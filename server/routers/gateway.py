@@ -101,23 +101,27 @@ def _bearer(request: Request) -> str:
 # 所以做法是：上限改成**本端自己的**配置（`WB_GATEWAY_MAX_BODY_MB`），默认调到
 # 32 MB —— 足够容纳常见的长上下文与附件，又不会让单进程内存失控。
 #
-# 兼容：上游若仍是**旧版**（配置里还有 server.max_body_mb），继续尊重它的取值
-# （见 max_body_bytes），这样升级顺序不受限：先升哪边都不会出现「一边说 256MB
-# 另一边 413」的错配。
+# 本地定制：**不再**采信上游 config.json 的 server.max_body_mb（本机 2api 里写的是
+# 1024MB，采信它会让本端单请求内存失控）；上限只由本端 WB_GATEWAY_MAX_BODY_MB 决定，
+# 默认 64MB，与外层 nginx 的 client_max_body_size 对齐。
 _BODY_LIMIT_TTL = 10
 _body_limit_cache: dict[str, float | int] = {'at': 0.0, 'bytes': 0, 'source': ''}
 DEFAULT_MAX_BODY_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_MB', 64))
-
-
-def max_body_bytes() -> int:
-    # 本地定制：不再采信上游 config 的 server.max_body_mb（2api 里是 1024MB，
-    # 会在内存里拼出超大 body）；统一用本端 env（默认 64MB，与 nginx 对齐）。
-    return DEFAULT_MAX_BODY_MB * 1024 * 1024
+# 上限是**谁**定的（'env' / ''）。保留这个字段是为了 413 文案能指向真正该改的地方。
+_BODY_LIMIT_SOURCE: dict[str, str] = {'value': ''}
 
 
 def _env_set(name: str) -> bool:
     value = (os.environ.get(name) or '').strip()
     return value != ''
+
+
+def max_body_bytes() -> int:
+    # 本地定制：不再采信上游 config 的 server.max_body_mb（2api 里写的是 1024MB，
+    # 本端要在内存里拼出完整 body，采信它等于把单进程内存交给上游配置）；
+    # 统一用本端 env（默认 64MB，与外层 nginx 的 client_max_body_size 对齐）。
+    _BODY_LIMIT_SOURCE['value'] = 'env' if _env_set('WB_GATEWAY_MAX_BODY_MB') else ''
+    return DEFAULT_MAX_BODY_MB * 1024 * 1024
 
 # ── max_tokens 上限钳制 ────────────────────────────────────────────
 #

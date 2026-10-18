@@ -514,7 +514,9 @@ def start_update(target: str, *, source: str = 'release') -> tuple[bool, str]:
     """
     # 本地定制：受控维护版本（签名清单托管）不允许网页自助更新，
     # 否则会覆盖本地修复、且新包与 managed-release 清单对不上导致服务起不来。
-    if (config.ROOT / 'deploy' / 'managed-release.json').exists():
+    if ((config.ROOT / 'deploy' / 'managed-release.json').exists()
+            and (config.ROOT / 'release-trust.pem').exists()):
+        # 信任锚与签名清单同时存在 = 受控维护版本（源码目录里的清单副本不算）
         return False, '当前为受控维护版本，请使用已验证的发布包升级；网页更新已暂停以保护本地修复。'
     if target not in ('manager', 'upstream', 'both'):
         return False, '参数不合法'

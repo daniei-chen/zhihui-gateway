@@ -152,6 +152,12 @@ class ScriptExtractionTest(unittest.TestCase):
         config.AUTH_DIR = Path(self._tmp.name) / 'auths'
         config.AUTH_DIR.mkdir(parents=True, exist_ok=True)
         taskrun._last_extract_failure.update({'at': 0.0, 'reason': ''})
+        # 本组测试针对的是「宿主机没有脚本时才去容器提取」。生产机上
+        # /opt/workbuddy2api/scripts/task_runner.py 是存在的，不屏蔽会让
+        # _script_path() 直接命中宿主机路径、根本不触发提取 —— 测试就与机器绑定了。
+        patcher = mock.patch.object(taskrun, '_host_script', return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         config.DATA_DIR = self._orig_data
@@ -516,7 +522,8 @@ class EventLoopResponsivenessTest(unittest.TestCase):
                     await asyncio.sleep(0.05)
 
             hb = asyncio.create_task(beat())
-            with mock.patch('subprocess.run', side_effect=self._slow_docker(delay)):
+            with mock.patch('subprocess.run', side_effect=self._slow_docker(delay)), \
+                 mock.patch.object(taskrun, '_host_script', return_value=None):
                 await coro_factory()
             stop.set()
             await hb

@@ -176,12 +176,12 @@ class BodyLimitEnforcement(unittest.TestCase):
         self.assertIsNotNone(err)
         self.assertEqual(err.status_code, 400)
 
-    def test_message_points_at_the_upstream_key_when_it_wins(self) -> None:
-        """上限来自**旧版上游**的 config.json 时，报错必须指上游那个键。
+    def test_legacy_upstream_key_is_ignored(self) -> None:
+        """本地定制：上限只由本端 WB_GATEWAY_MAX_BODY_MB 决定。
 
-        issue #180 的实际形状：用户的上游是旧版、`server.max_body_mb` 还在，
-        面板优先听它；旧文案却一律写「由环境变量 WB_GATEWAY_MAX_BODY_MB 决定」，
-        用户把环境变量改大了毫无效果，还以为面板不认这个配置。
+        本机 2api 的 config.json 里 `server.max_body_mb` 写的是 1024MB；
+        本端要在内存里拼出完整 body，采信它等于把单进程内存交给上游配置。
+        所以旧版上游那个键**不再生效**，413 文案也必须指向本端的环境变量。
         """
         with tempfile.TemporaryDirectory() as tmp:
             cfg = pathlib.Path(tmp) / 'config.json'
@@ -190,12 +190,14 @@ class BodyLimitEnforcement(unittest.TestCase):
             config.UPSTREAM_CONFIG = cfg
             _reset_cache()
             try:
+                self.assertEqual(gateway.max_body_bytes() // 1024 // 1024,
+                                 gateway.DEFAULT_MAX_BODY_MB)
                 _, err = self._read(self.big, {})
                 msg = json.loads(err.body)['error']['message']
-                self.assertIn('上游', msg)
-                self.assertIn('server.max_body_mb', msg,
-                              '要指出上游那个键 —— 那才是用户该改的地方')
-                self.assertIn('WB_GATEWAY_MAX_BODY_MB', msg, '也要给出删键后的替代做法')
+                self.assertIn('WB_GATEWAY_MAX_BODY_MB', msg,
+                              '上限只由本端环境变量决定，文案要指对地方')
+                self.assertNotIn('server.max_body_mb', msg,
+                                 '不能再让用户去改一个本端已经不看的键')
             finally:
                 config.UPSTREAM_CONFIG = orig
                 _reset_cache()
