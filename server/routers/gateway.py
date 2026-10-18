@@ -674,7 +674,10 @@ def _scan_sse(pending: str, usage: dict) -> tuple[str, bool]:
 # 有意**不套用**调用时的那套校验（额度用尽 / 已过期 / 被停用 / IP 白名单）：恰恰是
 # 在调不动的时候，用户最需要看到「还剩多少、为什么调不动」。密钥本身已证明归属，
 # 这里只暴露它自己的元数据，把状态如实回给调用方，而不是再甩一个 401。
-@router.get('/v1/usage')
+#
+# 本地定制：`/v1/usage` 已经是本仓库的「按密钥用量统计」（在用、且被客户端依赖），
+# 上游 issue #137 的「配额自查」改挂 /v1/key，两个契约都保留、互不覆盖。
+@router.get('/v1/key')
 def key_usage(request: Request):
     ip = iputil.client_ip(request)
     ua = request.headers.get('user-agent')

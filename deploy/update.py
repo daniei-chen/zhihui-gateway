@@ -182,7 +182,7 @@ def _download_hint(exc: BaseException) -> str:
         return '（当前使用的是环境变量里的代理；若代理不可用，可用 WB_UPDATE_PROXY 指定一个）'
     return ('（当前网络似乎无法直连 GitHub。容器/内网环境请在 .env 里设置 '
             'WB_UPDATE_PROXY=http://<宿主IP>:<端口> 后重试，例如 http://172.17.0.1:7890）')
-UPSTREAM_REPO = os.environ.get('WB_UPSTREAM_REPO') or 'https://github.com/daniei-chen/WorkBuddy-API.git'
+UPSTREAM_REPO = os.environ.get('WB_UPSTREAM_REPO') or 'https://github.com/Sliverkiss/workbuddy2api.git'
 SERVICE_NAME = os.environ.get('WB_SERVICE_NAME') or 'workbuddy-web'
 DATA_DIR = Path(os.environ.get('WB_DATA_DIR') or INSTALL_DIR / 'data')
 STATUS_FILE = Path(os.environ.get('WB_UPDATE_STATUS') or DATA_DIR / 'update-status.json')
@@ -636,62 +636,6 @@ def _fetch_failed_hint(out: str, pinned: str = '') -> str:
             + (f'：{out.strip()[:200]}' if out.strip() else ''))
 
 
-def restore_local_dockerfile(rep: Reporter) -> None:
-    """把上游覆盖掉的本地 Dockerfile 定制装回去。
-
-    为什么需要：本机无法直连 proxy.golang.org，Dockerfile 里的
-    GOPROXY=goproxy.cn 与清华 apk 源是构建可用的前提。上游仓库没有这些
-    定制，而每次更新都会先 `git checkout -- .` 丢弃本地改动——不装回来，
-    下一次「更新上游」就会因为拉不到 Go 模块而构建失败（2026-09-16 实际
-    发生过一次）。定制来源：仓库内 .local-config/Dockerfile（手工维护）。
-
-    注意：不要给这两个文件设 skip-worktree / assume-unchanged 标记——
-    那会让 `git reset --hard` 报 "Entry ... not uptodate" 并阻断更新
-    （2026-09-16 的另一处故障根因，已清除）。
-    """
-    local = UPSTREAM_DIR / '.local-config' / 'Dockerfile'
-    work = UPSTREAM_DIR / 'Dockerfile'
-    if not local.is_file():
-        rep.log('未找到 .local-config/Dockerfile，跳过本地 Dockerfile 定制恢复', 'warn')
-        return
-    try:
-        want = local.read_text(encoding='utf-8')
-        cur = work.read_text(encoding='utf-8') if work.is_file() else ''
-    except OSError as exc:
-        rep.log(f'本地 Dockerfile 定制恢复失败：{exc}', 'warn')
-        return
-    if cur == want:
-        rep.log('Dockerfile 本地定制已是目标状态')
-        return
-    work.write_text(want, encoding='utf-8')
-    rep.log('已恢复 Dockerfile 本地定制（GOPROXY / apk 镜像源）')
-
-
-def apply_source_patches(rep: Reporter) -> None:
-    """重施 Go 源码本地补丁（新会话轮转 / 额度耗尽跳过 等）。
-
-    为什么需要：`git checkout -- .` 与 reset 会丢弃所有本地改动，补丁必须
-    在构建前装回去。补丁文件维护在 UPSTREAM_DIR/local-patches/patches/，
-    由 apply-patches.sh 逐条应用（幂等：已应用的自动跳过）。
-
-    fail-closed：补丁失败（上游改了同区域代码导致冲突）→ 中止更新并保留
-    旧容器继续服务。不做"打不上就算了"的降级——静默少了本地能力比更新
-    失败更危险（行为与预期不符且难以发现）。
-    """
-    script = UPSTREAM_DIR / 'local-patches' / 'apply-patches.sh'
-    if not script.is_file():
-        rep.log('未找到 local-patches/apply-patches.sh，跳过源码补丁重施', 'warn')
-        return
-    rc, out = run(['bash', str(script)], rep=rep, check=False)
-    if rc != 0:
-        rep.log('源码补丁重施失败（上游可能改了同区域代码）', 'error')
-        rep.log('  处理指引：对照 UPSTREAM_DIR/local-patches/backup/ 修订补丁，'
-                '或临时把冲突补丁移出 patches/ 后重试。', 'error')
-        raise RuntimeError('本地源码补丁无法应用，更新已中止（旧容器继续服务）')
-    rep.log('本地源码补丁已就绪')
-
-
-
 def update_upstream(rep: Reporter) -> None:
     rep.step('更新上游 workbuddy2api')
 
@@ -810,9 +754,6 @@ def update_upstream(rep: Reporter) -> None:
             rep.log(f'恢复 docker-compose.yml 失败：{exc}', 'warn')
             rep.log('  你的定制仍保存在本次更新的备份 patch 里，可手动恢复', 'warn')
 
-    # Retain the deployed mirror and customization hooks.
-    restore_local_dockerfile(rep)
-    apply_source_patches(rep)
     # 4) 恢复安全基线
     enforce_local_bind(rep)
 
@@ -1858,7 +1799,12 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
 
 # ── 入口 ─────────────────────────────────────────────────
 def main() -> int:
-    if (INSTALL_DIR / 'deploy' / 'managed-release.json').exists():
+    # 本地定制：受控维护版本（签名清单托管）不允许用本更新器自助升级 ——
+    # 包内 server/web 与 deploy/managed-release.json 清单对不上会让 ExecStartPre
+    # 直接拒绝启动。升级请走签名发布流程（tools/sign_release.py + 切换 releases/current）。
+    if ((INSTALL_DIR / 'deploy' / 'managed-release.json').exists()
+            and (INSTALL_DIR / 'release-trust.pem').exists()):
+        # 信任锚与签名清单同时存在 = 受控维护版本（源码目录里的清单副本不算）
         print('Managed release: use the verified deployment controller.')
         return 1
     parser = argparse.ArgumentParser(description='WorkBuddy Manager 更新')

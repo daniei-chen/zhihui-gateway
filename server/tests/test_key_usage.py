@@ -69,7 +69,7 @@ class KeyUsageEndpointTest(_Base):
                    'last_used_at = ? WHERE prefix = ?', (int(time.time()) - 30, prefix))
 
         with mock.patch.object(config, 'http_client', side_effect=AssertionError('不该问上游')):
-            r = self._client().get('/v1/usage', headers={'Authorization': f'Bearer {token}'})
+            r = self._client().get('/v1/key', headers={'Authorization': f'Bearer {token}'})
 
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
@@ -82,7 +82,7 @@ class KeyUsageEndpointTest(_Base):
     def test_unlimited_quota_reports_none_not_zero(self) -> None:
         """不限额要显示「不限」，不能糊成「剩余 0」——那会让人以为已经用完了。"""
         token = self._make_key(quota=0, quota_credit=0)
-        r = self._client().get('/v1/usage', headers={'Authorization': f'Bearer {token}'})
+        r = self._client().get('/v1/key', headers={'Authorization': f'Bearer {token}'})
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertIsNone(body['tokens']['limit'])
@@ -94,7 +94,7 @@ class KeyUsageEndpointTest(_Base):
         token = self._make_key(quota=100)
         prefix = token[:12]
         db.execute('UPDATE api_keys SET used_tokens = 100, enabled = 0 WHERE prefix = ?', (prefix,))
-        r = self._client().get('/v1/usage', headers={'Authorization': f'Bearer {token}'})
+        r = self._client().get('/v1/key', headers={'Authorization': f'Bearer {token}'})
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(body['tokens']['remaining'], 0)
@@ -106,15 +106,15 @@ class KeyUsageEndpointTest(_Base):
         db.execute('UPDATE api_keys SET expires_at = ? WHERE prefix = ?',
                    (int(time.time()) - 10, prefix))
         body = self._client().get(
-            '/v1/usage', headers={'Authorization': f'Bearer {token}'}).json()
+            '/v1/key', headers={'Authorization': f'Bearer {token}'}).json()
         self.assertTrue(body['key']['expired'])
 
     def test_missing_or_invalid_key_is_rejected(self) -> None:
         client = self._client()
-        missing = client.get('/v1/usage')
+        missing = client.get('/v1/key')
         self.assertEqual(missing.status_code, 401)
         self.assertIn('missing_api_key', missing.text)
-        r = client.get('/v1/usage', headers={'Authorization': 'Bearer wbk_not-a-real-key'})
+        r = client.get('/v1/key', headers={'Authorization': 'Bearer wbk_not-a-real-key'})
         self.assertEqual(r.status_code, 401)
         self.assertIn('invalid_api_key', r.text)
 
@@ -134,7 +134,7 @@ class KeyUsageEndpointTest(_Base):
         token = self._make_key()
         prefix = token[:12]
 
-        r = self._client().get('/v1/usage', headers={'Authorization': f'Bearer {token}'})
+        r = self._client().get('/v1/key', headers={'Authorization': f'Bearer {token}'})
         self.assertEqual(r.status_code, 200, r.text)
 
         row = db.query_one('SELECT last_used_at, used_tokens, used_credit '
@@ -156,7 +156,7 @@ class KeyUsageEndpointTest(_Base):
         db.execute('UPDATE api_keys SET used_tokens = 9000, used_credit = 9000 '
                    'WHERE prefix = ?', (theirs[:12],))
         body = self._client().get(
-            '/v1/usage', headers={'Authorization': f'Bearer {mine}'}).json()
+            '/v1/key', headers={'Authorization': f'Bearer {mine}'}).json()
         self.assertEqual(body['tokens']['used'], 0, '读到了别人的用量')
         self.assertEqual(body['tokens']['limit'], 1000, '限额也对成了别人的')
 
