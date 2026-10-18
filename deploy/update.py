@@ -1802,9 +1802,7 @@ def main() -> int:
     # 本地定制：受控维护版本（签名清单托管）不允许用本更新器自助升级 ——
     # 包内 server/web 与 deploy/managed-release.json 清单对不上会让 ExecStartPre
     # 直接拒绝启动。升级请走签名发布流程（tools/sign_release.py + 切换 releases/current）。
-    if ((INSTALL_DIR / 'deploy' / 'managed-release.json').exists()
-            and (INSTALL_DIR / 'release-trust.pem').exists()):
-        # 信任锚与签名清单同时存在 = 受控维护版本（源码目录里的清单副本不算）
+    if (INSTALL_DIR / 'deploy' / 'managed-release.json').exists():
         print('Managed release: use the verified deployment controller.')
         return 1
     parser = argparse.ArgumentParser(description='WorkBuddy Manager 更新')

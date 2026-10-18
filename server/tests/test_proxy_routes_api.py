@@ -289,7 +289,8 @@ class UpdaterEnvInjectionTest(_Base):
                 mock.patch.object(updater.subprocess, 'Popen', fake_popen), \
                 mock.patch.object(updater, '_write_initial_status'), \
                 mock.patch.object(updater, 'STATUS_FILE', self.root / 'status.json'), \
-                mock.patch.object(updater, 'LOG_FILE', self.root / 'update.log'):
+                mock.patch.object(updater, 'LOG_FILE', self.root / 'update.log'), \
+                mock.patch.object(updater, 'LOCK_FILE', self.root / 'update.lock'):
             ok, message = updater.start_update('manager')
         self.assertTrue(ok, message)
         self.assertEqual(seen.get('WB_HTTP_PROXY'), 'socks5://u:pw@h:1080')

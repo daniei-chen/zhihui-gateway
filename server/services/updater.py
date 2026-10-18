@@ -411,6 +411,10 @@ def _lock_active() -> bool:
         pid = int(LOCK_FILE.read_text(encoding='utf-8').strip() or 0)
     except Exception:  # noqa: BLE001
         return False
+    if pid <= 1:
+        # PID 1（或非法值）不可能是更新子进程：残留锁不能把更新永久挡住
+        LOCK_FILE.unlink(missing_ok=True)
+        return False
     if _pid_alive(pid):
         return True
     LOCK_FILE.unlink(missing_ok=True)
@@ -514,9 +518,7 @@ def start_update(target: str, *, source: str = 'release') -> tuple[bool, str]:
     """
     # 本地定制：受控维护版本（签名清单托管）不允许网页自助更新，
     # 否则会覆盖本地修复、且新包与 managed-release 清单对不上导致服务起不来。
-    if ((config.ROOT / 'deploy' / 'managed-release.json').exists()
-            and (config.ROOT / 'release-trust.pem').exists()):
-        # 信任锚与签名清单同时存在 = 受控维护版本（源码目录里的清单副本不算）
+    if (config.ROOT / 'deploy' / 'managed-release.json').exists():
         return False, '当前为受控维护版本，请使用已验证的发布包升级；网页更新已暂停以保护本地修复。'
     if target not in ('manager', 'upstream', 'both'):
         return False, '参数不合法'
