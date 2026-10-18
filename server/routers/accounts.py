@@ -295,7 +295,7 @@ async def auth_start(
     ),
     upstream_id: int | None = Query(None),
     body: dict | None = Body(None),
-    user: dict = Depends(security.require_admin),
+    user: dict = Depends(security.current_user),
 ) -> dict:
     """发起扫码登录。realm 决定国内版 / 国际版端点（缺省国内版）。
 
@@ -355,7 +355,7 @@ async def auth_poll(
     realm: str | None = None,
     region: str | None = None,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.require_admin),
+    user: dict = Depends(security.current_user),
 ) -> dict:
     """轮询扫码结果；成功则落盘并触发上游重载。
 
@@ -759,7 +759,7 @@ async def account_credits(
     filename: str,
     force: bool = False,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.require_admin),
+    user: dict = Depends(security.current_user),
 ) -> dict:
     """查询单个账号的实时积分余额与套餐到期时间（直接向腾讯查询，带 60s 缓存）。
 

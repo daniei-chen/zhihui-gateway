@@ -275,7 +275,7 @@ export default function TasksPage() {
     } finally {
       setCollectBusy(false);
     }
-  }, [reload]);
+  }, [reload, t]);
 
   function accountLabel(l: TaskLog) {
     const uid = l.uid || '';

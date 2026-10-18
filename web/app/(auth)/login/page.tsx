@@ -2,7 +2,6 @@
 
 import {useEffect, useState} from 'react';
 import {useRouter} from 'next/navigation';
-import {motion} from 'motion/react';
 import {Bot, Loader2, LogIn} from 'lucide-react';
 import {errText} from '@/lib/api';
 import {useAuth} from '@/lib/auth-context';
@@ -71,12 +70,7 @@ export default function LoginPage() {
       <div className="absolute right-4 top-4">
         <LanguageToggle />
       </div>
-      <motion.div
-        initial={{opacity: 0, y: 12}}
-        animate={{opacity: 1, y: 0}}
-        transition={{duration: 0.35}}
-        className="w-full max-w-sm"
-      >
+      <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-3 text-center">
           <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground">
             <Bot className="h-5 w-5" />
@@ -133,7 +127,7 @@ export default function LoginPage() {
         <p className="mt-6 text-center text-[11px] text-muted-foreground">
           {t('login.legal')}
         </p>
-      </motion.div>
+      </div>
     </div>
   );
 }

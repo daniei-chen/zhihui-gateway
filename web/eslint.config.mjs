@@ -12,12 +12,16 @@ const compat = new FlatCompat({
 const eslintConfig = [
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
   {
-    ignores: ['.next/**', 'out/**', 'node_modules/**'],
+    ignores: ['.next/**', 'out/**', 'node_modules/**', 'next-env.d.ts'],
   },
   {
     rules: {
       'max-len': 'off',
     },
+  },
+  {
+    files: ['vendor/braces/**/*.js'],
+    rules: {'@typescript-eslint/no-require-imports': 'off'},
   },
 ];
 

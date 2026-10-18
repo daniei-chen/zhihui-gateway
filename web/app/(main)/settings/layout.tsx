@@ -30,7 +30,6 @@ import {RichText} from '@/lib/i18n/rich-text';
 import {settingsApi, upstreamApi, errText} from '@/lib/api';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {UpstreamEndpoints} from '@/components/settings/UpstreamEndpoints';
-import {BASE_PATH} from '@/lib/base-path';
 import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,

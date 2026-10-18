@@ -169,7 +169,7 @@ def update_user(username: str, body: UserPatch, request: Request,
     if body.role and body.role != target.get('role'):
         admins = [u for u in cfg.get('users', []) if u.get('role') == 'admin']
         if target.get('role') == 'admin' and len(admins) <= 1:
-            raise HTTPException(status_code=400, detail='至少保留一个管理员')
+            raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
         target['role'] = body.role
         changed_role = True
 
@@ -207,7 +207,7 @@ def delete_user(username: str, request: Request,
         raise HTTPException(status_code=404, detail='用户不存在')
     admins = [u for u in users if u.get('role') == 'admin']
     if target.get('role') == 'admin' and len(admins) <= 1:
-        raise HTTPException(status_code=400, detail='至少保留一个管理员')
+        raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
     if target.get('username') == user.get('username'):
         raise HTTPException(status_code=400, detail='不能删除当前登录用户')
     cfg['users'] = [u for u in users if u.get('username') != username]

@@ -28,7 +28,7 @@ UPSTREAM_DIR="${UPSTREAM_DIR:-/opt/workbuddy2api}"
 # 上游原仓库 Sliverkiss/workbuddy2api 自 2026-09-23 起已不可访问（404）。
 # 默认值保留原地址只为「已有副本的人不必改代码」；新装请用 UPSTREAM_SRC
 # 指向本地源码，或把 UPSTREAM_REPO 改成你自己的副本。
-UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/Sliverkiss/workbuddy2api.git}"
+UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/daniei-chen/WorkBuddy-API.git}"
 UPSTREAM_SRC="${UPSTREAM_SRC:-}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-7863}"
 MANAGER_PORT="${MANAGER_PORT:-7864}"

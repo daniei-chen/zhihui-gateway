@@ -73,7 +73,6 @@ import {useT} from '@/lib/i18n/provider';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
 import {Input} from '@/components/ui/input';
-import {Label} from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -197,7 +196,7 @@ export default function AccountsPage() {
   /** 账号池；`undefined` = 还没取到（首屏加载中，或它自己失败了） */
   const accounts: Account[] | undefined = values.pool?.accounts;
   const upstream: UpstreamStatus | null = poolStatus.values.upstream ?? null;
-  const groups: UpstreamEndpoint[] = groupList.values.groups?.items || [];
+  const groups: UpstreamEndpoint[] = useMemo(() => groupList.values.groups?.items || [], [groupList.values.groups?.items]);
   /**
    * 当前分组的元信息：manageable = 该分组配了本地账号目录（可加 / 移 / 删账号）。
    * 与账号池同一次响应，所以直接从它派生，不再单独存一份（少一处会不同步的状态）。
@@ -220,7 +219,7 @@ export default function AccountsPage() {
   const reloadAll = useCallback(async () => {
     const [a, b, c] = await Promise.all([reload(), poolStatus.reload(), groupList.reload()]);
     return a && b && c;
-  }, [reload, poolStatus.reload, groupList.reload]);
+  }, [reload, poolStatus, groupList]);
 
   // 打开页面时自动拉一次实时积分：上游 /status 的 credits 可能滞后数小时，
   // 首次进入应展示真实余额。服务端有 TTL 缓存，重复进入不会频繁请求。
@@ -253,7 +252,7 @@ export default function AccountsPage() {
     return () => {
       alive = false;
     };
-  }, [groupId]);
+  }, [groupId, t]);
 
   // 上游状态（冷却 / 成功计数等）会随时间变化，页面停留时定时刷新，
   // 否则会一直显示打开页面那一刻的旧数据。
@@ -284,7 +283,7 @@ export default function AccountsPage() {
     } finally {
       setCreditsBusy(false);
     }
-  }, [groupId]);
+  }, [groupId, t]);
 
   /** 批量签到：逐账号记录结果 */
   const checkinAll = useCallback(async () => {
@@ -329,7 +328,7 @@ export default function AccountsPage() {
     } finally {
       setCheckinAllBusy(false);
     }
-  }, [reloadAll, groupId]);
+  }, [reloadAll, groupId, t]);
 
   /**
    * 将本地 auths 文件与上游账号池状态按 uid 合并。

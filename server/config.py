@@ -70,7 +70,7 @@ _BASE_PATH_RAW = _env('WB_BASE_PATH', '').strip('/')
 BASE_PATH = f'/{_BASE_PATH_RAW}' if _BASE_PATH_RAW else ''
 
 # 网络
-UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 120)
+UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 300)
 TENCENT_TIMEOUT = _env_int('WB_TENCENT_TIMEOUT', 15)
 # 「全部签到」的并发上限：太低会拖到前端超时（几十个账号时），
 # 太高又容易触发腾讯风控。5 是保守且够快的取值。
@@ -216,7 +216,7 @@ def new_secret() -> str:
     return secrets.token_urlsafe(48)
 
 
-def http_client(timeout, *, connect: float | None = None, proxy: str | None = None):
+def http_client(timeout, *, connect: float | None = None, proxy: str | None = None, identity: str | None = None):
     """统一的 httpx 客户端：默认忽略系统/环境代理，避免内网请求被代理劫持。
 
     需要走代理时显式设置 WB_HTTP_PROXY。
@@ -237,4 +237,5 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     selected_proxy = HTTP_PROXY if proxy is None else proxy
     if selected_proxy:
         kwargs['proxy'] = selected_proxy
-    return httpx.AsyncClient(**kwargs)
+    from . import pooledhttp
+    return pooledhttp.client(tmo, selected_proxy, identity)

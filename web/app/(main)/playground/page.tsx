@@ -232,7 +232,7 @@ export default function PlaygroundPage() {
       setStreaming(false);
       abortRef.current = null;
     }
-  }, [input, msgs, model, effort, realm, streaming]);
+  }, [input, msgs, model, effort, realm, streaming, t]);
 
   const stop = () => abortRef.current?.abort();
 

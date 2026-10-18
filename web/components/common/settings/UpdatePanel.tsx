@@ -119,7 +119,7 @@ export function UpdatePanel() {
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -147,7 +147,7 @@ export function UpdatePanel() {
     }
   }, [status?.logs]);
 
-  const logs = status?.logs ?? [];
+  const logs = useMemo(() => status?.logs ?? [], [status?.logs]);
   const logText = useMemo(
     () => (logs.length ? logs.map((l) => l.text).join('\n') : status?.log_tail || ''),
     [logs, status?.log_tail],

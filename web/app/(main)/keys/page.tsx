@@ -100,7 +100,7 @@ const EMPTY_UPSTREAMS: UpstreamEndpoint[] = [];
 export default function KeysPage() {
   const t = useT();
   const {isAdmin} = useAuth();
-  const {realm, label: realmName} = useRealm();
+  const {realm} = useRealm();
   /**
    * 密钥列表 + 上游列表。**两份数据放同一个 hook，不拆。**
    *

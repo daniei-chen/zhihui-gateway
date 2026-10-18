@@ -199,7 +199,7 @@ export default function ModelsPage() {
     }
   }, [reload]);
 
-  const models = data?.models ?? [];
+  const models = useMemo(() => data?.models ?? [], [data?.models]);
 
   const filtered = useMemo(() => {
     const kw = q.trim().toLowerCase();

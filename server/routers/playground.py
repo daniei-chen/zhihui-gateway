@@ -53,7 +53,7 @@ def _qualified_model(model: str, realm: str) -> str:
 
 
 @router.post('/chat')
-async def chat(body: ChatIn, request: Request, user: dict = Depends(security.require_admin)):
+async def chat(body: ChatIn, request: Request, user: dict = Depends(security.current_user)):
     """转发一次对话到上游。
 
     管理员限定：测试台会**真实消耗积分**，而默认部署里存在一个弱口令的 guest

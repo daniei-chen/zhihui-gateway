@@ -186,6 +186,25 @@ def _parse(row) -> dict:
     }
 
 
+def _norm_models(items: object) -> list[str]:
+    """模型白名单归一化：兼容"全角/半角逗号连接的整串"输入。
+
+    前端模型输入框按半角逗号拆分；用户用中文输入法敲出全角逗号时
+    （如 "模型A，模型B"）会整体存成一个元素——列表显示"1 模型"，实际
+    白名单连任何模型都匹配不上（400 model_not_allowed）。这里在后端
+    兜底：每个元素再按全角/半角逗号拆分并去空白；正常数组输入原样保留。
+    """
+    if not isinstance(items, list):
+        return items
+    out: list[str] = []
+    for m in items:
+        if isinstance(m, str):
+            out.extend(p.strip() for p in m.replace('，', ',').split(',') if p.strip())
+        else:
+            out.append(m)
+    return out
+
+
 def list_keys() -> list[dict]:
     """全部密钥，附带 `packet_id`（来源红包）。
 
@@ -241,7 +260,7 @@ def create_key(
         expires_at,
         max_ips,
         json.dumps(_norm_cidrs(ip_allowlist)),
-        json.dumps(models or []),
+        json.dumps(_norm_models(models or [])),
         _norm_realm(realm),
         quota,
         _norm_credit_quota(quota_credit),
@@ -276,7 +295,7 @@ def update_key(key_id: int, patch: dict) -> dict | None:
         # 与创建同一条归一化路径：校验与存储必须是同一份数据（见 _norm_cidrs）
         fields['ip_allowlist'] = json.dumps(_norm_cidrs(patch['ip_allowlist']))
     if 'models' in patch:
-        fields['models'] = json.dumps(patch['models'] or [])
+        fields['models'] = json.dumps(_norm_models(patch['models'] or []))
     if 'realm' in patch:
         # 显式传 null/'' 是**允许**的：管理员可以把旧密钥改回「不限制」。
         # 所以这里不能用 `patch['realm'] or ...` 之类的真值判断。
@@ -316,7 +335,7 @@ def reset_usage(key_id: int) -> bool:
     """
     if not db.query_one('SELECT id FROM api_keys WHERE id = ?', (key_id,)):
         return False
-    db.execute('UPDATE api_keys SET used_tokens = 0, used_credit = 0 WHERE id = ?', (key_id,))
+    db.execute('UPDATE api_keys SET used_tokens = 0, used_credit = 0, used_credit_units = 0 WHERE id = ?', (key_id,))
     return True
 
 
@@ -542,5 +561,8 @@ def touch(key: dict, ip: str, tokens: int = 0, credit: float | None = None) -> N
     if tokens:
         db.execute('UPDATE api_keys SET used_tokens = used_tokens + ? WHERE id = ?', (tokens, key['id']))
     if credit:
-        db.execute('UPDATE api_keys SET used_credit = used_credit + ? WHERE id = ?',
-                   (float(credit), key['id']))
+        from .ledger import units, SCALE
+        db.execute('UPDATE api_keys SET used_credit_units=coalesce(used_credit_units,round(used_credit*1000000))+? WHERE id=?',
+                   (units(credit), key['id']))
+        db.execute('UPDATE api_keys SET used_credit=used_credit_units*1.0/? WHERE id=?',
+                   (SCALE,key['id']))

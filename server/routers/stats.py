@@ -228,7 +228,11 @@ def repair_usage(user: dict = Depends(security.require_admin)) -> dict:
 
     用于修复历史缺陷导致的部分调用未计入统计。
     """
-    return db.backfill_usage_from_logs()
+    try:
+        return db.backfill_usage_from_logs()
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post('/rebuild-usage')
@@ -238,7 +242,11 @@ def rebuild_usage(user: dict = Depends(security.require_admin)) -> dict:
     与 /repair-usage 的区别：repair 只补缺口（增量、幂等），
     本接口是**重建**——会替换 usage_daily 的内容，能删除此前多出来的行。
     """
-    return db.rebuild_usage_from_logs()
+    try:
+        return db.rebuild_usage_from_logs()
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get('/daily')
@@ -256,7 +264,9 @@ def daily(days: int = 30, realm: str | None = None,
     rows = db.query(
         'SELECT day, SUM(requests) AS requests, '
         'SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens, '
-        'COALESCE(SUM(credit),0) AS credit '
+        'COALESCE(SUM(credit),0) AS credit, '
+        'COALESCE(SUM(cache_hit_tokens),0) AS cache_hit_tokens, '
+        'COALESCE(SUM(cache_miss_tokens),0) AS cache_miss_tokens '
         f'FROM usage_daily WHERE day >= ?{rf} GROUP BY day ORDER BY day ASC',
         args,
     )
@@ -270,6 +280,8 @@ def daily(days: int = 30, realm: str | None = None,
             'completion_tokens': int(r['completion_tokens'] or 0),
             'credit': float(r['credit'] or 0),
             'failed': failures.get(r['day'], 0),
+            'cache_hit_tokens': int(r['cache_hit_tokens'] or 0),
+            'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
         }
         for r in rows
     ]
@@ -383,7 +395,9 @@ def by_model(days: int = 30, realm: str | None = None,
     rows = db.query(
         'SELECT model AS name, SUM(requests) AS requests, '
         'SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens, '
-        'COALESCE(SUM(credit),0) AS credit '
+        'COALESCE(SUM(credit),0) AS credit, '
+        'COALESCE(SUM(cache_hit_tokens),0) AS cache_hit_tokens, '
+        'COALESCE(SUM(cache_miss_tokens),0) AS cache_miss_tokens '
         f'FROM usage_daily WHERE day >= ?{rf} GROUP BY model ORDER BY SUM(prompt_tokens + completion_tokens) DESC',
         args,
     )
@@ -394,6 +408,8 @@ def by_model(days: int = 30, realm: str | None = None,
             'prompt_tokens': int(r['prompt_tokens'] or 0),
             'completion_tokens': int(r['completion_tokens'] or 0),
             'credit': float(r['credit'] or 0),
+            'cache_hit_tokens': int(r['cache_hit_tokens'] or 0),
+            'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
         }
         for r in rows
     ]
@@ -413,7 +429,9 @@ def by_key(days: int = 30, realm: str | None = None,
     rows = db.query(
         'SELECT COALESCE(k.name, u.key_id || "") AS name, SUM(u.requests) AS requests, '
         'SUM(u.prompt_tokens) AS prompt_tokens, SUM(u.completion_tokens) AS completion_tokens, '
-        'COALESCE(SUM(u.credit),0) AS credit '
+        'COALESCE(SUM(u.credit),0) AS credit, '
+        'COALESCE(SUM(u.cache_hit_tokens),0) AS cache_hit_tokens, '
+        'COALESCE(SUM(u.cache_miss_tokens),0) AS cache_miss_tokens '
         'FROM usage_daily u LEFT JOIN api_keys k ON k.id = u.key_id '
         f'WHERE u.day >= ?{rf} GROUP BY u.key_id ORDER BY SUM(u.prompt_tokens + u.completion_tokens) DESC',
         args,
@@ -425,6 +443,8 @@ def by_key(days: int = 30, realm: str | None = None,
             'prompt_tokens': int(r['prompt_tokens'] or 0),
             'completion_tokens': int(r['completion_tokens'] or 0),
             'credit': float(r['credit'] or 0),
+            'cache_hit_tokens': int(r['cache_hit_tokens'] or 0),
+            'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
         }
         for r in rows
     ]

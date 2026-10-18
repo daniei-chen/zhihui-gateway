@@ -42,7 +42,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({children}: {children: ReactNode}) {
   const [me, setMe] = useState<Me | null>(null);
-  // 有缓存时直接视为已就绪，页面无需为登录校验停留
+  // 缓存只用于尽快恢复用户信息；认证状态仍由服务端校验决定。
   const [loading, setLoading] = useState(true);
   const hydrated = useRef(false);
 
@@ -82,11 +82,10 @@ export function AuthProvider({children}: {children: ReactNode}) {
   useEffect(() => {
     if (hydrated.current) return;
     hydrated.current = true;
-    // 先用缓存立即还原界面，再后台校验一次
+    // 先用缓存恢复界面信息，等待服务器校验后再判断是否已登录，避免失效缓存导致来回跳转。
     const cached = readCachedMe();
     if (cached) {
       setMe(cached);
-      setLoading(false);
     }
     refresh();
   }, [refresh]);

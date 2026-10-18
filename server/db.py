@@ -533,6 +533,10 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ('request_logs', 'cache_hit_tokens', 'INTEGER'),
     ('request_logs', 'cache_miss_tokens', 'INTEGER'),
     ('request_logs', 'cache_write_tokens', 'INTEGER'),
+    # usage_daily 聚合层的缓存列（本地：命中率按天聚合展示）——
+    # 官方 1.0.67 的建表不含（官方聚合层无缓存），由本补丁迁移补齐。
+    ('usage_daily', 'cache_hit_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+    ('usage_daily', 'cache_miss_tokens', 'INTEGER NOT NULL DEFAULT 0'),
     ('api_keys', 'quota_credit', 'REAL NOT NULL DEFAULT 0'),
     ('api_keys', 'used_credit', 'REAL NOT NULL DEFAULT 0'),
     # 入站请求被拦的**原因**（issue #33）。
@@ -555,6 +559,8 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 值形如 `昵称(uid8)`，与上游日志里的写法一致；脱敏与截断在写入侧做。
     # NULL = 未关联上（采集不可用、或该条在上游日志里已滚掉），界面显示「—」。
     ('request_logs', 'account', 'TEXT'),
+    ('request_logs', 'account_source', "TEXT DEFAULT 'legacy-unclassified'"),
+    ('request_logs', 'account_attempt', 'INTEGER DEFAULT 0'),
     # 输入侧命中缓存的 token 数（上游 usage.prompt_cache_hit_tokens）。
     #
     # 为什么值得单独记：prompt_tokens 是**含**缓存的，光看它看不出这次省了
@@ -589,6 +595,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
             # 并发启动时可能已被另一进程加过，忽略即可
             pass
     _rebuild_usage_daily_pk(conn)
+    from .ledger import units
+    for table, old, new in (('api_keys','used_credit','used_credit_units'),
+                            ('usage_daily','credit','credit_units'),
+                            ('usage_hourly','credit','credit_units')):
+        cols = {r[1] for r in conn.execute(f'PRAGMA table_info({table})')}
+        if new not in cols:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {new} INTEGER')
+        for row in conn.execute(f'SELECT rowid,{old} FROM {table} WHERE {new} IS NULL').fetchall():
+            conn.execute(f'UPDATE {table} SET {new}=? WHERE rowid=?', (units(row[1] or 0),row[0]))
+
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id) WHERE request_id IS NOT NULL')
 
 
 def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:
@@ -654,14 +671,17 @@ def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:
                   completion_tokens INTEGER NOT NULL DEFAULT 0,
                   credit            REAL    NOT NULL DEFAULT 0,
                   realm             TEXT    NOT NULL DEFAULT 'cn',
+                  cache_hit_tokens  INTEGER NOT NULL DEFAULT 0,
+                  cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
                   PRIMARY KEY (day, key_id, model, realm)
                 )
             ''')
             conn.execute('''
                 INSERT OR REPLACE INTO usage_daily_new
-                  (day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm)
+                  (day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm,
+                   cache_hit_tokens, cache_miss_tokens)
                 SELECT day, key_id, model, requests, prompt_tokens, completion_tokens,
-                       credit, realm
+                       credit, realm, COALESCE(cache_hit_tokens,0), COALESCE(cache_miss_tokens,0)
                 FROM usage_daily
             ''')
             conn.execute('DROP TABLE usage_daily')
@@ -698,7 +718,8 @@ def execute(sql: str, args: Iterable[Any] = ()) -> int:
     with _lock:
         conn = connect()
         cur = conn.execute(sql, tuple(args))
-        conn.commit()
+        if not getattr(_atomic_state, "depth", 0):
+            conn.commit()
         return int(cur.lastrowid or 0)
 
 
@@ -706,7 +727,8 @@ def executemany(sql: str, seq: Iterable[Iterable[Any]]) -> None:
     with _lock:
         conn = connect()
         conn.executemany(sql, [tuple(x) for x in seq])
-        conn.commit()
+        if not getattr(_atomic_state, "depth", 0):
+            conn.commit()
 
 
 # ── settings ─────────────────────────────────────────────
@@ -757,6 +779,7 @@ def bump_usage(
     completion_tokens: int,
     credit: float | None = None,
     realm: str | None = None,
+    cache: tuple[int, int] | None = None,
 ) -> None:
     """累计当日用量。credit 为本次真实扣费，缺省不计入（不按 0 记）。
 
@@ -765,15 +788,20 @@ def bump_usage(
     """
     day = day_of()
     r = realm if realm in ('cn', 'global') else realm_of_model(model)
+    ch, cm = cache if cache else (0, 0)
+    from .ledger import units, SCALE
+    amount = units(credit or 0)
     execute(
-        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm) '
-        'VALUES(?, ?, ?, 1, ?, ?, ?, ?) '
+        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) '
+        'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?) '
         'ON CONFLICT(day, key_id, model, realm) DO UPDATE SET '
         '  requests = requests + 1, '
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
-        '  credit = credit + excluded.credit',
-        (day, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
+        '  credit = credit + excluded.credit, '
+        '  cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens, '
+        '  cache_miss_tokens = cache_miss_tokens + excluded.cache_miss_tokens',
+        (day, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r, ch, cm),
     )
     # 同一份数据的**小时**维度，给「今日」趋势图用。两处必须一起写：只写一处
     # 就会出现「卡片有数、小时图没有」或反过来的分歧（口径一致性见建表注释）。
@@ -787,6 +815,16 @@ def bump_usage(
         '  credit = credit + excluded.credit',
         (day, hour_of(), key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
     )
+    # Integer totals are updated without adding binary floats. Legacy REAL fields
+    # are refreshed as presentation values in the caller's same transaction.
+    execute('UPDATE usage_daily SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND key_id=? AND model=? AND realm=?',
+            (amount,day,key_id,model,r))
+    execute('UPDATE usage_daily SET credit=credit_units*1.0/? WHERE day=? AND key_id=? AND model=? AND realm=?',
+            (SCALE,day,key_id,model,r))
+    execute('UPDATE usage_hourly SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
+            (amount,day,hour_of(),key_id,model,r))
+    execute('UPDATE usage_hourly SET credit=credit_units*1.0/? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
+            (SCALE,day,hour_of(),key_id,model,r))
 
 
 def realm_of_model(model: str | None) -> str:
@@ -966,6 +1004,9 @@ def add_audit_log(actor: str, action: str, target: str = '',
         (int(time.time()), _clean(actor, 64), _clean(action, 32),
          _clean(target, 128), _clean(detail, 500), _clean(ip, 64)),
     )
+    from . import ledger, observability
+    state = observability.current.get()
+    ledger.admin(actor, action, _clean(target, 128), request_id=state.request_id if state else None)
 
 
 def list_audit_logs(limit: int = 200, offset: int = 0) -> list[dict]:
@@ -1027,31 +1068,17 @@ def _prune_request_logs() -> None:
 
 
 def add_request_log(**fields: object) -> None:
-    """写一条请求日志，并按保留期做滚动清理。
-
-    参数用 kwargs（调用方能按名字传，列多时不易错位），但**传给 SQLite 时必须
-    展开成位置元组**：`execute()` 内部做 `tuple(args)`，直接塞 dict 会把它当成
-    单个参数，于是键名被当值写进库（实测：`credit` 列存进了字符串 `'credit'`，
-    `rebuild` 随即因 `NOT NULL constraint failed` 崩掉）。这里显式按列序展开。
-    """
     global _request_log_writes
-    execute(
-        'INSERT INTO request_logs(ts, key_id, ip, model, mapped_model, status, '
-        'prompt_tokens, completion_tokens, latency_ms, first_token_ms, ua, error, '
-        'stream, credit, realm, account, cache_hit_tokens, cache_miss_tokens, '
-        'cache_write_tokens) '
-        'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (fields.get('ts'), fields.get('key_id'), fields.get('ip'),
-         fields.get('model'), fields.get('mapped_model'), fields.get('status'),
-         fields.get('prompt_tokens'), fields.get('completion_tokens'),
-         fields.get('latency_ms'), fields.get('first_token_ms'), fields.get('ua'),
-         fields.get('error'), fields.get('stream'), fields.get('credit'),
-         fields.get('realm'), fields.get('account'), fields.get('cache_hit_tokens'),
-         fields.get('cache_miss_tokens'), fields.get('cache_write_tokens')),
-    )
+    columns=('ts','key_id','ip','model','mapped_model','status','prompt_tokens','completion_tokens',
+             'latency_ms','first_token_ms','ua','error','stream','credit','realm','account',
+             'cache_hit_tokens','cache_miss_tokens','cache_write_tokens',
+             'request_id','endpoint','method','protocol','http_status','terminal_state','error_stage',
+             'release_id','usage_source','usage_complete','first_byte_ms')
+    execute('INSERT INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
+            tuple(fields.get(c) for c in columns))
     _request_log_writes += 1
     if _request_log_writes >= _REQUEST_LOG_CHECK_EVERY:
-        _request_log_writes = 0
+        _request_log_writes=0
         _prune_request_logs()
 
 
@@ -1103,7 +1130,7 @@ def attach_request_accounts(entries: Iterable[dict]) -> int:
             )
             if row is None:
                 continue
-            execute('UPDATE request_logs SET account = ? WHERE id = ?',
+            execute("UPDATE request_logs SET account = ?, account_source='timestamp-heuristic' WHERE id = ?",
                     (acct, row['id']))
             filled += 1
         except Exception:  # noqa: BLE001
@@ -1272,10 +1299,28 @@ def _usage_expected_rows(bucket_expr: str) -> list[dict]:
         f"SELECT {bucket_expr} AS bucket, key_id, "
         f"{_USAGE_MODEL_EXPR} AS model, {_USAGE_REALM_EXPR} AS realm, "
         "COUNT(*) AS requests, COALESCE(SUM(prompt_tokens),0) AS pt, "
-        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr "
+        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr, "
+        "COALESCE(SUM(cache_hit_tokens),0) AS ch, COALESCE(SUM(cache_miss_tokens),0) AS cm "
         "FROM request_logs WHERE key_id IS NOT NULL "
         f"GROUP BY {bucket_expr}, key_id, {_USAGE_MODEL_EXPR}, {_USAGE_REALM_EXPR}"
     )
+
+def _require_legacy_repair():
+    if query_one('SELECT 1 FROM usage_events LIMIT 1'):
+        raise ValueError('新账本已经启用，不能仅用可清理的请求日志覆盖财务汇总；请使用账本对账流程。')
+
+
+def _sync_legacy_credit_units(conn):
+    """Legacy-only repair must update the integer and display projections together."""
+    from . import ledger
+    for table in ('usage_daily', 'usage_hourly'):
+        for row in conn.execute('SELECT rowid,credit FROM '+table).fetchall():
+            amount = ledger.units(row['credit']) or 0
+            conn.execute('UPDATE '+table+' SET credit_units=?,credit=? WHERE rowid=?',
+                         (amount, amount / ledger.SCALE, row['rowid']))
+    if not getattr(_atomic_state, 'depth', 0):
+        conn.commit()
+
 
 def backfill_usage_from_logs() -> dict:
     """把 request_logs 里尚未计入 usage_daily 的用量补进统计。
@@ -1284,6 +1329,7 @@ def backfill_usage_from_logs() -> dict:
     以「已记录的调用」推算应有用量，再把差额写入 usage_daily，
     因此可重复执行而不会重复计数。
     """
+    _require_legacy_repair()
     # 应有用量（按天 × 密钥 × 模型）
     # 必须与 bump_usage 用同一时区口径（本地），否则凌晨的调用会被算成两天
     #
@@ -1296,7 +1342,8 @@ def backfill_usage_from_logs() -> dict:
     expected = query(
         f"SELECT {day_expr} AS day, key_id, {model_expr} AS model, {realm_expr} AS realm, "
         "COUNT(*) AS requests, COALESCE(SUM(prompt_tokens),0) AS pt, "
-        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr "
+        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr, "
+        "COALESCE(SUM(cache_hit_tokens),0) AS ch, COALESCE(SUM(cache_miss_tokens),0) AS cm "
         f"FROM request_logs WHERE key_id IS NOT NULL "
         f"GROUP BY {day_expr}, key_id, {model_expr}, {realm_expr}"
     )
@@ -1304,7 +1351,7 @@ def backfill_usage_from_logs() -> dict:
     current = {
         (r['day'], r['key_id'], r['model'], r['realm'] or 'cn'): r
         for r in query(
-            'SELECT day, key_id, model, realm, requests, prompt_tokens, completion_tokens, credit FROM usage_daily'
+            'SELECT day, key_id, model, realm, requests, prompt_tokens, completion_tokens, credit, cache_hit_tokens, cache_miss_tokens FROM usage_daily'
         )
     }
 
@@ -1316,23 +1363,29 @@ def backfill_usage_from_logs() -> dict:
         cur_req = int(cur['requests']) if cur else 0
         cur_pt = int(cur['prompt_tokens']) if cur else 0
         cur_ct = int(cur['completion_tokens']) if cur else 0
+        cur_ch = int(cur['cache_hit_tokens'] or 0) if cur else 0
+        cur_cm = int(cur['cache_miss_tokens'] or 0) if cur else 0
 
         d_req = int(row['requests']) - cur_req
         d_pt = int(row['pt']) - cur_pt
         d_ct = int(row['ct']) - cur_ct
-        if d_req <= 0 and d_pt <= 0 and d_ct <= 0:
+        d_ch = int(row['ch']) - cur_ch
+        d_cm = int(row['cm']) - cur_cm
+        if d_req <= 0 and d_pt <= 0 and d_ct <= 0 and d_ch <= 0 and d_cm <= 0:
             continue
         execute(
-            'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm) '
-            'VALUES(?, ?, ?, ?, ?, ?, ?, ?) '
+            'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) '
+            'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
             'ON CONFLICT(day, key_id, model, realm) DO UPDATE SET '
             '  requests = MAX(requests, excluded.requests), '
             '  prompt_tokens = MAX(prompt_tokens, excluded.prompt_tokens), '
             '  completion_tokens = MAX(completion_tokens, excluded.completion_tokens), '
-            '  credit = MAX(credit, excluded.credit)',
+            '  credit = MAX(credit, excluded.credit), '
+            '  cache_hit_tokens = MAX(cache_hit_tokens, excluded.cache_hit_tokens), '
+            '  cache_miss_tokens = MAX(cache_miss_tokens, excluded.cache_miss_tokens)',
             (row['day'], row['key_id'], row['model'], int(row['requests']),
              int(row['pt']), int(row['ct']), float(row['cr'] or 0),
-             str(row['realm'] or 'cn')),
+             str(row['realm'] or 'cn'), int(row['ch'] or 0), int(row['cm'] or 0)),
         )
         fixed += 1
         added_requests += max(0, d_req)
@@ -1341,6 +1394,7 @@ def backfill_usage_from_logs() -> dict:
     # 小时维度用同一套规则再补一遍（「今日」趋势图读这张表）。与上面**同源同规则**：
     # 请求日志 → 应有值 → 与现值比差额 → MAX 写入，所以重复执行不会重复计数。
     fixed_h = _backfill_hourly_from_logs()
+    _sync_legacy_credit_units(connect())
 
     return {
         'repaired': fixed,
@@ -1385,6 +1439,7 @@ def _backfill_hourly_from_logs() -> int:
              str(row['realm'] or 'cn')),
         )
         fixed += 1
+    _sync_legacy_credit_units(connect())
     return fixed
 
 
@@ -1433,6 +1488,7 @@ def rebuild_usage_from_logs() -> dict:
     注意：本操作以 request_logs 为唯一依据。若请求日志曾被清空，
     那部分历史汇总会随之丢失（接口上已明确标注）。
     """
+    _require_legacy_repair()
     # 归一化表达式必须**同时**用在 SELECT 与 GROUP BY 上，不能只在 SELECT 里写
     # 别名、GROUP BY 里复用别名。
     #
@@ -1455,7 +1511,8 @@ def rebuild_usage_from_logs() -> dict:
     expected = query(
         f"SELECT {day_expr} AS day, key_id, {model_expr} AS model, {realm_expr} AS realm, "
         "COUNT(*) AS requests, COALESCE(SUM(prompt_tokens),0) AS pt, "
-        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr "
+        "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(credit),0) AS cr, "
+        "COALESCE(SUM(cache_hit_tokens),0) AS ch, COALESCE(SUM(cache_miss_tokens),0) AS cm "
         f"FROM request_logs WHERE key_id IS NOT NULL "
         f"GROUP BY {day_expr}, key_id, {model_expr}, {realm_expr}"
     )
@@ -1473,10 +1530,11 @@ def rebuild_usage_from_logs() -> dict:
             conn.execute('DELETE FROM usage_daily')
             conn.executemany(
                 'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, '
-                'completion_tokens, credit, realm) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+                'completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(row['day'], row['key_id'], row['model'], int(row['requests']),
                   int(row['pt']), int(row['ct']), float(row['cr'] or 0),
-                  str(row['realm'] or 'cn')) for row in expected],
+                  str(row['realm'] or 'cn'),
+                  int(row['ch'] or 0), int(row['cm'] or 0)) for row in expected],
             )
             # 小时维度与按天**同一事务**重建：只重建一处会让「今日」图与卡片
             # 在重建后对不上，而那正是分两张表要避免的事。
@@ -1490,6 +1548,12 @@ def rebuild_usage_from_logs() -> dict:
                   float(row['cr'] or 0), str(row['realm'] or 'cn'))
                  for row in hourly_rows if len(str(row['bucket'] or '')) >= 13],
             )
+            from . import ledger
+            for table in ('usage_daily', 'usage_hourly'):
+                for row in conn.execute('SELECT rowid,credit FROM '+table).fetchall():
+                    amount = ledger.units(row['credit']) or 0
+                    conn.execute('UPDATE '+table+' SET credit_units=?,credit=? WHERE rowid=?',
+                                 (amount, amount / ledger.SCALE, row['rowid']))
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1503,3 +1567,51 @@ def rebuild_usage_from_logs() -> dict:
         'requests_delta': int(after['r'] or 0) - int(before['r'] or 0),
         'tokens_delta': int(after['t'] or 0) - int(before['t'] or 0),
     }
+
+
+from contextlib import contextmanager
+_atomic_state=threading.local()
+
+@contextmanager
+def transaction():
+    # All operations hold the existing RLock; nesting never commits the outer transaction.
+    with _lock:
+        conn=connect()
+        depth=getattr(_atomic_state,'depth',0)
+        if depth == 0:
+            conn.execute('BEGIN IMMEDIATE')
+        _atomic_state.depth=depth+1
+        try:
+            yield conn
+            if depth == 0:
+                conn.commit()
+        except BaseException:
+            if depth == 0:
+                conn.rollback()
+            raise
+        finally:
+            _atomic_state.depth=depth
+
+_MIGRATIONS += (
+    ('request_logs','request_id','TEXT'),
+    ('request_logs','endpoint','TEXT'),
+    ('request_logs','method','TEXT'),
+    ('request_logs','protocol','TEXT'),
+    ('request_logs','http_status','INTEGER'),
+    ('request_logs','terminal_state','TEXT'),
+    ('request_logs','error_stage','TEXT'),
+    ('request_logs','release_id','TEXT'),
+    ('request_logs','usage_source','TEXT'),
+    ('request_logs','usage_complete','INTEGER'),
+    ('request_logs','first_byte_ms','INTEGER'),
+)
+SCHEMA += '''
+CREATE TABLE IF NOT EXISTS request_outcomes(
+ request_id TEXT PRIMARY KEY, ts INTEGER NOT NULL, endpoint TEXT, method TEXT, protocol TEXT,
+ http_status INTEGER, terminal_state TEXT, error_stage TEXT, latency_ms INTEGER, release_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_request_outcomes_ts ON request_outcomes(ts);
+'''
+from .ledger import SCHEMA as _LEDGER_SCHEMA
+SCHEMA += _LEDGER_SCHEMA
+SCHEMA += 'CREATE TABLE IF NOT EXISTS readiness_probe(id INTEGER PRIMARY KEY CHECK(id=1), ts INTEGER NOT NULL);'

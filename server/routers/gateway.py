@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import sys
 import logging
 import time
 
@@ -10,6 +12,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import config, db, iputil, keysvc, upstreamsvc
+from .. import observability
 from ..config import _env_int
 from ..routers.security import get_config as get_security_config
 
@@ -34,6 +37,45 @@ def _oai_error(message: str, status: int = 400, err_type: str = 'invalid_request
     if hint:
         err['gateway_hint'] = hint
     return JSONResponse({'error': err}, status_code=status)
+
+
+def _oai_error_with_blip(message: str, status: int = 502, exc=None,
+                         err_type: str = 'api_error',
+                         code: str | None = 'upstream_unavailable') -> JSONResponse:
+    """抖动感知的 502 报错：附加 Retry-After（秒）+ X-Upstream-Blip: 1。
+
+    网关在调腾讯 copilot 上游遇网络层错误（EOF / 关闭的连接 / TLS 握手超时 /
+    连接重置）时返回。客户端拿到头后按 HTTP 标准退避，避免「007ms 固定间隔撞
+    恢复窗口」式的连续失败。
+
+    退避策略：单次返回头，不在网关内累计（保留每请求独立判断语义）。
+    """
+    resp = _oai_error(message, status, err_type, code)
+    resp.headers['Retry-After'] = '5'
+    resp.headers['X-Upstream-Blip'] = '1'
+    return resp
+
+
+def _oai_error_with_blip_body(message: str, status: int = 502, exc=None,
+                              err_type: str = 'api_error',
+                              code: str | None = 'upstream_unavailable') -> JSONResponse:
+    """502 上游不可用：在响应头 + 错误体中同时提示客户端等 5 秒再试。
+
+    响应头路径（Retry-After + X-Upstream-Blip）在 nginx 反代链路上透传不稳，
+    实测 deepseek-harness 等客户端读不到；错误体字段（retry_after_seconds
+    + message 末尾提示）任何 OpenAI 兼容客户端都能从 message/原样 JSON 拿到。
+    """
+    suffix = ' 请等 5 秒后重试'
+    body = {'error': {
+        'message': message + suffix,
+        'type': err_type,
+        'code': code,
+        'retry_after_seconds': 5,
+    }}
+    resp = JSONResponse(body, status_code=status)
+    resp.headers['Retry-After'] = '5'
+    resp.headers['X-Upstream-Blip'] = '1'
+    return resp
 
 
 def _bearer(request: Request) -> str:
@@ -61,34 +103,12 @@ def _bearer(request: Request) -> str:
 # 另一边 413」的错配。
 _BODY_LIMIT_TTL = 10
 _body_limit_cache: dict[str, float | int] = {'at': 0.0, 'bytes': 0}
-DEFAULT_MAX_BODY_MB = _env_int('WB_GATEWAY_MAX_BODY_MB', 32)
+DEFAULT_MAX_BODY_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_MB', 64))
 
 
 def max_body_bytes() -> int:
-    """当前生效的请求体上限（字节）。
-
-    取值顺序：
-      1. 上游 config.json 的 `server.max_body_mb`（**仅旧版上游还有这个键**）；
-      2. 否则用本端默认值（`WB_GATEWAY_MAX_BODY_MB`，默认 32 MB）。
-
-    每次读配置有 IO 成本，故做 10 秒缓存：改动很快生效，又不必每请求读文件。
-    """
-    now = time.time()
-    cached = int(_body_limit_cache['bytes'])
-    if cached and now - float(_body_limit_cache['at']) < _BODY_LIMIT_TTL:
-        return cached
-    limit = DEFAULT_MAX_BODY_MB * 1024 * 1024
-    try:
-        cfg = json.loads(config.UPSTREAM_CONFIG.read_text(encoding='utf-8'))
-        mb = int((cfg.get('server') or {}).get('max_body_mb') or 0)
-        if mb > 0:
-            limit = mb * 1024 * 1024
-    except Exception:  # noqa: BLE001
-        # 配置读不到就沿用默认值：网关不能因为读不到配置而拒绝服务
-        pass
-    _body_limit_cache['at'] = now
-    _body_limit_cache['bytes'] = limit
-    return limit
+    # The legacy Go server.max_body_mb field was retired. The public Nginx path accepts 64 MiB.
+    return DEFAULT_MAX_BODY_MB * 1024 * 1024
 
 
 def _payload_too_large(limit: int) -> JSONResponse:
@@ -118,12 +138,22 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
 
     chunks: list[bytes] = []
     size = 0
+    deadline = time.monotonic() + 30
     try:
-        async for chunk in request.stream():
+        iterator = request.stream().__aiter__()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(iterator.__anext__(), max(0.001,deadline-time.monotonic()))
+            except StopAsyncIteration:
+                break
             size += len(chunk)
             if size > limit:
                 return None, _payload_too_large(limit)
             chunks.append(chunk)
+    except TimeoutError:
+        return None, _oai_error('请求体读取超过 30 秒',408,'invalid_request_error','body_read_timeout')
+    except observability.CapacityError:
+        return None, _oai_error('大上下文处理容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
     except Exception:  # noqa: BLE001
         return None, _oai_error('读取请求体失败', 400)
 
@@ -133,6 +163,14 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
         return None, _oai_error('请求体不是合法 JSON', 400)
     if not isinstance(body, dict):
         return None, _oai_error('请求体必须是 JSON 对象', 400)
+
+    invalid = _invalid_unicode_path(body)
+    if invalid is not None:
+        return None, _oai_error(f'JSON 字符串包含孤立 Unicode surrogate：{invalid}', 400,
+                                'invalid_request_error', 'invalid_unicode')
+    state = observability.current.get()
+    if state and isinstance(body.get('model'),str):
+        state.requested_model = db._clean(body['model'],128)
     return body, None
 
 
@@ -283,79 +321,62 @@ def _usage_cache(usage: dict | None) -> tuple[int | None, int | None, int | None
 
 
 def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None) -> None:
-    """记录调用日志与用量。
-
-    credit 为上游返回的真实扣费（usage.credit）。None 表示上游没给，
-    与「扣了 0」是两回事，因此用 NULL 存而不是 0。
-
-    `usage` 可以直接把上游那份 usage 传进来：扣费与**提示词缓存三段**都从它里面取
-    （issue #69）。之所以整份传进来而不是在各调用点各取一遍——四条协议路径
-    （chat 流式/非流式、Responses、Anthropic）都各自有一份 usage，分开取迟早漏一处，
-    而漏的表现是「某个协议的缓存统计永远是空的」。传 `credit` 仍然有效（显式值优先）。
-
-    first_token 为首字延迟（毫秒）。None 表示未采集到：非流式请求本来就没有
-    中间过程，历史记录也没这个值，因此同样用 NULL 存，而不是 0。
-
-    注意：日志/统计属于旁路，任何异常都不能影响用户请求本身
-    （曾因统计函数缺失导致流式响应在收尾阶段中断，客户端看到
-    内容正常但报 terminated）。因此这里整体兜底。
-    """
+    pt,ct=observability.usage_int(pt),observability.usage_int(ct)
     if credit is None:
         credit = _usage_credit(usage)
     cache_hit, cache_miss, cache_write = _usage_cache(usage)
-
+    state = observability.current.get()
+    http_status = state.http_status if state and state.http_status else status
+    terminal = state.terminal_state if state else None
+    if stream and terminal == 'client_cancelled':
+        status = 499
+    elif stream and terminal in ('upstream_error','transport_error','protocol_incomplete'):
+        status = 502
+    if terminal is None:
+        terminal = 'rejected' if 400 <= status < 500 else 'upstream_error' if status >= 500 else 'completed'
+    if state:
+        state.terminal_state = terminal
     try:
-        # realm 由**实际发往上游的模型名**判定（上游按 `cn:` / `global:` 前缀路由）：
-        # 它决定这次调用实际走了哪个账号池，也是界面按版本切换日志/统计的依据。
-        #
-        # 有「模型映射」时判**映射后**的名字（issue #47）：请求名可能是个别名，
-        # 别名本身不带前缀，按它判会把一次真实的国际版调用记成国内版，界面按
-        # 版本筛选时这条就跑到另一栏去了。没有映射时 mapped 为空，判请求名。
-        #
-        # **所有外部来源的文本都要清洗 + 截断**（`db._clean`）：
-        #   * `model` 来自请求体，长度无上限。此前一个 1 MiB 的 model 会被写进
-        #     `request_logs.model`、`mapped_model` 以及 `usage_daily.model`
-        #     **三处**（后者还在主键里，等于再加一份索引），单次请求就能放大
-        #     数 MB —— 持密钥者可用少量请求把库撑大（实测 11 次请求 25MB）。
-        #   * `ua` / `error` 同样来自外部（error 还含上游响应原文），带换行就能
-        #     在日志页伪造出额外行，污染排查。
-        # 清洗只影响入库文本，**不影响转发给上游的内容**（body 早已发走）。
         model_clean = db._clean(model, 128)
         realm = db.realm_of_model(db._clean(mapped, 128) or model_clean)
-        db.add_request_log(
-            ts=int(time.time()),
-            key_id=key['id'] if key else None,
-            ip=db._clean(ip, 64),
-            model=model_clean,
-            mapped_model=db._clean(mapped, 128),
-            status=status,
-            prompt_tokens=pt,
-            completion_tokens=ct,
-            latency_ms=latency,
-            first_token_ms=first_token,
-            ua=db._clean(ua, 512),
-            error=db._clean(error, 500),
-            stream=1 if stream else 0,
-            credit=credit,
-            realm=realm,
-            cache_hit_tokens=cache_hit,
-            cache_miss_tokens=cache_miss,
-            cache_write_tokens=cache_write,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning('写入请求日志失败（不影响请求）: %s', exc)
-        return
-
-    if key:
-        try:
-            total = pt + ct
-            # credit 一并传入：密钥的**积分额度**（issue #27）靠它累计。
-            # 原先只记 token，积分用量就永远是 0，超限判定无从谈起。
-            keysvc.touch(key, ip, total, credit)
-            if total or credit:
-                db.bump_usage(key['id'], model_clean, pt, ct, credit, realm=realm)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning('累计用量失败（不影响请求）: %s', exc)
+        with db.transaction():
+            if state and db.query_one('SELECT id FROM request_logs WHERE request_id=?', (state.request_id,)):
+                return
+            db.add_request_log(
+                ts=int(time.time()),key_id=key['id'] if key else None,ip=db._clean(ip,64),
+                model=model_clean,mapped_model=db._clean(mapped,128),status=status,
+                prompt_tokens=max(0,pt),completion_tokens=max(0,ct),latency_ms=latency,
+                first_token_ms=first_token,ua=db._clean(ua,512),error=db._clean(error,500),
+                stream=1 if stream else 0,credit=credit,realm=realm,
+                cache_hit_tokens=cache_hit,cache_miss_tokens=cache_miss,cache_write_tokens=cache_write,
+                request_id=state.request_id if state else None,endpoint=state.endpoint if state else None,
+                method=state.method if state else None,protocol=state.protocol if state else None,
+                http_status=http_status,terminal_state=terminal,error_stage=state.error_stage if state else None,
+                release_id=observability.RELEASE_ID,
+                account=state.account if state else None,
+                usage_source='upstream' if usage else 'unknown' if stream else 'not_reported',
+                usage_complete=1 if isinstance(usage,dict) and 'prompt_tokens' in usage and 'completion_tokens' in usage else 0,
+                first_byte_ms=state.first_byte_ms if state else None,
+            )
+            from .. import budget
+            budget.settle(usage,pt,ct,credit)
+            from .. import ledger
+            ledger.record(state.request_id if state else None, key['id'] if key else None,
+                          model_clean, realm, pt, ct, credit,
+                          bool(key and (pt+ct or credit)), terminal, observability.RELEASE_ID)
+            if state and getattr(state,'config_hash',None):
+                ledger.forwarding(state,'terminal',terminal)
+            if key and (status < 400 or pt+ct>0 or credit):
+                total=max(0,pt)+max(0,ct)
+                keysvc.touch(key,ip,total,credit)
+                if total or credit:
+                    db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0))
+        if state:
+            state.recorded=True
+    except Exception:
+        from .. import operational
+        operational.ledger_write_healthy=False
+        logger.exception('请求账本事务失败 request_id=%s',state.request_id if state else None)
 
 
 def _authorize(request: Request, model: str | None,
@@ -383,6 +404,9 @@ def _authorize(request: Request, model: str | None,
     if not key:
         _log_ip(ip, path, True, ua, 'invalid_key')
         return None, ip, _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
+
+    state=observability.current.get()
+    if state: state.key_id=int(key["id"])
 
     # 映射只算一次，后面三处拒绝路径都要用它记账（见下）。
     # 为什么拒绝路径也要传：日志的 `realm` 按**实际要用的那个名字**归档（issue #47
@@ -423,6 +447,9 @@ def _authorize(request: Request, model: str | None,
             getattr(reason, 'code', 'forbidden'),
         )
 
+    if not is_model_list and not observability.admit_key(key):
+        _record(key,ip,model or '',mapped or '',429,0,0,0,ua,'密钥并发容量已满',False)
+        return None,ip,_oai_error('密钥并发容量已满，请等待当前请求结束',429,'rate_limit_error','key_concurrency_exceeded')
     limited, count = _rate_limited(key)
     if limited:
         msg = f'请求过于频繁（{RATE_WINDOW}s 内超过 {RATE_MAX_PER_MIN} 次）'
@@ -477,6 +504,14 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
     api_key = upstreamsvc.forward_api_key(up)
     if api_key:
         headers['Authorization'] = f'Bearer {api_key}'
+    state = observability.current.get()
+    if state:
+        headers['X-Request-ID'] = state.request_id
+        if getattr(state,'config_hash',None):
+            headers['X-WB-Config-Hash'] = state.config_hash
+        if state.key_id is not None:
+            namespace = f'key:{state.key_id}/upstream:{up.get("id") or 0}'
+            headers['X-WB-Tenant'] = namespace
     return headers
 
 
@@ -536,6 +571,217 @@ def _scan_sse(pending: str, usage: dict) -> tuple[str, bool]:
 # 列表按密钥的版本归属过滤：国际版密钥只看到 `global:` 条目、国内版密钥只看到
 # 其余条目（限定了版本的密钥看不到另一版本，免得挑出一个注定 403 的模型）。
 # 未限定版本的密钥（存量）照旧看到全部——它们本来就两版都能调。
+# ── 按密钥用量查询 /v1/usage ──────────────────────────────────────────────
+#
+# 给密钥持有者一个自助查用量的入口：带自己的密钥即可查当天 / 近 7 天 / 近 30 天
+# 的请求数、Token 用量与缓存命中率。**不返回实付（credit）**——那是内部口径，
+# 对外只回答"用了多少"。
+#
+# 鉴权刻意比 chat 轻：配额用尽的密钥也能查。配额打满时 chat 会被 429 拒绝，
+# 而"我用了多少、还剩多少"的答案只能从本接口拿——此时反而是最需要它的时刻。
+# 所以不走 _authorize 的完整链路（其中 keysvc.validate 会把配额用尽直接拦掉），
+# 只保留"密钥本身有效"这一层：resolve + 停用 / 过期。
+# 数据口径与 /api/stats 完全一致（同一张 usage_daily 表、同一套 day 过滤），
+# 保证"用户自查"与"控制台看到"的数字一致。
+
+
+def _usage_since(days: int) -> str:
+    """近 days 天（含今天）的起始日期串——口径与 /api/stats 的 _since 一致。"""
+    return time.strftime('%Y-%m-%d', time.localtime(time.time() - (days - 1) * 86400))
+
+
+def _usage_window(key_id: int, since_day: str) -> dict:
+    """聚合单个密钥自 since_day 起的用量（含当天）。
+
+    hit_rate 分母为 0（无调用 / 上游从未返回缓存字段）时给 null：
+    0 会被读成"缓存全没命中"，与"没有数据"是两回事。
+    """
+    row = db.query_one(
+        'SELECT COALESCE(SUM(requests),0) AS r, '
+        'COALESCE(SUM(prompt_tokens + completion_tokens),0) AS t, '
+        'COALESCE(SUM(cache_hit_tokens),0) AS hit, '
+        'COALESCE(SUM(cache_miss_tokens),0) AS miss '
+        'FROM usage_daily WHERE key_id = ? AND day >= ?',
+        (key_id, since_day),
+    )
+    hit = int((row['hit'] if row is not None else 0) or 0)
+    miss = int((row['miss'] if row is not None else 0) or 0)
+    cached = hit + miss
+    return {
+        'requests': int((row['r'] if row is not None else 0) or 0),
+        'tokens': int((row['t'] if row is not None else 0) or 0),
+        'cache_hit_tokens': hit,
+        'cache_miss_tokens': miss,
+        'hit_rate': round(hit / cached, 4) if cached else None,
+    }
+
+
+def _usage_live(key_id: int, window: int = 3) -> dict:
+    """实时速度：最近 window 秒完成的生成 token 速率（客户端轮询即可看到跳动）。
+
+    取 request_logs 而不是 usage_daily：后者按天聚合，颗粒度不够。
+    只计 completion_tokens（输出速度才是"token 速度"的直觉口径）；
+    窗口内没有请求时速率自然归零——0 本身就是有意义的信息。
+    """
+    since = int(time.time()) - window
+    row = db.query_one(
+        'SELECT COALESCE(SUM(completion_tokens),0) AS t FROM request_logs '
+        'WHERE key_id = ? AND ts >= ?',
+        (key_id, since),
+    )
+    tokens = int((row['t'] if row is not None else 0) or 0)
+    return {
+        'window_seconds': window,
+        'tokens': tokens,
+        'tokens_per_second': round(tokens / window, 1),
+    }
+
+
+def _usage_by_model(key_id: int, since_day: str) -> list[dict]:
+    """按模型拆分用量（近 N 天，含当天）。口径与 _usage_window 一致，按 tokens 降序。"""
+    rows = db.query(
+        "SELECT COALESCE(model, '未知') AS name, "
+        'COALESCE(SUM(requests),0) AS r, '
+        'COALESCE(SUM(prompt_tokens + completion_tokens),0) AS t, '
+        'COALESCE(SUM(cache_hit_tokens),0) AS h, '
+        'COALESCE(SUM(cache_miss_tokens),0) AS m '
+        'FROM usage_daily WHERE key_id = ? AND day >= ? GROUP BY model '
+        'ORDER BY t DESC',
+        (key_id, since_day),
+    )
+    out = []
+    for row in rows:
+        hit, miss = int(row['h'] or 0), int(row['m'] or 0)
+        cached = hit + miss
+        out.append({
+            'model': row['name'],
+            'requests': int(row['r'] or 0),
+            'tokens': int(row['t'] or 0),
+            'cache_hit_tokens': hit,
+            'cache_miss_tokens': miss,
+            'hit_rate': round(hit / cached, 4) if cached else None,
+        })
+    return out
+
+
+def _usage_norm_model(raw) -> str:
+    """模型 ID 规范化：剥 realm 前缀（cn:/global:）、转小写；空名归「未知」。"""
+    name = str(raw or '').strip()
+    if not name:
+        return '未知'
+    if ':' in name:
+        name = name.rsplit(':', 1)[-1].strip()
+    return name.lower()
+
+
+def _usage_by_model_windows(key_id: int, today: str, d7: str, d30: str) -> dict:
+    """规范模型 → {today, last_7d, last_30d}，字段口径与 _usage_window 完全一致。
+
+    一次取全部分日×分模型行，Python 侧归并 realm 变体与大小写；分模型卡之和
+    == 聚合段（空模型名的失败请求计入「未知」，对账不打架）。usage_daily 的
+    主键本就含 model——上线之前的历史同样可分（需求信 B2：可回溯）。
+    """
+    rows = db.query(
+        "SELECT day, COALESCE(NULLIF(model, ''), '未知') AS name, "
+        'COALESCE(SUM(requests),0) AS r, '
+        'COALESCE(SUM(prompt_tokens + completion_tokens),0) AS t, '
+        'COALESCE(SUM(cache_hit_tokens),0) AS h, '
+        'COALESCE(SUM(cache_miss_tokens),0) AS m '
+        'FROM usage_daily WHERE key_id = ? AND day >= ? GROUP BY day, name',
+        (key_id, d30),
+    )
+    acc = {}
+    for row in rows:
+        name = _usage_norm_model(row['name'])
+        bucket = acc.setdefault(
+            name, {'today': [0, 0, 0, 0], 'last_7d': [0, 0, 0, 0], 'last_30d': [0, 0, 0, 0]})
+        for win, since in (('today', today), ('last_7d', d7), ('last_30d', d30)):
+            if row['day'] >= since:
+                cell = bucket[win]
+                cell[0] += int(row['r'] or 0)
+                cell[1] += int(row['t'] or 0)
+                cell[2] += int(row['h'] or 0)
+                cell[3] += int(row['m'] or 0)
+    out = {}
+    for name, bucket in acc.items():
+        cards = {}
+        for win in ('today', 'last_7d', 'last_30d'):
+            r, t, h, m = bucket[win]
+            cards[win] = {
+                'requests': r,
+                'tokens': t,
+                'cache_hit_tokens': h,
+                'cache_miss_tokens': m,
+                'hit_rate': round(h / (h + m), 4) if (h + m) else None,
+            }
+        out[name] = cards
+    return out
+
+
+def _usage_live_model(key_id: int, window: int) -> dict:
+    """规范模型 → 实时速度（口径同 _usage_live：只计 completion_tokens）。"""
+    since = int(time.time()) - window
+    rows = db.query(
+        'SELECT model, COALESCE(SUM(completion_tokens),0) AS t FROM request_logs '
+        'WHERE key_id = ? AND ts >= ? GROUP BY model',
+        (key_id, since),
+    )
+    acc = {}
+    for row in rows:
+        name = _usage_norm_model(row['model'])
+        acc[name] = acc.get(name, 0) + int(row['t'] or 0)
+    return {
+        name: {'window_seconds': window, 'tokens': tk, 'tokens_per_second': round(tk / window, 1)}
+        for name, tk in sorted(acc.items())
+    }
+
+
+@router.get('/v1/usage')
+async def usage_v1(request: Request):
+    """按密钥查询用量：当天 / 近 7 天 / 近 30 天。
+
+    调用方式：Authorization: Bearer <wbk_密钥>（也认 x-api-key 头）。
+    返回 tokens = prompt + completion 合计；hit_rate = 缓存命中 token 占比，
+    0~1 小数（无数据时为 null）；含义与 /api/stats 页面同源。
+    live_window 查询参数可调实时速度窗口（秒，默认 3，钳制 2~300）；
+    响应恒含 by_model（规范模型 → today/last_7d/last_30d 全窗口拆分）与
+    live_by_model（规范模型 → 实时速度），新模型自动出现。
+    """
+    token = _bearer(request)
+    if not token:
+        return _oai_error('缺少 API Key，请在 Authorization 头中提供 Bearer 令牌', 401,
+                          'authentication_error', 'missing_api_key')
+    key = keysvc.resolve(token)
+    if not key:
+        return _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
+    if not key['enabled']:
+        return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
+    if key['expires_at'] and key['expires_at'] < time.time():
+        return _oai_error('密钥已过期', 403, 'permission_error', 'key_expired')
+    today = time.strftime('%Y-%m-%d')
+    # 实时速度窗口可调（秒）：默认 3 秒——请求完成瞬间数字尖跳，轮询越快越动感。
+    # 客户端轮询间隔建议不超过窗口的一半，否则会踩空看不到跳（见 _usage_live 文档）。
+    try:
+        live_window = int(request.query_params.get('live_window', '3'))
+    except (TypeError, ValueError):
+        live_window = 3
+    live_window = min(300, max(2, live_window))
+    resp = {
+        'key': {'name': key['name'], 'prefix': key['prefix']},
+        'today': _usage_window(key['id'], today),
+        'last_7d': _usage_window(key['id'], _usage_since(7)),
+        'last_30d': _usage_window(key['id'], _usage_since(30)),
+        'live': _usage_live(key['id'], live_window),
+    }
+    # by_model / live_by_model：恒返回的增量字段（需求信 A2，向后兼容）。
+    resp['by_model'] = _usage_by_model_windows(key['id'], today, _usage_since(7), _usage_since(30))
+    resp['live_by_model'] = _usage_live_model(key['id'], live_window)
+    for _name in resp['by_model']:
+        resp['live_by_model'].setdefault(
+            _name, {'window_seconds': live_window, 'tokens': 0, 'tokens_per_second': 0.0})
+    return resp
+
+
 @router.get('/v1/models')
 async def list_models(request: Request):
     key, ip, err = _authorize(request, None, is_model_list=True)
@@ -562,7 +808,7 @@ async def list_models(request: Request):
     except Exception as exc:  # noqa: BLE001
         latency = int((time.time() - started) * 1000)
         _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
-        return _oai_error(f'上游不可用: {exc}', 502, 'api_error', 'upstream_unavailable')
+        return _oai_error_with_blip_body(f'上游不可用: {exc}', 502, exc)
 
 
 def _as_anthropic_models(payload: object) -> object:
@@ -674,10 +920,68 @@ def _scope_models(payload: object, key: dict | None) -> object:
 
 
 # ── 对话补全（v1 / v2）──────────────────────────────────
+# ── 本地补丁：会话键注入（提升上游缓存命中）────────────────
+# 背景：ZCode 等 OpenAI 兼容客户端 body 不带 conversation_id，manager 转发又不
+# 透传 x-session-id 头 → 上游会话粘性路由不启动、每请求随机换号，
+# prompt_cache_key（wb2a-<uid8>-<会话>）随账号变化 → 上游前缀缓存全 miss。
+# 方案：把客户端 x-session-id（会话内稳定）注入 body 的 conversation_id，令
+# 「同会话 → 同账号 → 稳定缓存键」生效。客户端已带会话键时不覆盖。
+# 维护：由 /opt/workbuddy-manager/local-patches/apply_patches.sh 在服务启动时
+# 自动重施（管理端更新会覆盖 server/，靠它恢复）。
+_SESSION_HEADERS = ('x-session-id',)
+
+
+def _inject_session_key(body: 'dict', request: Request) -> None:
+    if not isinstance(body, dict):
+        return
+    if body.get('conversation_id') or body.get('conversationId'):
+        return
+    meta = body.get('metadata')
+    if isinstance(meta, dict) and (meta.get('conversation_id') or meta.get('conversationId')):
+        return
+    for name in _SESSION_HEADERS:
+        v = (request.headers.get(name) or '').strip()
+        if v:
+            body['conversation_id'] = v
+            return
+
+
+
+def _forwarding_identity(key,upstream):
+    import hashlib
+    token=upstreamsvc.forward_api_key(upstream)
+    return str(key.get('id'))+'|'+str(upstream.get('base_url'))+'|'+hashlib.sha256(token.encode()).hexdigest()
+
+def _prepare_forward(key,body):
+    from .. import budget, ledger
+    try:
+        budget.prepare(key,body)
+        state=observability.current.get()
+        if state:
+            import hashlib
+            from ..services import wb2api
+            values=wb2api.load_upstream_config()
+            safe={name:values.get(name) for name in ('pool','cooldown','features','session_sticky','server','admin')}
+            safe['prompt_mode']=(values.get('prompt') or {}).get('mode')
+            safe['global_enabled']=(values.get('global') or {}).get('enabled')
+            state.config_hash=hashlib.sha256(json.dumps(safe,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            state.upstream_id=str(key.get('upstream_id') or 'default')
+            state.resolved_model=db._clean(body.get('model'),128)
+            state.realm=db.realm_of_model(state.resolved_model)
+            changed=state.resolved_model != getattr(state,'requested_model',None)
+            state.transform=json.dumps({'protocol_bridge':state.protocol if state.protocol in ('anthropic','responses') else None,'model_alias':changed},separators=(',',':'))
+            ledger.forwarding(state,'prepared')
+        budget.forwarded()
+    except budget.BudgetRejected as exc:
+        return _oai_error(str(exc),429,'insufficient_quota',exc.code)
+    return None
+
 async def _chat(request: Request, upstream_path: str):
     body, err = await _read_json_body(request)
     if err:
         return err
+
+    _inject_session_key(body, request)
 
     requested_model = body.get('model') if isinstance(body, dict) else None
     # model 必须是字符串：非字符串（对象/数组/数字）会让后面的 _map_model 与
@@ -708,12 +1012,18 @@ async def _chat(request: Request, upstream_path: str):
     if upstream_err:
         return upstream_err
     url = f'{upstream["base_url"]}{upstream_path}'
+    budget_error = _prepare_forward(key,body)
+    if budget_error:
+        return budget_error
     started = time.time()
 
     if not stream:
         try:
-            async with config.http_client(config.UPSTREAM_TIMEOUT, connect=5) as client:
+            async with config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=_forwarding_identity(key,upstream)) as client:
                 resp = await client.post(url, json=body, headers=_upstream_headers(upstream))
+            state=observability.current.get()
+            if state:
+                state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
             latency = int((time.time() - started) * 1000)
             usage = {}
             try:
@@ -734,10 +1044,10 @@ async def _chat(request: Request, upstream_path: str):
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
             _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False)
-            return _oai_error(f'上游不可用: {exc}', 502, 'api_error', 'upstream_unavailable')
+            return _oai_error_with_blip(f'上游不可用: {exc}', 502, exc)
 
     # 流式转发
-    client = config.http_client(config.UPSTREAM_TIMEOUT, connect=5)
+    client = config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=_forwarding_identity(key,upstream))
     try:
         req = client.build_request('POST', url, json=body, headers=_upstream_headers(upstream))
         resp = await client.send(req, stream=True)
@@ -745,48 +1055,61 @@ async def _chat(request: Request, upstream_path: str):
         await client.aclose()
         latency = int((time.time() - started) * 1000)
         _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), True)
-        return _oai_error(f'上游不可用: {exc}', 502, 'api_error', 'upstream_unavailable')
+        return _oai_error_with_blip(f'上游不可用: {exc}', 502, exc)
 
     status_code = resp.status_code
     content_type = resp.headers.get('content-type', 'text/event-stream')
 
     async def generator():
-        usage: dict = {}
-        pending = ''
-        error_text: str | None = None
-        # 首字延迟：只记一次，取「首个含正文的 delta」到达时刻。
-        # 注意起点含建连 + 上游排队 + 模型开始思考，这正是「上游多久开始回话」。
-        first_token_ms: int | None = None
+        audit = observability.StreamAudit()
+        error_text = None
+        first_token_ms = None
+        cancelled = False
+        error_bytes = bytearray()
+        state = observability.current.get()
+        if state:
+            state.account = (getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
         try:
             async for chunk in resp.aiter_bytes():
+                if state and state.first_byte_ms is None:
+                    state.first_byte_ms = int((time.time()-started)*1000)
                 if status_code >= 400:
-                    pending += chunk.decode('utf-8', errors='ignore')
-                    # 有数据就留一份：早先要等到 4000 字节才取，而上游的错误体
-                    # 通常只有几百字节 → error_text 恒为空，**错误被静默丢弃**：
-                    # 客户端看得到（原样透传），管理端日志却什么都不记，用户来问
-                    # 「为什么失败」时查不到任何线索。与 anthropic 层同口径。
-                    if error_text is None and pending.strip():
-                        error_text = pending[:500]
-                    yield chunk
-                    continue
-                pending += chunk.decode('utf-8', errors='ignore')
-                pending, saw_content = _scan_sse(pending, usage)
-                if saw_content and first_token_ms is None:
-                    first_token_ms = int((time.time() - started) * 1000)
+                    error_bytes.extend(chunk[:max(0,2000-len(error_bytes))])
+                    error_text = bytes(error_bytes).decode('utf-8','replace')[:500] or f'上游 HTTP {status_code}'
+                    audit.error_stage='upstream'
+                else:
+                    audit.feed(chunk)
+                    if audit.saw_useful and first_token_ms is None:
+                        first_token_ms=int((time.time()-started)*1000)
                 yield chunk
+            if status_code < 400:
+                audit.finish()
+                error_text=audit.error
+                if not audit.completed and not error_text:
+                    error_text='上游流提前结束：未收到可信终止事件'
+                if error_text and not audit.error:
+                    yield observability.sse_error(error_text)
+        except (asyncio.CancelledError,GeneratorExit):
+            cancelled=True
+            raise
+        except Exception as exc:
+            error_text=f'上游流传输或协议异常：{type(exc).__name__}'
+            audit.error_stage='stream_read'
+            logger.warning('stream failed request_id=%s error=%s',state.request_id if state else None,type(exc).__name__)
+            # No replay after partial output; expose a terminal error event.
+            yield observability.sse_error(error_text)
         finally:
-            await resp.aclose()
-            await client.aclose()
-            latency = int((time.time() - started) * 1000)
-            pt = int(usage.get('prompt_tokens') or 0)
-            ct = int(usage.get('completion_tokens') or 0)
-            _record(
-                key, ip, requested_model or '', mapped or '', status_code, pt, ct,
-                latency, ua, error_text, True, usage=usage,
-                first_token=first_token_ms,
-            )
+            cancelled=cancelled or isinstance(sys.exc_info()[1],(asyncio.CancelledError,GeneratorExit))
+            observability.set_stream_state(audit,error_text,cancelled)
+            try:
+                await observability.close_stream(resp,client)
+            finally:
+                usage=audit.usage
+                _record(key,ip,requested_model or '',mapped or '',status_code,
+                        observability.usage_int(usage.get('prompt_tokens')),observability.usage_int(usage.get('completion_tokens')),
+                        int((time.time()-started)*1000),ua,error_text,True,usage=usage,first_token=first_token_ms)
 
-    return StreamingResponse(generator(), status_code=status_code, media_type=content_type)
+    return observability.ManagedStreamingResponse(generator(),cleanup=lambda:observability.close_stream(resp,client), status_code=status_code, media_type=content_type)
 
 
 @router.post('/v1/chat/completions')
@@ -815,3 +1138,18 @@ async def gateway_health() -> dict:
     except Exception:  # noqa: BLE001
         # 不回异常详情：那会暴露上游地址与网络拓扑
         return {'service': 'workbuddy-manager', 'upstream_ok': False}
+
+def _invalid_unicode_path(value, path='$'):
+    pending=[(value,path)]
+    while pending:
+        item, location=pending.pop()
+        if isinstance(item,str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in item):
+                return location[:256]
+        elif isinstance(item,dict):
+            for index,(key,child) in enumerate(item.items()):
+                pending.append((key,f'{location}.key[{index}]'))
+                pending.append((child,f'{location}.value[{index}]'))
+        elif isinstance(item,list):
+            pending.extend((child,f'{location}[{index}]') for index,child in enumerate(item))
+    return None

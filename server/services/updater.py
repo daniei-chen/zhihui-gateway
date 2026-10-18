@@ -377,6 +377,8 @@ def _write_initial_status(target: str, pid: int) -> None:
 
 def start_update(target: str) -> tuple[bool, str]:
     """启动更新（后台脱离运行）。返回 (是否已启动, 说明)。"""
+    if (config.ROOT / 'deploy' / 'managed-release.json').exists():
+        return False, '当前为受控维护版本，请使用已验证的发布包升级；网页更新已暂停以保护本地修复。'
     if target not in ('manager', 'upstream', 'both'):
         return False, '参数不合法'
     if os.name == 'nt' and config.WB2API_MODE == 'native':
@@ -497,7 +499,7 @@ VERSION_CACHE_TTL = 6 * 3600          # 6 小时
 # 「新版本已发布但还没有签名」时的短 TTL：这时结论随时会变（维护者签完就好），
 # 用 5 分钟换来界面及时恢复。
 _SIG_PENDING_TTL = 5 * 60
-UPSTREAM_API_REPO = os.environ.get('WB_UPSTREAM_API_REPO') or 'Sliverkiss/workbuddy2api'
+UPSTREAM_API_REPO = os.environ.get('WB_UPSTREAM_API_REPO') or 'daniei-chen/WorkBuddy-API'
 # 管理端仓库（owner/name），用于查询最新 Release
 MANAGER_REPO = os.environ.get('WB_MANAGER_REPO') or 'ithtelab/workbuddy-manager'
 _upstream_api_repo_cache: str | None = None
