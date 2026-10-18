@@ -101,13 +101,20 @@ def _bearer(request: Request) -> str:
 # 所以做法是：上限改成**本端自己的**配置（`WB_GATEWAY_MAX_BODY_MB`），默认调到
 # 32 MB —— 足够容纳常见的长上下文与附件，又不会让单进程内存失控。
 #
-# 本地定制：**不再**采信上游 config.json 的 server.max_body_mb（本机 2api 里写的是
-# 1024MB，采信它会让本端单请求内存失控）；上限只由本端 WB_GATEWAY_MAX_BODY_MB 决定，
-# 默认 64MB，与外层 nginx 的 client_max_body_size 对齐。
+# 上限取值（v2.4.0 语义 + 本端硬顶）：
+#   1. 上游 config.json 的 server.max_body_mb（本机 2api 写的是 1024）——**采信**；
+#   2. 读不到/没这个键 → 本端 WB_GATEWAY_MAX_BODY_MB（默认 64MB）；
+#   3. 无论哪种，都不超过本端硬顶 WB_GATEWAY_MAX_BODY_CEILING_MB（默认 1024）。
+# 为什么硬顶必须留在**网关**：本端要把完整 body 读进内存再 json.loads（峰值约
+# 体积的 2~3 倍），上游 Go 端能背压、本端不能。配置写错（比如填 99999）时
+# 不能把进程内存一次性交出去。
 _BODY_LIMIT_TTL = 10
 _body_limit_cache: dict[str, float | int] = {'at': 0.0, 'bytes': 0, 'source': ''}
 DEFAULT_MAX_BODY_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_MB', 64))
-# 上限是**谁**定的（'env' / ''）。保留这个字段是为了 413 文案能指向真正该改的地方。
+# 本端硬顶：上游配置再大也不越过它（保护本进程内存，见上面的说明）
+BODY_CEILING_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_CEILING_MB', 1024))
+# 上限是**谁**定的：'upstream' / 'env' / ''（默认），'+ceiling' 表示被硬顶截断。
+# 保留这个字段是为了 413 文案能指向真正该改的地方。
 _BODY_LIMIT_SOURCE: dict[str, str] = {'value': ''}
 
 
@@ -117,11 +124,36 @@ def _env_set(name: str) -> bool:
 
 
 def max_body_bytes() -> int:
-    # 本地定制：不再采信上游 config 的 server.max_body_mb（2api 里写的是 1024MB，
-    # 本端要在内存里拼出完整 body，采信它等于把单进程内存交给上游配置）；
-    # 统一用本端 env（默认 64MB，与外层 nginx 的 client_max_body_size 对齐）。
-    _BODY_LIMIT_SOURCE['value'] = 'env' if _env_set('WB_GATEWAY_MAX_BODY_MB') else ''
-    return DEFAULT_MAX_BODY_MB * 1024 * 1024
+    """当前生效的请求体上限（字节）。
+
+    取值顺序：上游 config.json 的 `server.max_body_mb` → 本端
+    `WB_GATEWAY_MAX_BODY_MB`；最后再被 `BODY_CEILING_MB` 截断。
+    10 秒缓存：改配置很快生效，又不必每请求读文件。
+    """
+    now = time.time()
+    cached = int(_body_limit_cache['bytes'])
+    if cached and now - float(_body_limit_cache['at']) < _BODY_LIMIT_TTL:
+        return cached
+    limit_mb = DEFAULT_MAX_BODY_MB
+    source = 'env' if _env_set('WB_GATEWAY_MAX_BODY_MB') else ''
+    try:
+        cfg = json.loads(config.UPSTREAM_CONFIG.read_text(encoding='utf-8'))
+        mb = int((cfg.get('server') or {}).get('max_body_mb') or 0)
+        if mb > 0:
+            limit_mb = mb
+            source = 'upstream'
+    except Exception:  # noqa: BLE001
+        # 配置读不到就沿用本端默认值：网关不能因为读不到配置而拒绝服务
+        pass
+    if limit_mb > BODY_CEILING_MB:
+        limit_mb = BODY_CEILING_MB
+        source = f'{source}+ceiling' if source else 'ceiling'
+    limit = limit_mb * 1024 * 1024
+    _body_limit_cache['at'] = now
+    _body_limit_cache['bytes'] = limit
+    _body_limit_cache['source'] = source
+    _BODY_LIMIT_SOURCE['value'] = source
+    return limit
 
 # ── max_tokens 上限钳制 ────────────────────────────────────────────
 #
@@ -175,9 +207,15 @@ def _payload_too_large(limit: int) -> JSONResponse:
     mb = limit // 1024 // 1024
     source = _BODY_LIMIT_SOURCE.get('value') or ''
     if source == 'upstream':
-        where = ('该上限来自**上游** config.json 的 server.max_body_mb（你的上游是旧版、'
-                 '还认这个键；面板优先听它，所以改环境变量不生效）：把那个值调大并重启上游，'
-                 '或者删掉该键，让面板改用环境变量 WB_GATEWAY_MAX_BODY_MB')
+        where = ('该上限来自**上游** config.json 的 server.max_body_mb（面板优先听它，'
+                 '改本端环境变量不生效）：把那个值调大并重启上游，'
+                 '或者删掉该键让面板改用 WB_GATEWAY_MAX_BODY_MB')
+    elif source == 'upstream+ceiling':
+        where = (f'上游允许更大，但被本端硬顶 WB_GATEWAY_MAX_BODY_CEILING_MB 截到 {mb} MB'
+                 '（保护本进程内存：单请求峰值约为体积的 2~3 倍）')
+    elif source == 'ceiling':
+        where = (f'默认允许更大，但被本端硬顶 WB_GATEWAY_MAX_BODY_CEILING_MB 截到 {mb} MB'
+                 '（保护本进程内存）')
     elif source == 'env':
         where = ('该上限来自环境变量 WB_GATEWAY_MAX_BODY_MB（改完要重启面板）')
     else:
