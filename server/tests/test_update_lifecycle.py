@@ -95,14 +95,12 @@ class InitialStatusClosedLoop(unittest.TestCase):
         self._orig = {
             'STATUS_FILE': updater.STATUS_FILE,
             'LOCK_FILE': updater.LOCK_FILE,
-            'UPSTREAM_REF_FILE': updater.UPSTREAM_REF_FILE,
             'current_version': updater.current_version,
             'in_container': updater.in_container,
             'can_control_docker': updater.can_control_docker,
         }
         updater.STATUS_FILE = self.dir / 'update-status.json'
         updater.LOCK_FILE = self.dir / 'update.lock'
-        updater.UPSTREAM_REF_FILE = self.dir / 'upstream-ref.txt'
         self._orig_data = config.DATA_DIR
         config.DATA_DIR = self.dir
         updater.current_version = lambda: 'v1.0.66'  # type: ignore[assignment]
