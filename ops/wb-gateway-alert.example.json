@@ -1,0 +1,24 @@
+{
+  "wechat": {
+    "enabled": true,
+    "botId": "wx_8eff3e58c07fb792a8576ef5",
+    "targetId": "wb-gateway-alerts",
+    "api": "http://127.0.0.1:3080/api/dsh-im/delivery/messages"
+  },
+  "email": {
+    "enabled": true,
+    "smtp_host": "smtp.163.com",
+    "smtp_port": 465,
+    "user": "19567189736@163.com",
+    "password": "",
+    "to": "2421873411@qq.com, 3130727798@qq.com"
+  },
+  "weixin_direct": {
+    "enabled": true,
+    "note": "直连微信机器人平台，不依赖 DSH；token 从 DSH 凭据库按 tokenRef 取",
+    "botId": "wx_8eff3e58c07fb792a8576ef5",
+    "toUserId": "o9cq808pfBHBYjplwZnbhgNf88js@im.wechat",
+    "tokenRef": "",
+    "credentials": "/home/agentuser/.dsh/.credentials.yaml"
+  }
+}
