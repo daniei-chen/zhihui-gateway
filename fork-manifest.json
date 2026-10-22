@@ -1,0 +1,219 @@
+{
+  "_comment": "本地定制清单（fork manifest）。升级前由 fork-verify.sh 与 fork-upgrade.sh 读取；2026-10-22 首次升级时漏搬了 10 个『已跟踪文件里的本地修改』，第二次核对才发现（slowdegrade、skipExhausted、creditsKnown 等全丢），因此这里把 go_files_added / go_files_modified 分开记录。",
+  "version": 1,
+  "updated": "2026-10-22",
+  "baseline": {
+    "manager": "v2.4.0",
+    "current": "v2.8.3+local.20261022.3",
+    "upstream_go": "v2.8.3"
+  },
+  "mechanisms": [
+    {
+      "id": "signed-release",
+      "path": "deploy/managed-release.json",
+      "note": "签名托管清单，494 文件逐条 sha256+权限；改动 server/web/deploy/local-patches 必须重签"
+    },
+    {
+      "id": "preflight",
+      "path": "deploy/source_preflight.py",
+      "note": "ExecStartPre 验签闸门；上游无此文件，升级时禁止被上游 deploy/ 覆盖"
+    },
+    {
+      "id": "trust-anchor",
+      "path": "/opt/workbuddy-manager/release-trust.pem",
+      "note": "fork 公钥；私钥在 /root/wb-release/release-signing.key"
+    },
+    {
+      "id": "runtime-override",
+      "path": "/opt/workbuddy-manager/local-overrides/sitecustomize.py",
+      "note": "PYTHONPATH 注入，抬高并发 8/2→60/50；不碰托管源码"
+    },
+    {
+      "id": "systemd-dropins",
+      "path": "/etc/systemd/system/workbuddy-web.service.d/",
+      "note": "7 个：并发/限额/超时/body 上限/启动限制"
+    }
+  ],
+  "python_modules_added": [
+    "server/budget.py",
+    "server/budgetowner.py",
+    "server/ledger.py",
+    "server/observability.py",
+    "server/bodyguard.py",
+    "server/operational.py",
+    "server/offsitebackup.py",
+    "server/backup_application.py",
+    "server/pooledhttp.py",
+    "server/upstreamschema.py",
+    "server/upstream-schema.json",
+    "server/routers/budgets.py"
+  ],
+  "go_files_added": [
+    {
+      "path": "internal/pool/slowdegrade.go",
+      "why": "慢速降权：TTFB 连续超阈的账号临时出池（治理「慢而 200」）"
+    },
+    {
+      "path": "internal/pool/slowdegrade_test.go",
+      "why": "慢速降权测试"
+    },
+    {
+      "path": "internal/pool/exhausted_test.go",
+      "why": "额度耗尽过滤测试"
+    },
+    {
+      "path": "internal/session/session_rotation_test.go",
+      "why": "会话轮换测试"
+    },
+    {
+      "path": "internal/upstream/attempt_timeout_test.go",
+      "why": "尝试超时看门狗测试"
+    },
+    {
+      "path": "internal/server/session_namespace.go",
+      "why": "多租户会话键隔离（X-WB-Tenant → 命名空间键）"
+    },
+    {
+      "path": "internal/server/session_namespace_test.go",
+      "why": "上一条的测试"
+    },
+    {
+      "path": "internal/server/attempt_audit.go",
+      "why": "选号尝试审计日志（只观测）"
+    },
+    {
+      "path": "internal/server/upgrade_body_test.go.disabled",
+      "why": "孤儿测试（引用不存在的 Config.MaxBodyBytes），停用以免 go test 编译失败"
+    },
+    {
+      "path": "internal/redisstore/filebinds.go",
+      "why": "本地原子会话镜像，替代 Redis 依赖"
+    },
+    {
+      "path": "internal/redisstore/filebinds_test.go",
+      "why": "上一条的测试"
+    },
+    {
+      "path": "internal/redisstore/closure_load_test.go",
+      "why": "连接关闭覆盖测试"
+    },
+    {
+      "path": "internal/session/restore_expiry.go",
+      "why": "恢复绑定会话时保留剩余寿命"
+    },
+    {
+      "path": "internal/session/restore_expiry_test.go",
+      "why": "上一条的测试"
+    }
+  ],
+  "upstream_patches": {
+    "_comment": "dev/upstream-patches 里 0001-0011 的功能在 v2.8.3 已全部被上游吸收或改名实现，逐条 grep 核对过；补丁文件仅作历史记录，不再重放。",
+    "absorbed_in_v2_8_3": [
+      "0001",
+      "0002",
+      "0003",
+      "0004",
+      "0005",
+      "0006",
+      "0007",
+      "0008",
+      "0009",
+      "0010",
+      "0011"
+    ],
+    "verify_cmds": [
+      "grep -rl 11148 --include=*.go upstream/",
+      "grep -rl addListingCompat --include=*.go upstream/",
+      "grep -rl scheduleSeed --include=*.go upstream/",
+      "grep -rl credit_exhausted --include=*.go upstream/",
+      "grep -rl X-Conversation-ID --include=*.go upstream/",
+      "grep -rl PickWeight --include=*.go upstream/"
+    ]
+  },
+  "merge_conflicts": {
+    "_comment": "v2.4.0 → v2.8.3 实测的 4 处文本冲突 + 1 处语义断层，fork-upgrade.sh 内置这些解法。",
+    "server/main.py": "两边 import 都留（本地上 budgets、上游加 cooling）",
+    "server/routers/gateway.py": "两边 import 都留（本地 observability、上游 modelcatalog）",
+    "server/routers/system.py": "删除 set_upstream_ref 路由（上游 v2.8.0 废弃 upstream_ref）",
+    "server/services/updater.py": "删除 UPSTREAM_API_REPO（上游改为上游随包分发）",
+    "server/upstreamschema.py": "语义断层，非文本冲突：需给 schema 加 top_level 支持 reasoning_as_content"
+  },
+  "frontend": {
+    "vendor_braces": {
+      "path": "web/vendor/braces",
+      "why": "GHSA-vfj7-8cjw-p6xm（ReDoS）安全补丁，上游没有",
+      "wired_via": "web/package.json overrides: {\"braces\": \"file:./vendor/braces\"}",
+      "provenance": "web/vendor/braces/PATCH_PROVENANCE.json（11 个文件 sha256）"
+    },
+    "local_pages": [
+      "web/app/(main)/accounts/page.tsx",
+      "web/app/(main)/models/page.tsx",
+      "web/app/(main)/playground/page.tsx",
+      "web/app/(main)/tasks/page.tsx",
+      "web/app/(auth)/login/page.tsx",
+      "web/components/common/settings/UpdatePanel.tsx"
+    ]
+  },
+  "gateway_behaviors": [
+    "会话键注入：x-session-id → conversation_id（提升上游缓存命中，实测 98.4%）",
+    "/v1/usage 按密钥用量自查（上游 issue #137 的配额自查改挂 /v1/key，本地保留双份）",
+    "502 抖动提示：Retry-After + X-Upstream-Blip + 错误体 retry_after_seconds",
+    "max_tokens 钳制 + body 硬顶 512MB（WB_GATEWAY_MAX_BODY_CEILING_MB）",
+    "按上游身份分池出站连接（pooledhttp.py）"
+  ],
+  "dsn_fingerprint_rules": {
+    "_comment": "WorkBuddy 上游对第三方客户端的指纹识别，网关侧改写规避；DSH 配置侧一律不动。",
+    "rule_1_system_sentence": "sanitizeDshRe + 本地定制：只把 powered by/built on 换成 running on（不整句替换，保留角色与模型名）",
+    "rule_2_web_gui": "sanitizeDshGuiRe：DeepSeek Harness → DeepSeek-Harness（上游 v2.8.3 自带，语义保留）"
+  },
+  "go_files_modified": [
+    {
+      "path": "internal/pool/state.go",
+      "why": "8 处：creditsKnown 权威余额观测、skipExhausted 额度耗尽过滤、慢速降权出池判定"
+    },
+    {
+      "path": "internal/pool/entry.go",
+      "why": "7 处：额度耗尽/慢速降权的账号状态"
+    },
+    {
+      "path": "internal/pool/pool.go",
+      "why": "4 处：skipExhausted 开关与选号口径"
+    },
+    {
+      "path": "internal/pool/pick.go",
+      "why": "2 处：加权选号里叠加慢速降权与额度耗尽过滤"
+    },
+    {
+      "path": "internal/pool/cooldown.go",
+      "why": "2 处：冷却口径并入 slowUntil/degradeUntil"
+    },
+    {
+      "path": "internal/pool/persist.go",
+      "why": "1 处：持久化新增状态字段"
+    },
+    {
+      "path": "internal/session/session.go",
+      "why": "3 处：会话粘性与本地镜像联动"
+    },
+    {
+      "path": "internal/server/handler.go",
+      "why": "1 处：流式成功路径喂 TTFB 样本"
+    },
+    {
+      "path": "cmd/server/config.go",
+      "why": "11 处：slow_degrade/slow_ttfb/slow_streak/slow_cooldown 等本地配置项"
+    },
+    {
+      "path": "cmd/server/main.go",
+      "why": "3 处：慢速降权与尝试看门狗的装配"
+    },
+    {
+      "path": "internal/upstream/sanitize.go",
+      "why": "DSH 句式规避改为只换连接词（powered by/built on → running on），保留角色与模型名；上游原版是整句替换成 helpful AI assistant"
+    },
+    {
+      "path": "internal/upstream/sanitize_test.go",
+      "why": "断言跟随上一条：验证语义保留且改写后不再命中指纹"
+    }
+  ]
+}
