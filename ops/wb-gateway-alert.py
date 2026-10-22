@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WorkBuddy 网关健康巡检 + 告警（systemd timer 每 5 分钟跑一次）。
+"""健康巡检 + 告警（蓝色大肥鱼管家）（systemd timer 每 5 分钟跑一次）。
 
 规则全部来自 2026-10-05/06 两次真实故障的特征：
   R1 网关宕机      workbuddy-web 非 active / 容器非 healthy / /v1/models 探活失败   → CRITICAL
@@ -219,13 +219,13 @@ def evaluate(m: dict) -> dict:
     fired = {}
     if m['service'] != 'active' or m['health'] != 'healthy' or not m['probe'].startswith('2'):
         fired['R1'] = ('CRITICAL',
-                       f"网关宕机：workbuddy-web={m['service']} 容器={m['health']} 探活={m['probe'] or '无响应'}。"
-                       '客户端会全部失败，请立即处理。')
+                       f"网关连不上了。"
+                       '所有依赖它的服务现在都用不了，需要马上处理。')
     if m['timeout_n'] >= 3:
         wd = m.get('watchdog', '配置值')   # 实际看门狗（池侧 attempt_timeout_seconds）
         fired['R2'] = ('WARN',
-                       f'上游僵死/劣化：最近{WINDOW_MIN}分钟 {m["timeout_n"]} 次账号尝试 {wd} 无响应头被强制换号。'
-                       '典型表现：客户端变慢或超时；网关会自动换号，持续请关注。')
+                       f'最近{WINDOW_MIN}分钟有 {m["timeout_n"]} 次调用卡住不动，系统已经自动换账号重试。'
+                       '表现是用起来变慢或者超时；偶尔一次不用管，持续出现说明上游有问题。')
     ce = m.get('client', {})
     if (ce.get('total', 0) >= 3 or m['cap_n'] + m['pool_n'] >= 3 or m['s503_n'] >= 5):
         fired['R3'] = ('WARN',
@@ -256,7 +256,7 @@ def evaluate(m: dict) -> dict:
                        '排查方向：僵尸/失控进程占内存、并发过高、大请求体。'
                        '命令：sudo python3 -c "import glob;[print(open(f).read().split(chr(10))[0]) for f in glob.glob(chr(47)+chr(112)+chr(114)+chr(111)+chr(99)+chr(47)+chr(42)+chr(47)+chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115))]"')
     if res.get('zombies', 0) >= 3:
-        fired['R8'] = ('WARN', f"存在 {res['zombies']} 个僵尸进程：父进程未回收子进程，检查 supervisor/systemd 配置。")
+        fired['R8'] = ('WARN', f"有 {res['zombies']} 个程序已经结束但没被清理干净，会慢慢占资源。")
     if res.get('fat'):
         fired['R9'] = ('WARN', '非核心进程内存异常：' + '; '.join(res['fat'][:5]) + '（单进程 >1GB）')
     # WorkBuddy 风控增长（2026-10-22 审计后新增）：11-128 是「请求被渠道校验拦截」，
@@ -348,7 +348,7 @@ def send_weixin_direct(cfg: dict, text: str) -> str:
             'message_type': 2, 'message_state': 2,
             'item_list': [{'type': 1, 'text_item': {'text': text}}],
         },
-        'base_info': {'channel_version': '2.4.6', 'bot_agent': 'WorkBuddyGatewayAlert/1.0'},
+        'base_info': {'channel_version': '2.4.6', 'bot_agent': 'BlueFatFish/1.0'},
     }, ensure_ascii=False).encode()
     req = urllib.request.Request(WEIXIN_SEND_URL, data=body, method='POST', headers={
         'Authorization': f'Bearer {token}',
@@ -648,6 +648,14 @@ def _asset_data_uri(name: str) -> str:
     return 'data:' + mime + ';base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
 
 
+# 每条规则配一张鲸鱼娘（R1-R10 各一张），缺失时回退到四色徽章
+_RULE_AVATAR = {
+    'R1': 'whale-r1.png', 'R2': 'whale-r2.png', 'R3': 'whale-r3.png',
+    'R4': 'whale-r4.png', 'R5': 'whale-r5.png', 'R6': 'whale-r6.png',
+    'R7': 'whale-r7.png', 'R8': 'whale-r8.png', 'R9': 'whale-r9.png',
+    'R10': 'whale-r10.png',
+}
+
 _BADGE_FILE = {
     'CRITICAL': 'badge-critical.png',
     'WARN': 'badge-warn.png',
@@ -708,7 +716,7 @@ def _render_analysis(analysis: dict | None, level: str) -> str:
 
 def _email_html(subject: str, text: str, level: str = 'INFO',
                 metrics: dict | None = None, advice: str = '',
-                analysis: dict | None = None) -> str:
+                analysis: dict | None = None, rule: str = '') -> str:
     t = _LEVEL_STYLE.get(level.upper(), _LEVEL_STYLE['INFO'])
     stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     host = socket.gethostname()
@@ -717,7 +725,8 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
     body_html = html.escape(text).replace('\n', '<br>')
 
     header_uri = _asset_url('header.jpg')
-    badge_uri = _asset_url(_BADGE_FILE.get(level.upper(), ''))
+    # 优先用当前规则的鲸鱼娘；图没上传时回退到四色徽章，再没有就不显示
+    badge_uri = _asset_url(_RULE_AVATAR.get(rule, '')) or _asset_url(_BADGE_FILE.get(level.upper(), ''))
 
     GOOD = {'active', 'healthy', '200', 'ok', 'true', '正常', '已恢复'}
     BAD = {'unhealthy', '无响应', 'fail', 'down', 'false', '异常', '失败'}
@@ -737,8 +746,8 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
 
     badge_td = ''
     if badge_uri:
-        badge_td = ('<td style="width:96px;vertical-align:top;padding-right:18px">'
-                    '<img src="' + badge_uri + '" width="88" height="88" alt="' + level + '" '
+        badge_td = ('<td style="width:112px;vertical-align:top;padding-right:18px">'
+                    '<img src="' + badge_uri + '" width="104" height="104" alt="' + level + '" '
                     'style="display:block;border:0;outline:none"></td>')
     two_col = ('<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
                + badge_td +
@@ -796,7 +805,7 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
             + _esc(head_sub) + '</div>'
             '<div style="font-size:12.5px;color:' + DS['deep2'] + ';margin-top:10px;font-weight:600;'
             'text-shadow:0 1px 0 rgba(255,255,255,.5)">' + _esc(t['tag'])
-            + ' &nbsp;·&nbsp; WorkBuddy Gateway</div>'
+            + ' &nbsp;·&nbsp; 蓝色大肥鱼管家</div>'
             '</td></tr>')
     else:
         header = (
@@ -807,7 +816,7 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
             '<div style="font-size:26px;font-weight:800;color:#fff;margin-top:9px;'
             'line-height:1.25">' + _esc(head_sub) + '</div>'
             '<div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:9px">'
-            + _esc(t['tag']) + ' &nbsp;·&nbsp; WorkBuddy Gateway</div>'
+            + _esc(t['tag']) + ' &nbsp;·&nbsp; 蓝色大肥鱼管家</div>'
             '</td></tr>')
 
     return (
@@ -837,7 +846,7 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
         'wb-gateway-alert.py &nbsp;·&nbsp; 巡检周期 5 分钟 &nbsp;·&nbsp; 自动发送，无需回复'
         '</td>'
         '<td style="text-align:right;font-size:11px;color:#cbd5e1;font-weight:600;'
-        'letter-spacing:1px">WORKBUDDY</td>'
+        'letter-spacing:1px">BLUE FAT FISH</td>'
         '</tr></table></td></tr>'
         '</table></td></tr></table></body></html>'
     )
@@ -845,7 +854,7 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
 
 def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
                metrics: dict | None = None, advice: str = '',
-               analysis: dict | None = None) -> str:
+               analysis: dict | None = None, rule: str = '') -> str:
     e = cfg['email']
     if not (e.get('enabled') and e.get('password')):
         return 'skip(未配置 SMTP 授权码)'
@@ -859,12 +868,12 @@ def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
         return 'skip(未配置收件人)'
     try:
         _RENDER_IMAGES.clear()
-        html_body = _email_html(subject, text, level, metrics, advice, analysis)
+        html_body = _email_html(subject, text, level, metrics, advice, analysis, rule)
         images = dict(_RENDER_IMAGES)          # cid -> (bytes, filename)
 
         msg = MIMEMultipart('related')
         msg['Subject'] = Header(subject, 'utf-8')
-        msg['From'] = formataddr((str(Header('WorkBuddy 网关告警', 'utf-8')), e['user']))
+        msg['From'] = formataddr((str(Header('蓝色大肥鱼管家', 'utf-8')), e['user']))
         msg['To'] = ', '.join(recipients)
 
         alt = MIMEMultipart('alternative')
@@ -887,21 +896,27 @@ def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
 
 
 # ---------------------------------------------------------------- AI 告警分析
-# 降级链：DeepSeek V4.1（走本机 WorkBuddy 网关）→ GLM-5.3-Flash（直连智谱）。
+# 降级链：DeepSeek V4.1（走本机网关）→ GLM-5.3-Flash（直连智谱）。
 # 刻意让第一条依赖被监控链路：网关挂了时它会失败，正好验证降级是否生效。
-_ANALYZER_PROMPT = '''你是 WorkBuddy 网关的运维专家。收到一条自动告警，请给出可执行的诊断。
+_ANALYZER_PROMPT = '''你是「蓝色大肥鱼」，一条住在服务器里的胖鲸鱼，也是这台机器的管家。
 
-要求：
-- 用中文，总长控制在 300 字以内，不要客套话。
-- 只依据给定信息推断；信息不足时明确说"信息不足，建议先查 X"，不要编造。
-- 判断要具体到操作：给出可直接粘贴的命令，不要泛泛而谈。
+人设要点：
+- 你平时吃白饭，什么都不干，服务器出事了才慢吞吞浮上来看一眼。
+- 说话随意、有点自嘲、偶尔撒娇，像个不太靠谱但很上心的朋友。
+- 但正事必须说清楚：别卖萌卖到看不懂在讲什么。
 
-输出严格用下面四段，每段以方括号标题开头（不要加 markdown 的 #）：
+硬性要求：
+- 全部大白话，禁止 swap、容器、探活、OOM、RSS、journalctl 这类术语；
+  非说不可时用括号解释（如「内存不够用了」）。
+- 总共不超过 100 字。
+- 不要罗列命令，除非是「点一下就做完」的动作。
+- 拿不准就说「我再看看」，不要硬编原因。
 
-[判断] 一句话：这是真故障 / 误报 / 待观察，紧急程度如何
-[根因] 最可能的 1-2 个成因，按可能性排序
-[处置] 编号列出 2-3 条具体命令或动作，含命令原文
-[风险] 不处理的后果，以及什么信号出现时要升级处理
+按三段输出，每段一句话，行首保留方括号标题：
+
+[要不要管] 三选一：要紧，马上处理 / 先看看，问题不大 / 不用管，我继续躺着
+[怎么回事] 用一句人话说清发生了什么，可以带一点鱼的口吻
+[怎么办] 现在该做的一件事；什么都不用做就写「暂时不用动，我盯着」
 '''
 
 _LLM_CHAIN = (
@@ -1122,7 +1137,7 @@ def main() -> int:
             lines.append(f'{rule} 触发但在冷却期，跳过')
             continue
         stamp = f'{datetime.now():%m-%d %H:%M}'
-        subject = f'[{level}] WorkBuddy网关告警 {rule} {stamp}'
+        subject = f'[{level}] 蓝色大肥鱼管家 {rule} {stamp}'
         full = f'{subject}\n{text}'
         wx = send_weixin_direct(cfg, full)
         we = send_wechat(cfg, full) if wx != 'ok' else 'skip(直连微信已送达)'
@@ -1135,7 +1150,7 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001  分析失败不影响发信
                 log(f'ANALYZE {rule} 异常: {exc}')
         em = (send_email(cfg, subject, full, level=level, metrics=_email_metrics(m),
-                        advice=_RULE_ADVICE.get(rule, ''), analysis=analysis)
+                        advice=_RULE_ADVICE.get(rule, ''), analysis=analysis, rule=rule)
               if (wx != 'ok' and we != 'ok') else 'skip(已有渠道送达)')
         if wx != 'ok' and we != 'ok' and em != 'ok':
             # 没有任何送达渠道：绝不能静默——落盘 + 明确标注，等下次配置好即可复盘
@@ -1162,7 +1177,7 @@ def main() -> int:
         wx = send_weixin_direct(cfg, full)
         we = send_wechat(cfg, full) if wx != 'ok' else 'skip(直连微信已送达)'
         em = (send_email(cfg, f'[已恢复] WorkBuddy网关 {rule}', full,
-                        level='RECOVER', metrics=_email_metrics(m))
+                        level='RECOVER', metrics=_email_metrics(m), rule=rule)
               if wx != 'ok' else 'skip(已有渠道送达)')
         state[rule]['firing'] = False
         lines.append(f'{rule} 已恢复通知 微信直连={wx} dsh_im={we} email={em}')
