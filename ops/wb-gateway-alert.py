@@ -656,8 +656,59 @@ _BADGE_FILE = {
 }
 
 
+
+def _render_analysis(analysis: dict | None, level: str) -> str:
+    """把模型返回的分段文本渲染成「AI 诊断」区块。"""
+    if not analysis or not analysis.get('ok') or not analysis.get('text'):
+        return ''
+    t = _LEVEL_STYLE.get(level.upper(), _LEVEL_STYLE['INFO'])
+    raw = analysis['text']
+    model = analysis.get('model', 'AI')
+    # 按 [标题] 切段
+    parts = []
+    cur_title, cur_body = '', []
+    for line in raw.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('[') and ']' in stripped:
+            if cur_title or cur_body:
+                parts.append((cur_title, '\n'.join(cur_body).strip()))
+            cur_title = stripped[:stripped.index(']') + 1]
+            cur_body = [stripped[stripped.index(']') + 1:].strip()]
+        else:
+            cur_body.append(line)
+    if cur_title or cur_body:
+        parts.append((cur_title, '\n'.join(cur_body).strip()))
+
+    rows = []
+    for title, body in parts:
+        if not body and not title:
+            continue
+        body_html = html.escape(body).replace('\n', '<br>')
+        rows.append(
+            '<tr><td style="padding:10px 0 0;vertical-align:top;width:64px">'
+            '<span style="display:inline-block;font-size:10.5px;font-weight:700;color:'
+            + t['accent'] + ';letter-spacing:.5px">' + _esc(title.strip('[]')) + '</span></td>'
+            '<td style="padding:10px 0 0;font-size:13px;line-height:1.8;color:#334155">'
+            + body_html + '</td></tr>')
+    if not rows:
+        rows = ['<tr><td style="font-size:13px;line-height:1.8;color:#334155">'
+                + html.escape(raw).replace('\n', '<br>') + '</td></tr>']
+
+    return (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" '
+        'style="margin-top:22px;background:#f8fafc;border:1px solid ' + DS['line'] + ';'
+        'border-radius:10px"><tr><td style="padding:14px 16px 16px">'
+        '<div style="font-size:11px;font-weight:700;letter-spacing:1.4px;color:' + DS['blue'] + ';'
+        'margin-bottom:4px">AI 诊断 <span style="font-weight:500;color:#94a3b8">· '
+        + _esc(model) + '</span></div>'
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%">'
+        + ''.join(rows) + '</table>'
+        '</td></tr></table>')
+
+
 def _email_html(subject: str, text: str, level: str = 'INFO',
-                metrics: dict | None = None, advice: str = '') -> str:
+                metrics: dict | None = None, advice: str = '',
+                analysis: dict | None = None) -> str:
     t = _LEVEL_STYLE.get(level.upper(), _LEVEL_STYLE['INFO'])
     stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     host = socket.gethostname()
@@ -776,7 +827,7 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
         '<div style="font-size:11px;color:#94a3b8;letter-spacing:1.5px;font-weight:600;'
         'margin:24px 0 9px">告警详情</div>'
         '<div style="font-size:14px;color:#1e293b;line-height:1.85">' + body_html + '</div>'
-        + bars + advice_html +
+        + bars + _render_analysis(analysis, level) + advice_html +
         '</td></tr>'
         '<tr><td style="background:#f8fafc;border:1px solid ' + DS['line'] + ';border-top:none;'
         'border-radius:0 0 16px 16px;padding:16px 28px">'
@@ -793,7 +844,8 @@ def _email_html(subject: str, text: str, level: str = 'INFO',
 
 
 def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
-               metrics: dict | None = None, advice: str = '') -> str:
+               metrics: dict | None = None, advice: str = '',
+               analysis: dict | None = None) -> str:
     e = cfg['email']
     if not (e.get('enabled') and e.get('password')):
         return 'skip(未配置 SMTP 授权码)'
@@ -807,7 +859,7 @@ def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
         return 'skip(未配置收件人)'
     try:
         _RENDER_IMAGES.clear()
-        html_body = _email_html(subject, text, level, metrics, advice)
+        html_body = _email_html(subject, text, level, metrics, advice, analysis)
         images = dict(_RENDER_IMAGES)          # cid -> (bytes, filename)
 
         msg = MIMEMultipart('related')
@@ -832,6 +884,121 @@ def send_email(cfg: dict, subject: str, text: str, level: str = 'INFO',
         return 'ok'
     except Exception as exc:  # noqa: BLE001
         return f'fail: {exc}'
+
+
+# ---------------------------------------------------------------- AI 告警分析
+# 降级链：DeepSeek V4.1（走本机 WorkBuddy 网关）→ GLM-5.3-Flash（直连智谱）。
+# 刻意让第一条依赖被监控链路：网关挂了时它会失败，正好验证降级是否生效。
+_ANALYZER_PROMPT = '''你是 WorkBuddy 网关的运维专家。收到一条自动告警，请给出可执行的诊断。
+
+要求：
+- 用中文，总长控制在 300 字以内，不要客套话。
+- 只依据给定信息推断；信息不足时明确说"信息不足，建议先查 X"，不要编造。
+- 判断要具体到操作：给出可直接粘贴的命令，不要泛泛而谈。
+
+输出严格用下面四段，每段以方括号标题开头（不要加 markdown 的 #）：
+
+[判断] 一句话：这是真故障 / 误报 / 待观察，紧急程度如何
+[根因] 最可能的 1-2 个成因，按可能性排序
+[处置] 编号列出 2-3 条具体命令或动作，含命令原文
+[风险] 不处理的后果，以及什么信号出现时要升级处理
+'''
+
+_LLM_CHAIN = (
+    {
+        'name': 'DeepSeek-V4.1',
+        'base': 'http://127.0.0.1:7864/v1',
+        'model': 'deepseek-v4.1-flash',
+        'key_source': 'gateway',
+        'timeout': 60,
+    },
+    {
+        'name': 'GLM-5.3-Flash',
+        'base': 'https://open.bigmodel.cn/api/coding/paas/v4',
+        'model': 'glm-5.3-flash',
+        'key_source': 'zai',
+        'timeout': 60,
+    },
+)
+
+
+def _gateway_api_key() -> str:
+    """从告警配置或 DSH 凭据里取本机网关的 wbk_ 钥匙。"""
+    try:
+        cfg = load_config()
+        k = (cfg.get('analyzer') or {}).get('gateway_key')
+        if k:
+            return k
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import yaml  # type: ignore
+        cred = yaml.safe_load(Path('/home/agentuser/.dsh/.credentials.yaml').read_text(encoding='utf-8'))
+        return (cred.get('records', {}).get('llm-pi-ai/zhihui', {}) or {}).get('key', '')
+    except Exception:  # noqa: BLE001
+        return ''
+
+
+def _zai_api_key() -> str:
+    try:
+        import yaml  # type: ignore
+        cred = yaml.safe_load(Path('/home/agentuser/.dsh/.credentials.yaml').read_text(encoding='utf-8'))
+        return (cred.get('refs', {}) or {}).get('ZAI_CODING_CN_API_KEY', '')
+    except Exception:  # noqa: BLE001
+        return ''
+
+
+def _llm_call(step: dict, system: str, user: str) -> str:
+    key = _gateway_api_key() if step['key_source'] == 'gateway' else _zai_api_key()
+    if not key:
+        raise RuntimeError('missing key for ' + step['name'])
+    body = json.dumps({
+        'model': step['model'],
+        'messages': [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
+        ],
+        'temperature': 0.2,
+        'max_tokens': 2000,
+        'stream': False,
+    }).encode()
+    req = urllib.request.Request(
+        step['base'].rstrip('/') + '/chat/completions', data=body,
+        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key},
+        method='POST')
+    with urllib.request.urlopen(req, timeout=step['timeout']) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    msg = (data.get('choices') or [{}])[0].get('message') or {}
+    content = (msg.get('content') or '').strip()
+    if not content:
+        # 思考型模型（如 GLM-5.3 系列在部分档位）会把整段输出放进 reasoning_content，
+        # content 留空。此时用 reasoning_content 兜底，否则降级链会误判为失败。
+        content = (msg.get('reasoning_content') or '').strip()
+    if not content:
+        finish = (data.get('choices') or [{}])[0].get('finish_reason', '?')
+        raise RuntimeError(f'empty content from {step["name"]} (finish_reason={finish})')
+    return content
+
+
+def analyze_alert(rule: str, level: str, detail: str, metrics: dict) -> dict:
+    """返回 {ok, model, text, error}；全部失败时 ok=False，邮件退回纯模板。"""
+    user = (
+        f'告警规则：{rule}（级别 {level}）\n'
+        f'告警内容：{detail}\n'
+        f'当前指标：{json.dumps(metrics, ensure_ascii=False)}\n'
+        f'主机：{socket.gethostname()}\n'
+        f'时间：{datetime.now():%Y-%m-%d %H:%M:%S}\n'
+    )
+    errors = []
+    for step in _LLM_CHAIN:
+        try:
+            text = _llm_call(step, _ANALYZER_PROMPT, user)
+            log(f'ANALYZE {rule} via {step["name"]}: ok ({len(text)} 字)')
+            return {'ok': True, 'model': step['name'], 'text': text, 'error': ''}
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f'{step["name"]}: {type(exc).__name__} {str(exc)[:80]}')
+            log(f'ANALYZE {rule} via {step["name"]}: fail {exc}')
+    return {'ok': False, 'model': '', 'text': '', 'error': ' | '.join(errors)}
 
 
 # ---------------------------------------------------------------- 邮件内容辅助
@@ -959,8 +1126,16 @@ def main() -> int:
         full = f'{subject}\n{text}'
         wx = send_weixin_direct(cfg, full)
         we = send_wechat(cfg, full) if wx != 'ok' else 'skip(直连微信已送达)'
+        # 只有 CRITICAL / WARN 才值得让模型分析：INFO 类是「仅供参考」，
+        # 调用一次要 5-16 秒 + 几百 token，不划算。
+        analysis = None
+        if level in ('CRITICAL', 'WARN'):
+            try:
+                analysis = analyze_alert(rule, level, text, _email_metrics(m))
+            except Exception as exc:  # noqa: BLE001  分析失败不影响发信
+                log(f'ANALYZE {rule} 异常: {exc}')
         em = (send_email(cfg, subject, full, level=level, metrics=_email_metrics(m),
-                        advice=_RULE_ADVICE.get(rule, ''))
+                        advice=_RULE_ADVICE.get(rule, ''), analysis=analysis)
               if (wx != 'ok' and we != 'ok') else 'skip(已有渠道送达)')
         if wx != 'ok' and we != 'ok' and em != 'ok':
             # 没有任何送达渠道：绝不能静默——落盘 + 明确标注，等下次配置好即可复盘
