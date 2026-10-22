@@ -197,7 +197,7 @@
     },
     {
       "path": "internal/server/handler.go",
-      "why": "1 处：流式成功路径喂 TTFB 样本"
+      "why": "流式成功路径喂 TTFB 样本；2026-10-22 补第三种流错误（非空流、非明确截断）的 WARN 留痕——此前该分支静默，一次 TTFB 3.3s 后秒断的请求在上游日志里无迹可查"
     },
     {
       "path": "cmd/server/config.go",
