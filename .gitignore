@@ -143,3 +143,4 @@ start-all.cmd
 stop-all.cmd
 dev/.weight-task
 dev/.shots-weight-task
+web/node_modules
