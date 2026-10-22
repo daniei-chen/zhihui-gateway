@@ -158,6 +158,11 @@ jobs:
             echo "::error::包内 upstream/.upstream-id 缺失或为空；更新器无法判断是否需要同步上游。"
             exit 1
           fi
+          # 上游镜像的稳定标识随镜像 label 下发（dev.workbuddy.upstream-id）：
+          # 面板读本机容器的镜像 label 即可判断「镜像部署且与本次发布同源」，
+          # 不再要求镜像部署用户的磁盘上有源码目录（issue #254）。
+          UPSTREAM_ID="$(cat "$STAGE/upstream/.upstream-id")"
+          echo "upstream_id=$UPSTREAM_ID" >> $GITHUB_OUTPUT
           # 写入版本标记：管理端「系统更新」页与安装流程据此显示当前版本
           echo "${TAG}" > "$STAGE/.version"
           # 不含运行时数据与凭据
@@ -461,6 +466,9 @@ jobs:
           tags: |
             ${{ steps.upstream_image.outputs.name }}:${{ steps.vars.outputs.version }}
             ${{ steps.upstream_image.outputs.name }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.vars.outputs.version }}
+            dev.workbuddy.upstream-id=${{ steps.pack.outputs.upstream_id }}
           provenance: false
 
       - name: 记录上游镜像 digest

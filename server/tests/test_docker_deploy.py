@@ -980,6 +980,23 @@ class UpstreamImagePublishTest(unittest.TestCase):
         self.assertIn('continue-on-error: true', block,
                       '镜像推不上去不该让发布作业标红')
 
+    def test_upstream_image_carries_version_and_upstream_id_labels(self) -> None:
+        """镜像必须自带版本与上游标识 label。
+
+        镜像部署（compose 用 image: 不用 build:）下，本机磁盘没有源码目录，
+        .upstream-id 文件不存在，面板会把「随包上游与本机不一致」永远挂在
+        界面上。镜像有了自描述 label，面板读容器镜像的 labels 就能判断
+        「镜像部署且与本次发布同源」。label 一丢，这条判定路径就断了。
+        """
+        block = self._step('构建并推送上游镜像')
+        self.assertIn('org.opencontainers.image.version=', block,
+                      '上游镜像缺少版本 label，镜像部署无法自报版本')
+        self.assertIn('dev.workbuddy.upstream-id=${{ steps.pack.outputs.upstream_id }}',
+                      block, '上游镜像缺少 upstream-id label，面板无法判定镜像与发布同源')
+        pack = self._step('组装发布目录')
+        self.assertIn('echo "upstream_id=$UPSTREAM_ID" >> $GITHUB_OUTPUT', pack,
+                      'pack 步骤没有产出 upstream_id，镜像 label 会渲染成空串')
+
 
 class UpdaterBootstrapPackagingTest(unittest.TestCase):
     """发布包必须把更新器放一份到 server/（issue #240）。

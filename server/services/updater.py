@@ -340,13 +340,29 @@ def _pid_alive(pid: object) -> bool:
         return _pid_alive_windows(pid_int)
     try:
         os.kill(pid_int, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
     except Exception:  # noqa: BLE001
         return False
+    # Linux 额外判僵尸：os.kill(pid, 0) 对 zombie 进程**静默成功**（PID 槽位还在，
+    # 只是进程已退出、等待父进程回收）。若 update.lock 里记录的 pid 恰好变成
+    # zombie（更新进程退出后父进程未及时 wait），_lock_active() 会一直判活，
+    # read_status() 把状态强制拉回 running=true，前端永久显示「正在更新」，
+    # 而状态文件里其实早就写好了 running=false / step=更新完成。
+    # 因此读 /proc/<pid>/stat 的状态字段，'Z' 视为已死。
+    try:
+        with open(f'/proc/{pid_int}/stat', 'rb') as f:
+            raw = f.read()
+        # 格式：pid (comm) state ... —— comm 可含空格和右括号，故从最后一个 ')' 后切。
+        state = raw.rsplit(b')', 1)[1].split()[0]
+        if state == b'Z':
+            return False
+    except (OSError, IndexError):
+        # 读不到 /proc（非 Linux、容器限制等）时退回 os.kill 的结论，保持原行为。
+        pass
+    return True
 
 
 def _pid_alive_windows(pid_int: int) -> bool:
