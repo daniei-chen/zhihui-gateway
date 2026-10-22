@@ -67,3 +67,39 @@ location ^~ /mail-assets/ {
 
 - 微信两条通道当前不可用：`weixin_direct` 返回 `{"ret":-2,"errmsg":"prepare failed"}`，
   `dsh_im` 返回 `401`。**邮件是当前唯一可用的告警通道。**
+
+## 触发方式（两条路径）
+
+| 路径 | 触发源 | 检测延迟 | 常驻开销 |
+|---|---|---|---|
+| **OnFailure** | `workbuddy-web.service` 的 `OnFailure=` | **秒级** | 0 |
+| **定时巡检** | `wb-gateway-alert.timer`（`*:0/1`） | **≤1 分钟** | 0（跑完退出） |
+
+```ini
+# workbuddy-web.service
+[Unit]
+OnFailure=wb-alert-onfailure@%n.service
+
+# wb-alert-onfailure@.service（模板）
+[Service]
+ExecStart=/opt/workbuddy-manager/venv/bin/python /usr/local/bin/wb-gateway-alert.py --onfailure %i
+```
+
+`--onfailure` 模式不跑巡检，直接发一封信，内容含 `ActiveState / SubState / Result / NRestarts`
+与最后 12 行 journal —— 崩溃现场第一手证据。
+
+**刻意没做 `journalctl -f` 常驻监听**：需持续 30–50MB 常驻内存，而这台机器
+（3.7G 总、DSH 自身占 750MB）余量只有 1.2–1.4G，不值得为「100 毫秒 vs 60 秒」付这个代价。
+
+**资源实测**：单次巡检 254ms / CPU 0.22s / 峰值内存 27MB（跑完释放）。
+
+## 覆盖边界
+
+| 故障 | 能告警 |
+|---|---|
+| 管理端进程崩溃 | ✅ OnFailure，秒级 |
+| 上游容器退出 | ✅ OnFailure（若挂同一钩子） |
+| 应用报错 / 资源异常 | ✅ 巡检，≤1 分钟 |
+| **整机宕机** | ❌ 脚本同机，需外部拨测 |
+| **网络断开** | ❌ 邮件发不出去 |
+| **SMTP 故障** | ❌ 落到 `/var/log/wb-gateway-alerts.fired` |
