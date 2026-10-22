@@ -215,5 +215,30 @@
       "path": "internal/upstream/sanitize_test.go",
       "why": "断言跟随上一条：验证语义保留且改写后不再命中指纹"
     }
-  ]
+  ],
+  "ops_layer": {
+    "_comment": "运维层（告警巡检 + 邮件素材），源码在 ops/，用 ops/install.sh 安装。不属于上游项目，升级不覆盖。",
+    "source_dir": "ops/",
+    "installer": "ops/install.sh",
+    "runtime_paths": {
+      "script": "/usr/local/bin/wb-gateway-alert.py",
+      "config": "/etc/wb-gateway-alert.json（600，不入库）",
+      "mail_assets": "/var/www/mail-assets/",
+      "nginx_route": "/mail-assets/ { auth_request off; root /var/www; }",
+      "systemd": "wb-gateway-alert.{service,timer}（5 分钟）"
+    },
+    "alert_rules": [
+      "R1 网关宕机",
+      "R2 上游僵死",
+      "R3 客户端拒绝",
+      "R4 上游限流",
+      "R5 备份过期",
+      "R6 异地副本未配",
+      "R7 swap 偏高",
+      "R8 僵尸进程",
+      "R9 单进程内存>1GB",
+      "R10 风控 11-128"
+    ],
+    "email_notes": "QQ 屏蔽 data URI、CID 也不渲染，最终走 HTTPS 外链；素材由 nginx /mail-assets/ 直出（auth_request off，邮件客户端无 cookie）"
+  }
 }
