@@ -3,12 +3,20 @@ import json
 import math
 from pathlib import Path
 SCHEMA = json.loads(Path(__file__).with_name('upstream-schema.json').read_text())
+# 顶层键（不属于任何配置段）：上游 wb2api 直接读 config.json 的顶层。
+# v2.7.0 起新增 reasoning_as_content（思考通道兜底），塞进段里会写到错误路径。
+TOP_LEVEL = SCHEMA.get('top_level', {})
 
 def validate(patch):
     if not isinstance(patch, dict):
         raise ValueError('上游配置必须是对象')
     sections = SCHEMA['sections']
     for section, values in patch.items():
+        if section in TOP_LEVEL:
+            typ = TOP_LEVEL[section]
+            if typ == 'bool' and not isinstance(values, bool):
+                raise ValueError(f'{section} 类型错误（要求 {typ}）')
+            continue
         if section not in sections:
             raise ValueError(f'未知或不可修改的配置段：{section}')
         if not isinstance(values, dict):
