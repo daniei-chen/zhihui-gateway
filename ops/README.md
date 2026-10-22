@@ -103,3 +103,42 @@ ExecStart=/opt/workbuddy-manager/venv/bin/python /usr/local/bin/wb-gateway-alert
 | **整机宕机** | ❌ 脚本同机，需外部拨测 |
 | **网络断开** | ❌ 邮件发不出去 |
 | **SMTP 故障** | ❌ 落到 `/var/log/wb-gateway-alerts.fired` |
+
+## AI 告警分析（2026-10-22）
+
+CRITICAL / WARN 级别触发时，先让模型给出诊断，再随邮件发出。INFO 不调用（省 token）。
+
+### 降级链
+
+```
+第 1 跳  DeepSeek-V4.1    http://127.0.0.1:7864/v1（本机网关）
+            ↓ 失败（网关自己挂了 / 超时）
+第 2 跳  GLM-5.3-Flash    https://open.bigmodel.cn/api/coding/paas/v4（智谱直连）
+            ↓ 也失败
+兜底      不发分析，邮件仍按原模板送达
+```
+
+**刻意让第一条依赖被监控链路**：网关宕机（R1）时它会连接拒绝，正好验证降级真能生效。
+
+### 提示词要点
+
+- 输出严格四段：`[判断]` `[根因]` `[处置]` `[风险]`
+- 要求给可直接粘贴的命令，不要泛泛而谈
+- 总长 300 字以内
+- 信息不足时明确说"建议先查 X"，禁止编造
+
+### 踩过的坑
+
+| 坑 | 现象 | 处理 |
+|---|---|---|
+| **max_tokens 太小** | GLM-5.3-Flash 的 reasoning 吃掉 780 tokens，content 返回空，被误判失败 | 提到 **2000** |
+| **思考型模型 content 为空** | 部分档位把输出全放 `reasoning_content` | 空 content 时用 `reasoning_content` 兜底 |
+
+### 耗时实测
+
+| 链路 | 耗时 | 输出长度 |
+|---|---|---|
+| DeepSeek-V4.1（网关） | ~5–6 秒 | 560–660 字 |
+| GLM-5.3-Flash（智谱） | ~16–25 秒 | 430–490 字 |
+
+降级到 GLM 时整体延迟约 25 秒（含第一跳失败等待），可接受。
