@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import html
 import socket
+import sys
 import smtplib
 import subprocess
 import urllib.request
@@ -888,7 +889,41 @@ def save_state(st: dict) -> None:
     STATE.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding='utf-8')
 
 
+def _onfailure_main(unit: str) -> int:
+    """systemd OnFailure 触发的即时告警：不跑巡检，直接发一封信。"""
+    cfg = load_config()
+    host = socket.gethostname()
+    status = sh(f'systemctl show {unit} -p ActiveState -p SubState -p Result -p NRestarts 2>/dev/null')
+    journal_tail = sh(f'journalctl -u {unit} -n 12 --no-pager -q 2>/dev/null')
+    text = (
+        f'{unit} 非正常退出，systemd 已通过 OnFailure 立即触发本告警。\n\n'
+        f'状态：\n{status.strip()}\n\n'
+        f'最近日志（最后 12 行）：\n{journal_tail.strip()[-1200:]}\n\n'
+        f'主机 {host} 会自动尝试拉起（Restart=always）；若连续失败，检查 journalctl -u {unit}。'
+    )
+    advice = ('先看状态里的 Result 字段：exit-code / signal / timeout 含义不同。'
+              '若 NRestarts 在快速上涨，说明起不来，先 systemctl stop 再排查，避免重启风暴。')
+    m = {}
+    for line in status.splitlines():
+        if '=' in line:
+            k, _, v = line.partition('=')
+            if k.strip() in ('ActiveState', 'SubState', 'Result', 'NRestarts'):
+                m[k.strip()] = v.strip()
+    r = send_email(cfg, f'[CRITICAL] {unit} 异常退出', text,
+                   level='CRITICAL', metrics=m, advice=advice)
+    log(f'ONFAILURE {unit}: email={r}')
+    return 0
+
+
 def main() -> int:
+    if '--onfailure' in sys.argv:
+        idx = sys.argv.index('--onfailure')
+        unit = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else 'workbuddy-web.service'
+        try:
+            return _onfailure_main(unit)
+        except Exception as exc:  # noqa: BLE001  兜底：绝不让告警本身抛错
+            log(f'ONFAILURE 处理失败: {exc}')
+            return 0
     cfg = load_config()
     state = load_state()
     m = collect()
