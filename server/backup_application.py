@@ -114,7 +114,10 @@ def verify_release_archive(archive):
                 (root/path).write_bytes(archive.extractfile(name).read())
             subprocess.run(['openssl','dgst','-sha256','-verify',str(root/'key.pem'),'-signature',str(root/'signature'),str(root/'manifest')],capture_output=True,check=True,timeout=10)
         signed=True
-    return {'release_id':manifest['release_id'],'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
+    # 本地清单（sign_release.py 生成）用的是 version 字段；旧清单曾叫 release_id。
+    # 两者都认，缺失时回落到空串——备份不该因一个展示用字段而整体失败。
+    release_id=manifest.get('release_id') or manifest.get('version') or ''
+    return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
 
 def main():
     os.umask(0o077)
