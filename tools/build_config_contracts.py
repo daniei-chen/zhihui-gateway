@@ -1,0 +1,105 @@
+"""Generate portable configuration contracts from actual runtime source reads."""
+from __future__ import annotations
+import ast
+import json
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parents[1]
+PREFIX = re.compile(r'WB(?:2API)?_[A-Z0-9_]+\Z')
+
+
+def literal(node):
+    try: return ast.literal_eval(node)
+    except (ValueError, TypeError): return None
+
+
+def generate(service, folder):
+    specs = {}
+    def entry(name, relative, line):
+        record = specs.setdefault(name, {'type':'string','sensitive':bool(re.search(
+            r'TOKEN|PASSWORD|SECRET|CREDENTIAL|(?:^|_)KEY(?:_|$)',name)), 'consumers':[]})
+        source = f'{relative}:{line}'
+        if source not in record['consumers']:record['consumers'].append(source)
+        return record
+    for path in sorted(folder.rglob('*.py')):
+        if 'tests' in path.parts or path.name in {'configcontract.py'}:continue
+        tree = ast.parse(path.read_text(encoding='utf-8-sig'))
+        relative = path.relative_to(ROOT).as_posix()
+        for node in ast.walk(tree):
+            if service == 'manager' and isinstance(node, ast.Constant) and isinstance(node.value,str) and PREFIX.fullmatch(node.value):
+                entry(node.value,relative,node.lineno)
+            if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Name) or not node.args:continue
+            helper = node.func.id
+            if helper not in {'_env','_env_str','_env_bool','_env_int','_env_float','_abs','_num'}:continue
+            name = literal(node.args[0])
+            if not isinstance(name,str):continue
+            if service == 'qtg':name = 'QTG_' + name.upper()
+            elif not PREFIX.fullmatch(name):continue
+            record = entry(name,relative,node.lineno)
+            kind = {'_env_int':'integer','_env_float':'number','_num':'number',
+                    '_env_bool':'boolean','_abs':'absolute_path'}.get(helper,'string')
+            if record['type']=='string':record['type']=kind
+            if kind=='boolean':record['boolean_dialect']=service
+            if len(node.args)>1:
+                default=literal(node.args[1])
+                if default is not None:record.setdefault('default',default)
+                else:record.setdefault('default_expression',ast.unparse(node.args[1]))
+            if service=='qtg' and helper in {'_env_int','_env_float'} and len(node.args)>=4:
+                record['minimum'],record['maximum']=literal(node.args[2]),literal(node.args[3])
+    for name, record in specs.items():
+        if any(word in name for word in ('TIMEOUT','_CANCEL_S','GRACEFUL_SHUTDOWN')) or name.endswith(('_SEC','_S')):
+            record['unit']='seconds'
+        elif name.endswith('_MB'):record['unit']='MiB'
+        elif name.endswith('_HOURS'):record['unit']='hours'
+        elif name.endswith('_DAYS'):record['unit']='days'
+        elif name.endswith('_PER_MIN'):record['unit']='per_minute'
+        elif record['type'] in {'integer','number'}:record['unit']='count'
+        if service=='manager' and record['type'] in {'integer','number'}:
+            record['minimum']=0
+            if any(word in name for word in ('TIMEOUT','_CANCEL_S','CONCURRENCY','_MAX_POOLS','_CONNECTIONS','BODY_')):
+                record.pop('minimum',None);record['exclusive_minimum']=0
+        if name.endswith(('_BASE','_PROBE_URL')):record['format']='http_url'
+        if name.endswith('_PROXY') and record['type']=='string' and name not in {'WB_TRUST_PROXY'}:
+            record['format']='proxy_url'
+        if name in {'WB_TRUSTED_PROXY_CIDRS','QTG_TRUSTED_EDGE_PEERS'}:record['format']='ip_network_list'
+    if service=='manager':
+        extras={'WB_GRACEFUL_SHUTDOWN_S':{'type':'number','default':650,'exclusive_minimum':0,'unit':'seconds'},
+                'WB_SAFE_RETRY_MAX':{'type':'integer','default':1,'minimum':1,'maximum':3},
+                'WB_MANAGER_PORT':{'minimum':0,'maximum':65535},
+                'WB_SECURE_COOKIE':{'choices':['auto','true','false','0','1']},
+                'WB2API_MODE':{'choices':['docker','native']},
+                'WB_RUN_MODE':{'choices':['auto','docker','container','systemd','host','native']}}
+        for name in ('WB_TRUST_PROXY','WB_ENABLE_DOCS','WB_AUDIT_ALL_ACCESS'):
+            extras[name]={'choices':['0','1']}
+        for name in ('WB_SESSION_DAYS','WB_TRUSTED_PROXY_HOPS','WB_GATEWAY_RATE_PER_MIN'):
+            extras[name]={'minimum':1}
+        extras['WB_SESSION_DAYS']['normalize_minimum']=1
+        extras['WB_ALLOW_UNVERIFIED_PACKAGE']={'type':'boolean','boolean_dialect':'manager','default':False}
+        # 告警投递配置（notify.py）。文件缺失即 disabled，默认值就是默认路径本身。
+        # 必须登记：本变量直接经 os.environ 读取，未登记会让设置它的实例启动即被
+        # unknown_variable 拒绝（N33）。
+        extras['WB_NOTIFY_CONFIG']={'type':'absolute_path','default':'/opt/notify/config.json'}
+        for name, patch in extras.items():
+            entry(name,'manual-reviewed-runtime-constraint',0).update(patch)
+    else:
+        # N34：QTG_WB_READ_MODE 此前只靠 adapters/workbuddy.read_mode 运行时兜底
+        # （非法值静默退回 sqlite），启动校验放行非法值。登记 choices 让它在启动期
+        # 就被拒绝，避免"配了 http 却一直读本地 SQL，且没人知道"。
+        for name,choices in {'QTG_WB_ENGINE':['on','off'],'QTG_QODER_ENGINE':['bff','qoder2'],
+                            'QTG_TRAE_ENGINE':['bff','aiwork'],
+                            'QTG_WB_READ_MODE':['sqlite','http']}.items():
+            specs[name]['choices']=choices
+        specs['QTG_LOG_LEVEL']['choices']=['debug','info','warning','warn','error','critical','fatal','notset']
+    schema={'schema':'zhihui-config/v1','service':service,
+            'prefixes':['WB_','WB2API_'] if service=='manager' else ['QTG_'],
+            'settings':dict(sorted(specs.items()))}
+    core=(ROOT/'tools/config_contract_core.py').read_text(encoding='utf-8')
+    (folder/'configcontract.py').write_text('# Generated by tools/build_config_contracts.py; edit tools/config_contract_core.py.\n'+core,encoding='utf-8')
+    (folder/'config-schema.json').write_text(json.dumps(schema,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    return len(specs)
+
+
+if __name__=='__main__':
+    print(json.dumps({service:generate(service,ROOT/folder) for service,folder in
+        [('manager','manager/server'),('qtg','qtg/app/qtg')]}))

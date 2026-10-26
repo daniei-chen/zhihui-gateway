@@ -1,0 +1,4311 @@
+{
+  "declarations": 214,
+  "unique_method_paths": 214,
+  "duplicate_groups": 0,
+  "duplicate_extra_declarations": 0,
+  "registration_order": [
+    "ip_guard",
+    "health",
+    "auth",
+    "read",
+    "actions",
+    "proxy",
+    "anthropic",
+    "data_admin",
+    "system",
+    "compat_fixes",
+    "compat_stats",
+    "compat_settings",
+    "compat_accounts_ext",
+    "authz",
+    "capabilities",
+    "compat"
+  ],
+  "effective_digest": "d2db5351bb03a805a67184147218058c79f13ef73afa4eb77d228b578afb85b6",
+  "effective_digest_schema": "method-path-module-handler/v2",
+  "effective": [
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/security/config",
+      "full_path": "/api/security/config",
+      "func": "compat_security_config_get",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 118,
+      "method": "POST",
+      "path": "/security/config",
+      "full_path": "/api/security/config",
+      "func": "compat_security_config_save",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 146,
+      "method": "GET",
+      "path": "/security/rules",
+      "full_path": "/api/security/rules",
+      "func": "compat_security_rules_list",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 151,
+      "method": "POST",
+      "path": "/security/rules",
+      "full_path": "/api/security/rules",
+      "func": "compat_security_rules_add",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 180,
+      "method": "DELETE",
+      "path": "/security/rules/{rid}",
+      "full_path": "/api/security/rules/{rid}",
+      "func": "compat_security_rules_delete",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 192,
+      "method": "GET",
+      "path": "/security/logs",
+      "full_path": "/api/security/logs",
+      "func": "compat_security_logs",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 198,
+      "method": "POST",
+      "path": "/security/logs/clear",
+      "full_path": "/api/security/logs/clear",
+      "func": "compat_security_logs_clear",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 16,
+      "method": "GET",
+      "path": "/healthz",
+      "full_path": "/healthz",
+      "func": "healthz",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 22,
+      "method": "GET",
+      "path": "/readyz",
+      "full_path": "/readyz",
+      "func": "readyz",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 37,
+      "method": "GET",
+      "path": "/metrics",
+      "full_path": "/metrics",
+      "func": "prometheus",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 42,
+      "method": "GET",
+      "path": "/api/v1/health",
+      "full_path": "/api/v1/health",
+      "func": "health_detail",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 58,
+      "method": "POST",
+      "path": "/login",
+      "full_path": "/api/v1/auth/login",
+      "func": "login",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 86,
+      "method": "POST",
+      "path": "/logout",
+      "full_path": "/api/v1/auth/logout",
+      "func": "logout",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/session",
+      "full_path": "/api/v1/auth/session",
+      "func": "session",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 53,
+      "method": "GET",
+      "path": "/overview",
+      "full_path": "/api/v1/overview",
+      "func": "overview",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 60,
+      "method": "GET",
+      "path": "/accounts",
+      "full_path": "/api/v1/accounts",
+      "func": "accounts",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 67,
+      "method": "GET",
+      "path": "/usage",
+      "full_path": "/api/v1/usage",
+      "func": "usage",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 74,
+      "method": "GET",
+      "path": "/tasks",
+      "full_path": "/api/v1/tasks",
+      "func": "tasks",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 81,
+      "method": "GET",
+      "path": "/keys",
+      "full_path": "/api/v1/keys",
+      "func": "keys",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 89,
+      "method": "GET",
+      "path": "/models",
+      "full_path": "/api/v1/models",
+      "func": "models",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 99,
+      "method": "GET",
+      "path": "/logs",
+      "full_path": "/api/v1/logs",
+      "func": "logs",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/alerts",
+      "full_path": "/api/v1/alerts",
+      "func": "alerts",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 115,
+      "method": "GET",
+      "path": "/requests",
+      "full_path": "/api/v1/requests",
+      "func": "requests_rows",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 125,
+      "method": "GET",
+      "path": "/ops",
+      "full_path": "/api/v1/ops",
+      "func": "ops",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 146,
+      "method": "GET",
+      "path": "/settings",
+      "full_path": "/api/v1/settings",
+      "func": "settings",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 169,
+      "method": "GET",
+      "path": "/audit",
+      "full_path": "/api/v1/audit",
+      "func": "audit",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 181,
+      "method": "POST",
+      "path": "/cache/invalidate",
+      "full_path": "/api/v1/cache/invalidate",
+      "func": "invalidate_cache",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 141,
+      "method": "POST",
+      "path": "/checkin",
+      "full_path": "/api/v1/actions/checkin",
+      "func": "checkin",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 157,
+      "method": "POST",
+      "path": "/accounts/{platform}/{action}",
+      "full_path": "/api/v1/actions/accounts/{platform}/{action}",
+      "func": "account_action",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 212,
+      "method": "POST",
+      "path": "/accounts/add",
+      "full_path": "/api/v1/actions/accounts/add",
+      "func": "add_account",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 228,
+      "method": "POST",
+      "path": "/keys",
+      "full_path": "/api/v1/actions/keys",
+      "func": "save_keys",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 254,
+      "method": "POST",
+      "path": "/limits",
+      "full_path": "/api/v1/actions/limits",
+      "func": "save_limits",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 267,
+      "method": "POST",
+      "path": "/notify",
+      "full_path": "/api/v1/actions/notify",
+      "func": "save_notify",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 290,
+      "method": "POST",
+      "path": "/backup",
+      "full_path": "/api/v1/actions/backup",
+      "func": "run_backup",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 320,
+      "method": "POST",
+      "path": "/alerts/ack",
+      "full_path": "/api/v1/actions/alerts/ack",
+      "func": "ack_alerts",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 332,
+      "method": "POST",
+      "path": "/oauth/start",
+      "full_path": "/api/v1/actions/oauth/start",
+      "func": "oauth_start",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 348,
+      "method": "GET",
+      "path": "/oauth/poll",
+      "full_path": "/api/v1/actions/oauth/poll",
+      "func": "oauth_poll",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 369,
+      "method": "POST",
+      "path": "/oauth/finish",
+      "full_path": "/api/v1/actions/oauth/finish",
+      "func": "oauth_finish",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 326,
+      "method": "GET",
+      "path": "/v1/models",
+      "full_path": "/v1/models",
+      "func": "list_models",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 356,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "full_path": "/v1/chat/completions",
+      "func": "chat_completions",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 549,
+      "method": "GET",
+      "path": "/v1/usage",
+      "full_path": "/v1/usage",
+      "func": "data_plane_usage",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 561,
+      "method": "GET",
+      "path": "/v1/health",
+      "full_path": "/v1/health",
+      "func": "data_plane_health",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 655,
+      "method": "POST",
+      "path": "/v1/responses",
+      "full_path": "/v1/responses",
+      "func": "responses_api",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/anthropic.py",
+      "line": 176,
+      "method": "POST",
+      "path": "/v1/messages",
+      "full_path": "/v1/messages",
+      "func": "anthropic_messages",
+      "prefix": "",
+      "module": "anthropic"
+    },
+    {
+      "file": "qtg/routers/anthropic.py",
+      "line": 186,
+      "method": "POST",
+      "path": "/v1/messages/count_tokens",
+      "full_path": "/v1/messages/count_tokens",
+      "func": "anthropic_count_tokens",
+      "prefix": "",
+      "module": "anthropic"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 53,
+      "method": "GET",
+      "path": "/api/v1/qtg-keys",
+      "full_path": "/api/v1/qtg-keys",
+      "func": "list_qtg_keys",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 59,
+      "method": "GET",
+      "path": "/api/v1/proxy-requests",
+      "full_path": "/api/v1/proxy-requests",
+      "func": "list_proxy_requests",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 71,
+      "method": "GET",
+      "path": "/api/v1/proxy-stats",
+      "full_path": "/api/v1/proxy-stats",
+      "func": "proxy_stats",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 77,
+      "method": "GET",
+      "path": "/api/v1/data-plane",
+      "full_path": "/api/v1/data-plane",
+      "func": "data_plane_status",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 116,
+      "method": "POST",
+      "path": "/api/v1/actions/qtg-keys",
+      "full_path": "/api/v1/actions/qtg-keys",
+      "func": "create_qtg_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 131,
+      "method": "POST",
+      "path": "/api/v1/actions/qtg-keys/{kid}/{op}",
+      "full_path": "/api/v1/actions/qtg-keys/{kid}/{op}",
+      "func": "mutate_qtg_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 145,
+      "method": "POST",
+      "path": "/api/v1/actions/upstream-keys",
+      "full_path": "/api/v1/actions/upstream-keys",
+      "func": "save_upstream_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 165,
+      "method": "POST",
+      "path": "/api/v1/actions/proxy-prune",
+      "full_path": "/api/v1/actions/proxy-prune",
+      "func": "prune_requests",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 175,
+      "method": "GET",
+      "path": "/api/v1/meta",
+      "full_path": "/api/v1/meta",
+      "func": "meta",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 24,
+      "method": "GET",
+      "path": "/system/configuration",
+      "full_path": "/api/v1/system/configuration",
+      "func": "configuration_snapshot",
+      "prefix": "/api/v1",
+      "module": "system"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 81,
+      "method": "GET",
+      "path": "/system",
+      "full_path": "/api/v1/system",
+      "func": "system_info",
+      "prefix": "/api/v1",
+      "module": "system"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 144,
+      "method": "GET",
+      "path": "/security",
+      "full_path": "/api/v1/security",
+      "func": "security_info",
+      "prefix": "/api/v1",
+      "module": "system"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 235,
+      "method": "GET",
+      "path": "/upstreams",
+      "full_path": "/api/upstreams",
+      "func": "fixed_upstreams",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 337,
+      "method": "GET",
+      "path": "/platforms",
+      "full_path": "/api/platforms",
+      "func": "platform_capabilities",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 354,
+      "method": "GET",
+      "path": "/accounts",
+      "full_path": "/api/accounts",
+      "func": "fixed_accounts",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 384,
+      "method": "GET",
+      "path": "/status",
+      "full_path": "/api/status",
+      "func": "fixed_status",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 416,
+      "method": "GET",
+      "path": "/models",
+      "full_path": "/api/models",
+      "func": "fixed_models",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 460,
+      "method": "GET",
+      "path": "/model-catalog",
+      "full_path": "/api/model-catalog",
+      "func": "fixed_model_catalog",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 545,
+      "method": "GET",
+      "path": "/playground/models",
+      "full_path": "/api/playground/models",
+      "func": "fixed_playground_models",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 624,
+      "method": "GET",
+      "path": "/keys",
+      "full_path": "/api/keys",
+      "func": "fixed_keys",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 663,
+      "method": "POST",
+      "path": "/keys",
+      "full_path": "/api/keys",
+      "func": "fixed_keys_create",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 710,
+      "method": "GET",
+      "path": "/keys/import-local/status",
+      "full_path": "/api/keys/import-local/status",
+      "func": "fixed_import_status",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 720,
+      "method": "GET",
+      "path": "/keys/import-local/detect",
+      "full_path": "/api/keys/import-local/detect",
+      "func": "fixed_import_detect",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 726,
+      "method": "POST",
+      "path": "/keys/import-local",
+      "full_path": "/api/keys/import-local",
+      "func": "fixed_import_local",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 732,
+      "method": "POST",
+      "path": "/keys/export",
+      "full_path": "/api/keys/export",
+      "func": "fixed_keys_export",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 758,
+      "method": "GET",
+      "path": "/task-claim-schedule",
+      "full_path": "/api/task-claim-schedule",
+      "func": "compat_task_claim_schedule",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 764,
+      "method": "PUT",
+      "path": "/task-claim-schedule",
+      "full_path": "/api/task-claim-schedule",
+      "func": "compat_task_claim_schedule_save",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 784,
+      "method": "GET",
+      "path": "/red-packets",
+      "full_path": "/api/red-packets",
+      "func": "compat_red_packets_list",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 789,
+      "method": "GET",
+      "path": "/red-packets/{rid}",
+      "full_path": "/api/red-packets/{rid}",
+      "func": "compat_red_packet_detail",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 794,
+      "method": "POST",
+      "path": "/red-packets",
+      "full_path": "/api/red-packets",
+      "func": "compat_red_packet_create",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 799,
+      "method": "POST",
+      "path": "/red-packets/{rid}/revoke",
+      "full_path": "/api/red-packets/{rid}/revoke",
+      "func": "compat_red_packet_revoke",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 804,
+      "method": "GET",
+      "path": "/claim/{code}",
+      "full_path": "/api/claim/{code}",
+      "func": "compat_claim_get",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 809,
+      "method": "POST",
+      "path": "/claim/{code}",
+      "full_path": "/api/claim/{code}",
+      "func": "compat_claim_draw",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 815,
+      "method": "GET",
+      "path": "/alerts",
+      "full_path": "/api/alerts",
+      "func": "fixed_alerts",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 908,
+      "method": "POST",
+      "path": "/alerts/ack",
+      "full_path": "/api/alerts/ack",
+      "func": "fixed_alerts_ack",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 920,
+      "method": "GET",
+      "path": "/agents",
+      "full_path": "/api/agents",
+      "func": "fixed_agents",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 946,
+      "method": "POST",
+      "path": "/agents/{cid}/apply",
+      "full_path": "/api/agents/{cid}/apply",
+      "func": "fixed_agent_apply",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 960,
+      "method": "POST",
+      "path": "/agents/{cid}/restore",
+      "full_path": "/api/agents/{cid}/restore",
+      "func": "fixed_agent_restore",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 116,
+      "method": "GET",
+      "path": "/stats/summary",
+      "full_path": "/api/stats/summary",
+      "func": "stats_summary",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 166,
+      "method": "GET",
+      "path": "/stats/daily",
+      "full_path": "/api/stats/daily",
+      "func": "stats_daily",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 175,
+      "method": "GET",
+      "path": "/stats/hourly",
+      "full_path": "/api/stats/hourly",
+      "func": "stats_hourly",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 197,
+      "method": "GET",
+      "path": "/stats/by-model",
+      "full_path": "/api/stats/by-model",
+      "func": "stats_by_model",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 230,
+      "method": "GET",
+      "path": "/stats/by-key",
+      "full_path": "/api/stats/by-key",
+      "func": "stats_by_key",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 261,
+      "method": "GET",
+      "path": "/stats/credits",
+      "full_path": "/api/stats/credits",
+      "func": "stats_credits",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 44,
+      "method": "GET",
+      "path": "/users",
+      "full_path": "/api/users",
+      "func": "compat_users",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 54,
+      "method": "POST",
+      "path": "/users",
+      "full_path": "/api/users",
+      "func": "compat_users_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 59,
+      "method": "PATCH",
+      "path": "/users/{username}",
+      "full_path": "/api/users/{username}",
+      "func": "compat_users_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 64,
+      "method": "DELETE",
+      "path": "/users/{username}",
+      "full_path": "/api/users/{username}",
+      "func": "compat_users_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 69,
+      "method": "POST",
+      "path": "/sessions/revoke",
+      "full_path": "/api/sessions/revoke",
+      "func": "compat_sessions_revoke",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 82,
+      "method": "GET",
+      "path": "/tokens",
+      "full_path": "/api/tokens",
+      "func": "compat_tokens",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 91,
+      "method": "POST",
+      "path": "/tokens",
+      "full_path": "/api/tokens",
+      "func": "compat_tokens_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 96,
+      "method": "PATCH",
+      "path": "/tokens/{tid}",
+      "full_path": "/api/tokens/{tid}",
+      "func": "compat_tokens_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 101,
+      "method": "DELETE",
+      "path": "/tokens/{tid}",
+      "full_path": "/api/tokens/{tid}",
+      "func": "compat_tokens_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/proxies",
+      "full_path": "/api/proxies",
+      "func": "compat_proxies",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/proxy-routes",
+      "full_path": "/api/proxy-routes",
+      "func": "compat_proxy_routes",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 118,
+      "method": "GET",
+      "path": "/proxy-routes/bindings",
+      "full_path": "/api/proxy-routes/bindings",
+      "func": "compat_proxy_bindings",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 123,
+      "method": "POST",
+      "path": "/proxy-routes",
+      "full_path": "/api/proxy-routes",
+      "func": "compat_proxy_routes_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 128,
+      "method": "PUT",
+      "path": "/proxy-routes/{name}",
+      "full_path": "/api/proxy-routes/{name}",
+      "func": "compat_proxy_routes_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 133,
+      "method": "DELETE",
+      "path": "/proxy-routes/{name}",
+      "full_path": "/api/proxy-routes/{name}",
+      "func": "compat_proxy_routes_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 138,
+      "method": "POST",
+      "path": "/proxy-routes/import",
+      "full_path": "/api/proxy-routes/import",
+      "func": "compat_proxy_routes_import",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 143,
+      "method": "POST",
+      "path": "/proxy-routes/probe",
+      "full_path": "/api/proxy-routes/probe",
+      "func": "compat_proxy_routes_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 148,
+      "method": "GET",
+      "path": "/settings/proxy",
+      "full_path": "/api/settings/proxy",
+      "func": "compat_proxy_settings",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 159,
+      "method": "PUT",
+      "path": "/settings/proxy",
+      "full_path": "/api/settings/proxy",
+      "func": "compat_proxy_settings_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 164,
+      "method": "GET",
+      "path": "/settings/proxy-pool",
+      "full_path": "/api/settings/proxy-pool",
+      "func": "compat_proxy_pool",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 169,
+      "method": "PUT",
+      "path": "/settings/proxy-pool",
+      "full_path": "/api/settings/proxy-pool",
+      "func": "compat_proxy_pool_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 174,
+      "method": "POST",
+      "path": "/settings/proxy/probe",
+      "full_path": "/api/settings/proxy/probe",
+      "func": "compat_proxy_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 180,
+      "method": "GET",
+      "path": "/settings/upstream",
+      "full_path": "/api/settings/upstream",
+      "func": "compat_settings_upstream",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 198,
+      "method": "POST",
+      "path": "/settings/upstream",
+      "full_path": "/api/settings/upstream",
+      "func": "compat_settings_upstream_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 202,
+      "method": "GET",
+      "path": "/settings/model-map",
+      "full_path": "/api/settings/model-map",
+      "func": "compat_model_map",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 210,
+      "method": "POST",
+      "path": "/settings/model-map",
+      "full_path": "/api/settings/model-map",
+      "func": "compat_model_map_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 225,
+      "method": "GET",
+      "path": "/upstream/reload-state",
+      "full_path": "/api/upstream/reload-state",
+      "func": "compat_reload_state",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 231,
+      "method": "POST",
+      "path": "/settings/upstash/test",
+      "full_path": "/api/settings/upstash/test",
+      "func": "compat_upstash_test",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 236,
+      "method": "POST",
+      "path": "/settings/upstash/reload",
+      "full_path": "/api/settings/upstash/reload",
+      "func": "compat_upstash_reload",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 242,
+      "method": "GET",
+      "path": "/settings/github-token",
+      "full_path": "/api/settings/github-token",
+      "func": "compat_github_token",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 247,
+      "method": "PUT",
+      "path": "/settings/github-token",
+      "full_path": "/api/settings/github-token",
+      "func": "compat_github_token_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 252,
+      "method": "GET",
+      "path": "/settings/github-mirror",
+      "full_path": "/api/settings/github-mirror",
+      "func": "compat_github_mirror",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 257,
+      "method": "PUT",
+      "path": "/settings/github-mirror",
+      "full_path": "/api/settings/github-mirror",
+      "func": "compat_github_mirror_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 275,
+      "method": "GET",
+      "path": "/settings/pg-sync",
+      "full_path": "/api/settings/pg-sync",
+      "func": "compat_pg_sync",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 280,
+      "method": "GET",
+      "path": "/settings/pg-sync/status",
+      "full_path": "/api/settings/pg-sync/status",
+      "func": "compat_pg_sync_status",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 285,
+      "method": "POST",
+      "path": "/settings/pg-sync",
+      "full_path": "/api/settings/pg-sync",
+      "func": "compat_pg_sync_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 290,
+      "method": "POST",
+      "path": "/settings/pg-sync/export",
+      "full_path": "/api/settings/pg-sync/export",
+      "func": "compat_pg_sync_export",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 295,
+      "method": "POST",
+      "path": "/settings/pg-sync/import",
+      "full_path": "/api/settings/pg-sync/import",
+      "func": "compat_pg_sync_import",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 300,
+      "method": "POST",
+      "path": "/settings/pg-sync/test",
+      "full_path": "/api/settings/pg-sync/test",
+      "func": "compat_pg_sync_test",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 306,
+      "method": "GET",
+      "path": "/system/update-status",
+      "full_path": "/api/system/update-status",
+      "func": "compat_update_status",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 319,
+      "method": "DELETE",
+      "path": "/system/update-status",
+      "full_path": "/api/system/update-status",
+      "func": "compat_update_status_clear",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 324,
+      "method": "GET",
+      "path": "/system/check-update",
+      "full_path": "/api/system/check-update",
+      "func": "compat_check_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 338,
+      "method": "POST",
+      "path": "/system/update",
+      "full_path": "/api/system/update",
+      "func": "compat_start_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 343,
+      "method": "GET",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 348,
+      "method": "POST",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package_upload",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 353,
+      "method": "DELETE",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 358,
+      "method": "GET",
+      "path": "/system/changelog",
+      "full_path": "/api/system/changelog",
+      "func": "compat_changelog",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 370,
+      "method": "POST",
+      "path": "/upstreams",
+      "full_path": "/api/upstreams",
+      "func": "compat_upstreams_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 376,
+      "method": "PATCH",
+      "path": "/upstreams/{uid}",
+      "full_path": "/api/upstreams/{uid}",
+      "func": "compat_upstreams_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 381,
+      "method": "DELETE",
+      "path": "/upstreams/{uid}",
+      "full_path": "/api/upstreams/{uid}",
+      "func": "compat_upstreams_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 386,
+      "method": "POST",
+      "path": "/upstreams/{uid}/probe",
+      "full_path": "/api/upstreams/{uid}/probe",
+      "func": "compat_upstreams_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 402,
+      "method": "POST",
+      "path": "/proxy-routes/{name}/auto-assign",
+      "full_path": "/api/proxy-routes/{name}/auto-assign",
+      "func": "compat_proxy_auto_assign",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 73,
+      "method": "POST",
+      "path": "/auth/start",
+      "full_path": "/api/auth/start",
+      "func": "compat_auth_start",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/auth/poll",
+      "full_path": "/api/auth/poll",
+      "func": "compat_auth_poll",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 132,
+      "method": "POST",
+      "path": "/auth/finish",
+      "full_path": "/api/auth/finish",
+      "func": "compat_auth_finish",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 181,
+      "method": "POST",
+      "path": "/accounts/{file:path}/test",
+      "full_path": "/api/accounts/{file:path}/test",
+      "func": "compat_account_test",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 204,
+      "method": "POST",
+      "path": "/accounts/{file:path}/clear-cooling",
+      "full_path": "/api/accounts/{file:path}/clear-cooling",
+      "func": "compat_clear_cooling",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 240,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/proxy",
+      "full_path": "/api/accounts/{file:path}/proxy",
+      "func": "compat_account_set_proxy",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 245,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/weight",
+      "full_path": "/api/accounts/{file:path}/weight",
+      "func": "compat_account_set_weight",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 250,
+      "method": "POST",
+      "path": "/accounts/{file:path}/move",
+      "full_path": "/api/accounts/{file:path}/move",
+      "func": "compat_account_move",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 257,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/note",
+      "full_path": "/api/accounts/{file:path}/note",
+      "func": "compat_account_note",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 285,
+      "method": "POST",
+      "path": "/accounts/{file:path}/force-cooling",
+      "full_path": "/api/accounts/{file:path}/force-cooling",
+      "func": "compat_account_force_cooling",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 296,
+      "method": "GET",
+      "path": "/accounts/{file:path}/credits",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "func": "compat_account_credits_get",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 303,
+      "method": "POST",
+      "path": "/accounts/{file:path}/disabled",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "func": "compat_account_disabled_post",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 76,
+      "method": "GET",
+      "path": "/probe",
+      "full_path": "/api/v1/authz/probe",
+      "func": "probe",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 106,
+      "method": "GET",
+      "path": "/identity",
+      "full_path": "/api/v1/authz/identity",
+      "func": "identity_view",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 124,
+      "method": "GET",
+      "path": "/matrix",
+      "full_path": "/api/v1/authz/matrix",
+      "func": "matrix",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/capabilities.py",
+      "line": 45,
+      "method": "GET",
+      "path": "/capabilities",
+      "full_path": "/api/v1/capabilities",
+      "func": "capabilities",
+      "prefix": "/api/v1",
+      "module": "capabilities"
+    },
+    {
+      "file": "qtg/routers/capabilities.py",
+      "line": 69,
+      "method": "GET",
+      "path": "/capabilities/{cap_id}",
+      "full_path": "/api/v1/capabilities/{cap_id}",
+      "func": "capability_detail",
+      "prefix": "/api/v1",
+      "module": "capabilities"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 62,
+      "method": "POST",
+      "path": "/login",
+      "full_path": "/api/login",
+      "func": "compat_login",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 78,
+      "method": "POST",
+      "path": "/logout",
+      "full_path": "/api/logout",
+      "func": "compat_logout",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 104,
+      "method": "GET",
+      "path": "/me",
+      "full_path": "/api/me",
+      "func": "compat_me",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 211,
+      "method": "GET",
+      "path": "/upstream/status",
+      "full_path": "/api/upstream/status",
+      "func": "compat_upstream_status",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 286,
+      "method": "GET",
+      "path": "/stats/upstream",
+      "full_path": "/api/stats/upstream",
+      "func": "compat_stats_upstream",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 297,
+      "method": "GET",
+      "path": "/stats/credits-flow",
+      "full_path": "/api/stats/credits-flow",
+      "func": "compat_credits_flow",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 368,
+      "method": "GET",
+      "path": "/logs",
+      "full_path": "/api/logs",
+      "func": "compat_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 424,
+      "method": "GET",
+      "path": "/checkin-logs",
+      "full_path": "/api/checkin-logs",
+      "func": "compat_checkin_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 482,
+      "method": "GET",
+      "path": "/audit-logs",
+      "full_path": "/api/audit-logs",
+      "func": "compat_audit_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 526,
+      "method": "GET",
+      "path": "/ip-rules",
+      "full_path": "/api/ip-rules",
+      "func": "compat_ip_rules",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 531,
+      "method": "GET",
+      "path": "/ip-access-logs",
+      "full_path": "/api/ip-access-logs",
+      "func": "compat_ip_access_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 537,
+      "method": "GET",
+      "path": "/tasks",
+      "full_path": "/api/tasks",
+      "func": "compat_tasks",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 563,
+      "method": "GET",
+      "path": "/tasks/logs",
+      "full_path": "/api/tasks/logs",
+      "func": "compat_task_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 636,
+      "method": "GET",
+      "path": "/claim",
+      "full_path": "/api/claim",
+      "func": "compat_claim",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 645,
+      "method": "GET",
+      "path": "/task-run",
+      "full_path": "/api/task-run",
+      "func": "compat_task_run_status",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 663,
+      "method": "POST",
+      "path": "/task-run",
+      "full_path": "/api/task-run",
+      "func": "compat_task_run_start",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 668,
+      "method": "POST",
+      "path": "/task-run/stop",
+      "full_path": "/api/task-run/stop",
+      "func": "compat_task_run_stop",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 673,
+      "method": "GET",
+      "path": "/task-logs",
+      "full_path": "/api/task-logs",
+      "func": "compat_task_logs_alias",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 684,
+      "method": "GET",
+      "path": "/accounts/daily-plan",
+      "full_path": "/api/accounts/daily-plan",
+      "func": "compat_daily_plan",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 695,
+      "method": "GET",
+      "path": "/accounts/refresh-plan",
+      "full_path": "/api/accounts/refresh-plan",
+      "func": "compat_refresh_plan2",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 700,
+      "method": "GET",
+      "path": "/system/versions",
+      "full_path": "/api/system/versions",
+      "func": "compat_system_versions",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 769,
+      "method": "GET",
+      "path": "/accounts/{file:path}",
+      "full_path": "/api/accounts/{file:path}",
+      "func": "compat_account_detail",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 780,
+      "method": "POST",
+      "path": "/accounts/{file:path}/checkin",
+      "full_path": "/api/accounts/{file:path}/checkin",
+      "func": "compat_account_checkin",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 820,
+      "method": "POST",
+      "path": "/accounts/{file:path}/credits",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "func": "compat_account_credits",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 832,
+      "method": "POST",
+      "path": "/accounts/{file:path}/refresh",
+      "full_path": "/api/accounts/{file:path}/refresh",
+      "func": "compat_account_refresh",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 848,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/disabled",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "func": "compat_account_disabled",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 870,
+      "method": "DELETE",
+      "path": "/accounts/{file:path}",
+      "full_path": "/api/accounts/{file:path}",
+      "func": "compat_account_delete",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 878,
+      "method": "POST",
+      "path": "/playground/chat",
+      "full_path": "/api/playground/chat",
+      "func": "compat_playground_chat",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 950,
+      "method": "POST",
+      "path": "/logs/clear",
+      "full_path": "/api/logs/clear",
+      "func": "compat_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 960,
+      "method": "POST",
+      "path": "/stats/repair-usage",
+      "full_path": "/api/stats/repair-usage",
+      "func": "compat_stats_repair_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 976,
+      "method": "POST",
+      "path": "/stats/rebuild-usage",
+      "full_path": "/api/stats/rebuild-usage",
+      "func": "compat_stats_rebuild_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 984,
+      "method": "POST",
+      "path": "/stats/repair",
+      "full_path": "/api/stats/repair",
+      "func": "compat_stats_repair_legacy",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 989,
+      "method": "POST",
+      "path": "/stats/rebuild",
+      "full_path": "/api/stats/rebuild",
+      "func": "compat_stats_rebuild_legacy",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 995,
+      "method": "POST",
+      "path": "/restart",
+      "full_path": "/api/restart",
+      "func": "compat_restart",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1005,
+      "method": "POST",
+      "path": "/upstream/restart",
+      "full_path": "/api/upstream/restart",
+      "func": "compat_upstream_restart",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1067,
+      "method": "POST",
+      "path": "/keys/check-models",
+      "full_path": "/api/keys/check-models",
+      "func": "compat_keys_check_models",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1086,
+      "method": "PATCH",
+      "path": "/keys/{kid}",
+      "full_path": "/api/keys/{kid}",
+      "func": "compat_keys_update",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1109,
+      "method": "DELETE",
+      "path": "/keys/{kid}",
+      "full_path": "/api/keys/{kid}",
+      "func": "compat_keys_delete",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1125,
+      "method": "POST",
+      "path": "/keys/{kid}/reset-usage",
+      "full_path": "/api/keys/{kid}/reset-usage",
+      "func": "compat_keys_reset_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1168,
+      "method": "POST",
+      "path": "/accounts/checkin-all",
+      "full_path": "/api/accounts/checkin-all",
+      "func": "compat_checkin_all",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1216,
+      "method": "POST",
+      "path": "/accounts/refresh-tokens",
+      "full_path": "/api/accounts/refresh-tokens",
+      "func": "compat_refresh_tokens",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1239,
+      "method": "POST",
+      "path": "/accounts/refresh-credits",
+      "full_path": "/api/accounts/refresh-credits",
+      "func": "compat_refresh_credits",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1260,
+      "method": "GET",
+      "path": "/accounts/export",
+      "full_path": "/api/accounts/export",
+      "func": "compat_accounts_export",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1279,
+      "method": "POST",
+      "path": "/accounts/upload",
+      "full_path": "/api/accounts/upload",
+      "func": "compat_accounts_upload",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1317,
+      "method": "PUT",
+      "path": "/accounts/refresh-plan",
+      "full_path": "/api/accounts/refresh-plan",
+      "func": "compat_refresh_plan_save",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1336,
+      "method": "POST",
+      "path": "/accounts/refresh-plan/run",
+      "full_path": "/api/accounts/refresh-plan/run",
+      "func": "compat_refresh_plan_run",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1362,
+      "method": "POST",
+      "path": "/task-logs/collect",
+      "full_path": "/api/task-logs/collect",
+      "func": "compat_task_logs_collect",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1376,
+      "method": "POST",
+      "path": "/task-logs/clear",
+      "full_path": "/api/task-logs/clear",
+      "func": "compat_task_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1384,
+      "method": "POST",
+      "path": "/checkin-logs/clear",
+      "full_path": "/api/checkin-logs/clear",
+      "func": "compat_checkin_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1392,
+      "method": "PUT",
+      "path": "/accounts/daily-plan",
+      "full_path": "/api/accounts/daily-plan",
+      "func": "compat_daily_plan_save",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1411,
+      "method": "POST",
+      "path": "/accounts/daily-plan/run",
+      "full_path": "/api/accounts/daily-plan/run",
+      "func": "compat_daily_plan_run",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1442,
+      "method": "GET",
+      "path": "/upstream/logs",
+      "full_path": "/api/upstream/logs",
+      "func": "compat_upstream_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1479,
+      "method": "GET",
+      "path": "/{path:path}",
+      "full_path": "/api/{path:path}",
+      "func": "compat_fallback",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/main.py",
+      "line": 256,
+      "method": "GET",
+      "path": "/",
+      "full_path": "/",
+      "func": "_index",
+      "prefix": "",
+      "module": "main"
+    },
+    {
+      "file": "qtg/main.py",
+      "line": 262,
+      "method": "GET",
+      "path": "/favicon.svg",
+      "full_path": "/favicon.svg",
+      "func": "_favicon",
+      "prefix": "",
+      "module": "main"
+    },
+    {
+      "file": "qtg/main.py",
+      "line": 269,
+      "method": "GET",
+      "path": "/{path:path}",
+      "full_path": "/{path:path}",
+      "func": "_spa",
+      "prefix": "",
+      "module": "main"
+    }
+  ],
+  "duplicates": [],
+  "declared_rows": [
+    {
+      "file": "qtg/main.py",
+      "line": 256,
+      "method": "GET",
+      "path": "/",
+      "full_path": "/",
+      "func": "_index",
+      "prefix": "",
+      "module": "main"
+    },
+    {
+      "file": "qtg/main.py",
+      "line": 262,
+      "method": "GET",
+      "path": "/favicon.svg",
+      "full_path": "/favicon.svg",
+      "func": "_favicon",
+      "prefix": "",
+      "module": "main"
+    },
+    {
+      "file": "qtg/main.py",
+      "line": 269,
+      "method": "GET",
+      "path": "/{path:path}",
+      "full_path": "/{path:path}",
+      "func": "_spa",
+      "prefix": "",
+      "module": "main"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 141,
+      "method": "POST",
+      "path": "/checkin",
+      "full_path": "/api/v1/actions/checkin",
+      "func": "checkin",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 157,
+      "method": "POST",
+      "path": "/accounts/{platform}/{action}",
+      "full_path": "/api/v1/actions/accounts/{platform}/{action}",
+      "func": "account_action",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 212,
+      "method": "POST",
+      "path": "/accounts/add",
+      "full_path": "/api/v1/actions/accounts/add",
+      "func": "add_account",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 228,
+      "method": "POST",
+      "path": "/keys",
+      "full_path": "/api/v1/actions/keys",
+      "func": "save_keys",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 254,
+      "method": "POST",
+      "path": "/limits",
+      "full_path": "/api/v1/actions/limits",
+      "func": "save_limits",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 267,
+      "method": "POST",
+      "path": "/notify",
+      "full_path": "/api/v1/actions/notify",
+      "func": "save_notify",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 290,
+      "method": "POST",
+      "path": "/backup",
+      "full_path": "/api/v1/actions/backup",
+      "func": "run_backup",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 320,
+      "method": "POST",
+      "path": "/alerts/ack",
+      "full_path": "/api/v1/actions/alerts/ack",
+      "func": "ack_alerts",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 332,
+      "method": "POST",
+      "path": "/oauth/start",
+      "full_path": "/api/v1/actions/oauth/start",
+      "func": "oauth_start",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 348,
+      "method": "GET",
+      "path": "/oauth/poll",
+      "full_path": "/api/v1/actions/oauth/poll",
+      "func": "oauth_poll",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/actions.py",
+      "line": 369,
+      "method": "POST",
+      "path": "/oauth/finish",
+      "full_path": "/api/v1/actions/oauth/finish",
+      "func": "oauth_finish",
+      "prefix": "/api/v1/actions",
+      "module": "actions"
+    },
+    {
+      "file": "qtg/routers/anthropic.py",
+      "line": 176,
+      "method": "POST",
+      "path": "/v1/messages",
+      "full_path": "/v1/messages",
+      "func": "anthropic_messages",
+      "prefix": "",
+      "module": "anthropic"
+    },
+    {
+      "file": "qtg/routers/anthropic.py",
+      "line": 186,
+      "method": "POST",
+      "path": "/v1/messages/count_tokens",
+      "full_path": "/v1/messages/count_tokens",
+      "func": "anthropic_count_tokens",
+      "prefix": "",
+      "module": "anthropic"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 58,
+      "method": "POST",
+      "path": "/login",
+      "full_path": "/api/v1/auth/login",
+      "func": "login",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 86,
+      "method": "POST",
+      "path": "/logout",
+      "full_path": "/api/v1/auth/logout",
+      "func": "logout",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/auth.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/session",
+      "full_path": "/api/v1/auth/session",
+      "func": "session",
+      "prefix": "/api/v1/auth",
+      "module": "auth"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 76,
+      "method": "GET",
+      "path": "/probe",
+      "full_path": "/api/v1/authz/probe",
+      "func": "probe",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 106,
+      "method": "GET",
+      "path": "/identity",
+      "full_path": "/api/v1/authz/identity",
+      "func": "identity_view",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/authz.py",
+      "line": 124,
+      "method": "GET",
+      "path": "/matrix",
+      "full_path": "/api/v1/authz/matrix",
+      "func": "matrix",
+      "prefix": "/api/v1/authz",
+      "module": "authz"
+    },
+    {
+      "file": "qtg/routers/capabilities.py",
+      "line": 45,
+      "method": "GET",
+      "path": "/capabilities",
+      "full_path": "/api/v1/capabilities",
+      "func": "capabilities",
+      "prefix": "/api/v1",
+      "module": "capabilities"
+    },
+    {
+      "file": "qtg/routers/capabilities.py",
+      "line": 69,
+      "method": "GET",
+      "path": "/capabilities/{cap_id}",
+      "full_path": "/api/v1/capabilities/{cap_id}",
+      "func": "capability_detail",
+      "prefix": "/api/v1",
+      "module": "capabilities"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 62,
+      "method": "POST",
+      "path": "/login",
+      "full_path": "/api/login",
+      "func": "compat_login",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 78,
+      "method": "POST",
+      "path": "/logout",
+      "full_path": "/api/logout",
+      "func": "compat_logout",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 104,
+      "method": "GET",
+      "path": "/me",
+      "full_path": "/api/me",
+      "func": "compat_me",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 211,
+      "method": "GET",
+      "path": "/upstream/status",
+      "full_path": "/api/upstream/status",
+      "func": "compat_upstream_status",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 286,
+      "method": "GET",
+      "path": "/stats/upstream",
+      "full_path": "/api/stats/upstream",
+      "func": "compat_stats_upstream",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 297,
+      "method": "GET",
+      "path": "/stats/credits-flow",
+      "full_path": "/api/stats/credits-flow",
+      "func": "compat_credits_flow",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 368,
+      "method": "GET",
+      "path": "/logs",
+      "full_path": "/api/logs",
+      "func": "compat_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 424,
+      "method": "GET",
+      "path": "/checkin-logs",
+      "full_path": "/api/checkin-logs",
+      "func": "compat_checkin_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 482,
+      "method": "GET",
+      "path": "/audit-logs",
+      "full_path": "/api/audit-logs",
+      "func": "compat_audit_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 526,
+      "method": "GET",
+      "path": "/ip-rules",
+      "full_path": "/api/ip-rules",
+      "func": "compat_ip_rules",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 531,
+      "method": "GET",
+      "path": "/ip-access-logs",
+      "full_path": "/api/ip-access-logs",
+      "func": "compat_ip_access_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 537,
+      "method": "GET",
+      "path": "/tasks",
+      "full_path": "/api/tasks",
+      "func": "compat_tasks",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 563,
+      "method": "GET",
+      "path": "/tasks/logs",
+      "full_path": "/api/tasks/logs",
+      "func": "compat_task_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 636,
+      "method": "GET",
+      "path": "/claim",
+      "full_path": "/api/claim",
+      "func": "compat_claim",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 645,
+      "method": "GET",
+      "path": "/task-run",
+      "full_path": "/api/task-run",
+      "func": "compat_task_run_status",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 663,
+      "method": "POST",
+      "path": "/task-run",
+      "full_path": "/api/task-run",
+      "func": "compat_task_run_start",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 668,
+      "method": "POST",
+      "path": "/task-run/stop",
+      "full_path": "/api/task-run/stop",
+      "func": "compat_task_run_stop",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 673,
+      "method": "GET",
+      "path": "/task-logs",
+      "full_path": "/api/task-logs",
+      "func": "compat_task_logs_alias",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 684,
+      "method": "GET",
+      "path": "/accounts/daily-plan",
+      "full_path": "/api/accounts/daily-plan",
+      "func": "compat_daily_plan",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 695,
+      "method": "GET",
+      "path": "/accounts/refresh-plan",
+      "full_path": "/api/accounts/refresh-plan",
+      "func": "compat_refresh_plan2",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 700,
+      "method": "GET",
+      "path": "/system/versions",
+      "full_path": "/api/system/versions",
+      "func": "compat_system_versions",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 769,
+      "method": "GET",
+      "path": "/accounts/{file:path}",
+      "full_path": "/api/accounts/{file:path}",
+      "func": "compat_account_detail",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 780,
+      "method": "POST",
+      "path": "/accounts/{file:path}/checkin",
+      "full_path": "/api/accounts/{file:path}/checkin",
+      "func": "compat_account_checkin",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 820,
+      "method": "POST",
+      "path": "/accounts/{file:path}/credits",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "func": "compat_account_credits",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 832,
+      "method": "POST",
+      "path": "/accounts/{file:path}/refresh",
+      "full_path": "/api/accounts/{file:path}/refresh",
+      "func": "compat_account_refresh",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 848,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/disabled",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "func": "compat_account_disabled",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 870,
+      "method": "DELETE",
+      "path": "/accounts/{file:path}",
+      "full_path": "/api/accounts/{file:path}",
+      "func": "compat_account_delete",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 878,
+      "method": "POST",
+      "path": "/playground/chat",
+      "full_path": "/api/playground/chat",
+      "func": "compat_playground_chat",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 950,
+      "method": "POST",
+      "path": "/logs/clear",
+      "full_path": "/api/logs/clear",
+      "func": "compat_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 960,
+      "method": "POST",
+      "path": "/stats/repair-usage",
+      "full_path": "/api/stats/repair-usage",
+      "func": "compat_stats_repair_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 976,
+      "method": "POST",
+      "path": "/stats/rebuild-usage",
+      "full_path": "/api/stats/rebuild-usage",
+      "func": "compat_stats_rebuild_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 984,
+      "method": "POST",
+      "path": "/stats/repair",
+      "full_path": "/api/stats/repair",
+      "func": "compat_stats_repair_legacy",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 989,
+      "method": "POST",
+      "path": "/stats/rebuild",
+      "full_path": "/api/stats/rebuild",
+      "func": "compat_stats_rebuild_legacy",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 995,
+      "method": "POST",
+      "path": "/restart",
+      "full_path": "/api/restart",
+      "func": "compat_restart",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1005,
+      "method": "POST",
+      "path": "/upstream/restart",
+      "full_path": "/api/upstream/restart",
+      "func": "compat_upstream_restart",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1067,
+      "method": "POST",
+      "path": "/keys/check-models",
+      "full_path": "/api/keys/check-models",
+      "func": "compat_keys_check_models",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1086,
+      "method": "PATCH",
+      "path": "/keys/{kid}",
+      "full_path": "/api/keys/{kid}",
+      "func": "compat_keys_update",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1109,
+      "method": "DELETE",
+      "path": "/keys/{kid}",
+      "full_path": "/api/keys/{kid}",
+      "func": "compat_keys_delete",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1125,
+      "method": "POST",
+      "path": "/keys/{kid}/reset-usage",
+      "full_path": "/api/keys/{kid}/reset-usage",
+      "func": "compat_keys_reset_usage",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1168,
+      "method": "POST",
+      "path": "/accounts/checkin-all",
+      "full_path": "/api/accounts/checkin-all",
+      "func": "compat_checkin_all",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1216,
+      "method": "POST",
+      "path": "/accounts/refresh-tokens",
+      "full_path": "/api/accounts/refresh-tokens",
+      "func": "compat_refresh_tokens",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1239,
+      "method": "POST",
+      "path": "/accounts/refresh-credits",
+      "full_path": "/api/accounts/refresh-credits",
+      "func": "compat_refresh_credits",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1260,
+      "method": "GET",
+      "path": "/accounts/export",
+      "full_path": "/api/accounts/export",
+      "func": "compat_accounts_export",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1279,
+      "method": "POST",
+      "path": "/accounts/upload",
+      "full_path": "/api/accounts/upload",
+      "func": "compat_accounts_upload",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1317,
+      "method": "PUT",
+      "path": "/accounts/refresh-plan",
+      "full_path": "/api/accounts/refresh-plan",
+      "func": "compat_refresh_plan_save",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1336,
+      "method": "POST",
+      "path": "/accounts/refresh-plan/run",
+      "full_path": "/api/accounts/refresh-plan/run",
+      "func": "compat_refresh_plan_run",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1362,
+      "method": "POST",
+      "path": "/task-logs/collect",
+      "full_path": "/api/task-logs/collect",
+      "func": "compat_task_logs_collect",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1376,
+      "method": "POST",
+      "path": "/task-logs/clear",
+      "full_path": "/api/task-logs/clear",
+      "func": "compat_task_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1384,
+      "method": "POST",
+      "path": "/checkin-logs/clear",
+      "full_path": "/api/checkin-logs/clear",
+      "func": "compat_checkin_logs_clear",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1392,
+      "method": "PUT",
+      "path": "/accounts/daily-plan",
+      "full_path": "/api/accounts/daily-plan",
+      "func": "compat_daily_plan_save",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1411,
+      "method": "POST",
+      "path": "/accounts/daily-plan/run",
+      "full_path": "/api/accounts/daily-plan/run",
+      "func": "compat_daily_plan_run",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1442,
+      "method": "GET",
+      "path": "/upstream/logs",
+      "full_path": "/api/upstream/logs",
+      "func": "compat_upstream_logs",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat.py",
+      "line": 1479,
+      "method": "GET",
+      "path": "/{path:path}",
+      "full_path": "/api/{path:path}",
+      "func": "compat_fallback",
+      "prefix": "/api",
+      "module": "compat"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 73,
+      "method": "POST",
+      "path": "/auth/start",
+      "full_path": "/api/auth/start",
+      "func": "compat_auth_start",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/auth/poll",
+      "full_path": "/api/auth/poll",
+      "func": "compat_auth_poll",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 132,
+      "method": "POST",
+      "path": "/auth/finish",
+      "full_path": "/api/auth/finish",
+      "func": "compat_auth_finish",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 181,
+      "method": "POST",
+      "path": "/accounts/{file:path}/test",
+      "full_path": "/api/accounts/{file:path}/test",
+      "func": "compat_account_test",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 204,
+      "method": "POST",
+      "path": "/accounts/{file:path}/clear-cooling",
+      "full_path": "/api/accounts/{file:path}/clear-cooling",
+      "func": "compat_clear_cooling",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 240,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/proxy",
+      "full_path": "/api/accounts/{file:path}/proxy",
+      "func": "compat_account_set_proxy",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 245,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/weight",
+      "full_path": "/api/accounts/{file:path}/weight",
+      "func": "compat_account_set_weight",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 250,
+      "method": "POST",
+      "path": "/accounts/{file:path}/move",
+      "full_path": "/api/accounts/{file:path}/move",
+      "func": "compat_account_move",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 257,
+      "method": "PUT",
+      "path": "/accounts/{file:path}/note",
+      "full_path": "/api/accounts/{file:path}/note",
+      "func": "compat_account_note",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 285,
+      "method": "POST",
+      "path": "/accounts/{file:path}/force-cooling",
+      "full_path": "/api/accounts/{file:path}/force-cooling",
+      "func": "compat_account_force_cooling",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 296,
+      "method": "GET",
+      "path": "/accounts/{file:path}/credits",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "func": "compat_account_credits_get",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_accounts_ext.py",
+      "line": 303,
+      "method": "POST",
+      "path": "/accounts/{file:path}/disabled",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "func": "compat_account_disabled_post",
+      "prefix": "/api",
+      "module": "compat_accounts_ext"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 235,
+      "method": "GET",
+      "path": "/upstreams",
+      "full_path": "/api/upstreams",
+      "func": "fixed_upstreams",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 337,
+      "method": "GET",
+      "path": "/platforms",
+      "full_path": "/api/platforms",
+      "func": "platform_capabilities",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 354,
+      "method": "GET",
+      "path": "/accounts",
+      "full_path": "/api/accounts",
+      "func": "fixed_accounts",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 384,
+      "method": "GET",
+      "path": "/status",
+      "full_path": "/api/status",
+      "func": "fixed_status",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 416,
+      "method": "GET",
+      "path": "/models",
+      "full_path": "/api/models",
+      "func": "fixed_models",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 460,
+      "method": "GET",
+      "path": "/model-catalog",
+      "full_path": "/api/model-catalog",
+      "func": "fixed_model_catalog",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 545,
+      "method": "GET",
+      "path": "/playground/models",
+      "full_path": "/api/playground/models",
+      "func": "fixed_playground_models",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 624,
+      "method": "GET",
+      "path": "/keys",
+      "full_path": "/api/keys",
+      "func": "fixed_keys",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 663,
+      "method": "POST",
+      "path": "/keys",
+      "full_path": "/api/keys",
+      "func": "fixed_keys_create",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 710,
+      "method": "GET",
+      "path": "/keys/import-local/status",
+      "full_path": "/api/keys/import-local/status",
+      "func": "fixed_import_status",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 720,
+      "method": "GET",
+      "path": "/keys/import-local/detect",
+      "full_path": "/api/keys/import-local/detect",
+      "func": "fixed_import_detect",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 726,
+      "method": "POST",
+      "path": "/keys/import-local",
+      "full_path": "/api/keys/import-local",
+      "func": "fixed_import_local",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 732,
+      "method": "POST",
+      "path": "/keys/export",
+      "full_path": "/api/keys/export",
+      "func": "fixed_keys_export",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 758,
+      "method": "GET",
+      "path": "/task-claim-schedule",
+      "full_path": "/api/task-claim-schedule",
+      "func": "compat_task_claim_schedule",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 764,
+      "method": "PUT",
+      "path": "/task-claim-schedule",
+      "full_path": "/api/task-claim-schedule",
+      "func": "compat_task_claim_schedule_save",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 784,
+      "method": "GET",
+      "path": "/red-packets",
+      "full_path": "/api/red-packets",
+      "func": "compat_red_packets_list",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 789,
+      "method": "GET",
+      "path": "/red-packets/{rid}",
+      "full_path": "/api/red-packets/{rid}",
+      "func": "compat_red_packet_detail",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 794,
+      "method": "POST",
+      "path": "/red-packets",
+      "full_path": "/api/red-packets",
+      "func": "compat_red_packet_create",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 799,
+      "method": "POST",
+      "path": "/red-packets/{rid}/revoke",
+      "full_path": "/api/red-packets/{rid}/revoke",
+      "func": "compat_red_packet_revoke",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 804,
+      "method": "GET",
+      "path": "/claim/{code}",
+      "full_path": "/api/claim/{code}",
+      "func": "compat_claim_get",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 809,
+      "method": "POST",
+      "path": "/claim/{code}",
+      "full_path": "/api/claim/{code}",
+      "func": "compat_claim_draw",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 815,
+      "method": "GET",
+      "path": "/alerts",
+      "full_path": "/api/alerts",
+      "func": "fixed_alerts",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 908,
+      "method": "POST",
+      "path": "/alerts/ack",
+      "full_path": "/api/alerts/ack",
+      "func": "fixed_alerts_ack",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 920,
+      "method": "GET",
+      "path": "/agents",
+      "full_path": "/api/agents",
+      "func": "fixed_agents",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 946,
+      "method": "POST",
+      "path": "/agents/{cid}/apply",
+      "full_path": "/api/agents/{cid}/apply",
+      "func": "fixed_agent_apply",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_fixes.py",
+      "line": 960,
+      "method": "POST",
+      "path": "/agents/{cid}/restore",
+      "full_path": "/api/agents/{cid}/restore",
+      "func": "fixed_agent_restore",
+      "prefix": "/api",
+      "module": "compat_fixes"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 44,
+      "method": "GET",
+      "path": "/users",
+      "full_path": "/api/users",
+      "func": "compat_users",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 54,
+      "method": "POST",
+      "path": "/users",
+      "full_path": "/api/users",
+      "func": "compat_users_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 59,
+      "method": "PATCH",
+      "path": "/users/{username}",
+      "full_path": "/api/users/{username}",
+      "func": "compat_users_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 64,
+      "method": "DELETE",
+      "path": "/users/{username}",
+      "full_path": "/api/users/{username}",
+      "func": "compat_users_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 69,
+      "method": "POST",
+      "path": "/sessions/revoke",
+      "full_path": "/api/sessions/revoke",
+      "func": "compat_sessions_revoke",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 82,
+      "method": "GET",
+      "path": "/tokens",
+      "full_path": "/api/tokens",
+      "func": "compat_tokens",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 91,
+      "method": "POST",
+      "path": "/tokens",
+      "full_path": "/api/tokens",
+      "func": "compat_tokens_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 96,
+      "method": "PATCH",
+      "path": "/tokens/{tid}",
+      "full_path": "/api/tokens/{tid}",
+      "func": "compat_tokens_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 101,
+      "method": "DELETE",
+      "path": "/tokens/{tid}",
+      "full_path": "/api/tokens/{tid}",
+      "func": "compat_tokens_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/proxies",
+      "full_path": "/api/proxies",
+      "func": "compat_proxies",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/proxy-routes",
+      "full_path": "/api/proxy-routes",
+      "func": "compat_proxy_routes",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 118,
+      "method": "GET",
+      "path": "/proxy-routes/bindings",
+      "full_path": "/api/proxy-routes/bindings",
+      "func": "compat_proxy_bindings",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 123,
+      "method": "POST",
+      "path": "/proxy-routes",
+      "full_path": "/api/proxy-routes",
+      "func": "compat_proxy_routes_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 128,
+      "method": "PUT",
+      "path": "/proxy-routes/{name}",
+      "full_path": "/api/proxy-routes/{name}",
+      "func": "compat_proxy_routes_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 133,
+      "method": "DELETE",
+      "path": "/proxy-routes/{name}",
+      "full_path": "/api/proxy-routes/{name}",
+      "func": "compat_proxy_routes_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 138,
+      "method": "POST",
+      "path": "/proxy-routes/import",
+      "full_path": "/api/proxy-routes/import",
+      "func": "compat_proxy_routes_import",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 143,
+      "method": "POST",
+      "path": "/proxy-routes/probe",
+      "full_path": "/api/proxy-routes/probe",
+      "func": "compat_proxy_routes_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 148,
+      "method": "GET",
+      "path": "/settings/proxy",
+      "full_path": "/api/settings/proxy",
+      "func": "compat_proxy_settings",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 159,
+      "method": "PUT",
+      "path": "/settings/proxy",
+      "full_path": "/api/settings/proxy",
+      "func": "compat_proxy_settings_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 164,
+      "method": "GET",
+      "path": "/settings/proxy-pool",
+      "full_path": "/api/settings/proxy-pool",
+      "func": "compat_proxy_pool",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 169,
+      "method": "PUT",
+      "path": "/settings/proxy-pool",
+      "full_path": "/api/settings/proxy-pool",
+      "func": "compat_proxy_pool_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 174,
+      "method": "POST",
+      "path": "/settings/proxy/probe",
+      "full_path": "/api/settings/proxy/probe",
+      "func": "compat_proxy_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 180,
+      "method": "GET",
+      "path": "/settings/upstream",
+      "full_path": "/api/settings/upstream",
+      "func": "compat_settings_upstream",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 198,
+      "method": "POST",
+      "path": "/settings/upstream",
+      "full_path": "/api/settings/upstream",
+      "func": "compat_settings_upstream_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 202,
+      "method": "GET",
+      "path": "/settings/model-map",
+      "full_path": "/api/settings/model-map",
+      "func": "compat_model_map",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 210,
+      "method": "POST",
+      "path": "/settings/model-map",
+      "full_path": "/api/settings/model-map",
+      "func": "compat_model_map_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 225,
+      "method": "GET",
+      "path": "/upstream/reload-state",
+      "full_path": "/api/upstream/reload-state",
+      "func": "compat_reload_state",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 231,
+      "method": "POST",
+      "path": "/settings/upstash/test",
+      "full_path": "/api/settings/upstash/test",
+      "func": "compat_upstash_test",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 236,
+      "method": "POST",
+      "path": "/settings/upstash/reload",
+      "full_path": "/api/settings/upstash/reload",
+      "func": "compat_upstash_reload",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 242,
+      "method": "GET",
+      "path": "/settings/github-token",
+      "full_path": "/api/settings/github-token",
+      "func": "compat_github_token",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 247,
+      "method": "PUT",
+      "path": "/settings/github-token",
+      "full_path": "/api/settings/github-token",
+      "func": "compat_github_token_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 252,
+      "method": "GET",
+      "path": "/settings/github-mirror",
+      "full_path": "/api/settings/github-mirror",
+      "func": "compat_github_mirror",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 257,
+      "method": "PUT",
+      "path": "/settings/github-mirror",
+      "full_path": "/api/settings/github-mirror",
+      "func": "compat_github_mirror_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 275,
+      "method": "GET",
+      "path": "/settings/pg-sync",
+      "full_path": "/api/settings/pg-sync",
+      "func": "compat_pg_sync",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 280,
+      "method": "GET",
+      "path": "/settings/pg-sync/status",
+      "full_path": "/api/settings/pg-sync/status",
+      "func": "compat_pg_sync_status",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 285,
+      "method": "POST",
+      "path": "/settings/pg-sync",
+      "full_path": "/api/settings/pg-sync",
+      "func": "compat_pg_sync_save",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 290,
+      "method": "POST",
+      "path": "/settings/pg-sync/export",
+      "full_path": "/api/settings/pg-sync/export",
+      "func": "compat_pg_sync_export",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 295,
+      "method": "POST",
+      "path": "/settings/pg-sync/import",
+      "full_path": "/api/settings/pg-sync/import",
+      "func": "compat_pg_sync_import",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 300,
+      "method": "POST",
+      "path": "/settings/pg-sync/test",
+      "full_path": "/api/settings/pg-sync/test",
+      "func": "compat_pg_sync_test",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 306,
+      "method": "GET",
+      "path": "/system/update-status",
+      "full_path": "/api/system/update-status",
+      "func": "compat_update_status",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 319,
+      "method": "DELETE",
+      "path": "/system/update-status",
+      "full_path": "/api/system/update-status",
+      "func": "compat_update_status_clear",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 324,
+      "method": "GET",
+      "path": "/system/check-update",
+      "full_path": "/api/system/check-update",
+      "func": "compat_check_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 338,
+      "method": "POST",
+      "path": "/system/update",
+      "full_path": "/api/system/update",
+      "func": "compat_start_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 343,
+      "method": "GET",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 348,
+      "method": "POST",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package_upload",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 353,
+      "method": "DELETE",
+      "path": "/system/update-package",
+      "full_path": "/api/system/update-package",
+      "func": "compat_update_package_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 358,
+      "method": "GET",
+      "path": "/system/changelog",
+      "full_path": "/api/system/changelog",
+      "func": "compat_changelog",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 370,
+      "method": "POST",
+      "path": "/upstreams",
+      "full_path": "/api/upstreams",
+      "func": "compat_upstreams_create",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 376,
+      "method": "PATCH",
+      "path": "/upstreams/{uid}",
+      "full_path": "/api/upstreams/{uid}",
+      "func": "compat_upstreams_update",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 381,
+      "method": "DELETE",
+      "path": "/upstreams/{uid}",
+      "full_path": "/api/upstreams/{uid}",
+      "func": "compat_upstreams_delete",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 386,
+      "method": "POST",
+      "path": "/upstreams/{uid}/probe",
+      "full_path": "/api/upstreams/{uid}/probe",
+      "func": "compat_upstreams_probe",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_settings.py",
+      "line": 402,
+      "method": "POST",
+      "path": "/proxy-routes/{name}/auto-assign",
+      "full_path": "/api/proxy-routes/{name}/auto-assign",
+      "func": "compat_proxy_auto_assign",
+      "prefix": "/api",
+      "module": "compat_settings"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 116,
+      "method": "GET",
+      "path": "/stats/summary",
+      "full_path": "/api/stats/summary",
+      "func": "stats_summary",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 166,
+      "method": "GET",
+      "path": "/stats/daily",
+      "full_path": "/api/stats/daily",
+      "func": "stats_daily",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 175,
+      "method": "GET",
+      "path": "/stats/hourly",
+      "full_path": "/api/stats/hourly",
+      "func": "stats_hourly",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 197,
+      "method": "GET",
+      "path": "/stats/by-model",
+      "full_path": "/api/stats/by-model",
+      "func": "stats_by_model",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 230,
+      "method": "GET",
+      "path": "/stats/by-key",
+      "full_path": "/api/stats/by-key",
+      "func": "stats_by_key",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/compat_stats.py",
+      "line": 261,
+      "method": "GET",
+      "path": "/stats/credits",
+      "full_path": "/api/stats/credits",
+      "func": "stats_credits",
+      "prefix": "/api",
+      "module": "compat_stats"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 53,
+      "method": "GET",
+      "path": "/api/v1/qtg-keys",
+      "full_path": "/api/v1/qtg-keys",
+      "func": "list_qtg_keys",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 59,
+      "method": "GET",
+      "path": "/api/v1/proxy-requests",
+      "full_path": "/api/v1/proxy-requests",
+      "func": "list_proxy_requests",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 71,
+      "method": "GET",
+      "path": "/api/v1/proxy-stats",
+      "full_path": "/api/v1/proxy-stats",
+      "func": "proxy_stats",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 77,
+      "method": "GET",
+      "path": "/api/v1/data-plane",
+      "full_path": "/api/v1/data-plane",
+      "func": "data_plane_status",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 116,
+      "method": "POST",
+      "path": "/api/v1/actions/qtg-keys",
+      "full_path": "/api/v1/actions/qtg-keys",
+      "func": "create_qtg_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 131,
+      "method": "POST",
+      "path": "/api/v1/actions/qtg-keys/{kid}/{op}",
+      "full_path": "/api/v1/actions/qtg-keys/{kid}/{op}",
+      "func": "mutate_qtg_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 145,
+      "method": "POST",
+      "path": "/api/v1/actions/upstream-keys",
+      "full_path": "/api/v1/actions/upstream-keys",
+      "func": "save_upstream_key",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 165,
+      "method": "POST",
+      "path": "/api/v1/actions/proxy-prune",
+      "full_path": "/api/v1/actions/proxy-prune",
+      "func": "prune_requests",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/data_admin.py",
+      "line": 175,
+      "method": "GET",
+      "path": "/api/v1/meta",
+      "full_path": "/api/v1/meta",
+      "func": "meta",
+      "prefix": "",
+      "module": "data_admin"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 16,
+      "method": "GET",
+      "path": "/healthz",
+      "full_path": "/healthz",
+      "func": "healthz",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 22,
+      "method": "GET",
+      "path": "/readyz",
+      "full_path": "/readyz",
+      "func": "readyz",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 37,
+      "method": "GET",
+      "path": "/metrics",
+      "full_path": "/metrics",
+      "func": "prometheus",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/health.py",
+      "line": 42,
+      "method": "GET",
+      "path": "/api/v1/health",
+      "full_path": "/api/v1/health",
+      "func": "health_detail",
+      "prefix": "",
+      "module": "health"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 112,
+      "method": "GET",
+      "path": "/security/config",
+      "full_path": "/api/security/config",
+      "func": "compat_security_config_get",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 118,
+      "method": "POST",
+      "path": "/security/config",
+      "full_path": "/api/security/config",
+      "func": "compat_security_config_save",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 146,
+      "method": "GET",
+      "path": "/security/rules",
+      "full_path": "/api/security/rules",
+      "func": "compat_security_rules_list",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 151,
+      "method": "POST",
+      "path": "/security/rules",
+      "full_path": "/api/security/rules",
+      "func": "compat_security_rules_add",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 180,
+      "method": "DELETE",
+      "path": "/security/rules/{rid}",
+      "full_path": "/api/security/rules/{rid}",
+      "func": "compat_security_rules_delete",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 192,
+      "method": "GET",
+      "path": "/security/logs",
+      "full_path": "/api/security/logs",
+      "func": "compat_security_logs",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/ip_guard.py",
+      "line": 198,
+      "method": "POST",
+      "path": "/security/logs/clear",
+      "full_path": "/api/security/logs/clear",
+      "func": "compat_security_logs_clear",
+      "prefix": "/api",
+      "module": "ip_guard"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 326,
+      "method": "GET",
+      "path": "/v1/models",
+      "full_path": "/v1/models",
+      "func": "list_models",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 356,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "full_path": "/v1/chat/completions",
+      "func": "chat_completions",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 549,
+      "method": "GET",
+      "path": "/v1/usage",
+      "full_path": "/v1/usage",
+      "func": "data_plane_usage",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 561,
+      "method": "GET",
+      "path": "/v1/health",
+      "full_path": "/v1/health",
+      "func": "data_plane_health",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/proxy.py",
+      "line": 655,
+      "method": "POST",
+      "path": "/v1/responses",
+      "full_path": "/v1/responses",
+      "func": "responses_api",
+      "prefix": "",
+      "module": "proxy"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 53,
+      "method": "GET",
+      "path": "/overview",
+      "full_path": "/api/v1/overview",
+      "func": "overview",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 60,
+      "method": "GET",
+      "path": "/accounts",
+      "full_path": "/api/v1/accounts",
+      "func": "accounts",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 67,
+      "method": "GET",
+      "path": "/usage",
+      "full_path": "/api/v1/usage",
+      "func": "usage",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 74,
+      "method": "GET",
+      "path": "/tasks",
+      "full_path": "/api/v1/tasks",
+      "func": "tasks",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 81,
+      "method": "GET",
+      "path": "/keys",
+      "full_path": "/api/v1/keys",
+      "func": "keys",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 89,
+      "method": "GET",
+      "path": "/models",
+      "full_path": "/api/v1/models",
+      "func": "models",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 99,
+      "method": "GET",
+      "path": "/logs",
+      "full_path": "/api/v1/logs",
+      "func": "logs",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 107,
+      "method": "GET",
+      "path": "/alerts",
+      "full_path": "/api/v1/alerts",
+      "func": "alerts",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 115,
+      "method": "GET",
+      "path": "/requests",
+      "full_path": "/api/v1/requests",
+      "func": "requests_rows",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 125,
+      "method": "GET",
+      "path": "/ops",
+      "full_path": "/api/v1/ops",
+      "func": "ops",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 146,
+      "method": "GET",
+      "path": "/settings",
+      "full_path": "/api/v1/settings",
+      "func": "settings",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 169,
+      "method": "GET",
+      "path": "/audit",
+      "full_path": "/api/v1/audit",
+      "func": "audit",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/read.py",
+      "line": 181,
+      "method": "POST",
+      "path": "/cache/invalidate",
+      "full_path": "/api/v1/cache/invalidate",
+      "func": "invalidate_cache",
+      "prefix": "/api/v1",
+      "module": "read"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 24,
+      "method": "GET",
+      "path": "/system/configuration",
+      "full_path": "/api/v1/system/configuration",
+      "func": "configuration_snapshot",
+      "prefix": "/api/v1",
+      "module": "system"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 81,
+      "method": "GET",
+      "path": "/system",
+      "full_path": "/api/v1/system",
+      "func": "system_info",
+      "prefix": "/api/v1",
+      "module": "system"
+    },
+    {
+      "file": "qtg/routers/system.py",
+      "line": 144,
+      "method": "GET",
+      "path": "/security",
+      "full_path": "/api/v1/security",
+      "func": "security_info",
+      "prefix": "/api/v1",
+      "module": "system"
+    }
+  ]
+}

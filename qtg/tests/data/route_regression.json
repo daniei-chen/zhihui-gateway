@@ -1,0 +1,1315 @@
+{
+  "generated_at": "2026-10-24T10:58:37+08:00",
+  "note": "由 routeaudit.inventory() 生成；改动路由后重跑 tools/regen_route_golden.py 并人工 review 重复组。",
+  "declarations": 214,
+  "unique_method_paths": 214,
+  "duplicate_groups": 0,
+  "duplicate_extra_declarations": 0,
+  "duplicate_keys": [],
+  "effective_digest": "d2db5351bb03a805a67184147218058c79f13ef73afa4eb77d228b578afb85b6",
+  "effective_digest_schema": "method-path-module-handler/v2",
+  "effective_handlers": [
+    {
+      "method": "GET",
+      "full_path": "/api/security/config",
+      "module": "ip_guard",
+      "func": "compat_security_config_get"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/security/config",
+      "module": "ip_guard",
+      "func": "compat_security_config_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/security/rules",
+      "module": "ip_guard",
+      "func": "compat_security_rules_list"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/security/rules",
+      "module": "ip_guard",
+      "func": "compat_security_rules_add"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/security/rules/{rid}",
+      "module": "ip_guard",
+      "func": "compat_security_rules_delete"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/security/logs",
+      "module": "ip_guard",
+      "func": "compat_security_logs"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/security/logs/clear",
+      "module": "ip_guard",
+      "func": "compat_security_logs_clear"
+    },
+    {
+      "method": "GET",
+      "full_path": "/healthz",
+      "module": "health",
+      "func": "healthz"
+    },
+    {
+      "method": "GET",
+      "full_path": "/readyz",
+      "module": "health",
+      "func": "readyz"
+    },
+    {
+      "method": "GET",
+      "full_path": "/metrics",
+      "module": "health",
+      "func": "prometheus"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/health",
+      "module": "health",
+      "func": "health_detail"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/auth/login",
+      "module": "auth",
+      "func": "login"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/auth/logout",
+      "module": "auth",
+      "func": "logout"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/auth/session",
+      "module": "auth",
+      "func": "session"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/overview",
+      "module": "read",
+      "func": "overview"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/accounts",
+      "module": "read",
+      "func": "accounts"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/usage",
+      "module": "read",
+      "func": "usage"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/tasks",
+      "module": "read",
+      "func": "tasks"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/keys",
+      "module": "read",
+      "func": "keys"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/models",
+      "module": "read",
+      "func": "models"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/logs",
+      "module": "read",
+      "func": "logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/alerts",
+      "module": "read",
+      "func": "alerts"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/requests",
+      "module": "read",
+      "func": "requests_rows"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/ops",
+      "module": "read",
+      "func": "ops"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/settings",
+      "module": "read",
+      "func": "settings"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/audit",
+      "module": "read",
+      "func": "audit"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/cache/invalidate",
+      "module": "read",
+      "func": "invalidate_cache"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/checkin",
+      "module": "actions",
+      "func": "checkin"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/accounts/{platform}/{action}",
+      "module": "actions",
+      "func": "account_action"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/accounts/add",
+      "module": "actions",
+      "func": "add_account"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/keys",
+      "module": "actions",
+      "func": "save_keys"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/limits",
+      "module": "actions",
+      "func": "save_limits"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/notify",
+      "module": "actions",
+      "func": "save_notify"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/backup",
+      "module": "actions",
+      "func": "run_backup"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/alerts/ack",
+      "module": "actions",
+      "func": "ack_alerts"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/oauth/start",
+      "module": "actions",
+      "func": "oauth_start"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/actions/oauth/poll",
+      "module": "actions",
+      "func": "oauth_poll"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/oauth/finish",
+      "module": "actions",
+      "func": "oauth_finish"
+    },
+    {
+      "method": "GET",
+      "full_path": "/v1/models",
+      "module": "proxy",
+      "func": "list_models"
+    },
+    {
+      "method": "POST",
+      "full_path": "/v1/chat/completions",
+      "module": "proxy",
+      "func": "chat_completions"
+    },
+    {
+      "method": "GET",
+      "full_path": "/v1/usage",
+      "module": "proxy",
+      "func": "data_plane_usage"
+    },
+    {
+      "method": "GET",
+      "full_path": "/v1/health",
+      "module": "proxy",
+      "func": "data_plane_health"
+    },
+    {
+      "method": "POST",
+      "full_path": "/v1/responses",
+      "module": "proxy",
+      "func": "responses_api"
+    },
+    {
+      "method": "POST",
+      "full_path": "/v1/messages",
+      "module": "anthropic",
+      "func": "anthropic_messages"
+    },
+    {
+      "method": "POST",
+      "full_path": "/v1/messages/count_tokens",
+      "module": "anthropic",
+      "func": "anthropic_count_tokens"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/qtg-keys",
+      "module": "data_admin",
+      "func": "list_qtg_keys"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/proxy-requests",
+      "module": "data_admin",
+      "func": "list_proxy_requests"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/proxy-stats",
+      "module": "data_admin",
+      "func": "proxy_stats"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/data-plane",
+      "module": "data_admin",
+      "func": "data_plane_status"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/qtg-keys",
+      "module": "data_admin",
+      "func": "create_qtg_key"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/qtg-keys/{kid}/{op}",
+      "module": "data_admin",
+      "func": "mutate_qtg_key"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/upstream-keys",
+      "module": "data_admin",
+      "func": "save_upstream_key"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/v1/actions/proxy-prune",
+      "module": "data_admin",
+      "func": "prune_requests"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/meta",
+      "module": "data_admin",
+      "func": "meta"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/system/configuration",
+      "module": "system",
+      "func": "configuration_snapshot"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/system",
+      "module": "system",
+      "func": "system_info"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/security",
+      "module": "system",
+      "func": "security_info"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/upstreams",
+      "module": "compat_fixes",
+      "func": "fixed_upstreams"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/platforms",
+      "module": "compat_fixes",
+      "func": "platform_capabilities"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts",
+      "module": "compat_fixes",
+      "func": "fixed_accounts"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/status",
+      "module": "compat_fixes",
+      "func": "fixed_status"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/models",
+      "module": "compat_fixes",
+      "func": "fixed_models"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/model-catalog",
+      "module": "compat_fixes",
+      "func": "fixed_model_catalog"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/playground/models",
+      "module": "compat_fixes",
+      "func": "fixed_playground_models"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/keys",
+      "module": "compat_fixes",
+      "func": "fixed_keys"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/keys",
+      "module": "compat_fixes",
+      "func": "fixed_keys_create"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/keys/import-local/status",
+      "module": "compat_fixes",
+      "func": "fixed_import_status"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/keys/import-local/detect",
+      "module": "compat_fixes",
+      "func": "fixed_import_detect"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/keys/import-local",
+      "module": "compat_fixes",
+      "func": "fixed_import_local"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/keys/export",
+      "module": "compat_fixes",
+      "func": "fixed_keys_export"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/task-claim-schedule",
+      "module": "compat_fixes",
+      "func": "compat_task_claim_schedule"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/task-claim-schedule",
+      "module": "compat_fixes",
+      "func": "compat_task_claim_schedule_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/red-packets",
+      "module": "compat_fixes",
+      "func": "compat_red_packets_list"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/red-packets/{rid}",
+      "module": "compat_fixes",
+      "func": "compat_red_packet_detail"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/red-packets",
+      "module": "compat_fixes",
+      "func": "compat_red_packet_create"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/red-packets/{rid}/revoke",
+      "module": "compat_fixes",
+      "func": "compat_red_packet_revoke"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/claim/{code}",
+      "module": "compat_fixes",
+      "func": "compat_claim_get"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/claim/{code}",
+      "module": "compat_fixes",
+      "func": "compat_claim_draw"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/alerts",
+      "module": "compat_fixes",
+      "func": "fixed_alerts"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/alerts/ack",
+      "module": "compat_fixes",
+      "func": "fixed_alerts_ack"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/agents",
+      "module": "compat_fixes",
+      "func": "fixed_agents"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/agents/{cid}/apply",
+      "module": "compat_fixes",
+      "func": "fixed_agent_apply"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/agents/{cid}/restore",
+      "module": "compat_fixes",
+      "func": "fixed_agent_restore"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/summary",
+      "module": "compat_stats",
+      "func": "stats_summary"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/daily",
+      "module": "compat_stats",
+      "func": "stats_daily"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/hourly",
+      "module": "compat_stats",
+      "func": "stats_hourly"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/by-model",
+      "module": "compat_stats",
+      "func": "stats_by_model"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/by-key",
+      "module": "compat_stats",
+      "func": "stats_by_key"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/credits",
+      "module": "compat_stats",
+      "func": "stats_credits"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/users",
+      "module": "compat_settings",
+      "func": "compat_users"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/users",
+      "module": "compat_settings",
+      "func": "compat_users_create"
+    },
+    {
+      "method": "PATCH",
+      "full_path": "/api/users/{username}",
+      "module": "compat_settings",
+      "func": "compat_users_update"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/users/{username}",
+      "module": "compat_settings",
+      "func": "compat_users_delete"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/sessions/revoke",
+      "module": "compat_settings",
+      "func": "compat_sessions_revoke"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/tokens",
+      "module": "compat_settings",
+      "func": "compat_tokens"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/tokens",
+      "module": "compat_settings",
+      "func": "compat_tokens_create"
+    },
+    {
+      "method": "PATCH",
+      "full_path": "/api/tokens/{tid}",
+      "module": "compat_settings",
+      "func": "compat_tokens_update"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/tokens/{tid}",
+      "module": "compat_settings",
+      "func": "compat_tokens_delete"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/proxies",
+      "module": "compat_settings",
+      "func": "compat_proxies"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/proxy-routes",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/proxy-routes/bindings",
+      "module": "compat_settings",
+      "func": "compat_proxy_bindings"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/proxy-routes",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes_create"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/proxy-routes/{name}",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes_update"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/proxy-routes/{name}",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes_delete"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/proxy-routes/import",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes_import"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/proxy-routes/probe",
+      "module": "compat_settings",
+      "func": "compat_proxy_routes_probe"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/proxy",
+      "module": "compat_settings",
+      "func": "compat_proxy_settings"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/settings/proxy",
+      "module": "compat_settings",
+      "func": "compat_proxy_settings_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/proxy-pool",
+      "module": "compat_settings",
+      "func": "compat_proxy_pool"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/settings/proxy-pool",
+      "module": "compat_settings",
+      "func": "compat_proxy_pool_save"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/proxy/probe",
+      "module": "compat_settings",
+      "func": "compat_proxy_probe"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/upstream",
+      "module": "compat_settings",
+      "func": "compat_settings_upstream"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/upstream",
+      "module": "compat_settings",
+      "func": "compat_settings_upstream_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/model-map",
+      "module": "compat_settings",
+      "func": "compat_model_map"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/model-map",
+      "module": "compat_settings",
+      "func": "compat_model_map_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/upstream/reload-state",
+      "module": "compat_settings",
+      "func": "compat_reload_state"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/upstash/test",
+      "module": "compat_settings",
+      "func": "compat_upstash_test"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/upstash/reload",
+      "module": "compat_settings",
+      "func": "compat_upstash_reload"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/github-token",
+      "module": "compat_settings",
+      "func": "compat_github_token"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/settings/github-token",
+      "module": "compat_settings",
+      "func": "compat_github_token_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/github-mirror",
+      "module": "compat_settings",
+      "func": "compat_github_mirror"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/settings/github-mirror",
+      "module": "compat_settings",
+      "func": "compat_github_mirror_save"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/pg-sync",
+      "module": "compat_settings",
+      "func": "compat_pg_sync"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/settings/pg-sync/status",
+      "module": "compat_settings",
+      "func": "compat_pg_sync_status"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/pg-sync",
+      "module": "compat_settings",
+      "func": "compat_pg_sync_save"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/pg-sync/export",
+      "module": "compat_settings",
+      "func": "compat_pg_sync_export"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/pg-sync/import",
+      "module": "compat_settings",
+      "func": "compat_pg_sync_import"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/settings/pg-sync/test",
+      "module": "compat_settings",
+      "func": "compat_pg_sync_test"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/system/update-status",
+      "module": "compat_settings",
+      "func": "compat_update_status"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/system/update-status",
+      "module": "compat_settings",
+      "func": "compat_update_status_clear"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/system/check-update",
+      "module": "compat_settings",
+      "func": "compat_check_update"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/system/update",
+      "module": "compat_settings",
+      "func": "compat_start_update"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/system/update-package",
+      "module": "compat_settings",
+      "func": "compat_update_package"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/system/update-package",
+      "module": "compat_settings",
+      "func": "compat_update_package_upload"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/system/update-package",
+      "module": "compat_settings",
+      "func": "compat_update_package_delete"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/system/changelog",
+      "module": "compat_settings",
+      "func": "compat_changelog"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/upstreams",
+      "module": "compat_settings",
+      "func": "compat_upstreams_create"
+    },
+    {
+      "method": "PATCH",
+      "full_path": "/api/upstreams/{uid}",
+      "module": "compat_settings",
+      "func": "compat_upstreams_update"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/upstreams/{uid}",
+      "module": "compat_settings",
+      "func": "compat_upstreams_delete"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/upstreams/{uid}/probe",
+      "module": "compat_settings",
+      "func": "compat_upstreams_probe"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/proxy-routes/{name}/auto-assign",
+      "module": "compat_settings",
+      "func": "compat_proxy_auto_assign"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/auth/start",
+      "module": "compat_accounts_ext",
+      "func": "compat_auth_start"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/auth/poll",
+      "module": "compat_accounts_ext",
+      "func": "compat_auth_poll"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/auth/finish",
+      "module": "compat_accounts_ext",
+      "func": "compat_auth_finish"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/test",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_test"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/clear-cooling",
+      "module": "compat_accounts_ext",
+      "func": "compat_clear_cooling"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/{file:path}/proxy",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_set_proxy"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/{file:path}/weight",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_set_weight"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/move",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_move"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/{file:path}/note",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_note"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/force-cooling",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_force_cooling"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_credits_get"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "module": "compat_accounts_ext",
+      "func": "compat_account_disabled_post"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/authz/probe",
+      "module": "authz",
+      "func": "probe"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/authz/identity",
+      "module": "authz",
+      "func": "identity_view"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/authz/matrix",
+      "module": "authz",
+      "func": "matrix"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/capabilities",
+      "module": "capabilities",
+      "func": "capabilities"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/v1/capabilities/{cap_id}",
+      "module": "capabilities",
+      "func": "capability_detail"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/login",
+      "module": "compat",
+      "func": "compat_login"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/logout",
+      "module": "compat",
+      "func": "compat_logout"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/me",
+      "module": "compat",
+      "func": "compat_me"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/upstream/status",
+      "module": "compat",
+      "func": "compat_upstream_status"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/upstream",
+      "module": "compat",
+      "func": "compat_stats_upstream"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/stats/credits-flow",
+      "module": "compat",
+      "func": "compat_credits_flow"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/logs",
+      "module": "compat",
+      "func": "compat_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/checkin-logs",
+      "module": "compat",
+      "func": "compat_checkin_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/audit-logs",
+      "module": "compat",
+      "func": "compat_audit_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/ip-rules",
+      "module": "compat",
+      "func": "compat_ip_rules"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/ip-access-logs",
+      "module": "compat",
+      "func": "compat_ip_access_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/tasks",
+      "module": "compat",
+      "func": "compat_tasks"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/tasks/logs",
+      "module": "compat",
+      "func": "compat_task_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/claim",
+      "module": "compat",
+      "func": "compat_claim"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/task-run",
+      "module": "compat",
+      "func": "compat_task_run_status"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/task-run",
+      "module": "compat",
+      "func": "compat_task_run_start"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/task-run/stop",
+      "module": "compat",
+      "func": "compat_task_run_stop"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/task-logs",
+      "module": "compat",
+      "func": "compat_task_logs_alias"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts/daily-plan",
+      "module": "compat",
+      "func": "compat_daily_plan"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts/refresh-plan",
+      "module": "compat",
+      "func": "compat_refresh_plan2"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/system/versions",
+      "module": "compat",
+      "func": "compat_system_versions"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts/{file:path}",
+      "module": "compat",
+      "func": "compat_account_detail"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/checkin",
+      "module": "compat",
+      "func": "compat_account_checkin"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/credits",
+      "module": "compat",
+      "func": "compat_account_credits"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/{file:path}/refresh",
+      "module": "compat",
+      "func": "compat_account_refresh"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/{file:path}/disabled",
+      "module": "compat",
+      "func": "compat_account_disabled"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/accounts/{file:path}",
+      "module": "compat",
+      "func": "compat_account_delete"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/playground/chat",
+      "module": "compat",
+      "func": "compat_playground_chat"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/logs/clear",
+      "module": "compat",
+      "func": "compat_logs_clear"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/stats/repair-usage",
+      "module": "compat",
+      "func": "compat_stats_repair_usage"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/stats/rebuild-usage",
+      "module": "compat",
+      "func": "compat_stats_rebuild_usage"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/stats/repair",
+      "module": "compat",
+      "func": "compat_stats_repair_legacy"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/stats/rebuild",
+      "module": "compat",
+      "func": "compat_stats_rebuild_legacy"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/restart",
+      "module": "compat",
+      "func": "compat_restart"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/upstream/restart",
+      "module": "compat",
+      "func": "compat_upstream_restart"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/keys/check-models",
+      "module": "compat",
+      "func": "compat_keys_check_models"
+    },
+    {
+      "method": "PATCH",
+      "full_path": "/api/keys/{kid}",
+      "module": "compat",
+      "func": "compat_keys_update"
+    },
+    {
+      "method": "DELETE",
+      "full_path": "/api/keys/{kid}",
+      "module": "compat",
+      "func": "compat_keys_delete"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/keys/{kid}/reset-usage",
+      "module": "compat",
+      "func": "compat_keys_reset_usage"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/checkin-all",
+      "module": "compat",
+      "func": "compat_checkin_all"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/refresh-tokens",
+      "module": "compat",
+      "func": "compat_refresh_tokens"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/refresh-credits",
+      "module": "compat",
+      "func": "compat_refresh_credits"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/accounts/export",
+      "module": "compat",
+      "func": "compat_accounts_export"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/upload",
+      "module": "compat",
+      "func": "compat_accounts_upload"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/refresh-plan",
+      "module": "compat",
+      "func": "compat_refresh_plan_save"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/refresh-plan/run",
+      "module": "compat",
+      "func": "compat_refresh_plan_run"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/task-logs/collect",
+      "module": "compat",
+      "func": "compat_task_logs_collect"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/task-logs/clear",
+      "module": "compat",
+      "func": "compat_task_logs_clear"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/checkin-logs/clear",
+      "module": "compat",
+      "func": "compat_checkin_logs_clear"
+    },
+    {
+      "method": "PUT",
+      "full_path": "/api/accounts/daily-plan",
+      "module": "compat",
+      "func": "compat_daily_plan_save"
+    },
+    {
+      "method": "POST",
+      "full_path": "/api/accounts/daily-plan/run",
+      "module": "compat",
+      "func": "compat_daily_plan_run"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/upstream/logs",
+      "module": "compat",
+      "func": "compat_upstream_logs"
+    },
+    {
+      "method": "GET",
+      "full_path": "/api/{path:path}",
+      "module": "compat",
+      "func": "compat_fallback"
+    },
+    {
+      "method": "GET",
+      "full_path": "/",
+      "module": "main",
+      "func": "_index"
+    },
+    {
+      "method": "GET",
+      "full_path": "/favicon.svg",
+      "module": "main",
+      "func": "_favicon"
+    },
+    {
+      "method": "GET",
+      "full_path": "/{path:path}",
+      "module": "main",
+      "func": "_spa"
+    }
+  ],
+  "registration_order": [
+    "ip_guard",
+    "health",
+    "auth",
+    "read",
+    "actions",
+    "proxy",
+    "anthropic",
+    "data_admin",
+    "system",
+    "compat_fixes",
+    "compat_stats",
+    "compat_settings",
+    "compat_accounts_ext",
+    "authz",
+    "capabilities",
+    "compat"
+  ]
+}
