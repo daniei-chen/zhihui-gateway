@@ -128,12 +128,20 @@ def prepare(key, body):
                 raise BudgetRejected('剩余 token 预算不足以覆盖当前输入估算', 'insufficient_quota')
             output = min(output, remaining - estimated_input)
             body[output_field] = output
-            tokens = estimated_input + output
-        else:
-            tokens = 0
-        credit = max(0, qc - uc) / ledger.SCALE if qc else 0.0
-        if qc and credit <= 0:
-            raise BudgetRejected('积分预算已用尽', 'credit_quota_exhausted')
+        # C-008 修复（2026-10-27 审计 S1）：预估 token 量必须**无条件**记录。
+        # 此前只在密钥设了 token 配额时才赋值，无配额密钥恒写 0 —— 实测全表
+        # SUM(reserved_tokens)=0（63,805 行），于是崩溃或未结算时 unknown 行没有任何
+        # 量级信息，"不确定消耗"永远估不出来，这道预留只剩并发计数作用。
+        tokens = estimated_input + output
+        # reserved_credit 仍写 0：本项目**没有本地定价表**，无法把 token 估成金额。
+        # 真实扣费由上游返回后写入 charged_credit，这里不编造数字。
+        credit = 0.0
+        if qc:
+            # 「积分是否用尽」单独判断，不再复用待写入字段（原实现把
+            # 「剩余额度」塞进 reserved_credit，语义是错的）。
+            remaining_credit = max(0, qc - uc) / ledger.SCALE
+            if remaining_credit <= 0:
+                raise BudgetRejected('积分预算已用尽', 'credit_quota_exhausted')
         now = int(time.time())
         db.execute('INSERT INTO budget_reservations(request_id,key_id,created_at,state,reserved_tokens,reserved_credit,updated_at,owner,fence,lease_until) VALUES(?,?,?,?,?,?,?,?,?,?)',
                    (rid,key['id'],now,'reserved',tokens,credit,now,budgetowner.identity(),1,now+60))

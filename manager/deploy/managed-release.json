@@ -111,7 +111,7 @@
       "mode": 420
     },
     "server/budget.py": {
-      "candidate_sha256": "aeb64968897c13663df1287284d1d5e12fa27358be71b15734c46aba23bf1e7e",
+      "candidate_sha256": "64ba87e1bfd13119d61faca0d8bf3404f2f96485bb1667d674c9f3ca699ba61a",
       "mode": 420
     },
     "server/budgetowner.py": {
