@@ -77,10 +77,15 @@ class Runtime:
         if self.wb is not None:
             await self.wb.start()
         log.info(
-            "qtg 启动：qoder=%s(%s) trae=%s wb=%s data=%s",
+            # 2026-10-27 审计修正：此前 trae 位置打的是 settings.trae_base（BFF 的
+            # 默认值 127.0.0.1:8792，该服务已不存在），而实际生效的是
+            # trae_engine 开关选中的 adapter（当前 aiwork → 127.0.0.1:8080）。
+            # 日志与事实不符会把排障引向错误方向，这里改成打印 adapter 自己的地址。
+            "qtg 启动：qoder=%s(%s) trae=%s(%s) wb=%s data=%s",
             self.qoder.name,
             getattr(self.qoder, "base_url", "?"),
-            self.settings.trae_base,
+            self.trae.name,
+            getattr(self.trae, "base_url", "?"),
             (self.wb.name if self.wb else "off"),
             self.settings.data_dir,
         )

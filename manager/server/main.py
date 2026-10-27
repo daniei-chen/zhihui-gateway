@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import logging
+import os
 import asyncio
 
 from . import config, db, drain, redpacket, security
@@ -28,6 +29,33 @@ from .routers import qtg_panel
 # 一旦出现 emoji（账号昵称就可能带）就会抛 UnicodeEncodeError —— 与「成长任务」
 # 那次崩溃同源（issue #147），只是触发条件更少。
 force_utf8_stdio()
+
+def _configure_app_logging() -> None:
+    """给应用 logger 装 handler（2026-10-27 审计：此前一个都没有）。
+
+    为什么必须做：root logger 默认 WARNING，而全仓有 38 处 `logger.info(...)`
+    —— 包括启动事件、签到调度、令牌刷新、保留期清理。没有 handler 时它们**全部
+    被丢弃**，出问题时只能翻 uvicorn 的 access log 猜。实测：签到调度确实在跑
+    （random_checkin.json 里有 done 记录），日志里却一条都没有。
+
+    为什么只压这几个库：httpx / httpcore / urllib3 / docker / asyncio 每请求都打
+    INFO，不压会把应用日志淹掉。应用自身的 INFO 只有 38 处且无每请求级调用。
+
+    可用 `WB_LOG_LEVEL` 覆盖（DEBUG/INFO/WARNING/ERROR）。
+    """
+    if logging.getLogger().handlers:
+        return          # 已被 pytest / uvicorn --log-config 等配置过，不重复加
+    level_name = (os.environ.get('WB_LOG_LEVEL') or 'INFO').upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    )
+    for _noisy in ('httpx', 'httpcore', 'urllib3', 'docker', 'asyncio', 'watchfiles'):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+_configure_app_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +125,22 @@ async def lifespan(app: FastAPI):
         await _qtg_rt.startup()
         app.state.rt = _qtg_rt
         logger.info('qoder/trae control plane merged in (qtgcore started)')
+        # D-008 修复（2026-10-27 审计 S1）：qtg 合并时**漏了这一步接线**。
+        # `checkin_scheduler.start()` 的 docstring 明确写着「在 lifespan 里调用」，
+        # 但全仓没有任何调用方，于是 qoder/trae 的每日随机签到静默停摆：
+        # compat-plans.json 里 daily.checkin.enabled 一直是 true，last_run 却停在
+        # 2026-10-22-18，random_checkin.json 的 done/attempts/last 全空。
+        # 是否真的签到仍由两道既有开关控制（checkin_scheduler_enabled 与
+        # compat-plans 的 daily.checkin.enabled），这里只恢复代码路径。
+        try:
+            from .qtgcore import checkin_scheduler as _qcheckin
+            _qtg_checkin_task = _qcheckin.start(_qtg_rt)
+            app.state.qtg_checkin_task = _qtg_checkin_task
+            if _qtg_checkin_task is not None:
+                logger.info('qtgcore 每日随机签到调度已接线并在运行')
+        except Exception:
+            app.state.qtg_checkin_task = None
+            logger.exception('qtgcore 签到调度启动失败（不影响其它功能）')
     except Exception:
         logger.exception('qoder/trae control plane failed; workbuddy proxy unaffected')
     try:
@@ -106,6 +150,17 @@ async def lifespan(app: FastAPI):
         app.state.instance_runtime = instance_runtime
         yield
     finally:
+        # D-008：先停签到调度，再关 runtime —— 顺序反了会出现"runtime 已关、
+        # 调度还在签到"的窗口。
+        _qct = getattr(app.state, 'qtg_checkin_task', None)
+        if _qct is not None:
+            _qct.cancel()
+            try:
+                await _qct
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception('qtgcore 签到调度关闭异常')
         if _qtg_rt is not None:
             try:
                 await _qtg_rt.shutdown()

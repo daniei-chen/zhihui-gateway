@@ -179,7 +179,7 @@
       "mode": 420
     },
     "server/main.py": {
-      "candidate_sha256": "ca69567810e85be6dbf73224b7e7bc49640af7717fa6127f51222d2119721560",
+      "candidate_sha256": "763d53ba339c974da1af18e0e513969354db7964e50d05115b17b99a3122db70",
       "mode": 420
     },
     "server/metering.py": {
