@@ -122,7 +122,24 @@ export function errText(e: unknown): string {
 http.interceptors.request.use((config) => {
   const platform = platformStore.explicit();
   if (platform) {
+    // H-001/B2（2026-10-27 审计）：平台同时写进请求头与 URL 查询参数。
+    //
+    // 请求头是既有契约（后端 header 优先，零风险）；查询参数让平台显式出现在
+    // URL 里 —— 访问日志、缓存键、请求回放都能据此区分「这是哪个平台的读」，
+    // 而头在代理/客户端库/CORS 预检里都可能被丢掉或改写。
+    //
+    // 两者都发是过渡期最稳的组合：任一入口失效，另一条仍然正确。
+    // 后端已实测两者等效（`?platform=qoder` 与 header qoder 返回完全相同的数据）。
+    //
+    // 给所有请求都加是安全的：后端 `_qtg_should_route()` 只看 path，query 不参与
+    // 转发匹配，所以对 `/api/login`、`/api/me` 这类不在白名单里的端点没有任何影响。
     (config.headers as Record<string, string>)['X-QTG-Platform'] = platform;
+    const cur = config.params;
+    if (cur === undefined || cur === null || typeof cur === 'object') {
+      const merged: Record<string, unknown> = { ...(cur as Record<string, unknown> | undefined) };
+      if (merged.platform === undefined) merged.platform = platform;
+      config.params = merged;
+    }
   }
   return config;
 });
