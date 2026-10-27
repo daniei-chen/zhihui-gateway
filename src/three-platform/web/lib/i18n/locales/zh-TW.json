@@ -1,6 +1,6 @@
 {
   "brand": {
-    "name": "智惠網關",
+    "name": "智匯網關",
     "tagline": "Qoder · Trae · WorkBuddy 三平台統一網關"
   },
   "language": {
@@ -99,7 +99,7 @@
     "community": "LINUX DO 社群",
     "communityTitle": "本專案在 LINUX DO 社群發布與交流",
     "help": "說明",
-    "about": "關於智惠網關",
+    "about": "關於智匯網關",
     "aboutDesc": "WorkBuddy Manager 是為 workbuddy2api 打造的帳號池管理與 OpenAI 相容反向代理閘道，支援多帳號掃碼納管、自動簽到、金鑰派發、IP 管控與用量統計。",
     "versionFallback": "（未取得執行版本）",
     "logout": "登出",

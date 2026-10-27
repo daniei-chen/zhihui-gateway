@@ -245,7 +245,7 @@
     "realmMismatch": "这个二维码是另一个版本（国内 / 国际）的，请重新获取"
   },
   "brand": {
-    "name": "智惠网关",
+    "name": "智汇网关",
     "tagline": "Qoder · Trae · WorkBuddy 三平台统一网关"
   },
   "changelog": {
@@ -846,8 +846,8 @@
     "community": "LINUX DO 社区",
     "communityTitle": "本项目在 LINUX DO 社区发布与交流",
     "help": "帮助",
-    "about": "关于智惠网关",
-    "aboutDesc": "智惠网关是 Qoder、Trae、WorkBuddy 三平台统一的账号池管理与 OpenAI / Anthropic 兼容网关，支持多账号纳管、自动签到、密钥分发、IP 管控与用量统计。",
+    "about": "关于智汇网关",
+    "aboutDesc": "智汇网关是 Qoder、Trae、WorkBuddy 三平台统一的账号池管理与 OpenAI / Anthropic 兼容网关，支持多账号纳管、自动签到、密钥分发、IP 管控与用量统计。",
     "versionFallback": "（未取到运行版本）",
     "logout": "退出登录",
     "logoutTitle": "确认退出登录？",
@@ -1093,7 +1093,7 @@
     "deleteUserDesc": "删除后该用户将无法登录管理端。",
     "usersEmpty": "暂无管理用户",
     "usersEmptyDesc": "至少保留一个管理员账号",
-    "aboutDesc": "智惠网关在 WorkBuddy Manager 的基础上扩展了 Qoder 与 Trae 两个平台：三个后端各自独立运行，本面板统一纳管账号、密钥、模型、用量与预警。账号轮询、并发与熔断由各自上游负责。",
+    "aboutDesc": "智汇网关在 WorkBuddy Manager 的基础上扩展了 Qoder 与 Trae 两个平台：三个后端各自独立运行，本面板统一纳管账号、密钥、模型、用量与预警。账号轮询、并发与熔断由各自上游负责。",
     "aboutCredits": "界面风格参考 linux-do/cdk（MIT），特此致谢。",
     "aboutUsage": "下游接入：Base URL 填 `https://你的域名/v1`，密钥用「API 密钥」页生成的 `wbk_...`。",
     "fieldInvalid": "「{label}」填写有误",

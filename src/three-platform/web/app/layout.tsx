@@ -49,15 +49,15 @@ const CJK_FONT_STACK = [
 
 export const metadata: Metadata = {
   title: {
-    template: '%s - 智惠网关',
-    default: '智惠网关',
+    template: '%s - 智汇网关',
+    default: '智汇网关',
   },
   /**
    * 站点描述用英文：它是构建期写进静态 HTML 的元数据，无法跟随运行时语言切换
    * （管理端本身不做语言路由，见 lib/i18n/config.ts 的说明）。选英文是因为
    * 分享卡片 / 搜索引擎抓取时它面向的受众最广；界面内的文案全部走 i18n。
    */
-  description: '智惠网关 - Qoder / Trae / WorkBuddy 三平台账号池与网关控制台',
+  description: '智汇网关 - Qoder / Trae / WorkBuddy 三平台账号池与网关控制台',
   // 图标 / 清单的 URL 也要带部署前缀（PR #60 评审补漏）：Next 只给 `_next`
   // 静态资源与 next/link 跳转补 basePath，**不会**改写 metadata 里的这些字符串
   // ——实测子路径部署下产物里仍是 `href="/favicon/..."`，会被请求到域名根（通常是
