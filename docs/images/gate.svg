@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 560" width="1100" height="560" role="img" aria-labelledby="t d">
+  <title id="t">发布门禁：改一个字节就起不来</title>
+  <desc id="d">源码与前端两棵树各有一份签名清单；启动前先验 Ed25519 签名，再逐文件比对哈希，任一不符直接拒绝启动。</desc>
+  <defs>
+    <linearGradient id="gbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1020"/>
+      <stop offset="1" stop-color="#0b1526"/>
+    </linearGradient>
+    <marker id="ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3d5a80"/>
+    </marker>
+    <marker id="gar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ef4444"/>
+    </marker>
+    <marker id="gag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22c55e"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="560" rx="18" fill="url(#gbg)"/>
+  <rect x="0.5" y="0.5" width="1099" height="559" rx="18" fill="none" stroke="#1e2b45"/>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+    <text x="48" y="50" fill="#e8eefb" font-size="18" font-weight="700">上线的东西，服务器自己会验</text>
+    <text x="48" y="74" fill="#7f95b4" font-size="12.5">不是“相信没人动过”，而是“动过就起不来” —— 两棵树，各一条门</text>
+
+    <!-- two trees -->
+    <g>
+      <rect x="48" y="106" width="196" height="62" rx="11" fill="#0d1a2e" stroke="#2b4a72"/>
+      <text x="68" y="132" fill="#cfe0f5" font-size="12.5" font-weight="700">源码树</text>
+      <text x="68" y="152" fill="#8ba0bd" font-size="11">后端 + 部署脚本 · 357 文件</text>
+
+      <rect x="48" y="182" width="196" height="62" rx="11" fill="#0d1a2e" stroke="#2b4a72"/>
+      <text x="68" y="208" fill="#cfe0f5" font-size="12.5" font-weight="700">前端树</text>
+      <text x="68" y="228" fill="#8ba0bd" font-size="11">静态导出产物 · 145 文件</text>
+    </g>
+
+    <path d="M244 137 L292 137" stroke="#3d5a80" stroke-width="2" marker-end="url(#ga)"/>
+    <path d="M244 213 L292 213" stroke="#3d5a80" stroke-width="2" marker-end="url(#ga)"/>
+
+    <!-- manifest -->
+    <rect x="300" y="106" width="212" height="138" rx="11" fill="#0e1c30" stroke="#2b4a72"/>
+    <text x="320" y="132" fill="#cfe0f5" font-size="12.5" font-weight="700">逐文件哈希清单</text>
+    <text x="320" y="154" fill="#7f95b4" font-size="10.5" font-family="ui-monospace, Consolas, monospace">managed-release.json</text>
+    <text x="320" y="172" fill="#7f95b4" font-size="10.5" font-family="ui-monospace, Consolas, monospace">manifest.sha256</text>
+    <text x="320" y="196" fill="#6d87a6" font-size="11">路径 + sha256 + 权限位</text>
+    <text x="320" y="216" fill="#6d87a6" font-size="11">清单即声明：我受门禁保护</text>
+    <text x="320" y="236" fill="#5d7a99" font-size="10.5">新增文件必须显式登记</text>
+
+    <path d="M512 175 L560 175" stroke="#3d5a80" stroke-width="2" marker-end="url(#ga)"/>
+
+    <!-- signature -->
+    <rect x="568" y="122" width="180" height="106" rx="11" fill="#101a2c" stroke="#8a6a1f"/>
+    <text x="588" y="148" fill="#ffd98a" font-size="12.5" font-weight="700">Ed25519 签名</text>
+    <text x="588" y="170" fill="#a8946b" font-size="11">私钥离线保管</text>
+    <text x="588" y="190" fill="#a8946b" font-size="11">签名覆盖清单字节</text>
+    <text x="588" y="212" fill="#7d6a3a" font-size="10.5">公钥即启动时的信任锚</text>
+
+    <path d="M748 175 L796 175" stroke="#3d5a80" stroke-width="2" marker-end="url(#ga)"/>
+
+    <!-- preflight -->
+    <rect x="804" y="106" width="248" height="138" rx="11" fill="#0c1c16" stroke="#1f7a4a"/>
+    <text x="824" y="132" fill="#9ff0bc" font-size="12.5" font-weight="700">启动前校验 preflight</text>
+    <text x="824" y="156" fill="#7fae91" font-size="11">① 验签名</text>
+    <text x="824" y="176" fill="#7fae91" font-size="11">② 逐文件比对 sha256</text>
+    <text x="824" y="196" fill="#7fae91" font-size="11">③ 检查权限位与软链</text>
+    <text x="824" y="222" fill="#5d8a70" font-size="10.5">三者全过，才允许起进程</text>
+
+    <!-- fail paths -->
+    <path d="M928 244 L928 292" stroke="#ef4444" stroke-width="2" marker-end="url(#gar)"/>
+    <rect x="796" y="300" width="264" height="54" rx="10" fill="#2b1416" stroke="#ef4444" stroke-opacity="0.7"/>
+    <text x="816" y="322" fill="#fca5a5" font-size="11.5" font-weight="700">签名不对 → 退出码 3</text>
+    <text x="816" y="342" fill="#b98282" font-size="11">哈希不符 → 退出码 4</text>
+
+    <path d="M804 213 L752 213" stroke="#22c55e" stroke-width="2" marker-end="url(#gag)" stroke-dasharray="0"/>
+    <rect x="588" y="278" width="180" height="76" rx="11" fill="#0d1a2e" stroke="#1f7a4a"/>
+    <text x="608" y="304" fill="#9ff0bc" font-size="12" font-weight="700">服务正常启动</text>
+    <text x="608" y="324" fill="#7fae91" font-size="11">只有全绿才走到这里</text>
+    <text x="608" y="342" fill="#5d8a70" font-size="10.5">失败时进程根本起不来</text>
+
+    <!-- note -->
+    <rect x="48" y="392" width="1004" height="130" rx="12" fill="#0a1526" stroke="#26374f"/>
+    <text x="72" y="420" fill="#8ba0bd" font-size="12.5" font-weight="700">这条链解决的是什么问题</text>
+    <g font-size="11.5" fill="#7d93b0">
+      <text x="72" y="446">磁盘上的文件被改，跑起来的仍然是服务 —— 这类问题没有门禁时只能靠“事后发现”，而事后往往已经跑了几周。</text>
+      <text x="72" y="468">门禁把发现时机推到启动那一刻：错了就起不来，日志里明确写“签名失败”还是“哈希不符”，不用猜。</text>
+      <text x="72" y="492" font-weight="700" fill="#a8946b">它的边界也要说清楚：</text>
+      <text x="72" y="512">防的是磁盘篡改，不防“有 root 的人重新签一份合法包”。高保障要把私钥放到离线机或 HSM，本机只留公钥。</text>
+    </g>
+  </g>
+</svg>
