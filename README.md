@@ -848,26 +848,6 @@ CI 会构建前端、打包产物、从 CHANGELOG 提取对应版本段落作为
 
 ---
 
-## 赞助与推广
-
-> 说明：以下为合作方推广信息。本项目部署需要一台能跑 Docker 的服务器，提供给有需要
-> 的用户参考；**本仓库与其没有技术依赖**，用别家服务器同样能正常部署。
-
-### 爱维云 · 免备案云服务器
-
-[爱维云 · lovevps.cn](https://lovevps.cn/)
-
-**长期七五折**，下单时填优惠码 **`catfk`** ｜ 官网：<https://lovevps.cn/>
-
-- **免备案、即开即用** —— 香港（5 个可用区）、美国、日本、新加坡、马来西亚、德国等
-  节点；国内另有济南、厦门、襄阳、绍兴、广州、西安、深圳等多个机房
-- **线路优化** —— CN2 / 9929 / BGP 精品线路；高防机型提供 200G 流量防御
-- **住宅 IP** —— 美国节点提供原生住宅宽带 IP
-- **弹性计费** —— 按需创建与释放，配置可随时升降
-- **资质** —— 持 IDC / ISP / CDN 经营许可（B1-20263321、苏B2-20263329）
-
----
-
 ## 相关项目
 
 - [**sanguine886/workbuddy-sdk**](https://github.com/sanguine886/workbuddy-sdk)（Go，MIT）——
@@ -881,7 +861,7 @@ CI 会构建前端、打包产物、从 CHANGELOG 提取对应版本段落作为
 ## 致谢
 
 - [**LINUX DO**](https://linux.do) —— 本项目的发布与交流社区
-- [**linux-do/cdk**](https://github.com/linux-do/cdk)（MIT）—— 界面设计令牌与浮动底栏组件来源，本项目 UI 视觉与其保持一致
+- [**linux-do/cdk**](https://github.com/linux-do/cdk)（MIT）—— LINUX DO 社区的 Next.js 项目，界面形态参考
 - [**Sliverkiss/workbuddy2api**](https://github.com/Sliverkiss/workbuddy2api) —— 底层账号池与 OpenAI 兼容代理（MIT；源码随本项目的发布包分发，版权归原作者）
 - [**lbjlaq/Antigravity-Manager**](https://github.com/lbjlaq/Antigravity-Manager) —— 管理端功能形态参考
 

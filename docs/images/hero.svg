@@ -66,7 +66,7 @@
     </g>
 
     <!-- right: convergence diagram -->
-    <g transform="translate(760,86)">
+    <g transform="translate(608,86)">
       <g font-size="13" font-weight="600" text-anchor="middle">
         <g>
           <rect x="0" y="0" width="132" height="44" rx="11" fill="#0d1a2e" stroke="#2b6cf6" stroke-opacity="0.6"/>
