@@ -199,7 +199,7 @@
       "mode": 420
     },
     "server/observability.py": {
-      "candidate_sha256": "d1afb2412adc7ed43f7b27a6a680b4ee7d2510d8b3c73f8e1bb13348a02bca40",
+      "candidate_sha256": "443dc994fdf3e129b94b58e31e8142f5d3c20392b689565a6434c4ed6aea6e58",
       "mode": 420
     },
     "server/offsitebackup.py": {

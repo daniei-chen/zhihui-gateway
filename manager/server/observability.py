@@ -430,13 +430,34 @@ class RequestAuditMiddleware:
                         (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
                          state.method, state.protocol, status, terminal, state.error_stage,
                          int((time.monotonic()-state.started)*1000), RELEASE_ID))
-                    if path.startswith('/api/') and (state.method not in ('GET','HEAD','OPTIONS') or status >= 400):
-                        from . import ledger
+                    if path.startswith('/api/'):
+                        # B-003 修复（2026-10-27 审计 S1）：原条件是
+                        #   method not in ('GET','HEAD','OPTIONS') or status >= 400
+                        # 于是任何匿名 GET 只要不是 2xx 就落一条 admin_events，
+                        # 而这张表有禁删触发器 —— 扫描器与未登录探针把审计链变成了
+                        # 噪声日志（24h 内 645/892 条是匿名 4xx，历史累计 19,558 行
+                        # 匿名 /api/me 401），且永久增长。
+                        # 只保留四类有追溯价值的：
+                        #   1) 有身份的 /api 操作
+                        #   2) 匿名 + 写方法 + **已知端点** 上被 401/403（真实越权尝试）
+                        #   3) 任何 5xx（服务端错误与身份无关）
+                        #   4) 有身份但路由未匹配（打错的路径也要能追）
+                        # 匿名 GET 4xx 与匿名未匹配探针不再入链；它们的痕迹仍完整
+                        # 保留在 request_outcomes / ip_access_logs / nginx access.log。
                         route = scope.get('route')
-                        action = state.method + ' ' + (getattr(route, 'path', '/api/unmatched'))
-                        ledger.admin(scope.get('state', {}).get('audit_actor'), action,
-                                     outcome='denied' if status in (401,403) else 'failed' if status >= 400 else 'completed',
-                                     status=status, request_id=state.request_id)
+                        matched = route is not None
+                        actor_obj = scope.get('state', {}).get('audit_actor') or {}
+                        actor_name = str(actor_obj.get('username') or 'anonymous') if isinstance(actor_obj, dict) else 'anonymous'
+                        has_identity = bool(actor_obj) and actor_name != 'anonymous'
+                        is_write = state.method not in ('GET', 'HEAD', 'OPTIONS')
+                        if (has_identity
+                                or (is_write and status in (401, 403) and matched)
+                                or status >= 500):
+                            from . import ledger
+                            action = state.method + ' ' + (getattr(route, 'path', '/api/unmatched') if matched else '/api/unmatched')
+                            ledger.admin(actor_obj, action,
+                                         outcome='denied' if status in (401,403) else 'failed' if status >= 400 else 'completed',
+                                         status=status, request_id=state.request_id)
                     _outcome_writes+=1
                     if _outcome_writes>=2000:
                         _outcome_writes=0
