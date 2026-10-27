@@ -39,6 +39,8 @@ import contextvars
 import json
 import logging
 import re
+import os
+import sys
 import time
 import uuid
 import anyio
@@ -149,7 +151,12 @@ def admit_key(key):
     state=current.get()
     if state is None or state.key_slot is not None or state.protocol=='http': return True
     key_id=int(key['id'])
-    limit=1 if key.get('quota') or key.get('quota_credit') else 4
+    # C-004：每密钥并发上限改为源码直读 env（默认值与历史硬编码一致）。
+    # 有配额密钥默认 1（配额闸只能有 1 个在途），无配额默认 4。
+    if key.get('quota') or key.get('quota_credit'):
+        limit=_env_int('WB_KEY_CONCURRENCY_QUOTA', 1)
+    else:
+        limit=_env_int('WB_KEY_CONCURRENCY', 4)
     with _key_lock:
         if _key_slots.get(key_id,0)>=limit: return False
         _key_slots[key_id]=_key_slots.get(key_id,0)+1; state.key_slot=key_id
@@ -317,12 +324,36 @@ class ManagedStreamingResponse(StreamingResponse):
             finally:
                 if self.cleanup: await self.cleanup()
 
+def _env_int(name, default):
+    """读环境变量里的正整数；缺失/非法一律回落默认值（不抛异常）。
+
+    C-004 修复（2026-10-27 审计 S1）：这些阈值此前**只**在
+    /opt/workbuddy-manager/local-overrides/sitecustomize.py 里靠猴子补丁抬高，
+    源码里是硬编码 8/2/4/1。后果是「用源码评估容量会错 7.5 倍」，
+    且补丁锚点一旦漂移就静默回落到 8/2/4/1。现在源码自己读，默认值与
+    历史硬编码一致，行为向后兼容。
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        v = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
+
+
 class RequestAuditMiddleware:
     """Pure ASGI wrapper; mutable context survives streaming tasks and is reset per request."""
     def __init__(self, app):
         self.app = app
         # One worker: bounded admission before body allocation, no unbounded queue.
-        self.active=0; self.large=0; self.maximum=8; self.large_maximum=2
+        # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
+        self.active=0; self.large=0
+        self.maximum = _env_int('WB_GATEWAY_MAX_CONCURRENCY', 8)
+        self.large_maximum = _env_int('WB_GATEWAY_LARGE_MAX_CONCURRENCY', 2)
+        print('[admission] 全局并发上限 maximum=%d large_maximum=%d（源码直读 env）'
+              % (self.maximum, self.large_maximum), file=sys.stderr, flush=True)
 
     async def __call__(self, scope, receive, send):
         global _outcome_writes

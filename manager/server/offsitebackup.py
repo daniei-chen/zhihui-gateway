@@ -18,7 +18,11 @@ BRANCH = 'workbuddy-recovery-encrypted'
 CERTIFICATE = Path('/root/backups/workbuddy-recovery/recovery-public.pem')
 CONFIG = Path('/root/backups/workbuddy-recovery/offsite.json')
 REPOSITORY = Path('/root/backups/workbuddy-offsite.git')
-MAX_CIPHER_BYTES = 50 * 1024 * 1024
+# C-007（2026-10-27 审计）：每日快照已 48.9 MB 且持续增长，原 50 MiB 上限
+# 只剩约 3.5 MB 余量 —— 恢复异地备份后很快就会以
+# "encrypted snapshot exceeds repository size limit" 失败。
+# 提高到 256 MiB 给增长留足空间；这仍是一个硬上限，不是无限制。
+MAX_CIPHER_BYTES = 256 * 1024 * 1024
 
 #: 子进程（openssl / git）的超时，秒。
 #:

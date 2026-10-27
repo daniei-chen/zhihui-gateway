@@ -6,6 +6,7 @@ not controlled here, so estimated budgets are not a hard provider billing guaran
 from __future__ import annotations
 import json
 import math
+import os
 import time
 from . import db, observability, budgetowner, ledger
 
@@ -61,6 +62,18 @@ def heartbeat():
     db.execute("UPDATE budget_reservations SET lease_until=? WHERE owner=? AND state IN ('reserved','forwarded')",
                (now + 60, budgetowner.identity()))
 
+def _env_int(name, default):
+    """读环境变量里的正整数；缺失/非法回落默认值。C-004：阈值不该藏在带外补丁里。"""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        v = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
+
+
 def _owned(row, state):
     return row['owner'] == budgetowner.identity() and row['fence'] == getattr(state, 'budget_fence', None)
 
@@ -91,7 +104,11 @@ def prepare(key, body):
                 (key['id'], _cutoff))
         else:
             pending = db.query_one('SELECT count(*) n FROM budget_reservations WHERE key_id=? AND state IN '+states, (key['id'],))
-        if pending['n'] >= (1 if limited else 4):
+        # C-004：未结算请求上限改为源码直读 env（默认值与历史硬编码一致：
+        # 有配额 1、无配额 4）。此前只由 sitecustomize 猴子补丁抬高。
+        _limit = (_env_int('WB_KEY_BUDGET_PENDING_QUOTA', 1) if limited
+                  else _env_int('WB_KEY_BUDGET_PENDING', 4))
+        if pending['n'] >= _limit:
             raise BudgetRejected('该密钥存在进行中或用量待核对的请求，请完成后再试', 'budget_pending')
         q, used = int(fresh['quota']), int(fresh['used_tokens'])
         qc = ledger.units(fresh['quota_credit'])

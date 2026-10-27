@@ -107,7 +107,7 @@
       "mode": 420
     },
     "server/budget.py": {
-      "candidate_sha256": "112f5c2606255afe6cf80f2fdfc574559608c5585d651591290761812b283b2c",
+      "candidate_sha256": "aeb64968897c13663df1287284d1d5e12fa27358be71b15734c46aba23bf1e7e",
       "mode": 420
     },
     "server/budgetowner.py": {
@@ -195,11 +195,11 @@
       "mode": 420
     },
     "server/observability.py": {
-      "candidate_sha256": "fa2c74cdbc5f19a5596fe378ee1b45377e4674c0e479f090237214a12fa0509e",
+      "candidate_sha256": "d1afb2412adc7ed43f7b27a6a680b4ee7d2510d8b3c73f8e1bb13348a02bca40",
       "mode": 420
     },
     "server/offsitebackup.py": {
-      "candidate_sha256": "9172263b57694b01e19b6ef0c17b92aead8a7e22d597284c15bfb7bbf787f067",
+      "candidate_sha256": "cf352faf2ab87e43e076484d15ff0fdcb2887a2be0b6358168c6cb267ea7efa2",
       "mode": 420
     },
     "server/operational.py": {
