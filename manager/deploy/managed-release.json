@@ -30,6 +30,10 @@
       "candidate_sha256": "831eb46fed6980b4ef60b37d580ecb088266c2236909e078d9e04a33b633295a",
       "mode": 493
     },
+    "deploy/reconcile_credits.py": {
+      "candidate_sha256": "a8795b8bd71ec90c7cda88ec690957069241b50006883530b62088e5f4e48634",
+      "mode": 493
+    },
     "deploy/release_state.py": {
       "candidate_sha256": "b29a680870e86abb3a4eeda9b76d4b45cac02fd73b428bcb6b875b792932328d",
       "mode": 493
@@ -315,7 +319,7 @@
       "mode": 420
     },
     "server/routers/stats.py": {
-      "candidate_sha256": "63b4185358a828ba4516193499e7f3ce509c72ebed6b9c2d58c780240e35c45b",
+      "candidate_sha256": "d61e86d9a66f5aa93912b68ddae699a7635133500c935347fe4f18515175c116",
       "mode": 420
     },
     "server/routers/system.py": {

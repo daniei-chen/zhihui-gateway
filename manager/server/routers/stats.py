@@ -86,6 +86,68 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
     return out
 
 
+@router.get('/credit-reconcile')
+def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
+    """C-001：计费三面口径对账（只读诊断）。
+
+    背景（2026-10-27 审计 S1）：同一批用量在三个面上曾经各不相同 ——
+    `usage_events`（账本，只覆盖账本上线后）17.6k、`usage_daily`（展示，全量聚合）
+    55.6k、`api_keys.used_credit_units`（配额执法）45.4k，最大差 3.17 倍。
+    而**配额判断读的正是最低那个数**，于是"用户看到的用量"与"实际扣的"不是同一个。
+
+    口径现已确立并修复：
+      * 明细 `request_logs` 为全量权威；
+      * 展示 `usage_daily` = 明细的按日聚合；
+      * 执法 `api_keys.used_credit_units` = 该密钥的明细聚合（含历史）。
+
+    本端点用于**持续自检**：任何一面再次漂移都会在 `drift_keys` 里显形。
+    """
+    scale = 1_000_000.0
+    rows = [dict(r) for r in db.query(
+        'SELECT k.id, k.name, k.used_credit_units, '
+        '  COALESCE((SELECT SUM(r.credit) FROM request_logs r '
+        '            WHERE r.key_id=k.id AND r.credit IS NOT NULL),0) AS detail '
+        'FROM api_keys k ORDER BY k.id')]
+    items = []
+    drift = []
+    for r in rows:
+        cur = float(r.get('used_credit_units') or 0) / scale
+        want = float(r.get('detail') or 0)
+        gap = round(want - cur, 6)
+        bad = abs(gap) >= 0.005
+        if bad:
+            drift.append(int(r['id']))
+        items.append({'key_id': int(r['id']), 'name': r.get('name'),
+                      'enforced_credit': round(cur, 6),
+                      'detail_credit': round(want, 6),
+                      'gap': gap, 'ok': not bad})
+    totals = {}
+    row = dict(db.query_one(
+        'SELECT '
+        ' (SELECT COALESCE(SUM(credit),0) FROM request_logs WHERE credit IS NOT NULL) AS detail, '
+        ' (SELECT COALESCE(SUM(credit_units),0)/1000000.0 FROM usage_events) AS ledger, '
+        ' (SELECT COALESCE(SUM(COALESCE(credit_units, CAST(credit*1000000 AS INTEGER))),0)/1000000.0 FROM usage_daily) AS daily, '
+        ' (SELECT COALESCE(SUM(used_credit_units),0)/1000000.0 FROM api_keys) AS enforced, '
+        ' (SELECT COALESCE(SUM(credit),0) FROM request_logs '
+        '    WHERE credit IS NOT NULL AND (key_id IS NULL OR key_id NOT IN (SELECT id FROM api_keys))) AS orphan'
+    ) or {})
+    for k in ('detail', 'ledger', 'daily', 'enforced', 'orphan'):
+        totals[k] = round(float(row.get(k) or 0), 6)
+    orow = dict(db.query_one(
+        'SELECT COUNT(*) AS n FROM request_logs '
+        'WHERE credit IS NOT NULL AND (key_id IS NULL OR key_id NOT IN (SELECT id FROM api_keys))') or {})
+    return {
+        'scale': 'credit',
+        'totals': totals,
+        'orphan_rows': int(orow.get('n') or 0),
+        'drift_keys': drift,
+        'ok': not drift,
+        'items': items,
+        'note': 'ledger 仅覆盖账本上线后的逐请求事件；detail 为全量权威；'
+                'enforced 应等于 detail 按密钥聚合；orphan 属已删除密钥、不计入任何存活密钥',
+    }
+
+
 @router.get('/summary')
 def summary(realm: str | None = None,
             user: dict = Depends(security.current_user)) -> dict:
