@@ -427,6 +427,9 @@ async def _qtg_platform_route(request, call_next):
             role=_role, scopes=frozenset({"*"} if _role == "admin" else {"read"}),
             auth_method="manager_session", aud="qtg", exp=_now + 60,
             iat=_now, iss="manager", jti="")
+        # H-001/B3（2026-10-27 审计）：平台解析结果落到请求上下文，
+        # qtgcore 统一读 state（identity.platform_of），不再各自解析请求头。
+        request.state.qtg_platform = platform
         request.state.qtg_rewritten = True
         request.scope["path"] = _QTG_INTERNAL + path
         request.scope["raw_path"] = (_QTG_INTERNAL + path).encode()

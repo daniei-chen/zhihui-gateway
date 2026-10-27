@@ -488,3 +488,19 @@ __all__ = [
     "ROLES", "SPOOF_MARKERS", "audit_actor", "audit_detail", "identity_of",
     "parse_origin", "split_csv",
 ]
+
+
+def platform_of(request) -> str:
+    """单一平台解析入口：中间件结果优先，请求头回退。
+
+    此前 qtgcore 有 10 处各自读 `x-qtg-platform`，两套入口（请求头 / `?platform=`）
+    靠中间件补头才勉强一致；任一处漏读都会静默返回全部平台的数据（实测 total 1→34）。
+    收敛到本函数后，只有这里读请求头。
+    """
+    state = getattr(request, 'state', None)
+    if state is not None:
+        value = getattr(state, 'qtg_platform', None)
+        if value:
+            return str(value).strip().lower()
+    headers = getattr(request, 'headers', None) or {}
+    return (headers.get('x-qtg-platform') or headers.get('x-platform') or '').strip().lower()

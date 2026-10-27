@@ -11,6 +11,7 @@ WorkBuddy 期望的结构，从而不改前端也能跑起来。
 * 未实现的端点返回**结构正确的空值**，绝不让前端 500。
 """
 from __future__ import annotations
+from ..identity import platform_of
 
 import secrets
 import datetime as dt
@@ -268,7 +269,7 @@ async def compat_logs(
     import time as _time
 
     rt = _rt(request)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    plat = platform_of(request)
     if plat == "workbuddy":
         return await _wb_logs(rt, days, status, page, size or limit or 20, offset)
     if plat not in ("qoder", "trae"):
@@ -314,7 +315,7 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default="")) 
     """
     rt = _rt(request)
     agg = await build_aggregate(rt)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    plat = platform_of(request)
     items: List[Dict[str, Any]] = []
     if plat == "qoder":
         for a in agg.qoder_accounts:
@@ -429,7 +430,7 @@ def _platform_rows(request: Request, agg) -> tuple[str, list]:
     批量动作（刷新积分 / 刷新令牌 / 签到 / 计划执行）必须走这里：否则在 Qoder
     平台点「刷新积分」会把 Trae 的账号也刷一遍——这正是「还是两个一起签到」的根因。
     """
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    plat = platform_of(request)
     if plat == "qoder":
         return plat, list(agg.qoder_accounts)
     if plat == "trae":
@@ -594,7 +595,7 @@ async def compat_playground_chat(request: Request):
 
     from .proxy import _base, _catalog, _upstream_key
 
-    hdr = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    hdr = platform_of(request)
     platform, upstream_model = (hdr if hdr in ("qoder", "trae") else "qoder"), model
     if "/" in model:
         head, _, rest = model.partition("/")
@@ -799,7 +800,7 @@ def _batch_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
 @router.post("/accounts/checkin-all")
 async def compat_checkin_all(request: Request) -> Dict[str, Any]:
     rt = _rt(request)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    plat = platform_of(request)
     results: List[Dict[str, Any]] = []
     if plat in ("", "qoder"):
         try:

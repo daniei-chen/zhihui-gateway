@@ -12,6 +12,7 @@
   用于按 key 与按模型对账。
 """
 from __future__ import annotations
+from ..identity import platform_of
 
 import asyncio
 import json
@@ -76,7 +77,7 @@ def _host_platform(request: Request) -> str:
     """
     # 显式头优先：nginx 把 /qoder/v1、/trae/v1 的前缀翻译成这个头，
     # 于是同一个域名下也能按路径区分平台——模型名重复时这是唯一可靠的区分方式。
-    _hdr = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    _hdr = platform_of(request)
     if _hdr in PLATFORMS:
         return _hdr
     host = (request.headers.get("host") or "").lower()

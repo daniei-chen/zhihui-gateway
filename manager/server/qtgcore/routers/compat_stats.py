@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Query, Request
 
+from ..identity import platform_of
 from ..service import build_aggregate, usage_payload
 
 router = APIRouter(prefix="/api", tags=["compat-stats"])
@@ -24,7 +25,7 @@ def _rt(request: Request):
 
 
 def _platform(request: Request) -> str:
-    raw = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    raw = platform_of(request)
     return raw if raw in PLATFORMS else "qoder"
 
 

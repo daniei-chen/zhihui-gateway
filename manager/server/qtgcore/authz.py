@@ -446,7 +446,10 @@ RULES: Tuple[Rule, ...] = PUBLIC_RULES + (
 
 def platform_of(request: Request) -> str:
     """推断请求所属平台；推断不出返回「三平台」。"""
-    header = (request.headers.get("x-qtg-platform") or request.headers.get("x-platform") or "").strip().lower()
+    state = getattr(request, "state", None)
+    header = str(getattr(state, "qtg_platform", "") or "").strip().lower()
+    if not header:
+        header = (request.headers.get("x-qtg-platform") or request.headers.get("x-platform") or "").strip().lower()
     if header in ("qoder", "trae", "workbuddy"):
         return header
     query = (request.query_params.get("platform") or "").strip().lower()

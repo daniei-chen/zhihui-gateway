@@ -12,6 +12,7 @@
 缺失时按 `qoder` 处理——这样即使旧前端也能工作。
 """
 from __future__ import annotations
+from ..identity import platform_of
 
 from typing import Any, Dict, List, Optional
 
@@ -62,7 +63,7 @@ def _to_epoch(v: Any) -> int:
 
 
 def _platform(request: Request) -> str:
-    raw = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    raw = platform_of(request)
     return raw if raw in PLATFORMS else "qoder"
 
 
@@ -311,7 +312,7 @@ def _resolve_upstream_id(request: Request, upstream_id: Optional[int]) -> Option
     """
     if upstream_id is not None:
         return upstream_id
-    raw = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    raw = platform_of(request)
     return _PLAT_TO_UPSTREAM.get(raw)
 
 
