@@ -69,92 +69,10 @@ def _account_path(rt, uid: str) -> Path:
 
 
 # ------------------------------------------------------------------ 扫码登录
-@router.post("/auth/start")
-async def compat_auth_start(request: Request) -> Dict[str, Any]:
-    """发起登录。按 `X-QTG-Platform` 选流程：
-
-    * qoder：设备码 → 轮询自动入池（`needCallback: false`）；
-    * trae：登录 URL → 用户登录后把浏览器地址栏的回调链接粘回来
-      （`needCallback: true`，交给 `POST /api/auth/finish`）。
-    """
-    body = await _body(request)
-    rt = _rt(request)
-    realm = str(body.get("realm") or "cn")
-    platform = (request.headers.get("x-qtg-platform") or "").strip().lower()
-    if platform not in ("qoder", "trae"):
-        platform = "qoder"
-    try:
-        if platform == "trae":
-            raw = await rt.trae.oauth_login_url()
-            inner = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-            return {"state": str(inner.get("state") or ""),
-                    "authUrl": str(inner.get("url") or ""),
-                    "realm": realm, "platform": "trae", "needCallback": True}
-        data = await rt.qoder.oauth_start(realm)
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(status_code=502,
-                             content={"detail": f"上游生成授权链接失败：{str(exc)[:200]}"})
-    return {
-        "state": str(data.get("state") or ""),
-        "authUrl": str(data.get("authUrl") or data.get("auth_url") or data.get("url") or ""),
-        "realm": str(data.get("realm") or realm),
-        "platform": "qoder",
-        "needCallback": False,
-    }
 
 
-@router.get("/auth/poll")
-async def compat_auth_poll(request: Request, state: str = Query(default=""),
-                           realm: str = Query(default="cn")) -> Dict[str, Any]:
-    rt = _rt(request)
-    if not state:
-        return {"status": "invalid", "message": "state 不能为空"}
-    platform = (request.headers.get("x-qtg-platform") or "").strip().lower()
-    if platform == "trae":
-        return {"status": "waiting"}
-    try:
-        data = await rt.qoder.oauth_poll(state)
-    except Exception as exc:  # noqa: BLE001
-        return {"status": "invalid", "message": str(exc)[:200]}
-    raw = str(data.get("status") or "")
-    if raw == "success":
-        return {"status": "success", "uid": str(data.get("uid") or ""),
-                "nickname": str(data.get("nickname") or data.get("name") or ""),
-                "updated": bool(data.get("updated")),
-                "realm": str(data.get("realm") or realm)}
-    if raw in ("expired", "error", "invalid"):
-        return {"status": "expired" if raw == "expired" else "invalid",
-                "message": str(data.get("message") or "")}
-    return {"status": "waiting"}
 
 
-@router.post("/auth/finish")
-async def compat_auth_finish(request: Request) -> Dict[str, Any]:
-    """Trae 流程收口：把浏览器跳转后的完整回调地址交给上游完成登录并落号。"""
-    body = await _body(request)
-    rt = _rt(request)
-    platform = str(body.get("platform") or "trae").lower()
-    callback = str(body.get("callback") or "").strip()
-    name = str(body.get("name") or "").strip()
-    if platform != "trae":
-        return JSONResponse(status_code=409,
-                             content={"detail": "Qoder 用设备码轮询自动入池，不需要提交回调"})
-    if not callback:
-        return JSONResponse(status_code=400,
-                             content={"detail": "请粘贴浏览器跳转后的完整回调地址"})
-    try:
-        raw = await rt.trae.oauth_finish(callback, name)
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(status_code=502, content={"detail": f"Trae 登录失败：{str(exc)[:200]}"})
-    inner = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-    ok = bool(inner.get("ok", True)) and not inner.get("error")
-    if not ok:
-        return JSONResponse(status_code=400, content={
-            "detail": str(inner.get("error") or inner.get("message") or "上游拒绝了这次登录")[:200]})
-    return {"status": "success",
-            "uid": str(inner.get("uid") or inner.get("user_id") or ""),
-            "nickname": str(inner.get("nickname") or inner.get("name") or name),
-            "updated": False}
 
 
 

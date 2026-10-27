@@ -58,72 +58,10 @@ def _login_throttle(request: Request) -> None:
         raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试")
     q.append(now)
     _login_attempts[ip] = q
-@router.post("/login")
-async def compat_login(request: Request, response: Response, body: LoginBody) -> Dict[str, Any]:
-    """兼容 WorkBuddy 的用户名+密码登录：密码即管理令牌。"""
-    _login_throttle(request)
-    rt = _rt(request)
-    if not rt.credentials.verify_password((body.password or "").strip()):
-        return {"ok": False, "username": "", "role": ""}
-    token = rt.credentials.issue_session(rt.settings.session_ttl_sec)
-    response.set_cookie(
-        "qtg_session", token, max_age=rt.settings.session_ttl_sec,
-        httponly=True, samesite="strict", secure=True, path="/",
-    )
-    rt.record_audit(action="login", actor="compat", result="ok", detail={"via": "wb-compat"})
-    return {"ok": True, "username": body.username or "admin", "role": "admin"}
 
 
-@router.post("/logout")
-async def compat_logout(request: Request, response: Response) -> Dict[str, Any]:
-    """退出：同时让 Manager 的 wb_session 失效（K03）。
-
-    qoder/trae 平台下 `/api/logout` 会落到 QTG；只删 qtg_session 的话，
-    浏览器里的 wb_session 仍然有效，等于"假退出"。这里转发给 Manager
-    并把它的删 cookie 头合并回来；转发失败时仍删本地会话，但标记 degraded。
-    """
-    rt = _rt(request)
-    cookie_header = wb_cookie_header(request.cookies)
-    degraded = False
-    if cookie_header:
-        ok, set_cookies = await forward_logout(rt.settings.wb_panel_base, cookie_header)
-        degraded = not ok
-        for header in set_cookies:
-            response.headers.append("set-cookie", header)
-    response.delete_cookie("qtg_session", path="/")
-    rt.record_audit(
-        action="logout",
-        actor="compat",
-        result="degraded" if degraded else "ok",
-        detail={"manager_forwarded": bool(cookie_header), "degraded": degraded},
-    )
-    return {"ok": True, "degraded": True} if degraded else {"ok": True}
 
 
-@router.get("/me")
-async def compat_me(request: Request) -> Dict[str, Any]:
-    rt = _rt(request)
-    cookie = request.cookies.get("qtg_session", "")
-    # 2026-10-23 审计修复：原来只要带任意 Authorization 头就判定已认证并返回 admin
-    # （实测 `Authorization: x` 即 200 admin）。现在必须是真的管理令牌。
-    authed = bool(rt.credentials.verify_session(cookie))
-    if not authed:
-        _hdr = request.headers.get("authorization", "")
-        _tok = _hdr[7:].strip() if _hdr.lower().startswith("bearer ") else ""
-        if _tok:
-            try:
-                _expected = rt.credentials.token()
-            except Exception:  # noqa: BLE001
-                _expected = ""
-            authed = bool(_expected) and secrets.compare_digest(_tok, _expected)
-    if not authed:
-        # WorkBuddy 前端用 401 判断跳登录
-        from fastapi.responses import JSONResponse
-
-        return JSONResponse(  # type: ignore[return-value]
-            status_code=401, content={"detail": "unauthorized"}
-        )
-    return {"username": "admin", "role": "admin"}
 
 
 # ------------------------------------------------------------------ 账号
@@ -207,59 +145,6 @@ def _map_account(rt, a) -> Dict[str, Any]:
 
 
 
-@router.get("/upstream/status")
-async def compat_upstream_status(request: Request, platform: str = Query(default="")) -> Dict[str, Any]:
-    """账号池运行态。
-
-    前端 mergePoolStatus() 依赖三个东西，缺一不可：
-      * `connected`      —— 为 false 时它把所有账号标成「未知」（不是「未加载」）；
-      * `accounts` 数组   —— 按 uid 匹配，用来刷新 healthy/cooling/disabled；
-      * `realm_totals`   —— 按版本分组的计数（界面切版本时用这份）。
-    """
-    rt = _rt(request)
-    agg = await build_aggregate(rt)
-    rows = all_accounts(agg)
-    if platform:
-        rows = [a for a in rows if a.platform == platform]
-
-    accounts = []
-    for a in rows:
-        accounts.append({
-            "uid": a.uid,
-            "healthy": a.state == "ready",
-            "disabled": a.state == "disabled",
-            "disabled_reason": a.note or "",
-            "manual_disabled": False,
-            "manual_reason": "",
-            "cooling": a.state == "cooling",
-            "in_flight": a.in_flight or 0,
-            "consecutive_fails": 0,
-            "degrade_until": None,
-            "last_used": 0,
-            "platform": a.platform,
-        })
-
-    def counts(rows_):
-        s = summarize(rows_)
-        return {"healthy": s.ready, "cooling": s.cooling, "disabled": s.disabled, "total": s.total}
-
-    up = all(h.up for h in agg.health) if agg.health else False
-    return {
-        "connected": up,
-        "accounts": accounts,
-        "healthy": len([x for x in accounts if x["healthy"]]),
-        "cooling": len([x for x in accounts if x["cooling"]]),
-        "disabled": len([x for x in accounts if x["disabled"]]),
-        "total": len(accounts),
-        "in_flight_full": 0,
-        "realm_totals": {
-            "cn": counts([a for a in rows if str(a.realm).lower() not in ("intl", "global")]),
-            "global": counts([a for a in rows if str(a.realm).lower() in ("intl", "global")]),
-        },
-        "redis_mode": "local",
-        "sticky_sessions": 1,
-        "error": "; ".join(agg.errors[:2]) if agg.errors else "",
-    }
 
 
 
@@ -478,33 +363,6 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default="")) 
     return {"total": len(items), "items": items, "local_total": len(items), "auto_total": 0}
 
 
-@router.get("/audit-logs")
-async def compat_audit_logs(request: Request) -> Dict[str, Any]:
-    """审计日志。
-
-    前端 `auditDetail()` 期待 `detail` 是**字符串**（按「；」分段再逐段翻译），
-    而 qtg 的审计记录里 detail 是结构化对象——这里转成 `k=v；k2=v2` 的文本，
-    否则前端会在 `detail.split('；')` 上抛 TypeError（整页崩）。
-    """
-    rt = _rt(request)
-    items = []
-    for rec in rt.audit.tail(200):
-        detail = rec.get("detail") or {}
-        if isinstance(detail, dict):
-            text = "；".join(f"{k}={v}" for k, v in detail.items() if v not in (None, "", [], {}))
-        else:
-            text = str(detail)
-        items.append({
-            "id": rec.get("hash", "")[:12],
-            "ts": rec.get("epoch", 0),
-            "time": rec.get("ts", ""),
-            "action": rec.get("action", ""),
-            "detail": text,
-            "actor": rec.get("actor", ""),
-            "ip": rec.get("ip", ""),
-            "result": rec.get("result", ""),
-        })
-    return {"total": len(items), "items": items}
 
 
 # ------------------------------------------------------------------ 安全 / 系统 / 设置
@@ -522,162 +380,29 @@ async def compat_audit_logs(request: Request) -> Dict[str, Any]:
 
 
 
-@router.get("/ip-rules")
-async def compat_ip_rules(request: Request) -> List[Dict[str, Any]]:
-    return []
-
-
-@router.get("/ip-access-logs")
-async def compat_ip_access_logs(request: Request) -> List[Dict[str, Any]]:
-    return []
-
-
-
-@router.get("/tasks")
-async def compat_tasks(request: Request) -> Dict[str, Any]:
-    """任务调度概览。
-
-    修复：`agg.qoder_scheduler` 是**上游原始 dict**（service.py:247），不是
-    SchedulerInfo 对象；旧代码直接 `.next_run` → AttributeError → 500。
-    这里统一走 `tasks_payload()` 的归一化结果，并按平台取对应调度器。
-    """
-    rt = _rt(request)
-    agg = await build_aggregate(rt)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
-    payload = tasks_payload(agg, [])
-    if plat == "workbuddy":
-        sched = payload.workbuddy
-    elif plat == "trae":
-        sched = payload.trae
-    else:
-        sched = payload.qoder
-    return {
-        "next_run": sched.next_run,
-        "last_run": sched.last_run,
-        "enabled": bool(sched.enabled),
-        "items": sched.tasks,
-    }
-
-
-@router.get("/tasks/logs")
-async def compat_task_logs(
-    request: Request,
-    limit: int = Query(default=20),
-    offset: int = Query(default=0),
-    kind: str = Query(default=""),
-    days: int = Query(default=7),
-) -> Dict[str, Any]:
-    """任务日志：按平台分开（qoder 用账号签到状态，trae 用上游 checkin 留痕）。
-
-    前端读 `logs` / `total` / `stats` 三个键（不是 items）。
-    """
-    rt = _rt(request)
-    agg = await build_aggregate(rt)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
-    rows: List[Dict[str, Any]] = []
-    if plat == "qoder":
-        for a in agg.qoder_accounts:
-            if not a.last_checkin and not a.checked_today:
-                continue
-            date = str(a.last_checkin or "")[:10]
-            ok = bool(a.checked_today)
-            rows.append({
-                "id": abs(hash(str(a.uid) + date)) % 100000,
-                "ts": 0, "uid": a.uid, "nickname": a.name or a.uid[:8],
-                "source": "auto", "kind": "checkin",
-                "level": "ok" if ok else "warn", "credits": 0,
-                "message": f"{date} {'已签到' if ok else '未签到'}",
-                "result": "ok" if ok else "failed",
-            })
-    elif plat == "workbuddy":
-        for row in (agg.wb_raw.get("checkin") or []):
-            if not isinstance(row, dict):
-                continue
-            ok_n = int(row.get("ok") or 0)
-            rows.append({
-                "id": abs(hash("wbt" + str(row.get("date", "")))) % 100000,
-                "ts": 0, "uid": "", "nickname": "",
-                "source": "auto", "kind": "checkin",
-                "level": "ok" if not row.get("failed") else "warn",
-                "credits": 0,
-                "message": (f"{row.get('date','')} 成功 {ok_n} · "
-                            f"失败 {row.get('failed',0)}"),
-                "result": "ok" if not row.get("failed") else "failed",
-            })
-    else:
-        for row in (agg.trae_raw.get("checkin") or []):
-            if not isinstance(row, dict):
-                continue
-            rows.append({
-                "id": abs(hash(row.get("date", ""))) % 100000,
-                "ts": 0, "uid": "", "nickname": "",
-                "source": "auto", "kind": "checkin",
-                "level": "ok" if not row.get("failed") else "warn",
-                "credits": 0,
-                "message": f"{row.get('date','')} 成功 {row.get('ok',0)} · 已签 {row.get('already',0)} · 失败 {row.get('failed',0)}",
-                "result": "ok",
-            })
-    if kind:
-        rows = [r for r in rows if r["kind"] == kind]
-    by_kind: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        item = by_kind.setdefault(r["kind"], {"count": 0, "credits": 0})
-        item["count"] += 1
-    return {
-        "total": len(rows),
-        "logs": rows[: max(1, limit)],
-        "stats": {"by_kind": by_kind, "total": len(rows), "total_credits": 0},
-    }
 
 
 
 
-@router.get("/claim")
-async def compat_claim(request: Request) -> Dict[str, Any]:
-    return {"available": False}
+
+
+
+
+
+
+
 
 
 # ------------------------------------------------------------------ 兜底
 # ------------------------------------------------------------------ 任务运行器
 # WorkBuddy 的「任务运行」是执行上游脚本；qtg 这边由 Qoder/Trae 各自的调度器负责，
 # 因此这些端点如实返回「不可用」而不是假装成功。
-@router.get("/task-run")
-async def compat_task_run_status(request: Request) -> Dict[str, Any]:
-    return {
-        "running": False,
-        "mode": "",
-        "target": "",
-        "started_at": 0,
-        "finished_at": 0,
-        "exit_code": None,
-        "timed_out": False,
-        "error": "",
-        "lines": [],
-        "tasks": [],
-        "available": False,
-        "unavailable_reason": "本部署不执行上游任务脚本：签到/保活由 Qoder、Trae 各自的调度器负责。",
-    }
 
 
-@router.post("/task-run")
-async def compat_task_run_start(request: Request) -> Dict[str, Any]:
-    return {"ok": False, "message": "本部署未启用任务脚本执行"}
 
 
-@router.post("/task-run/stop")
-async def compat_task_run_stop(request: Request) -> Dict[str, Any]:
-    return {"ok": True, "message": "没有正在运行的任务"}
 
 
-@router.get("/task-logs")
-async def compat_task_logs_alias(
-    request: Request,
-    limit: int = Query(default=200),
-    offset: int = Query(default=0),
-    days: int = Query(default=7),
-) -> Dict[str, Any]:
-    """前端实际请求的路径是 /api/task-logs（不是 /api/tasks/logs）。"""
-    return await compat_task_logs(request, limit, offset, "", days)
 
 
 @router.get("/accounts/daily-plan")
@@ -696,24 +421,6 @@ async def compat_refresh_plan2(request: Request) -> Dict[str, Any]:
     return {"enabled": False, "last_run": None, "next_run": None, "items": []}
 
 
-@router.get("/system/versions")
-async def compat_system_versions(request: Request) -> Dict[str, Any]:
-    """Versions：{manager, upstream_connected, upstream_accounts, upstream_dir}。"""
-    from .. import __version__
-
-    rt = _rt(request)
-    try:
-        agg = await build_aggregate(rt)
-        connected = all(h.up for h in agg.health) if agg.health else False
-        count = len(agg.qoder_accounts) + len(agg.trae_accounts)
-    except Exception:  # noqa: BLE001
-        connected, count = False, None
-    return {
-        "manager": __version__,
-        "upstream_connected": connected,
-        "upstream_accounts": count,
-        "upstream_dir": rt.settings.qoder_data_dir,
-    }
 
 
 def _platform_rows(request: Request, agg) -> tuple[str, list]:
@@ -991,19 +698,8 @@ async def compat_stats_rebuild_legacy(request: Request) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 上游重启（明确不支持）
-@router.post("/restart")
-async def compat_restart(request: Request) -> Dict[str, Any]:
-    """强制重启上游容器 = 动生产容器，本部署不在面板里开放。"""
-    return {
-        "ok": False,
-        "message": "面板不提供上游重启：请用 docker restart qoder-proxy / aiwork-server，"
-                   "或 systemctl restart qtg.service",
-    }
 
 
-@router.post("/upstream/restart")
-async def compat_upstream_restart(request: Request) -> Dict[str, Any]:
-    return await compat_restart(request)
 
 
 # ------------------------------------------------------------------ 数据面密钥写操作
@@ -1063,78 +759,12 @@ def _key_out(rt: Any, index: int, k: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
-@router.post("/keys/check-models")
-async def compat_keys_check_models(request: Request) -> Dict[str, Any]:
-    """模型白名单校验：本部署**不做**校验，必须如实说「未校验」。
-
-    K29 专项：旧实现返回 `{checked: true, unknown: []}`，前端据此显示「校验通过」，
-    但方法体里只有一句 `reason: qtg 不做模型白名单校验` —— 典型的假成功。
-    现在 `checked=false` + `available=false`（保留 `unknown` 字段兼容旧前端），
-    让 UI 走进「未校验/不支持」分支；能力表里登记为 `degraded`。
-    """
-    return {
-        "checked": False,
-        "available": False,
-        "ok": False,
-        "unknown": [],
-        "checked_at": now_iso(),
-        "reason": "qtg 不做模型白名单校验（键的模型白名单由 Manager 权威校验）",
-    }
 
 
-@router.patch("/keys/{kid}")
-async def compat_keys_update(request: Request, kid: str) -> Dict[str, Any]:
-    """更新密钥：转发给 Manager（K01-S2），不再改 QTG 本地库。"""
-    rt = _rt(request)
-    body = await _body(request)
-    patch: Dict[str, Any] = {}
-    for field in ("name", "enabled", "models", "quota", "quota_credit", "realm", "platforms",
-                  "expires_at", "max_ips", "ip_allowlist", "upstream_id"):
-        if field in body:
-            patch[field] = body[field]
-    try:
-        key_id = int(str(kid))
-    except (TypeError, ValueError):
-        return JSONResponse(status_code=404, content={"detail": "未找到该密钥"})
-    updated = await manager_api.update_key(
-        rt.settings, key_id, patch, request_id=manager_api.manager_request_id(request)
-    )
-    if updated is None:
-        return JSONResponse(status_code=404, content={"detail": "未找到该密钥"})
-    updated.setdefault("source", "manager")
-    return updated
 
 
-@router.delete("/keys/{kid}")
-async def compat_keys_delete(request: Request, kid: str) -> Dict[str, Any]:
-    """删除密钥：转发给 Manager（K01-S2）。"""
-    rt = _rt(request)
-    try:
-        key_id = int(str(kid))
-    except (TypeError, ValueError):
-        return JSONResponse(status_code=404, content={"detail": "未找到该密钥"})
-    ok = await manager_api.delete_key(
-        rt.settings, key_id, request_id=manager_api.manager_request_id(request)
-    )
-    rt.record_audit(action="compat_key_delete", actor="compat",
-                    result="ok" if ok else "not_found", detail={"key_id": key_id})
-    if not ok:
-        return JSONResponse(status_code=404, content={"detail": "未找到该密钥"})
-    return {"ok": True}
 
 
-@router.post("/keys/{kid}/reset-usage")
-async def compat_keys_reset_usage(request: Request, kid: str) -> Dict[str, Any]:
-    """重置用量：转发给 Manager（K01-S2）。Manager 侧才有权威用量计数。"""
-    rt = _rt(request)
-    try:
-        key_id = int(str(kid))
-    except (TypeError, ValueError):
-        return JSONResponse(status_code=404, content={"detail": "未找到该密钥"})
-    ok = await manager_api.reset_usage(
-        rt.settings, key_id, request_id=manager_api.manager_request_id(request)
-    )
-    return {"ok": ok}
 
 
 # ------------------------------------------------------------------ 账号批量动作（结构对齐前端）
@@ -1360,26 +990,8 @@ async def compat_refresh_plan_run(request: Request) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 任务 / 签到日志
-@router.post("/task-logs/collect")
-async def compat_task_logs_collect(request: Request) -> Dict[str, Any]:
-    """立即采集一次上游任务日志。
-
-    qtg 的「任务日志」是由上游 checkin 结果**实时转换**出来的视图（不落库），
-    这里强制刷新一次聚合缓存，让页面尽快拿到最新数据。
-    """
-    rt = _rt(request)
-    agg = await build_aggregate(rt, force=True)
-    parsed = len(agg.trae_raw.get("checkin") or [])
-    return {"ok": True, "parsed": parsed, "added": 0,
-            "message": "已重新抓取上游任务日志（qtg 不落库，新增 0 条）"}
 
 
-@router.post("/task-logs/clear")
-async def compat_task_logs_clear(request: Request) -> Dict[str, Any]:
-    return JSONResponse(
-        status_code=409,
-        content={"detail": "任务日志来自上游签到结果，本端没有可删除的存储，因此无法清空"},
-    )
 
 
 @router.post("/checkin-logs/clear")
@@ -1440,36 +1052,6 @@ async def compat_daily_plan_run(request: Request) -> Dict[str, Any]:
     return {"ok": ok, "message": msg, "task": task, "plan": plan}
 
 
-@router.get("/upstream/logs")
-async def compat_upstream_logs(request: Request, limit: int = Query(default=200)) -> Dict[str, Any]:
-    """上游容器日志（真实读取，按平台）。
-
-    qoder-bff：`/api/logs` → `{logs:[{ts,level,msg}]}`
-    trae-bff ：`/api/logs` → `{data:[...]}`（字段随版本不同，尽量兼容）
-    """
-    rt = _rt(request)
-    plat = (request.headers.get("x-qtg-platform") or "").strip().lower()
-    if plat not in ("qoder", "trae"):
-        plat = "qoder"
-    adapter = rt.qoder if plat == "qoder" else rt.trae
-    try:
-        raw = await adapter.logs()
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "lines": [f"读取上游日志失败：{str(exc)[:200]}"], "total": 0}
-    lines: List[str] = []
-    rows = raw.get("logs") if plat == "qoder" else raw.get("data")
-    for row in (rows or [])[: max(1, min(1000, limit))]:
-        if isinstance(row, str):
-            lines.append(row[:500])
-            continue
-        if not isinstance(row, dict):
-            continue
-        ts = str(row.get("ts") or row.get("time") or row.get("created_at") or "")[:24]
-        lvl = str(row.get("level") or row.get("type") or "")[:12]
-        msg = str(row.get("msg") or row.get("message") or row.get("detail")
-                  or row.get("text") or "")[:400]
-        lines.append(" ".join(x for x in (ts, lvl, msg) if x)[:500])
-    return {"available": True, "lines": lines, "total": len(lines)}
 
 
 
@@ -1477,15 +1059,3 @@ async def compat_upstream_logs(request: Request, limit: int = Query(default=200)
 # 未实现的 GET 以前一律 `return {}`，前端把「没实现」渲染成「暂无数据」——
 # 用户分不清是「真的没有」还是「这个功能没做」（审计点名的首要工程问题）。
 # 现在如实返回 501 + `available:false`，前端的错误态会显示这句话。
-@router.get("/{path:path}")
-async def compat_fallback(request: Request, path: str) -> Any:
-    if path.startswith("v1/"):
-        raise HTTPException(status_code=404, detail="Not Found")
-    return JSONResponse(
-        status_code=501,
-        content={
-            "available": False,
-            "code": "not_implemented",
-            "detail": f"/api/{path} 在 qtg 上未实现（不是「没有数据」）",
-        },
-    )

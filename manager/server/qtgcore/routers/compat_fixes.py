@@ -620,155 +620,22 @@ async def _wb_keys(rt) -> List[Dict[str, Any]]:
     return out
 
 
-@router.get("/keys")
-async def fixed_keys(request: Request) -> List[Dict[str, Any]]:
-    """密钥列表统一来自 Manager（K01-S2）。
-
-    以前 qoder/trae 读 QTG 本地 `qtg_keys`、workbuddy 直读 Manager DB，两边
-    各有一套 id 与字段。迁移后 Manager 是唯一权威，这里只做转发；
-    Manager 不可达时抛错（前端显示错误），不返回空列表冒充"没有密钥"。
-    """
-    rt = _rt(request)
-    keys = await manager_api.list_keys(
-        rt.settings, request_id=manager_api.manager_request_id(request)
-    )
-    out: List[Dict[str, Any]] = []
-    for k in keys:
-        if not isinstance(k, dict):
-            continue
-        out.append({
-            "id": k.get("id"),
-            "name": k.get("name") or "",
-            "prefix": k.get("prefix") or "",
-            "enabled": bool(k.get("enabled")),
-            "expires_at": k.get("expires_at") or None,
-            "max_ips": k.get("max_ips") or 0,
-            "ip_allowlist": k.get("ip_allowlist") or [],
-            "models": k.get("models") or [],
-            "realm": k.get("realm") or "",
-            "quota": k.get("quota"),
-            "used_tokens": k.get("used_tokens") or 0,
-            "quota_credit": k.get("quota_credit") or 0,
-            "used_credit": k.get("used_credit") or 0,
-            "upstream_id": k.get("upstream_id"),
-            "created_at": k.get("created_at"),
-            "last_used_at": k.get("last_used_at"),
-            "platforms": k.get("platforms") if isinstance(k.get("platforms"), list) else [],
-            "source": "manager",
-        })
-    return out
 
 
-@router.post("/keys")
-async def fixed_keys_create(request: Request) -> Dict[str, Any]:
-    """在 Manager 上创建密钥（K01-S2）。
-
-    QTG 不再写自己的 `qtg_keys`：字段直接按 Manager 契约发送，
-    前端此前被静默丢弃的 quota / quota_credit / realm / upstream_id 现在全部生效。
-    Manager 不可用或未配置服务凭据时**明确报错**，不返回假 key。
-    """
-    from .compat import _body
-
-    rt = _rt(request)
-    plat = _platform(request)
-    body = await _body(request)
-    name = str(body.get("name") or "").strip()
-    if not name:
-        # 与 Manager 的创建校验对齐（K29/N21）：空名称在入口拒绝，
-        # 不再默认"未命名"——那会绕过 Manager 的必填校验造出无名列。
-        return JSONResponse(status_code=422, content={"detail": "名称不能为空"})
-    payload = {
-        "name": name,
-        "models": [str(m).strip() for m in (body.get("models") or []) if str(m).strip()],
-        "ip_allowlist": [str(x).strip() for x in (body.get("ip_allowlist") or []) if str(x).strip()],
-        "max_ips": int(body.get("max_ips") or 0),
-        "quota": int(body.get("quota") or 0),
-        "quota_credit": float(body.get("quota_credit") or 0),
-        "platforms": body.get("platforms", [plat] if plat in ("workbuddy", "qoder", "trae")
-                              else ["workbuddy", "qoder", "trae"]),
-        "realm": str(body.get("realm") or ""),
-        "upstream_id": body.get("upstream_id"),
-        "expires_at": _to_epoch(body.get("expires_at")),
-    }
-    created = await manager_api.create_key(
-        rt.settings, payload, request_id=manager_api.manager_request_id(request)
-    )
-    rt.record_audit(
-        action="compat_key_create",
-        actor="compat",
-        result="ok",
-        detail={
-            "key_id": created.get("id"),
-            "name": created.get("name"),
-            "platform": plat,
-            "via": "manager",
-        },
-    )
-    out = dict(created)
-    out.setdefault("platforms", [plat])
-    out["source"] = "manager"
-    return out
 
 
 # ------------------------------------------------------------------ 本机导入 / 导出配置
-@router.get("/keys/import-local/status")
-async def fixed_import_status(request: Request) -> Dict[str, Any]:
-    """本机一键导入（写客户端配置）：本部署不提供。
-
-    但**结构必须完整**：前端 `importStatus?.clients.find(...)` 对 `clients`
-    没有可选链，返回 `{}` 会直接抛 TypeError —— 这正是「创建密钥出错」的原因。
-    """
-    return {"enabled": False, "local_caller": False, "clients": []}
 
 
-@router.get("/keys/import-local/detect")
-async def fixed_import_detect(request: Request, client: str = Query(default="ccswitch")) -> Dict[str, Any]:
-    return {"client": client if client in ("ccswitch", "zcode") else "ccswitch",
-            "found": False, "exe": None, "source": ""}
 
 
-@router.post("/keys/import-local")
-async def fixed_import_local(request: Request) -> JSONResponse:
-    return JSONResponse(status_code=409, content={
-        "detail": "本部署不提供「写入本机客户端配置」：控制面跑在服务器上，碰不到你电脑里的客户端" })
 
 
-@router.post("/keys/export")
-async def fixed_keys_export(request: Request) -> Dict[str, Any]:
-    """导出客户端配置片段（cc-switch / ZCode）。
-
-    面板只存密钥哈希、拿不回明文，所以这里只生成「结构」：
-    调用方需自己把刚创建的明文 token 贴进客户端。
-    """
-    from .compat import _body
-
-    rt = _rt(request)
-    body = await _body(request)
-    plat = _platform(request)
-    data = await _load_models(rt)
-    host = (request.headers.get("host") or "qoder.kaogong.art").split(":")[0]
-    scheme = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
-    return {
-        "client": str(body.get("client") or "ccswitch"),
-        "base_url": f"{scheme}://{host}" + {"qoder": "/qoder/v1", "trae": "/trae/v1"}.get(plat, "/v1"),
-        "realm": str(body.get("realm") or "cn"),
-        "models": [r["id"] for r in data[plat]],
-        "name": str(body.get("providerName") or f"qtg-{plat}"),
-        "app_type": str(body.get("app") or "claude"),
-    }
 
 
 # ------------------------------------------------------------------ 任务领取计划 / 红包
-@router.get("/task-claim-schedule")
-async def compat_task_claim_schedule() -> Dict[str, Any]:
-    """「自动领奖时间」：本部署没有任务领奖调度器（签到由上游负责），如实返回未启用。"""
-    return {"enabled": False, "hours": []}
 
 
-@router.put("/task-claim-schedule")
-async def compat_task_claim_schedule_save(request: Request) -> JSONResponse:
-    return JSONResponse(status_code=409, content={
-        "detail": "本部署没有任务领奖调度器：签到/保活由 Qoder、Trae 各自的调度器负责"})
 
 
 def _gone(what: str) -> JSONResponse:
@@ -785,191 +652,25 @@ def _gone(what: str) -> JSONResponse:
 
 
 
-@router.get("/red-packets")
-async def compat_red_packets_list(request: Request) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
-@router.get("/red-packets/{rid}")
-async def compat_red_packet_detail(request: Request, rid: str) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
-@router.post("/red-packets")
-async def compat_red_packet_create(request: Request) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
-@router.post("/red-packets/{rid}/revoke")
-async def compat_red_packet_revoke(request: Request, rid: str) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
-@router.get("/claim/{code}")
-async def compat_claim_get(request: Request, code: str) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
-@router.post("/claim/{code}")
-async def compat_claim_draw(request: Request, code: str) -> JSONResponse:
-    return _gone("红包 / 抽奖")
 
 
 # ------------------------------------------------------------------ 告警中心
-@router.get("/alerts")
-async def fixed_alerts(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
-    """告警中心数据源。
-
-    以前 `/api/alerts` 没实现（走兼容层兜底返回 `{}`），前端只能显示空。这里把四类
-    **真实信号**聚起来：
-
-      1. 上游风控（qoder2 的 `/health.risk`：排队 / 限流 / 拒绝 / 版本门）
-      2. 上游不可达（`/readyz` 的 health 结果）
-      3. 账号类：3 天内到期 / 余额低于 50 / 冷却·禁用·过期
-      4. 密钥 7 天内过期
-
-    `realm` 非空时只过滤**账号类**告警（国内版 cn / 国际版 intl）；风控与上游类是
-    全局信号，不随版本变化。
-    """
-    rt = _rt(request)
-    plat = _platform(request)
-    rows: List[Dict[str, Any]] = []
-    agg = await build_aggregate(rt)
-    cst = dt.timezone(dt.timedelta(hours=8))
-    now = dt.datetime.now(cst).timestamp()
-
-    # 1) 上游风控
-    adapter = rt.qoder if plat == "qoder" else (rt.wb if plat == "workbuddy" else rt.trae)
-    try:
-        raw = await adapter.alerts()
-        for a in (raw or {}).get("alerts") or []:
-            if isinstance(a, dict):
-                rows.append({**a, "kind": "risk"})
-    except Exception:  # noqa: BLE001
-        pass
-
-    # 2) 上游不可达
-    for h in agg.health:
-        if not h.up:
-            rows.append({
-                "id": f"upstream-{h.name}", "time": "", "level": "error",
-                "title": f"上游 {h.name} 不可达", "message": h.error or "健康检查失败",
-                "ack": False, "kind": "upstream",
-            })
-
-    # 3) 账号类
-    accounts = agg.qoder_accounts if plat == "qoder" else (agg.wb_accounts if plat == "workbuddy" else agg.trae_accounts)
-    for a in accounts:
-        if realm and plat == "qoder" and str(a.realm) != realm:
-            continue
-        tag = f"{a.uid[:8]}"
-        if a.days_left is not None and 0 <= a.days_left <= 3:
-            rows.append({
-                "id": f"expiring-{a.uid}", "time": "", "level": "warn",
-                "title": f"账号「{a.name}」{a.days_left} 天后到期",
-                "message": f"积分 {a.credits_remain:g}，到期后需重新授权", "ack": False,
-                "kind": "account", "target": tag,
-            })
-        if a.credits_remain < 50:
-            rows.append({
-                "id": f"lowcredits-{a.uid}", "time": "", "level": "warn",
-                "title": f"账号「{a.name}」余额偏低",
-                "message": f"剩余积分 {a.credits_remain:g}", "ack": False,
-                "kind": "account", "target": tag,
-            })
-        if a.state in ("cooling", "disabled", "expired"):
-            rows.append({
-                "id": f"state-{a.uid}", "time": "", "level": "error" if a.state != "cooling" else "warn",
-                "title": f"账号「{a.name}」状态异常：{a.state}",
-                "message": (a.note or a.cooldown_until or "")[:160], "ack": False,
-                "kind": "account", "target": tag,
-            })
-
-    # 4) 密钥即将过期
-    for k in rt.store.list_keys():
-        if plat not in (k.get("platforms") or list(PLATFORMS)):
-            continue
-        exp = int(k.get("expires_at") or 0)
-        if exp and 0 < exp - now < 7 * 86400:
-            days = int((exp - now) // 86400)
-            rows.append({
-                "id": f"keyexp-{k.get('id')}", "time": "", "level": "warn",
-                "title": f"密钥「{k.get('name') or ''}」{days} 天后过期",
-                "message": f"前缀 {k.get('masked') or ''}", "ack": False,
-                "kind": "key",
-            })
-
-    level_rank = {"error": 0, "warn": 1, "info": 2}
-    rows.sort(key=lambda r: level_rank.get(str(r.get("level")), 3))
-    return {
-        "alerts": rows,
-        "unread": len([r for r in rows if not r.get("ack")]),
-        "platform": plat,
-        "realm": realm or "all",
-    }
 
 
-@router.post("/alerts/ack")
-async def fixed_alerts_ack(request: Request) -> Dict[str, Any]:
-    """标记已读：qtg 的告警是**实时派生**的（不是存库的事件），所以没有可持久化的
-    已读状态；这里如实说明，而不是假装成功。"""
-    return {
-        "ok": False,
-        "available": False,
-        "detail": "qtg 的告警由实时状态派生，没有已读状态可保存；告警消失即代表问题已恢复",
-    }
 
 
 # ------------------------------------------------------------------ 智能体配置
-@router.get("/agents")
-async def fixed_agents(request: Request) -> Dict[str, Any]:
-    """本机客户端一键配置（Claude Code / Codex / Crush / DSH…）。
-
-    数据来自 qoder2 引擎的 `/agents`（只有它实现了本机客户端探测）；trae 平台
-    没有等价能力，如实返回空并说明。
-    """
-    rt = _rt(request)
-    plat = _platform(request)
-    if plat != "qoder":
-        return {
-            "clients": [], "available": False,
-            "note": "trae 引擎（aiwork-server）没有本机客户端配置能力；请用 qoder 平台或手动配置",
-        }
-    q = getattr(rt, "qoder", None)
-    if not hasattr(q, "agents"):
-        return {"clients": [], "available": False, "note": "当前 qoder 引擎不支持智能体配置"}
-    try:
-        data = await q.agents()
-    except Exception as exc:  # noqa: BLE001
-        return {"clients": [], "available": False, "note": f"读取失败：{str(exc)[:160]}"}
-    clients = data.get("clients") or []
-    return {"clients": clients, "available": True,
-            "note": "" if clients else "上游没有返回可配置的客户端"}
 
 
-@router.post("/agents/{cid}/apply")
-async def fixed_agent_apply(request: Request, cid: str) -> Dict[str, Any]:
-    rt = _rt(request)
-    if _platform(request) != "qoder":
-        return {"ok": False, "detail": "trae 平台不支持"}
-    q = getattr(rt, "qoder", None)
-    if not hasattr(q, "agents_apply"):
-        return {"ok": False, "detail": "当前引擎不支持"}
-    res = await q.agents_apply(cid)
-    rt.record_audit(action="agent_apply", actor="compat", result="ok" if res.get("ok") else "error",
-                    detail={"client": cid})
-    return res
 
 
-@router.post("/agents/{cid}/restore")
-async def fixed_agent_restore(request: Request, cid: str) -> Dict[str, Any]:
-    rt = _rt(request)
-    if _platform(request) != "qoder":
-        return {"ok": False, "detail": "trae 平台不支持"}
-    q = getattr(rt, "qoder", None)
-    if not hasattr(q, "agents_restore"):
-        return {"ok": False, "detail": "当前引擎不支持"}
-    res = await q.agents_restore(cid)
-    rt.record_audit(action="agent_restore", actor="compat", result="ok" if res.get("ok") else "error",
-                    detail={"client": cid})
-    return res
