@@ -14,7 +14,7 @@ def recovery_host_metadata():
     """
     commands={'workbuddy-web.unit.txt':['systemctl','cat','workbuddy-web.service'],
               'workbuddy-web.properties.txt':['systemctl','show','workbuddy-web.service','--property=User,Group,EnvironmentFiles,WorkingDirectory,Restart,TimeoutStopUSec'],
-              'gateway.image.json':['docker','inspect','--format','{{json .Config.Image}}','workbuddy2api']}
+              'gateway.image.json':['docker','inspect','--format','{{json .Config.Image}}','zhihui-workbuddy']}
     out={}
     for name,command in commands.items():
         result=subprocess.run(command,capture_output=True,timeout=15)
@@ -46,6 +46,46 @@ def add_bytes(archive,name,raw,*,uid=0,gid=0):
     info.uid=uid;info.gid=gid
     archive.addfile(info,io.BytesIO(raw))
 
+#: 发布签名算法 → 信任锚文件名。
+#:
+#: 2026-10-26 起 v9 的发布改用 Ed25519（`pkeyutl -rawin`，对消息本身签名）。
+#: 旧的 RSA 路径保留，只为能校验**历史**回退包；反过来不允许——清单声明的算法
+#: 必须与本机信任锚一致，否则就是一次降级尝试（把清单改成 rsa-sha256 就能绕开
+#: 新渠道的门禁）。
+_TRUST_ANCHORS = {'ed25519': 'release-trust-ed25519.pem',
+                  'rsa-sha256': 'release-trust.pem'}
+
+
+def release_algorithm(manifest):
+    """清单声明的签名算法；缺省按历史默认 RSA 处理。"""
+    return str(manifest.get('signature_algorithm') or 'rsa-sha256')
+
+
+def trust_anchor_name(manifest):
+    """该清单应当使用的信任锚文件名；未知算法直接失败。"""
+    algorithm = release_algorithm(manifest)
+    name = _TRUST_ANCHORS.get(algorithm)
+    if name is None:
+        raise RuntimeError('unsupported release signature algorithm: ' + algorithm)
+    return name
+
+
+def signature_verify_command(algorithm, anchor, signature, marker):
+    """按算法给出正确的 openssl 校验命令。
+
+    两种算法的签名语义不同，命令不能混用：
+      * Ed25519 —— `pkeyutl -rawin`（Ed25519 没有预哈希步骤，签的是消息本身）；
+      * RSA —— `dgst -sha256`（签的是消息摘要）。
+    用错命令不会"宽松通过"，只会失败；所以这里只按清单声明的算法分支，
+    **不做"两种都试"的回退**（那等于允许算法降级）。
+    """
+    if algorithm == 'ed25519':
+        return ['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(anchor),
+                '-rawin', '-in', str(marker), '-sigfile', str(signature)]
+    return ['openssl', 'dgst', '-sha256', '-verify', str(anchor),
+            '-signature', str(signature), str(marker)]
+
+
 def managed_sources(root):
     """Include every declared release file, regardless of suffix or folder name."""
     marker=root/'deploy/managed-release.json'
@@ -70,12 +110,15 @@ def managed_sources(root):
     if manifest.get('signature_required'):
         # Detached signatures cannot be inside the manifest they sign. Archive
         # both separately and verify against the installed custodian anchor.
-        for relative in ('deploy/managed-release.sig','release-trust.pem'):
+        # 2026-10-26：锚与校验命令按清单声明的算法选（v9 起是 Ed25519）。
+        anchor_name=trust_anchor_name(manifest)
+        for relative in ('deploy/managed-release.sig',anchor_name):
             source=root/relative
-            if not source.is_file() or source.is_symlink():raise RuntimeError('signed recovery material missing')
+            if not source.is_file() or source.is_symlink():raise RuntimeError('signed recovery material missing: '+relative)
             records.append((relative,source.read_bytes(),stat.S_IMODE(source.stat().st_mode)))
-        subprocess.run(['openssl','dgst','-sha256','-verify',str(root/'release-trust.pem'),
-                        '-signature',str(root/'deploy/managed-release.sig'),str(marker)],
+        subprocess.run(signature_verify_command(
+                           release_algorithm(manifest),root/anchor_name,
+                           root/'deploy/managed-release.sig',marker),
                        capture_output=True,check=True,timeout=10)
     return records
 
@@ -104,15 +147,20 @@ def verify_release_archive(archive):
             raise RuntimeError('managed recovery archive hash mismatch: '+relative)
     signed=False
     if manifest.get('signature_required'):
-        anchor=archive.extractfile('manager/release-trust.pem').read()
-        installed=MANAGER/'release-trust.pem'
+        # 恢复侧同样按清单算法校验（v9 起 Ed25519）；锚必须与本机 custodian 锚一致。
+        anchor_name=trust_anchor_name(manifest)
+        anchor=archive.extractfile('manager/'+anchor_name).read()
+        installed=MANAGER/anchor_name
         if not installed.is_file() or installed.is_symlink() or installed.read_bytes()!=anchor:
             raise RuntimeError('recovery trust anchor does not match installed custodian key')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            for path,name in (('key.pem','manager/release-trust.pem'),('signature','manager/deploy/managed-release.sig'),('manifest','manager/deploy/managed-release.json')):
+            for path,name in (('anchor','manager/'+anchor_name),('signature','manager/deploy/managed-release.sig'),('manifest','manager/deploy/managed-release.json')):
                 (root/path).write_bytes(archive.extractfile(name).read())
-            subprocess.run(['openssl','dgst','-sha256','-verify',str(root/'key.pem'),'-signature',str(root/'signature'),str(root/'manifest')],capture_output=True,check=True,timeout=10)
+            subprocess.run(signature_verify_command(
+                               release_algorithm(manifest),root/'anchor',
+                               root/'signature',root/'manifest'),
+                           capture_output=True,check=True,timeout=10)
         signed=True
     # 本地清单（sign_release.py 生成）用的是 version 字段；旧清单曾叫 release_id。
     # 两者都认，缺失时回落到空串——备份不该因一个展示用字段而整体失败。
@@ -162,7 +210,7 @@ def main():
             for relative,raw,mode in managed:
                 add_release_bytes(archive,'manager/'+relative,raw,mode)
             add_bytes(archive,'snapshot.json',json.dumps({'ts':int(time.time()),'request_rows':count,'database_quick_check':'ok','auth_consistency':'per-file stable reads'}).encode())
-            for path in (Path('/etc/nginx/sites-available/gateway.example.com'),Path('/etc/nginx/conf.d/workbuddy-audit.conf')):
+            for path in (Path('/etc/nginx/sites-available/zhihui.kaogong.art'),Path('/etc/nginx/conf.d/workbuddy-audit.conf')):
                 if path.is_file() and not path.is_symlink():
                     add_bytes(archive,'nginx/'+path.name,path.read_bytes())
             for name,raw in recovery_host_metadata().items():

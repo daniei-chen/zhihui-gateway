@@ -80,10 +80,28 @@ def transition(name, active, detail):
             log.warning('alert recovery dispatch failed name=%s', name)
 
 
+def _offsite_configured():
+    """异地发布是否**已配置**。
+
+    判据只用 `offsitebackup.CONFIG` 是否存在——与该模块自身的入口条件同源。
+    不另建一个「开关」变量：两份事实来源必然漂移，而漂移的方向恰好是「关了还在报」
+    或「开着却不报」。
+
+    为什么需要它：`backup_publish`（加密异地发布未验证）与 `backup_size`（密文接近
+    50 MiB 上限）描述的都是**异地发布**的问题。2026-10-26 用户决定不做异地备份后，
+    这两项不是「故障」而是「不适用」——继续报会让每次启动都刷两条噪音，
+    稀释真正需要人看的告警（启动日志里它们和 `budget_unknown`、`model_completion`
+    混在一起，看得多了就没人看了）。
+    """
+    from . import offsitebackup
+    return offsitebackup.CONFIG.is_file()
+
+
 def evaluate_backup_health(now):
     """Missing/unreadable/invalid reports are unknown, never a healthy backup."""
     import json
     latest = config.BACKUP_STATUS_FILE
+    offsite = _offsite_configured()
     try:
         data = json.loads(latest.read_text())
         size = data.get('bytes')
@@ -96,12 +114,14 @@ def evaluate_backup_health(now):
     except (OSError, ValueError, AttributeError, TypeError):
         transition('backup_status_unavailable', True, 'backup report missing, unreadable or invalid')
         transition('backup_stale', True, 'no valid backup freshness evidence')
-        transition('backup_publish', True, 'no verified offsite publication evidence')
+        transition('backup_publish', offsite, 'no verified offsite publication evidence')
         return
     transition('backup_status_unavailable', False, '')
     transition('backup_stale', age > 26*3600, 'verified backup report older than 26 hours')
-    transition('backup_publish', data.get('offsite') is not True, 'encrypted offsite publication not verified')
-    transition('backup_size', size > 45*1024**2, 'backup approaching 50 MiB ciphertext limit')
+    transition('backup_publish', offsite and data.get('offsite') is not True,
+               'encrypted offsite publication not verified')
+    transition('backup_size', offsite and size > 45*1024**2,
+               'backup approaching 50 MiB ciphertext limit')
 
 async def monitor():
     failures = 0

@@ -16,7 +16,7 @@ router = APIRouter(prefix='/api', tags=['auth'])
 
 @router.get('/healthz')
 def healthz() -> dict:
-    return {'ok': True, 'service': 'workbuddy-manager'}
+    return {'ok': True, 'service': 'zhihui-gateway'}
 
 @router.get('/readyz')
 def readyz():

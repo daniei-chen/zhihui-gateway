@@ -34,8 +34,8 @@ forced_platform = platformpolicy.current_platform
 # 那张表同时是「账号池分组」的数据源，落进去会让账号页凭空多出
 # qoder / trae 两个分组（2026-10-23 踩过，被当成串台）。
 _THREEWAY_SPEC = {
-    'qoder': ('http://127.0.0.1:8799', '/opt/qtg/secrets/qoder_upstream_key'),
-    'trae': ('http://127.0.0.1:8080', '/opt/qtg/secrets/aiwork_api_key'),
+    'qoder': ('http://127.0.0.1:8799', '/opt/workbuddy-manager/engine/secrets/qoder_upstream_key'),
+    'trae': ('http://127.0.0.1:8080', '/opt/workbuddy-manager/engine/secrets/aiwork_api_key'),
 }
 
 
@@ -527,7 +527,101 @@ def _usage_cache(usage: dict | None) -> tuple[int | None, int | None, int | None
             _one('prompt_cache_write_tokens'))
 
 
-def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None) -> None:
+def client_channel(ua: str | None) -> str:
+    text = (ua or '').strip().lower()
+    if not text:
+        return 'unknown'
+    if 'codex' in text:
+        return 'codex'
+    if 'claude-code' in text or 'claude code' in text:
+        return 'claude-code'
+    if 'deepseek' in text or 'dsh' in text:
+        return 'dsh'
+    if 'vscode' in text or 'visual studio code' in text or 'cursor' in text:
+        return 'vscode'
+    if 'jetbrains' in text or 'intellij' in text:
+        return 'jetbrains'
+    if 'workbuddy' in text:
+        return 'wb'
+    if 'mozilla' in text or 'chrome/' in text or 'safari/' in text or 'edg/' in text:
+        return 'web'
+    if any(k in text for k in ('python', 'httpx', 'requests/', 'curl/', 'node-fetch',
+                               'axios', 'okhttp', 'go-http-client')):
+        return 'api'
+    return 'other'
+
+
+def _image_part_to_openai(part: dict) -> dict | None:
+    """把常见的「非标准图片 part」归一成 OpenAI 的 image_url 形态（issue #134）。
+
+    各家客户端写法不一，上游只认 `{"type":"image_url","image_url":{"url":...}}`：
+      · `{"type":"input_image","image_url":"data:..."}`（Responses 风格混进 chat）
+      · `{"type":"image_url","image_url":"https://..."}`（url 直接给字符串）
+      · Anthropic 风格 `{"type":"image","source":{"type":"base64",...}}`
+    认不出的原样返回 None（调用方保持原 part 不动），不做有损改写。
+    """
+    kind = part.get('type')
+
+    def _url_of(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            inner = value.get('url')
+            return inner if isinstance(inner, str) else ''
+        return ''
+
+    if kind in ('input_image', 'image_url'):
+        url = _url_of(part.get('image_url')) or _url_of(part.get('url'))
+        if url:
+            return {'type': 'image_url', 'image_url': {'url': url}}
+        return None
+    if kind == 'image':
+        source = part.get('source')
+        if isinstance(source, dict):
+            stype = str(source.get('type') or '')
+            if stype == 'base64':
+                media = str(source.get('media_type') or 'image/png')
+                data = source.get('data')
+                if isinstance(data, str) and data:
+                    return {'type': 'image_url',
+                            'image_url': {'url': f'data:{media};base64,{data}'}}
+            elif stype == 'url':
+                url = _url_of(source.get('url'))
+                if url:
+                    return {'type': 'image_url', 'image_url': {'url': url}}
+    return None
+
+
+def normalize_chat_images(body: object) -> int:
+    """就地归一 chat 请求里的图片 part，返回改写的数量。
+
+    只动 `messages[*].content` 里的**列表**；字符串内容与其他字段一字不改。
+    客户端发图失败时最常见的形态是 url 直接给字符串或 input_image 混用，
+    上游解析不了就整条 400，这里换成标准形态即可（issue #134）。
+    """
+    if not isinstance(body, dict):
+        return 0
+    messages = body.get('messages')
+    if not isinstance(messages, list):
+        return 0
+    changed = 0
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for idx, part in enumerate(content):
+            if not isinstance(part, dict):
+                continue
+            fixed = _image_part_to_openai(part)
+            if fixed is not None and fixed != part:
+                content[idx] = fixed
+                changed += 1
+    return changed
+
+
+def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None, effort: str | None = None, session_key: str | None = None) -> None:
     pt,ct=observability.usage_int(pt),observability.usage_int(ct)
     if credit is None:
         credit = _usage_credit(usage)
@@ -556,6 +650,9 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                 first_token_ms=first_token,ua=db._clean(ua,512),error=db._clean(error,500),
                 stream=1 if stream else 0,credit=credit,realm=realm,
                 cache_hit_tokens=cache_hit,cache_miss_tokens=cache_miss,cache_write_tokens=cache_write,
+                effort=db._clean(effort, 16) if effort else None,
+                channel=client_channel(ua),
+                session_key=db._clean(session_key, 64) if session_key else None,
                 request_id=state.request_id if state else None,endpoint=state.endpoint if state else None,
                 method=state.method if state else None,protocol=state.protocol if state else None,
                 http_status=http_status,terminal_state=terminal,error_stage=state.error_stage if state else None,
@@ -592,6 +689,23 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         from .. import operational
         operational.ledger_write_healthy=False
         logger.exception('请求账本事务失败 request_id=%s',state.request_id if state else None)
+
+
+def _global_ip_blocked(ip: str) -> bool:
+    """全局入站 IP 规则是否拦截该来源（未启用安全策略时恒为放行）。
+
+    从 `_authorize` 抽出：`/v1/usage` 与调用路径必须同口径——它虽是只读端点，
+    但同样暴露密钥元数据与余量，被全局黑名单拦住的来源不该换条路就能查
+    （2026-10-21 安全检查 L4）。
+    """
+    sec = get_security_config()
+    if not sec.get('enabled'):
+        return False
+    rules = [
+        {'kind': r['kind'], 'cidr': r['cidr']}
+        for r in db.query('SELECT kind, cidr FROM ip_rules')
+    ]
+    return not iputil.evaluate(ip, rules, sec.get('mode', 'blacklist'))
 
 
 def _authorize(request: Request, model: str | None,
@@ -635,16 +749,10 @@ def _authorize(request: Request, model: str | None,
     mapped = _map_model(model) if mapped is None else mapped
 
     # 全局入站 IP 规则
-    sec = get_security_config()
-    if sec.get('enabled'):
-        rules = [
-            {'kind': r['kind'], 'cidr': r['cidr']}
-            for r in db.query('SELECT kind, cidr FROM ip_rules')
-        ]
-        if not iputil.evaluate(ip, rules, sec.get('mode', 'blacklist')):
-            _log_ip(ip, path, True, ua, 'ip_blocked')
-            _record(key, ip, model or '', mapped or '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
-            return None, ip, _oai_error(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
+    if _global_ip_blocked(ip):
+        _log_ip(ip, path, True, ua, 'ip_blocked')
+        _record(key, ip, model or '', mapped or '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        return None, ip, _oai_error(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
 
     # 注意这一行**在密钥校验之前**：密钥层面的拒绝（停用 / 过期 / 配额用尽 /
     # 模型与版本不符 / IP 白名单）发生在这之后，若就这样返回，日志里会显示
@@ -897,6 +1005,12 @@ def key_usage(request: Request):
     if not key:
         _log_ip(ip, path, True, ua, 'invalid_key')
         return _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
+
+    # 全局入站 IP 规则：与其他 /v1 入口同口径（见 _global_ip_blocked 的说明）。
+    if _global_ip_blocked(ip):
+        _log_ip(ip, path, True, ua, 'ip_blocked')
+        _record(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        return _oai_error(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
 
     def allowance(limit: int | None, used: int | None) -> dict:
         used_n = int(used or 0)
@@ -1421,7 +1535,39 @@ def _listing_compat_models(payload: object) -> object:
 # 「同会话 → 同账号 → 稳定缓存键」生效。客户端已带会话键时不覆盖。
 # 维护：由 /opt/workbuddy-manager/local-patches/apply_patches.sh 在服务启动时
 # 自动重施（管理端更新会覆盖 server/，靠它恢复）。
-_SESSION_HEADERS = ('x-session-id',)
+_SESSION_HEADERS = ('x-session-id', 'x-conversation-id', 'conversation-id')
+
+
+def _stable_session_fallback(body: 'dict') -> str:
+    """客户端不带会话头时，用 body 的稳定前缀生成会话键。
+
+    优先取**首条非 system 消息**：system 常带日期/环境等动态内容，逐请求变化会让
+    会话键不稳定（等于没粘住）；用户消息在会话内稳定。没有用户消息时才退回 system。
+    """
+    import hashlib
+    msgs = body.get('messages')
+    if not isinstance(msgs, list) or not msgs:
+        return ''
+    picked = []
+    for msg in msgs[:6]:
+        if isinstance(msg, dict) and str(msg.get('role') or '') != 'system':
+            picked = [msg]
+            break
+    if not picked:
+        picked = [m for m in msgs[:1] if isinstance(m, dict)]
+    pieces = []
+    for msg in picked:
+        content = msg.get('content')
+        if isinstance(content, str):
+            pieces.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get('text'), str):
+                    pieces.append(part['text'])
+    if not pieces:
+        return ''
+    digest = hashlib.sha256(chr(0).join(pieces).encode('utf-8', 'ignore')).hexdigest()[:16]
+    return 'wb-' + digest
 
 
 def _inject_session_key(body: 'dict', request: Request) -> None:
@@ -1437,6 +1583,10 @@ def _inject_session_key(body: 'dict', request: Request) -> None:
         if v:
             body['conversation_id'] = v
             return
+    # 兜底：客户端不带会话头时用 body 稳定前缀生成会话键（缓存命中关键）。
+    fallback = _stable_session_fallback(body)
+    if fallback:
+        body['conversation_id'] = fallback
 
 
 
@@ -1485,6 +1635,13 @@ async def _chat(request: Request, upstream_path: str):
         return err
 
     _inject_session_key(body, request)
+    # 观测：把最终会话键的 sha256 前 16 位落库，用于验证「同会话是否固定账号」。
+    session_key = None
+    if isinstance(body, dict):
+        raw_sk = body.get('conversation_id') or body.get('conversationId')
+        if isinstance(raw_sk, str) and raw_sk.strip():
+            import hashlib as _hashlib
+            session_key = _hashlib.sha256(raw_sk.strip().encode('utf-8', 'ignore')).hexdigest()[:16]
 
     requested_model = body.get('model') if isinstance(body, dict) else None
     # model 必须是字符串：非字符串（对象/数组/数字）会让后面的 _map_model 与
@@ -1505,6 +1662,17 @@ async def _chat(request: Request, upstream_path: str):
     # 越界的 max_tokens 会被上游包装成 503（见 clamp_max_tokens 的说明），
     # 鉴权后、转发前压回上限。
     clamp_max_tokens(body)
+
+    # 图片 part 归一（issue #134）：input_image / image_url 字符串 / Anthropic
+    # source 形态改写成上游认的标准形态；认不出的原样保留。
+    normalize_chat_images(body)
+
+    # 思考强度（reasoning_effort）：仅用于日志展示，不改写请求体。
+    effort = None
+    if isinstance(body, dict):
+        raw_effort = body.get('reasoning_effort')
+        if isinstance(raw_effort, str) and raw_effort.strip():
+            effort = raw_effort.strip()[:16]
 
     stream = bool(isinstance(body, dict) and body.get('stream'))
     if stream:
@@ -1574,14 +1742,14 @@ async def _chat(request: Request, upstream_path: str):
             error = None if resp.status_code < 400 else (str(data)[:500] if data is not None else resp.text[:500])
             _record(
                 key, ip, requested_model or '', mapped or '', resp.status_code, pt, ct,
-                latency, ua, error, False, usage=usage,
+                latency, ua, error, False, usage=usage, effort=effort, session_key=session_key,
             )
             if data is not None:
                 return JSONResponse(data, status_code=resp.status_code)
             return JSONResponse({'error': {'message': resp.text[:1000], 'type': 'api_error'}}, status_code=resp.status_code)
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False)
+            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
             return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
 
     # 流式转发
@@ -1593,7 +1761,7 @@ async def _chat(request: Request, upstream_path: str):
     except Exception as exc:  # noqa: BLE001
         await client.aclose()
         latency = int((time.time() - started) * 1000)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), True)
+        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), True, effort=effort, session_key=session_key)
         return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
 
     status_code = resp.status_code
@@ -1662,7 +1830,7 @@ async def _chat(request: Request, upstream_path: str):
                 usage=audit.usage
                 _record(key,ip,requested_model or '',mapped or '',status_code,
                         observability.usage_int(usage.get('prompt_tokens')),observability.usage_int(usage.get('completion_tokens')),
-                        int((time.time()-started)*1000),ua,error_text,True,usage=usage,first_token=first_token_ms)
+                        int((time.time()-started)*1000),ua,error_text,True,usage=usage,first_token=first_token_ms, effort=effort, session_key=session_key)
 
     return observability.ManagedStreamingResponse(generator(),cleanup=lambda:observability.close_stream(resp,client), status_code=status_code, media_type=content_type)
 
@@ -1692,7 +1860,7 @@ async def gateway_health() -> dict:
         return {'service': 'workbuddy-manager', 'upstream_ok': resp.status_code == 200}
     except Exception:  # noqa: BLE001
         # 不回异常详情：那会暴露上游地址与网络拓扑
-        return {'service': 'workbuddy-manager', 'upstream_ok': False}
+        return {'service': 'zhihui-gateway', 'upstream_ok': False}
 
 def _invalid_unicode_path(value, path='$'):
     pending=[(value,path)]

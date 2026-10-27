@@ -11,7 +11,7 @@ import os
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .. import config, drain, security
@@ -179,7 +179,7 @@ async def upload_update_package(
             raise HTTPException(
                 status_code=400,
                 detail='包里没有 .version —— 这不是本项目的发布包（发布页下载的是 '
-                       'workbuddy-manager-vX.Y.Z.tar.gz）',
+                       'zhihui-gateway-vX.Y.Z.tar.gz）',
             )
     except HTTPException:
         tmp_path.unlink(missing_ok=True)
@@ -259,3 +259,52 @@ def get_changelog(user: dict = Depends(security.current_user)) -> dict:
     data = changelog.load_changelog()
     data['current'] = updater.current_version()
     return data
+
+
+@router.get('/internal-session-verify')
+def internal_session_verify(request: Request,
+                            user: dict = Depends(security.current_user)):
+    """为 nginx auth_request 签发 qtg 身份断言（审计 P1-01）。
+
+    - 仅本机（nginx 127.0.0.1）可调用；nginx 的 /__zh_session 是 internal location；
+    - 复用 Manager 会话校验（Cookie / wbt_ token），通过后签发 5 分钟有效的
+      HMAC 断言（qtg `X-QTG-Identity` 契约），qtg 据此识别真实用户与角色，
+      不再依赖静态 admin Bearer；
+    - 无会话时 current_user 抛 401，nginx auth_request 直接拒绝。
+    """
+    peer = request.client.host if request.client else ''
+    if peer not in ('127.0.0.1', '::1'):
+        raise HTTPException(status_code=403, detail='仅允许本机调用')
+    try:
+        secret = open('/opt/workbuddy-manager/engine/secrets/identity_signing.key', encoding='utf-8').read().strip()
+    except OSError:
+        raise HTTPException(status_code=503, detail='身份签名密钥不可用')
+    if not secret:
+        raise HTTPException(status_code=503, detail='身份签名密钥为空')
+    import base64 as _b64
+    import hmac as _hmac
+    import json as _json
+    import time as _time
+    import uuid as _uuid
+    role = str(user.get('role') or 'viewer')
+    scopes = ['*'] if role == 'admin' else ['read']
+    now = int(_time.time())
+    payload = {
+        'sub': str(user.get('username') or 'unknown'),
+        'role': role,
+        'scopes': scopes,
+        'auth_method': 'edge_session',
+        'aud': 'qtg',
+        'exp': now + 300,
+        'iat': now,
+        'iss': 'manager',
+        'jti': _uuid.uuid4().hex,
+    }
+    body = _b64.urlsafe_b64encode(
+        _json.dumps(payload, separators=(',', ':'), sort_keys=True).encode()
+    ).decode().rstrip('=')
+    derived = hashlib.sha256(('qtg-identity-v1\x00' + secret).encode()).digest()
+    sig = _b64.urlsafe_b64encode(
+        _hmac.new(derived, body.encode(), hashlib.sha256).digest()
+    ).decode().rstrip('=')
+    return Response(status_code=204, headers={'X-QTG-Identity': 'v1.%s.%s' % (body, sig)})

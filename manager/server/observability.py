@@ -103,11 +103,16 @@ def _release_id() -> str:
     v2.8.3+local.20261022.3，导致 14.5 万行 request_outcomes/usage_events 的
     release_id 全部错标、审计追溯失效。改为读版本文件。
     """
-    try:
-        with open('/opt/workbuddy-manager/.version', encoding='utf-8') as fh:
-            return fh.read().strip() or "unknown"
-    except OSError:
-        return "unknown"
+    from . import config
+    for path in (str(config.ROOT / '.version'), '/opt/workbuddy-manager/.version'):
+        try:
+            with open(path, encoding='utf-8') as fh:
+                text = fh.read().strip()
+            if text:
+                return text
+        except OSError:
+            continue
+    return "unknown"
 
 
 RELEASE_ID = _release_id()

@@ -52,7 +52,7 @@ DRAIN_TIMEOUT_SEC = _env_int('WB_DRAIN_TIMEOUT_SEC', 25)
 # 上游 workbuddy2api（Go）
 WB2API_BASE = _env('WB2API_BASE', 'http://127.0.0.1:7863').rstrip('/')
 WB2API_KEY = _env('WB2API_KEY', '')
-WB2API_CONTAINER = _env('WB2API_CONTAINER', 'workbuddy2api')
+WB2API_CONTAINER = _env('WB2API_CONTAINER', 'zhihui-workbuddy')
 WB2API_MODE = _env('WB2API_MODE', 'docker').lower()  # docker | native
 
 # 上游数据文件（与 workbuddy2api 共享）
@@ -82,6 +82,23 @@ METRICS_TOKEN = _env('WB_METRICS_TOKEN', '')
 # Shared only by Manager and QTG; Nginx receives per-request assertions, no secret.
 # Empty means the optional identity bridge fails closed (503).
 QTG_IDENTITY_SECRET_FILE = _env('WB_QTG_IDENTITY_SECRET_FILE', '')
+
+# ── QTG 适配器契约（U3 阶段 2）：Manager 读引擎侧数据的反向通道 ──────────────
+# K26 的 read_api 是「QTG 读 Manager」；这里是对称的「Manager 读 QTG」。引擎侧的
+# 账号运行态 / 模型目录 / 真实用量 / 上游健康只有 QTG 能拿到（它直连各适配器），
+# Manager 自己的库里只有「同步过来的副本」，两者不是同一份数据。
+#
+# 三条语义都重要：
+#   1. BASE 为空 = 未启用。端点必须如实返回 available=false + reason，绝不能
+#      静默返回空列表——那会让面板显示「引擎上零账号」，比直接报错更难排查；
+#   2. 令牌走文件、不走环境变量：避免它出现在 systemd unit 与进程环境快照里
+#      （与 WB_METRICS_TOKEN_FILE 同一考虑）；
+#   3. 调用必须直连、不吃出口代理：内部通道被面板设置的代理劫持会变成
+#      「时好时坏」，而这种间歇故障最难归因。
+QTG_ADAPTER_BASE = _env('WB_QTG_ADAPTER_BASE', '').rstrip('/')
+QTG_ADAPTER_TOKEN_FILE = _env('WB_QTG_INTERNAL_TOKEN_FILE',
+                              '/opt/workbuddy-manager/engine/secrets/internal_service_token')
+QTG_ADAPTER_TIMEOUT_S = _env_int('WB_QTG_ADAPTER_TIMEOUT_S', 3)
 
 # 子路径部署时的 URL 前缀，留空 = 根路径部署（默认）。
 #

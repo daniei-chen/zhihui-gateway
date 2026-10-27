@@ -818,7 +818,7 @@ def _release_latest_via_redirect(url: str) -> dict:
         raise ValueError('not a releases/latest API URL')
     repo = f'{m.group(1)}/{m.group(2)}'
     page = f'https://github.com/{repo}/releases/latest'
-    req = urllib.request.Request(page, headers={'User-Agent': 'workbuddy-manager-updater'})
+    req = urllib.request.Request(page, headers={'User-Agent': 'zhihui-gateway-updater'})
     try:
         with _NO_REDIRECT_OPENER.open(req, timeout=15):
             raise RuntimeError('releases/latest 没有返回重定向')
@@ -861,7 +861,7 @@ def _gh_get(url: str, timeout: int = 15) -> object:
     for candidate in candidates:
         headers = {
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'workbuddy-manager-updater',
+            'User-Agent': 'zhihui-gateway-updater',
         }
         # 认证后 5000 次/小时；未认证仅 60 次/小时/IP——共享出口（TUN/系统代理）
         # 极易被同出口的其他用户打满，表现为设置页"检测更新"偶发 403

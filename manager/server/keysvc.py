@@ -440,7 +440,11 @@ def model_allowed(key: dict, model: object) -> bool:
     # 白名单里可能写着带前缀的 `cn:glm-5.2`。若按字面比对，改版后前者会
     # 被后者拒掉（用户看到「模型不在白名单内」却查不出哪里不对）。
     # `global:` 不归一化——它决定路由，两个版本的同名模型是**不同的东西**。
-    return _bare_model(model) in {_bare_model(x) for x in allow}
+    # 例外：密钥**已锁定版本**（realm=cn/global）时，前缀不再承担路由信息
+    # （另一版本根本进不来），两边都按裸名比。否则会出现一种死锁（issue #255）：
+    # 国际版密钥的白名单写裸名，客户端按界面提示加 `global:` 前缀调用反而被拒。
+    norm = _strip_realm_prefix if _norm_realm(key.get('realm')) else _bare_model
+    return norm(model) in {norm(x) for x in allow}
 
 
 def _strip_realm_prefix(name: str) -> str:

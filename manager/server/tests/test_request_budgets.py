@@ -25,7 +25,13 @@ class BudgetsTest(unittest.TestCase):
         self.assertEqual(budgets.connect_s, 5.0)
         self.assertEqual(budgets.stream_idle_s, 600.0)
         self.assertEqual(budgets.total_s, 600.0)
-        self.assertEqual(budgets.first_byte_s, 60.0)
+        # 2026-10-26：首包预算默认值由 min(60, base) 改为 base（= 读超时）。
+        # 依据是生产事故 INC-02：上游 copilot.tencent.com 约 9.4% 的请求首字节
+        # 超过 60s，60s 硬上限把它们全变成 502；而旧版 v2.8.3 的 first_byte
+        # 只记指标、没有任何超时控制，慢请求能一直等到读超时。
+        # 这条断言锁的是「默认等于读超时」这一**有意恢复的行为**，不是放宽阈值：
+        # 上限仍然存在（= 600s，受 WB_UPSTREAM_TIMEOUT 约束），只是不再额外收紧。
+        self.assertEqual(budgets.first_byte_s, 600.0)
         self.assertEqual(budgets.client_cancel_s, 5.0)
 
     def test_env_overrides(self) -> None:

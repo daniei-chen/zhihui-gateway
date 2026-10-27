@@ -16,12 +16,13 @@ from . import config, db, drain, redpacket, security
 from .iputil import client_ip
 from .stdio_utf8 import force_utf8_stdio
 from .routers import (
-    accounts, anthropic, auth, gateway, keys, logs, models, playground,
+    accounts, anthropic, auth, engine, gateway, keys, logs, models, playground,
     pgsync as pgsync_router, read_api, redpackets, responses,
     security as security_router, proxies, settings, stats, system, tokens, upstreams,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
 from .routers import budgets
+from .routers import qtg_panel
 
 # 最早时刻把标准输出/错误钉成 UTF-8：Windows 中文区域默认按 cp936 编码，日志里
 # 一旦出现 emoji（账号昵称就可能带）就会抛 UnicodeEncodeError —— 与「成长任务」
@@ -85,6 +86,19 @@ async def lifespan(app: FastAPI):
     # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
     pgsync.start_scheduler()
     instance_runtime = None
+    # Qoder/Trae control plane (folded in from the standalone qtg service).
+    # Routers read request.app.state.rt, so start the runtime before yield;
+    # failures here only affect the qoder/trae branches.
+    _qtg_rt = None
+    try:
+        from .qtgcore.config import load_settings as _qtg_load_settings
+        from .qtgcore.runtime import Runtime as _QtgRuntime
+        _qtg_rt = _QtgRuntime(_qtg_load_settings())
+        await _qtg_rt.startup()
+        app.state.rt = _qtg_rt
+        logger.info('qoder/trae control plane merged in (qtgcore started)')
+    except Exception:
+        logger.exception('qoder/trae control plane failed; workbuddy proxy unaffected')
     try:
         from .instance_runtime import InstanceRuntime
         instance_runtime = InstanceRuntime()
@@ -92,6 +106,11 @@ async def lifespan(app: FastAPI):
         app.state.instance_runtime = instance_runtime
         yield
     finally:
+        if _qtg_rt is not None:
+            try:
+                await _qtg_rt.shutdown()
+            except Exception:
+                logger.exception('qtgcore shutdown failed')
         # A managed launcher/pre-stop controller marks drain BEFORE uvicorn
         # starts shutdown. Lifespan shutdown is only the final cleanup stage.
         _drain = await drain.wait_until_drained(config.DRAIN_TIMEOUT_SEC)
@@ -141,9 +160,22 @@ def _warn_if_exposed() -> None:
     )
 
 
+def _release_version() -> str:
+    """A-04：版本号单一来源——当前 release 根的 .version（回退安装根）。"""
+    for path in (str(config.ROOT / '.version'), '/opt/workbuddy-manager/.version'):
+        try:
+            with open(path, encoding='utf-8') as fh:
+                text = fh.read().strip()
+            if text:
+                return text
+        except OSError:
+            continue
+    return 'unknown'
+
+
 app = FastAPI(
     title='WorkBuddy Manager',
-    version='2.8.3',
+    version=_release_version(),
     lifespan=lifespan,
     # 生产环境默认关闭交互式文档与 OpenAPI 描述：
     # 它们会把管理接口全貌（路径、参数、结构）暴露给任何未认证访问者，
@@ -162,9 +194,10 @@ if config.CORS_ORIGINS:
     # 管理员的 Cookie 调 /api/* 并读到响应 —— 等于把控制台交给任何网页。
     # 留空（默认）即同源部署，安全。
     if any(o.strip() == '*' for o in config.CORS_ORIGINS):
-        logging.getLogger('workbuddy').error(
-            'WB_CORS_ORIGINS 含 `*` 且已启用凭据：任意网站都能冒用管理员身份读取 '
-            '/api/*。请改为列出具体来源，或留空（同源部署）。'
+        # v2.10.2：误配 `*` 等于把控制台交给任意网站，直接拒绝启动。
+        raise RuntimeError(
+            'WB_CORS_ORIGINS 含 `*` 且已启用 Cookie 凭据：请改为列出具体来源，'
+            '或留空（同源部署，默认）。'
         )
     app.add_middleware(
         CORSMiddleware,
@@ -237,6 +270,10 @@ app.include_router(models.router)
 # 内部只读 API 的版本/能力探测（K26）：QTG 先探测契约版本再决定能否读，
 # 不可用时必须报错而不是回退直读 Manager SQLite。
 app.include_router(read_api.router)
+# 引擎侧数据（U3 阶段 2）：Manager 读 QTG 的 `/api/v1/adapter/*` 契约。
+# 与上面 K26 的方向相反 —— 两者合起来才是双向通道：QTG 读 Manager 的账本，
+# Manager 读 QTG 的引擎运行态；缺口在任一侧都必须是显式错误，不许回退直读对端库。
+app.include_router(engine.router)
 app.include_router(playground.router)
 app.include_router(gateway.router)
 # Anthropic Messages API 兼容层（/v1/messages）——给只认该协议的客户端用
@@ -244,6 +281,88 @@ app.include_router(anthropic.router)
 # OpenAI Responses API 兼容层（/v1/responses、/responses）——给 Codex /
 # DeepSeek Harness 的 openai-responses 协议用
 app.include_router(responses.router)
+# Qoder / Trae control plane (folded in from the standalone qtg service):
+# same login as every other manager endpoint, no second credential set.
+app.include_router(qtg_panel.router)
+
+# Qoder/Trae compat control plane (was qtg:8795), mounted under an internal
+# prefix so its /api/* handlers cannot collide with manager own endpoints.
+from .qtgcore.routers import (actions as _qa, compat as _qc,
+    compat_accounts_ext as _qace, compat_fixes as _qcf, compat_settings as _qcs,
+    compat_stats as _qst, data_admin as _qda, health as _qh,
+    read as _qread, system as _qsys)
+_QTG_INTERNAL = "/__qtg"
+# Only PLATFORM DATA endpoints are routed to the merged qtg control plane.
+# Everything else (login/session/users/tokens/system/settings/keys/security)
+# MUST stay on manager: nginx auth_request calls /api/system/internal-session-verify
+# with the same X-QTG-Platform header, and rewriting it yields a 501 there which
+# nginx turns into a hard 500 for the real request.
+_QTGP_ROUTE_PREFIXES = ("/api/accounts", "/api/stats/", "/api/models",
+                        "/api/model-catalog", "/api/upstreams", "/api/platforms",
+                        "/api/status", "/api/checkin-logs", "/api/logs",
+                        "/api/playground")
+
+def _qtg_should_route(path):
+    if not path.startswith("/api/"):
+        return False
+    for _p in _QTGP_ROUTE_PREFIXES:
+        # H-010：必须按路径段边界匹配。/api/logs 这类无尾斜杠的前缀此前用
+        # startswith 会让 /api/logsXXX 也命中，使"哪些路径走 qtgcore"不可静态推断。
+        _base = _p.rstrip("/")
+        if path == _base or path.startswith(_base + "/"):
+            return True
+    return False
+# Order matters: qtg registers compat LAST (catch-all fallback, see
+# qtg/routeaudit.py REGISTRATION_ORDER); real handlers must come first,
+# otherwise /api/accounts hits compat not_implemented stub.
+for _qr in (_qh, _qread, _qa, _qda, _qsys, _qcf, _qst, _qcs, _qace, _qc):
+    app.include_router(_qr.router, prefix=_QTG_INTERNAL)
+
+@app.middleware('http')
+async def _qtg_platform_route(request, call_next):
+    from fastapi.responses import JSONResponse
+    path = request.url.path
+    if path.startswith(_QTG_INTERNAL) and not getattr(request.state, "qtg_rewritten", False):
+        return JSONResponse({'detail': 'not found'}, status_code=404)
+    platform = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    if platform in ("qoder", "trae") and _qtg_should_route(path):
+        try:
+            _user = security._current_user(request)
+        except Exception as _exc:
+            # H-011：区分「鉴权失败」与「内部错误」。此前一律 401，导致
+            # DB 抖动 / 用户文件读失败 / 磁盘满都表现为"未登录"——用户被莫名
+            # 踢到登录页，监控上只见大量 401，真实故障（5xx 级）被完全掩盖。
+            if getattr(_exc, 'status_code', 500) in (401, 403):
+                return JSONResponse({'detail': 'auth required'}, status_code=401,
+                                    headers={'WWW-Authenticate': 'Bearer'})
+            logger.exception('qtg 平台路由：身份解析出现内部错误')
+            return JSONResponse({'detail': 'internal error'}, status_code=500)
+        import time as _t
+        from .qtgcore.identity import Identity as _I
+        _role = 'admin' if _user.get('role') == 'admin' else 'viewer'
+        # ── S0 授权闸门（H-000 / B-001 / D-001，2026-10-27 审计修复）────────
+        # qtgcore 的 handler 签名里没有任何 Depends 授权依赖，而 manager 原生
+        # 同路径 handler 全部有 require_admin。若不在此拦，已登录的 viewer 与
+        # scope=read/keys 服务令牌都能通过 X-QTG-Platform 头执行写操作
+        # （实测 viewer 会话成功对真实账号完成签到）。
+        #
+        # 判据：写方法必须同时满足「cookie 身份 role=admin」且「不是服务令牌」
+        # （_token_identity 会设 request.state.token_id；cookie 路径不设）。
+        # 读方法（GET/HEAD/OPTIONS）行为不变，面板查看不受影响。
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            _is_privileged = (_user.get('role') == 'admin'
+                              and not getattr(request.state, 'token_id', None))
+            if not _is_privileged:
+                return JSONResponse({'detail': '需要管理员权限'}, status_code=403)
+        _now = int(_t.time())
+        request.state.identity = _I(sub=str(_user.get("username") or "manager"),
+            role=_role, scopes=frozenset({"*"} if _role == "admin" else {"read"}),
+            auth_method="manager_session", aud="qtg", exp=_now + 60,
+            iat=_now, iss="manager", jti="")
+        request.state.qtg_rewritten = True
+        request.scope["path"] = _QTG_INTERNAL + path
+        request.scope["raw_path"] = (_QTG_INTERNAL + path).encode()
+    return await call_next(request)
 
 
 @app.middleware('http')
@@ -327,7 +446,7 @@ async def cache_headers(request: Request, call_next):
 def sysinfo(user: dict = Depends(security.current_user)) -> dict:
     """服务信息。需要登录 —— 路径类信息不应对未认证访问者暴露。"""
     return {
-        'service': 'workbuddy-manager',
+        'service': 'zhihui-gateway',
         'version': app.version,
     }
 
@@ -430,6 +549,23 @@ if config.STATIC_DIR.is_dir():
     def spa(full_path: str, request: Request):
         if full_path == "metrics":
             return prometheus_metrics(request)
+        # H-004：/api/* 走到这里意味着「没有任何业务路由匹配」（路径不存在，
+        # 或路径存在但方法不对被 Starlette 跳过后落到本兜底）。此前会返回
+        # 11777 字节的 404.html，前端 res.json() 抛 SyntaxError 被伪装成
+        # "数据加载失败"，真实原因完全被掩盖。这里明确回 JSON，
+        # 并给出 method 已注册时正确的 405 语义。
+        if full_path == "api" or full_path.startswith("api/"):
+            _path = "/" + full_path
+            _allow = sorted({
+                m for r in app.routes
+                for m in (getattr(r, "methods", None) or ())
+                if getattr(r, "path", None) == _path and m not in ("HEAD", "OPTIONS")
+            })
+            if _allow:
+                return JSONResponse(
+                    {"detail": "method not allowed", "allow": _allow},
+                    status_code=405, headers={"Allow": ", ".join(_allow)})
+            return JSONResponse({"detail": "not found"}, status_code=404)
         # 优先命中导出的静态页面 / 资源，否则回退到 404 页面。
         # 所有路径都必须先通过 _safe_static_path（越界即 None → 404）。
         #

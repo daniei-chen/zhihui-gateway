@@ -253,8 +253,13 @@ class LoginLockoutTest(unittest.TestCase):
             security.record_fail(f'172.{i // 250}.{i % 250}.9', f'flood{i}')
         self.assertTrue(security.login_blocked('4.4.4.4', 'admin'),
                         '窗口内的 admin 锁定条目被灌入操作挤掉了')
+        # v2.10.2 起按用户名的锁定只拦「自己也失败过」的来源 IP（防匿名锁死管理员），
+        # 所以先让 5.5.5.5 自己失败一次，再断言它仍被 admin 锁定覆盖。
+        security.record_fail('5.5.5.5', 'admin')
         self.assertTrue(security.login_blocked('5.5.5.5', 'admin'),
-                        '按用户维度的 admin 锁定同样不该被挤掉')
+                        '按用户维度的 admin 锁定对失败来源仍应生效')
+        self.assertFalse(security.login_blocked('6.6.6.6', 'admin'),
+                         '干净 IP 不应被匿名者用 admin 用户名锁死')
 
     def test_successful_login_clears_counter(self) -> None:
         for _ in range(3):

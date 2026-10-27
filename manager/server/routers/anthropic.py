@@ -1093,6 +1093,27 @@ async def messages(request: Request):
 
     status_code = resp.status_code
 
+    # A-001 修复（2026-10-27 审计 S1）：上游拒绝时不能把它塞进 200 的 SSE 流。
+    # 此前 status_code 算出来却从未使用，返回的是硬编码 200 + 流式 —— 外部
+    # Claude Code 等客户端会把 429/5xx 当成功（不重试、不报错、只显示空回答），
+    # 且网关侧的失败率在 HTTP 层完全不可见。这里先读干净错误体、关连接，
+    # 用真实状态码回错，流式分支只处理 <400 的正常响应。
+    if status_code >= 400:
+        text = ''
+        try:
+            raw = await resp.aread()
+            text = raw.decode('utf-8', 'replace')[:500]
+        except Exception:  # noqa: BLE001  读不到错误体不影响回错
+            text = f'上游 HTTP {status_code}'
+        finally:
+            try:
+                await resp.aclose()
+            finally:
+                await client.aclose()
+        latency = int((time.time() - started) * 1000)
+        gateway._record(key, ip, model, mapped or '', status_code, 0, 0, latency, ua, text, True)
+        return _err(f'上游返回 {status_code}：{text}', status_code, 'api_error')
+
     async def gen():
         translator=_StreamTranslator(model, thinking=want_thinking)
         translator.defer_finish=True

@@ -77,7 +77,20 @@ def prepare(key, body):
         fresh = db.query_one('SELECT quota,used_tokens,quota_credit,used_credit,used_credit_units FROM api_keys WHERE id=?', (key['id'],))
         if fresh is None: raise BudgetRejected('密钥已被删除', 'invalid_api_key')
         states = "('reserved','forwarded','unknown')" if limited else "('reserved','forwarded')"
-        pending = db.query_one('SELECT count(*) n FROM budget_reservations WHERE key_id=? AND state IN '+states, (key['id'],))
+        if limited:
+            # A-002 修复（2026-10-27 审计 S1）：unknown = 「上游没回 usage，等核对」。
+            # 它是历史遗留状态，却被永久计入「有配额密钥只允许 1 个在途」这道闸。
+            # 实测积压 120-190 条（最老 2026-10-24）⇒ 一旦给密钥设配额，之后每个
+            # 请求都 429 budget_pending 且不自愈。
+            # 这里只把最近 15 分钟内的 unknown 视为「在途」，更老的交给对账任务，
+            # 与「只有进行中的请求才该阻塞新请求」的原本意图一致。
+            _cutoff = int(time.time()) - 900
+            pending = db.query_one(
+                'SELECT count(*) n FROM budget_reservations WHERE key_id=? AND '
+                "(state IN ('reserved','forwarded') OR (state='unknown' AND updated_at>=?))",
+                (key['id'], _cutoff))
+        else:
+            pending = db.query_one('SELECT count(*) n FROM budget_reservations WHERE key_id=? AND state IN '+states, (key['id'],))
         if pending['n'] >= (1 if limited else 4):
             raise BudgetRejected('该密钥存在进行中或用量待核对的请求，请完成后再试', 'budget_pending')
         q, used = int(fresh['quota']), int(fresh['used_tokens'])

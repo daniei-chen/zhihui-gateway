@@ -1214,6 +1214,22 @@ def _checkin_semaphore() -> asyncio.Semaphore:
     return asyncio.Semaphore(config.CHECKIN_CONCURRENCY)
 
 
+# 批量签到的退避序列（issue #256）：上游偶发 `10001 签到失败，请稍后重试`，
+# 隔几秒单号重试即可成功。5s + 15s 总等待 20s，仍在面板 60s 超时内。
+_CHECKIN_RETRY_DELAYS = (5.0, 15.0)
+
+
+async def _checkin_with_retry(payload: dict, realm) -> tuple[int, str]:
+    """执行签到；仅对 -3（上游瞬时拒绝）按 5s/15s 退避重试。"""
+    code, message = await tencent.checkin(payload, realm)
+    for delay in _CHECKIN_RETRY_DELAYS:
+        if code != -3:
+            break
+        await asyncio.sleep(delay)
+        code, message = await tencent.checkin(payload, realm)
+    return code, message
+
+
 @router.post('/accounts/checkin-all')
 async def checkin_all(upstream_id: int | None = Query(None),
                       user: dict = Depends(security.require_admin)) -> dict:
@@ -1265,7 +1281,9 @@ async def checkin_all(upstream_id: int | None = Query(None),
 
         async with sem:
             # 传完整 auth dict：billing 域要带 X-User-Id 等身份头
-            code, message = await tencent.checkin({
+            # 瞬时 10001（上游瞬时限流）在 sem 内退避重试：放掉信号量再睡会让
+            # 其他账号涌入，重新制造并发峰值（issue #256）。
+            code, message = await _checkin_with_retry({
                 'access_token': token,
                 'uid': str((raw.get('account') or {}).get('uid') or uid),
                 'enterprise_id': str((raw.get('account') or {}).get('enterpriseId') or ''),

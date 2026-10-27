@@ -588,6 +588,23 @@ async def refresh_token(auth: dict) -> tuple[bool, str, dict]:
     return True, '刷新成功（上游未返回有效期，沿用原值）', out
 
 
+# 10001 的两层语义（issue #256）：上游既用它表示「今天已签到」（幂等成功），
+# 也用它表示「签到失败，请稍后重试」（瞬时限流）。只按业务码判断会把失败记成
+# 成功，所以这里再看 msg 文案区分。
+_ALREADY_CHECKIN_MARKERS = ('已签到', '已经签到', 'already checked in',
+                            'already signed in', 'already checkin')
+
+
+def is_already_checkin_message(code: int, message: str = '') -> bool:
+    """(code, message) 是否表示「今天已签到」；空 msg 保持旧行为。"""
+    if code != 10001:
+        return False
+    msg = (message or '').strip().lower()
+    if not msg:
+        return True
+    return any(m in msg for m in _ALREADY_CHECKIN_MARKERS)
+
+
 async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str]:
     """每日签到。10001 = 今日已签到，属正常幂等。
 
@@ -611,7 +628,18 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
         if code == 0:
             return 0, '签到成功'
         if code == 10001:
-            return 10001, '今日已签到'
+            msg = ''
+            try:
+                env = resp.json()
+                if isinstance(env, dict):
+                    msg = str(env.get('msg') or '')
+            except Exception:  # noqa: BLE001
+                msg = ''
+            if is_already_checkin_message(code, msg):
+                return 10001, '今日已签到'
+            # 同一 10001 的瞬时拒绝语义：用 -3 与「已签到」区分，
+            # 调用方才不会把失败记成成功（issue #256）。
+            return -3, msg or '签到失败，请稍后重试'
         return code, f'签到返回 code={code}'
     except Exception as exc:  # noqa: BLE001
         return -1, f'签到异常: {err_text(exc)}'

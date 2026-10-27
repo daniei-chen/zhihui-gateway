@@ -116,7 +116,7 @@ class Budgets:
         """从环境变量构造（缺省值保持与现状一致）。
 
         * `WB_CONNECT_TIMEOUT_S`      默认 5（与现有 `connect=5` 一致）
-        * `WB_FIRST_BYTE_TIMEOUT_S`   默认 min(60, 读超时)
+        * `WB_FIRST_BYTE_TIMEOUT_S`   默认 = 读超时（旧版 first_byte 只记指标、无硬预算；60s cap 会造成慢上游 502，2026-10-26 回归修复）
         * `WB_STREAM_IDLE_TIMEOUT_S`  默认读超时（httpx read timeout 语义）
         * `WB_TOTAL_TIMEOUT_S`        默认读超时
         * `WB_CLIENT_CANCEL_S`        默认 5（与 close_stream 的 shield 一致）
@@ -136,7 +136,7 @@ class Budgets:
         base = float(upstream_timeout or _num('WB_UPSTREAM_TIMEOUT', 300.0))
         return cls(
             connect_s=_num('WB_CONNECT_TIMEOUT_S', 5.0),
-            first_byte_s=_num('WB_FIRST_BYTE_TIMEOUT_S', min(60.0, base)),
+            first_byte_s=_num('WB_FIRST_BYTE_TIMEOUT_S', base),
             stream_idle_s=_num('WB_STREAM_IDLE_TIMEOUT_S', base),
             total_s=_num('WB_TOTAL_TIMEOUT_S', base),
             client_cancel_s=_num('WB_CLIENT_CANCEL_S', 5.0),

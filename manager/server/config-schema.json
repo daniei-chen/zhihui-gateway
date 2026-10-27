@@ -92,7 +92,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/bodyguard.py:26"
+        "manager/server/bodyguard.py:32"
       ],
       "default": 32,
       "unit": "count",
@@ -102,14 +102,14 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/migrations.py:91"
+        "manager/server/migrations.py:96"
       ]
     },
     "WB_AUDIT_ALL_ACCESS": {
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:145",
+        "manager/server/config.py:162",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": "0",
@@ -148,7 +148,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:93"
+        "manager/server/config.py:110"
       ],
       "default": ""
     },
@@ -170,7 +170,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:101"
+        "manager/server/config.py:118"
       ],
       "default": 5,
       "unit": "count",
@@ -214,7 +214,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:181"
+        "manager/server/config.py:198"
       ],
       "default": ""
     },
@@ -222,7 +222,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:111"
+        "manager/server/config.py:128"
       ],
       "default": 8,
       "unit": "count",
@@ -249,7 +249,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:152"
+        "manager/server/config.py:169"
       ],
       "default": "",
       "format": "proxy_url"
@@ -268,7 +268,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:136",
+        "manager/server/config.py:153",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": "0",
@@ -283,9 +283,19 @@
       "consumers": [
         "manager/server/deadline.py:139"
       ],
-      "default_expression": "min(60.0, base)",
+      "default_expression": "base",
       "unit": "seconds",
       "exclusive_minimum": 0
+    },
+    "WB_GATEWAY_LARGE_MAX_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 0,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
     },
     "WB_GATEWAY_MAX_BODY_CEILING_MB": {
       "type": "integer",
@@ -307,6 +317,16 @@
       "default": 64,
       "unit": "MiB",
       "exclusive_minimum": 0
+    },
+    "WB_GATEWAY_MAX_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 0,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
     },
     "WB_GATEWAY_RATE_PER_MIN": {
       "type": "integer",
@@ -352,7 +372,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:518"
+        "manager/server/config.py:535"
       ],
       "default": 24,
       "unit": "count",
@@ -362,7 +382,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:521"
+        "manager/server/config.py:538"
       ],
       "default": 8,
       "unit": "count",
@@ -372,7 +392,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:522"
+        "manager/server/config.py:539"
       ],
       "default": 4,
       "unit": "count",
@@ -382,7 +402,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:149",
+        "manager/server/config.py:166",
         "manager/server/services/updater.py:597"
       ],
       "default": "",
@@ -395,11 +415,51 @@
         "manager/server/services/updater.py:611"
       ]
     },
+    "WB_KEY_BUDGET_PENDING": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (prepare)"
+      ],
+      "default": 4,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_KEY_BUDGET_PENDING_QUOTA": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (prepare)"
+      ],
+      "default": 1,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_KEY_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 0,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_KEY_CONCURRENCY_QUOTA": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 1,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
     "WB_LOCAL_IMPORT": {
       "type": "boolean",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:163"
+        "manager/server/config.py:180"
       ],
       "boolean_dialect": "manager",
       "default": false
@@ -462,10 +522,29 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:151"
+        "manager/server/config.py:168"
       ],
       "default": "https://ipinfo.io/json",
       "format": "http_url"
+    },
+    "WB_QTG_ADAPTER_BASE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:98"
+      ],
+      "default": "",
+      "format": "http_url"
+    },
+    "WB_QTG_ADAPTER_TIMEOUT_S": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:101"
+      ],
+      "default": 3,
+      "unit": "seconds",
+      "exclusive_minimum": 0
     },
     "WB_QTG_IDENTITY_SECRET_FILE": {
       "type": "string",
@@ -475,11 +554,19 @@
       ],
       "default": ""
     },
+    "WB_QTG_INTERNAL_TOKEN_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:99"
+      ],
+      "default": "/opt/workbuddy-manager/engine/secrets/internal_service_token"
+    },
     "WB_REFRESH_CONCURRENCY": {
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:104"
+        "manager/server/config.py:121"
       ],
       "default": 3,
       "unit": "count",
@@ -516,7 +603,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:178",
+        "manager/server/config.py:195",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": "auto",
@@ -539,7 +626,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:169",
+        "manager/server/config.py:186",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": 1,
@@ -551,7 +638,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:176"
+        "manager/server/config.py:193"
       ],
       "default": 12,
       "unit": "hours",
@@ -579,7 +666,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:98"
+        "manager/server/config.py:115"
       ],
       "default": 15,
       "unit": "seconds",
@@ -599,8 +686,8 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:130",
-        "manager/server/config.py:131"
+        "manager/server/config.py:147",
+        "manager/server/config.py:148"
       ],
       "default": "127.0.0.0/8,::1/128",
       "format": "ip_network_list"
@@ -609,7 +696,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:115",
+        "manager/server/config.py:132",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": 1,
@@ -620,7 +707,7 @@
       "type": "string",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:112",
+        "manager/server/config.py:129",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": "1",
@@ -681,7 +768,7 @@
       "type": "integer",
       "sensitive": false,
       "consumers": [
-        "manager/server/config.py:97",
+        "manager/server/config.py:114",
         "manager/server/deadline.py:136"
       ],
       "default": 300,

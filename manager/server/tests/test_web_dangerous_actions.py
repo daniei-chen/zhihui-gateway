@@ -21,8 +21,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-_ROOT = Path(__file__).resolve().parents[2]
+
+def _resolve_web_root() -> tuple[Path, Path | None]:
+    """返回 (用于 sys.path 的根, 含前端资产的根)。
+
+    为什么不直接 `parents[2] / 'web'`：这份测试在两棵树上都会跑，而它们的形态不同。
+
+      * `src/three-platform/server/tests/` → parents[2] = `src/three-platform`，**有** web/；
+      * `manager/server/tests/`（部署副本原样）→ parents[2] = `manager`，**没有** web/。
+
+    后者是**正常的**：部署树只含 server/，前端资产由 `--target manager-assets` 从完整
+    源码树补进来。旧写法在部署树上直接 FileNotFoundError，把「本 target 不该跑这条
+    守卫」误报成「守卫坏了」——基线一直用 manager-assets，于是这个窟窿被盖住了。
+
+    这里向上找第一个含 `web/app` 的父目录；找不到就返回 None，由各 TestCase 的
+    setUpClass 决定 SkipTest。
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / 'web' / 'app').is_dir():
+            return parent, parent
+    return here.parents[2], None
+
+
+_ROOT, _WEB_ROOT = _resolve_web_root()
 _WEB = _ROOT / 'web'
+if _WEB_ROOT is None:
+    # 整个模块都依赖前端源码，没有资产就没有可断言的对象。跳过比报错诚实：
+    # FileNotFoundError 会让人以为「守卫坏了」，而真相是「这个 target 没有前端」。
+    raise unittest.SkipTest(
+        '本 target 不含前端资产（部署树 manager/ 只有 server/）；'
+        '前端源码守卫请用 --target manager-assets')
 
 _SECURITY = _WEB / 'app' / '(main)' / 'security' / 'page.tsx'
 # 设置页的外壳在 `layout.tsx`：批次 4 起 7 个 Tab 变成了 `/settings/<tab>`
@@ -334,10 +363,16 @@ class ForbiddenMessageTest(unittest.TestCase):
         code = _strip_comments(src)
         body = code[code.index('export function errText'):]
         body = body[:body.index('\n}')]
-        detail_first = body.index('if (raw) return tp(raw)')
+        # 原实现是一行 `if (raw) return tp(raw)`。为了让 5xx 的英文诊断带本地化前缀
+        # （N31），raw 分支变成了代码块。守卫的意图是「后端原文优先于状态码兜底」，
+        # 不是「必须写在同一行」——所以断言定位分支本身，并额外确认 5xx 那条
+        # 分支也在兜底之前（否则英文诊断又会被状态码吞掉）。
+        detail_first = body.index('if (raw)')
         fallback = body.index('status === 403')
         self.assertLess(detail_first, fallback,
                         '403 兜底排到了后端文案前面 —— 本机导入那两条操作说明会被抹掉')
+        self.assertLess(body.index("t('error.serverDetail'"), fallback,
+                        '5xx 原文的本地化前缀排在了 403 兜底之后 —— 走不到')
         self.assertIn("t('error.forbidden')", body, '403 兜底没有用可翻译的键')
 
 

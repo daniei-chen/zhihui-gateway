@@ -130,10 +130,37 @@ class Step:
 
     @property
     def checksum(self) -> str:
-        """代码指纹：用于发现「同版本号但实现被改过」（改实现必须升版本）。"""
+        """代码指纹（v1，历史口径）：字节码 co_code。
+
+        **保留它的唯一原因是兼容已写入 schema_migrations 的旧记录**——
+        换掉它会让所有 already-applied 的步骤立刻 mismatch。
+        注意它随 CPython 版本变化（换解释器 → 字节码变 → 指纹变），
+        所以新校验一律走 `checksum_v2`；见 C-005。
+        """
         code = getattr(self.run, '__code__', None)
         body = code.co_code if code is not None else b''
         raw = f'{self.version}|{self.name}|{self.phase}|{body.hex()}'.encode()
+        return hashlib.sha256(raw).hexdigest()
+
+    @property
+    def checksum_v2(self) -> str:
+        """代码指纹（v2）：**源码文本** hash，不随解释器版本变化。
+
+        C-005：此前只用 v1（co_code），Python 3.12 → 3.13 就会让全部已应用
+        步骤的指纹改变，`ensure()` 抛 SchemaDrift → db 初始化失败 → manager
+        全站不可用（连 /v1 转发都停）。v2 让「换解释器」不再触发漂移，同时
+        仍然能发现「同版本号原地改实现」。
+
+        取不到源码（lambda / 动态生成）时返回空串：空串永不匹配任何已存记录，
+        于是退回只认 v1 的行为，不放松校验。
+        """
+        try:
+            import inspect
+            import textwrap
+            src = textwrap.dedent(inspect.getsource(self.run))
+        except Exception:  # noqa: BLE001
+            return ''
+        raw = f'{self.version}|{self.name}|{self.phase}|{src}'.encode()
         return hashlib.sha256(raw).hexdigest()
 
     def row(self, app_version: str, state: str, now: int | None = None) -> tuple:
@@ -301,7 +328,8 @@ def ensure(conn: sqlite3.Connection, steps: Sequence[Step], *,
     for step in ordered:
         existing = rows.get(step.version)
         if existing is not None and _row_state(existing) == STATE_APPLIED:
-            if str(existing[5]) != step.checksum:
+            # C-005：接受 v1（字节码，历史记录）或 v2（源码 hash，跨解释器稳定）
+            if str(existing[5]) not in (step.checksum, step.checksum_v2):
                 raise SchemaDrift(
                     f'v{step.version} {step.name} 已应用，但实现指纹变了；'
                     '改实现必须升版本号，不能原地改历史步骤')
@@ -402,7 +430,7 @@ def status(conn: sqlite3.Connection, steps: Sequence[Step] | None = None) -> dic
                 out['pending'].append({'version': step.version, 'name': step.name,
                                        'phase': step.phase})
             elif _row_state(rows[step.version]) == STATE_APPLIED and \
-                    str(rows[step.version][5]) != step.checksum:
+                    str(rows[step.version][5]) not in (step.checksum, step.checksum_v2):
                 out['drift'].append({'version': step.version, 'name': step.name})
     return out
 

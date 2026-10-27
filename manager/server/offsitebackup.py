@@ -13,17 +13,29 @@ import subprocess
 import tempfile
 import time
 
-TARGET = 'git@github-backup:your-github-user/WorkBuddy-API.git'
+TARGET = 'git@github-backup:daniei-chen/WorkBuddy-API.git'
 BRANCH = 'workbuddy-recovery-encrypted'
 CERTIFICATE = Path('/root/backups/workbuddy-recovery/recovery-public.pem')
 CONFIG = Path('/root/backups/workbuddy-recovery/offsite.json')
 REPOSITORY = Path('/root/backups/workbuddy-offsite.git')
 MAX_CIPHER_BYTES = 50 * 1024 * 1024
 
+#: 子进程（openssl / git）的超时，秒。
+#:
+#: 2026-10-26 实测：本机到备份仓库的上行约 **163 KiB/s**，10 MiB 探针 push 用了 63 s，
+#: 因此 47 MiB 密文约需 292 s。原值 180 s 会在 push 中途掐断 git，git 返回 128，
+#: 被包装成 `backup command git failed (128)` —— 看起来像权限问题，实际是超时。
+#: 放宽到 900 s；失败仍然报错，不静默。
+#:
+#: 注意这只解决"慢"，不解决"大"：`MAX_CIPHER_BYTES` 仍是 50 MiB 硬上限，而当前密文
+#: 已约 47.7 MiB，很快会撞线。上限策略（提高上限 / 截断 request_logs 窗口 / 改对象存储）
+#: 需要业务方决定，见 docs/EXTERNAL-INPUTS-ONBOARDING.md 的 C3。
+RUN_TIMEOUT = 900
+
 def _run(command, *, data=None, cwd=None, accepted=(0,)):
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', LC_ALL='C.UTF-8')
     process = subprocess.run(command, input=data, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, cwd=cwd, env=env, timeout=180)
+                             stderr=subprocess.PIPE, cwd=cwd, env=env, timeout=RUN_TIMEOUT)
     if process.returncode not in accepted:
         # Credential helpers may include sensitive diagnostics. Never print them.
         raise RuntimeError(f'backup command {Path(command[0]).name} failed ({process.returncode})')

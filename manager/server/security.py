@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Request
 
 from . import config, tokensvc
 from .iputil import client_ip
+from .iputil import _is_trusted_proxy  # noqa: SLF001 —— 与 client_ip 同一份可信代理判据
 
 _fail: dict[str, list] = {}
 MAX_FAILS = 5
@@ -106,6 +107,18 @@ def weak_admin_passwords() -> list[str]:
                 found.append(str(item.get('username') or ''))
                 break
     return found
+
+
+# 对固定哑哈希跑一遍 PBKDF2，丢弃结果，用来对齐「用户不存在」分支的耗时，
+# 避免公网通过响应快慢枚举用户名（上游 v2.10.2 同款修复）。
+_DUMMY_HASH: str | None = None
+
+
+def dummy_verify(pwd: str) -> None:
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = make_hash(secrets.token_urlsafe(24))
+    verify_pwd(pwd, _DUMMY_HASH)
 
 
 # ── 用户存储 ─────────────────────────────────────────────
@@ -222,7 +235,7 @@ def bootstrap_users() -> dict:
     if not env_pwd:
         _write_initial_password_file(pwd)
         print('=' * 60, file=sys.stderr)
-        print('[WorkBuddy Manager] 已生成初始管理员账号', file=sys.stderr)
+        print('[智汇网关] 已生成初始管理员账号', file=sys.stderr)
         print(f'  用户名: admin', file=sys.stderr)
         print(f'  密码  : {pwd}', file=sys.stderr)
         print('  请登录后立即在「设置 → 管理用户」中修改密码。', file=sys.stderr)
@@ -376,7 +389,10 @@ def cookie_secure(request: Request) -> bool:
         return True
     if setting in ('false', '0'):
         return False
-    proto = request.headers.get('x-forwarded-proto', request.url.scheme)
+    proto = request.scope.get('scheme') or request.url.scheme
+    peer = request.client.host if request.client else ''
+    if config.TRUST_PROXY and _is_trusted_proxy(peer):
+        proto = request.headers.get('x-forwarded-proto', proto)
     return proto == 'https'
 
 
@@ -455,7 +471,9 @@ def login_blocked(ip: str, username: str | None = None) -> bool:
         key = username.lower()
         ucnt, ufirst = _user_fail.get(key, [0, 0.0])
         if ucnt >= MAX_FAILS and (now - ufirst) < LOCK_SECONDS:
-            return True
+            icnt, ifirst = _fail.get(ip, [0, 0.0])
+            if icnt > 0 and (now - ifirst) < LOCK_SECONDS:
+                return True
     return False
 
 
@@ -690,7 +708,7 @@ def current_user(request: Request) -> dict:
             '/api/audit-logs', '/api/accounts', '/api/models', '/api/keys',
             '/api/upstreams', '/api/proxy-routes', '/api/settings/panel',
             '/api/settings/upstream', '/api/settings/model-map',
-            '/api/read-api/', '/api/me', '/api/healthz', '/api/readyz',
+            '/api/read-api/', '/api/v1/', '/api/me', '/api/healthz', '/api/readyz',
             '/api/system/versions', '/api/system/update-status',
         )
         is_read = method in {'GET', 'HEAD'}

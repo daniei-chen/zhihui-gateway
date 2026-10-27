@@ -159,7 +159,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
   -- 版本（cn / global）：由请求的模型名前缀判定（上游的路由协议）。
   -- 为什么必须存：界面按版本切换时，日志与统计要跟着切；不存就无法回溯过滤。
   -- NULL = 该字段上线前的历史记录（或模型名无前缀）——按 cn 归类，见 realm_of_model。
-  realm             TEXT
+  realm             TEXT,
+  channel           TEXT,
+  -- 会话键（sha256 前 16 位；NULL = 客户端未提供也无法推导）
+  session_key       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 
@@ -718,6 +721,9 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ('red_packet_shares', 'token', "TEXT NOT NULL DEFAULT ''"),
     ('red_packet_shares', 'claimed_by_ip', 'TEXT'),
     ('red_packet_shares', 'claimed_at', 'INTEGER'),
+    ('request_logs', 'effort', 'TEXT'),
+    ('request_logs', 'channel', 'TEXT'),
+    ('request_logs', 'session_key', 'TEXT'),
 )
 
 
@@ -1258,7 +1264,8 @@ def add_request_log(**fields: object) -> None:
              'actual_platform','upstream_ref',
              # RV01：调用方关联 ID（X-Request-ID，校验过）。可空：NULL = 未提供/不合法，
              # 且**绝不**用服务端 request_id 回填。它不是主键，只用于跨系统相关性。
-             'client_request_id')
+             'client_request_id',
+             'effort','channel','session_key')
     if not fields.get('platform'):
         try:
             from .routers import gateway as _gw
