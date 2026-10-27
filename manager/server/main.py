@@ -384,6 +384,15 @@ async def _qtg_platform_route(request, call_next):
     if path.startswith(_QTG_INTERNAL) and not getattr(request.state, "qtg_rewritten", False):
         return JSONResponse({'detail': 'not found'}, status_code=404)
     platform = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    if not platform:
+        # H-001 / B1（2026-10-27 审计）：平台选择同时接受 `?platform=` 查询参数。
+        # 迁移理由：用请求头承载业务语义，URL 里看不出来、缓存与日志无法区分两种
+        # 响应、任何中间层都可能丢掉它，前端只能靠全局拦截器注入。
+        # 兼容策略：**header 优先**，缺省时才看 query —— 旧前端零影响。
+        try:
+            platform = (request.query_params.get("platform") or "").strip().lower()
+        except Exception:  # noqa: BLE001  取不到就当没有
+            platform = ""
     if platform in ("qoder", "trae") and _qtg_should_route(path):
         try:
             _user = security._current_user(request)
@@ -421,6 +430,16 @@ async def _qtg_platform_route(request, call_next):
         request.state.qtg_rewritten = True
         request.scope["path"] = _QTG_INTERNAL + path
         request.scope["raw_path"] = (_QTG_INTERNAL + path).encode()
+        # H-001/B1（2026-10-27 审计）：平台若来自 `?platform=`（客户端没发请求头），
+        # 这里把它补进 scope 的 headers —— qtgcore 内部有 10+ 处独立读
+        # `x-qtg-platform`（compat.py 8 处、authz.py、proxy.py），不补的话它们
+        # 读到空值就按「不过滤」处理，返回全部平台数据（实测 total 从 1 变 34）。
+        # 注意：这只是让两种入口行为一致；真正统一语义要改那 10+ 处为显式参数。
+        if not (request.headers.get("x-qtg-platform") or "").strip():
+            _h = [(k, v) for k, v in request.scope.get("headers") or []
+                  if k.lower() != b"x-qtg-platform"]
+            _h.append((b"x-qtg-platform", platform.encode("latin-1")))
+            request.scope["headers"] = _h
     return await call_next(request)
 
 
