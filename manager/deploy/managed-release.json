@@ -7,7 +7,7 @@
       "mode": 420
     },
     "deploy/README.md": {
-      "candidate_sha256": "3320f211d2ab7f9a5a480b25e0f475766b41f7fb129b8a468d48de0387e33ada",
+      "candidate_sha256": "e47b7cbb4a7ba279102d84fa0be25556d8ac915d62aecc578be1b1b48502fd85",
       "mode": 420
     },
     "deploy/check-upstream.sh": {
@@ -51,7 +51,7 @@
       "mode": 493
     },
     "deploy/update.py.pre-srcpatch-20260916-153909": {
-      "candidate_sha256": "95b8c6dfd7ed853998ccf6a3fb7898168efae74dfce37fc29292a63f7408ce8d",
+      "candidate_sha256": "841e1f993dfb0e9365ac49e2dd975492ea0a1e82a1aede31633e26d9f1a539e9",
       "mode": 420
     },
     "deploy/verify-release.sh": {
@@ -175,7 +175,7 @@
       "mode": 420
     },
     "server/main.py": {
-      "candidate_sha256": "72cb5c1172105050787f692ee3f2411c504ec22a8aee135283f64a6bf139b1c8",
+      "candidate_sha256": "ca69567810e85be6dbf73224b7e7bc49640af7717fa6127f51222d2119721560",
       "mode": 420
     },
     "server/metering.py": {
@@ -263,7 +263,7 @@
       "mode": 420
     },
     "server/routers/gateway.py": {
-      "candidate_sha256": "b08426121c7c41961aeec4461f6b5ea81aa47376a4b573739978b8bd1a0f0231",
+      "candidate_sha256": "726c9ff9293976cea607dc6a7ac31958e517de441afe444a02e46b83b462fea3",
       "mode": 420
     },
     "server/routers/gateway.py.pre-patch": {
@@ -439,7 +439,7 @@
       "mode": 420
     },
     "server/services/updater.py": {
-      "candidate_sha256": "cfbdd762e31260a56ec12fe4840ec2260dc1999f240db4f03c38b2a82b6e234a",
+      "candidate_sha256": "9e7fc439c6f588511207d3485d334114855ae1b56a3f74863182da9add469a5f",
       "mode": 420
     },
     "server/services/wb2api.py": {

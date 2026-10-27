@@ -1857,7 +1857,7 @@ async def gateway_health() -> dict:
     try:
         async with config.http_client(5, connect=2) as client:
             resp = await client.get(f'{config.WB2API_BASE}/healthz')
-        return {'service': 'workbuddy-manager', 'upstream_ok': resp.status_code == 200}
+        return {'service': 'zhihui-gateway', 'upstream_ok': resp.status_code == 200}
     except Exception:  # noqa: BLE001
         # 不回异常详情：那会暴露上游地址与网络拓扑
         return {'service': 'zhihui-gateway', 'upstream_ok': False}

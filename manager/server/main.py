@@ -1,4 +1,4 @@
-"""WorkBuddy Manager 入口：管理 API + 对外反代网关 + 静态前端托管。"""
+"""智汇网关（zhihui-gateway）入口：管理 API + 对外反代网关 + 静态前端托管。"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -174,7 +174,7 @@ def _release_version() -> str:
 
 
 app = FastAPI(
-    title='WorkBuddy Manager',
+    title='智汇网关',
     version=_release_version(),
     lifespan=lifespan,
     # 生产环境默认关闭交互式文档与 OpenAPI 描述：
