@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-labelledby="t d">
+  <title id="t">账号管理界面示意</title>
+  <desc id="d">账号管理页：工具栏含搜索与批量操作，表格按剩余有效期分档着色，逐行可签到、刷新积分与启用停用。数据为示例。</desc>
+  <rect width="1200" height="720" rx="16" fill="#0b1322"/>
+  <rect x="0.5" y="0.5" width="1199" height="719" rx="16" fill="none" stroke="#1c2740"/>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+    <!-- sidebar -->
+    <rect x="0" y="0" width="216" height="720" fill="#080f1b"/>
+    <line x1="216" y1="0" x2="216" y2="720" stroke="#18233a"/>
+    <g transform="translate(24,26)">
+      <rect width="30" height="30" rx="8" fill="#0f1d33" stroke="#22c55e" stroke-opacity="0.55"/>
+      <path d="M9 20 L15 10 L21 20 M12 17.5 h6" fill="none" stroke="#22c55e" stroke-width="1.9"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="66" y="47" fill="#e8eefb" font-size="14" font-weight="700">智汇网关</text>
+    <g font-size="12.5" fill="#7f95b4">
+      <text x="30" y="108">仪表盘</text>
+      <rect x="12" y="120" width="192" height="34" rx="8" fill="#12203a"/>
+      <rect x="12" y="120" width="3" height="34" rx="1.5" fill="#22c55e"/>
+      <text x="30" y="142" fill="#dff6e6" font-weight="600">账号管理</text>
+      <text x="30" y="186">任务记录</text>
+      <text x="30" y="220">API 密钥</text>
+      <text x="30" y="254">请求日志</text>
+      <text x="30" y="288">用量统计</text>
+      <text x="30" y="322">模型中心</text>
+      <text x="30" y="356">聊天测试台</text>
+      <line x1="24" y1="382" x2="192" y2="382" stroke="#18233a"/>
+      <text x="30" y="410">安全与 IP 管控</text>
+      <text x="30" y="444">设置</text>
+    </g>
+
+    <!-- topbar -->
+    <rect x="216" y="0" width="984" height="66" fill="#0a1220"/>
+    <line x1="216" y1="66" x2="1200" y2="66" stroke="#18233a"/>
+    <text x="244" y="40" fill="#e8eefb" font-size="16" font-weight="700">账号管理</text>
+    <text x="330" y="40" fill="#5d7a99" font-size="11.5">32 个账号</text>
+    <g transform="translate(830,19)">
+      <rect width="250" height="30" rx="15" fill="#0d1728" stroke="#1c2b45"/>
+      <rect x="3" y="3" width="82" height="24" rx="12" fill="#16233c"/>
+      <text x="44" y="19" fill="#cfe0f5" font-size="11" font-weight="600" text-anchor="middle">WorkBuddy</text>
+      <text x="128" y="19" fill="#6d87a6" font-size="11" text-anchor="middle">Qoder</text>
+      <text x="208" y="19" fill="#6d87a6" font-size="11" text-anchor="middle">Trae</text>
+    </g>
+
+    <!-- toolbar -->
+    <rect x="244" y="92" width="300" height="34" rx="9" fill="#0d1728" stroke="#1c2b45"/>
+    <circle cx="266" cy="109" r="5" fill="none" stroke="#4f6a8a" stroke-width="1.6"/>
+    <line x1="270" y1="113" x2="274" y2="117" stroke="#4f6a8a" stroke-width="1.6"/>
+    <text x="284" y="114" fill="#43597a" font-size="11.5">搜索昵称 / UID</text>
+
+    <g font-size="11.5">
+      <rect x="556" y="92" width="86" height="34" rx="9" fill="#0d1728" stroke="#1c2b45"/>
+      <text x="599" y="114" fill="#9fb3cf" text-anchor="middle">全部状态</text>
+      <rect x="654" y="92" width="86" height="34" rx="9" fill="#0d1728" stroke="#1c2b45"/>
+      <text x="697" y="114" fill="#9fb3cf" text-anchor="middle">全部平台</text>
+      <rect x="860" y="92" width="104" height="34" rx="9" fill="#0d1728" stroke="#1c2b45"/>
+      <text x="912" y="114" fill="#9fb3cf" text-anchor="middle">批量签到</text>
+      <rect x="974" y="92" width="104" height="34" rx="9" fill="#16a34a"/>
+      <text x="1026" y="114" fill="#f0fdf4" font-weight="600" text-anchor="middle">+ 添加账号</text>
+    </g>
+
+    <!-- table -->
+    <rect x="244" y="146" width="908" height="524" rx="12" fill="#0d1728" stroke="#1c2b45"/>
+    <rect x="244" y="146" width="908" height="40" rx="12" fill="#101c2f"/>
+    <rect x="244" y="174" width="908" height="12" fill="#101c2f"/>
+    <g font-size="11" fill="#5d7a99">
+      <text x="268" y="171">账号</text>
+      <text x="470" y="171">状态</text>
+      <text x="556" y="171">积分</text>
+      <text x="650" y="171">Token 有效期</text>
+      <text x="880" y="171">最近签到</text>
+      <text x="1020" y="171">操作</text>
+    </g>
+
+    <!-- rows -->
+    <g font-size="11.5">
+      <!-- r1 -->
+      <text x="268" y="208" fill="#b6c9e2">账号 甲</text>
+      <text x="268" y="224" fill="#3f5675" font-size="10">484fe240</text>
+      <circle cx="478" cy="208" r="3.5" fill="#2ea86a"/>
+      <text x="488" y="212" fill="#2ea86a">健康</text>
+      <text x="556" y="212" fill="#b6c9e2">1,100</text>
+      <rect x="650" y="200" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="200" width="132" height="6" rx="3" fill="#2ea86a"/>
+      <text x="812" y="212" fill="#2ea86a">26 天</text>
+      <text x="880" y="212" fill="#7f95b4">今天 09:05</text>
+      <text x="1020" y="212" fill="#5b9cf8">签到</text>
+      <text x="1068" y="212" fill="#5b9cf8">积分</text>
+
+      <!-- r2 -->
+      <text x="268" y="258" fill="#b6c9e2">账号 乙</text>
+      <text x="268" y="274" fill="#3f5675" font-size="10">45e09e89</text>
+      <circle cx="478" cy="258" r="3.5" fill="#2ea86a"/>
+      <text x="488" y="262" fill="#2ea86a">健康</text>
+      <text x="556" y="262" fill="#b6c9e2">860</text>
+      <rect x="650" y="250" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="250" width="98" height="6" rx="3" fill="#2ea86a"/>
+      <text x="812" y="262" fill="#2ea86a">17 天</text>
+      <text x="880" y="262" fill="#7f95b4">今天 09:12</text>
+      <text x="1020" y="262" fill="#5b9cf8">签到</text>
+      <text x="1068" y="262" fill="#5b9cf8">积分</text>
+
+      <!-- r3 -->
+      <text x="268" y="308" fill="#b6c9e2">账号 丙</text>
+      <text x="268" y="324" fill="#3f5675" font-size="10">5ccb46d9</text>
+      <circle cx="478" cy="308" r="3.5" fill="#f59e0b"/>
+      <text x="488" y="312" fill="#f59e0b">偏紧</text>
+      <text x="556" y="312" fill="#b6c9e2">420</text>
+      <rect x="650" y="300" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="300" width="52" height="6" rx="3" fill="#f59e0b"/>
+      <text x="812" y="312" fill="#f59e0b">9 天</text>
+      <text x="880" y="312" fill="#7f95b4">今天 09:31</text>
+      <text x="1020" y="312" fill="#5b9cf8">签到</text>
+      <text x="1068" y="312" fill="#5b9cf8">积分</text>
+
+      <!-- r4 -->
+      <text x="268" y="358" fill="#b6c9e2">账号 丁</text>
+      <text x="268" y="374" fill="#3f5675" font-size="10">518deace</text>
+      <circle cx="478" cy="358" r="3.5" fill="#ef4444"/>
+      <text x="488" y="362" fill="#ef4444">即将过期</text>
+      <text x="556" y="362" fill="#b6c9e2">150</text>
+      <rect x="650" y="350" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="350" width="24" height="6" rx="3" fill="#ef4444"/>
+      <text x="812" y="362" fill="#ef4444">1.5 天</text>
+      <text x="880" y="362" fill="#7f95b4">今天 09:44</text>
+      <text x="1020" y="362" fill="#5b9cf8">签到</text>
+      <text x="1068" y="362" fill="#5b9cf8">积分</text>
+
+      <!-- r5 cooling -->
+      <text x="268" y="408" fill="#b6c9e2">账号 戊</text>
+      <text x="268" y="424" fill="#3f5675" font-size="10">0df7f150</text>
+      <circle cx="478" cy="408" r="3.5" fill="#60a5fa"/>
+      <text x="488" y="412" fill="#60a5fa">冷却中</text>
+      <text x="556" y="412" fill="#b6c9e2">980</text>
+      <rect x="650" y="400" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="400" width="112" height="6" rx="3" fill="#2ea86a"/>
+      <text x="812" y="412" fill="#2ea86a">22 天</text>
+      <text x="880" y="412" fill="#7f95b4">昨天 21:05</text>
+      <text x="1020" y="412" fill="#5b9cf8">签到</text>
+      <text x="1068" y="412" fill="#5b9cf8">积分</text>
+
+      <!-- r6 expired -->
+      <text x="268" y="458" fill="#b6c9e2">账号 己</text>
+      <text x="268" y="474" fill="#3f5675" font-size="10">456babd1</text>
+      <circle cx="478" cy="458" r="3.5" fill="#6b7f99"/>
+      <text x="488" y="462" fill="#6b7f99">已过期</text>
+      <text x="556" y="462" fill="#b6c9e2">—</text>
+      <rect x="650" y="450" width="150" height="6" rx="3" fill="#16233c"/>
+      <text x="812" y="462" fill="#6b7f99">—</text>
+      <text x="880" y="462" fill="#7f95b4">10-25 20:18</text>
+      <text x="1020" y="462" fill="#5b9cf8">重新授权</text>
+
+      <!-- r7 -->
+      <text x="268" y="508" fill="#b6c9e2">账号 庚</text>
+      <text x="268" y="524" fill="#3f5675" font-size="10">eff01e89</text>
+      <circle cx="478" cy="508" r="3.5" fill="#2ea86a"/>
+      <text x="488" y="512" fill="#2ea86a">健康</text>
+      <text x="556" y="512" fill="#b6c9e2">730</text>
+      <rect x="650" y="500" width="150" height="6" rx="3" fill="#16233c"/>
+      <rect x="650" y="500" width="88" height="6" rx="3" fill="#2ea86a"/>
+      <text x="812" y="512" fill="#2ea86a">15 天</text>
+      <text x="880" y="512" fill="#7f95b4">今天 09:20</text>
+      <text x="1020" y="512" fill="#5b9cf8">签到</text>
+      <text x="1068" y="512" fill="#5b9cf8">积分</text>
+    </g>
+
+    <line x1="244" y1="546" x2="1152" y2="546" stroke="#18233a"/>
+    <text x="268" y="572" fill="#5d7a99" font-size="11.5">共 32 个账号 · 第 1 / 4 页</text>
+    <g font-size="11">
+      <rect x="1046" y="554" width="30" height="26" rx="6" fill="#16233c"/>
+      <text x="1061" y="571" fill="#cfe0f5" text-anchor="middle">1</text>
+      <rect x="1082" y="554" width="30" height="26" rx="6" fill="#0d1728" stroke="#1c2b45"/>
+      <text x="1097" y="571" fill="#7f95b4" text-anchor="middle">2</text>
+      <rect x="1118" y="554" width="30" height="26" rx="6" fill="#0d1728" stroke="#1c2b45"/>
+      <text x="1133" y="571" fill="#7f95b4" text-anchor="middle">3</text>
+    </g>
+
+    <text x="1152" y="706" fill="#33465f" font-size="10" text-anchor="end">布局示意 · 数据为示例</text>
+  </g>
+</svg>

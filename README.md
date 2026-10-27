@@ -12,7 +12,7 @@
 
 > 上游 workbuddy2api 的源码**随本项目的发布包一起分发**（MIT）。
 > 已部署的不受影响；重装 / 迁移时怎么取得源码，见
-> [部署指南的开头一节](deploy/README.md#〇上游源码从哪来随发布包分发)。
+> [部署指南的开头一节](manager/deploy/README.md#〇上游源码从哪来随发布包分发)。
 
 ![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
@@ -27,11 +27,11 @@
 [![Issues](https://img.shields.io/github/issues/daniei-chen/zhihui-gateway?color=f59e0b&label=反馈)](https://github.com/daniei-chen/zhihui-gateway/issues)
 [![LINUX DO](https://img.shields.io/badge/社区-LINUX%20DO-1f6feb)](https://linux.do)
 
-[English](README.en.md) · **简体中文**
+**简体中文**
 
 本项目在 [**LINUX DO**](https://linux.do) 社区发布与交流，欢迎佬友来玩。
 
-<img src="docs/images/dashboard.png" alt="智汇网关 仪表盘" width="100%" />
+<img src="docs/images/hero.svg" alt="智汇网关" width="100%" />
 
 </div>
 
@@ -244,42 +244,24 @@
 
 ## 界面预览
 
+> 以下为**界面布局示意图**（自绘 SVG，数值均为示例）。不直接放生产截图，是因为面板上会出现
+> 真实账号昵称、来源 IP 与密钥明文 —— 一旦进入公开仓库的 git 历史就无法收回，靠事后打码
+> 也无法保证没有遗漏。
+
 ### 仪表盘
 > 账号健康度、上游连接状态、近 14 天调用趋势
 
-<img src="docs/images/dashboard.png" alt="仪表盘" width="100%" />
-
-<details>
-<summary><b>深色模式</b>（点击展开）</summary>
-
-<img src="docs/images/dashboard-dark.png" alt="仪表盘 深色模式" width="100%" />
-
-</details>
+<img src="docs/images/ui-dashboard.svg" alt="仪表盘" width="100%" />
 
 ### 账号管理
 > Token 有效期按剩余时间分档着色（已过期 / 即将过期 / 偏紧 / 健康）
 
-<img src="docs/images/accounts.png" alt="账号管理" width="100%" />
-
-<details>
-<summary><b>扫码添加账号</b>（点击展开）</summary>
-
-<img src="docs/images/add-account.png" alt="扫码添加账号" width="100%" />
-
-</details>
-
-### 任务记录
-> 签到结果、上游原始日志、自动任务与积分收益集中一页（30 秒自动刷新）
-
-<img src="docs/images/tasks.png" alt="任务记录" width="100%" />
-
-### API 密钥
-> 限定版本（国内版 / 国际版）、独立配额、IP 限制、模型白名单，明文仅创建时展示一次
-
-<img src="docs/images/keys.png" alt="API 密钥" width="100%" />
+<img src="docs/images/ui-accounts.svg" alt="账号管理" width="100%" />
 
 ### 请求日志
 > 按时间 / 密钥 / 状态 / 模型 / IP 筛选，含**实际调用账号**、**首字延迟**、总耗时、Token 计量与**提示词缓存命中**
+
+<img src="docs/images/ui-logs.svg" alt="请求日志" width="100%" />
 
 「首字」= 从发起上游请求到收到第一个含正文的 delta，反映**上游响应快慢**；
 「总耗时」含模型生成全程，回答越长越大，用于看单次请求的整体开销。
@@ -291,46 +273,32 @@
 `docker.sock`、原生部署）这一列一直是 `—`，不影响其余功能。
 
 Token 后面的缓存标记（绿色「缓存 N%」/ 琥珀色「未命中」）来自上游返回的用量数据，
-用来判断同一段前缀**有没有真的吃到缓存**——命中部分计费便宜得多。前缀缓存按账号存，
+用来判断同一段前缀**有没有真的吃到缓存** —— 命中部分计费便宜得多。前缀缓存按账号存，
 所以「换了账号」与「没命中」常常一起出现，配合账号列一起看。上游不返回这项数据时
 标记不显示（详情里写「未采集」），与「没有命中」不是一回事。
 
-<img src="docs/images/logs.png" alt="请求日志" width="100%" />
+### 其余页面
 
-### 用量统计
-> 按天、按模型、按密钥多维统计 Token 消耗
+| 页面 | 关键点 |
+|---|---|
+| 任务记录 | 签到结果、上游原始日志、自动任务与积分收益集中一页（30 秒自动刷新） |
+| API 密钥 | 限定版本（国内版 / 国际版）、独立配额、IP 限制、模型白名单；明文仅创建时展示一次 |
+| 用量统计 | 按天、按模型、按密钥多维统计 Token 消耗 |
+| 模型中心 | 显示名、上下文上限、最大输出、推理档位与系列分组；数据直连腾讯模型接口，取不到时回退上游简表并如实标注 |
+| 聊天测试台 | 不建密钥直接试调模型；请求走管理端登录态转发到同一账号池，**会真实扣积分**，仅管理员可用 |
+| 安全与 IP 管控 | 全局白 / 黑名单、CIDR 规则、访问审计与拦截记录 |
+| 设置 | 上游配置可视化，中文说明 + 开关 / 数字框 |
+| 移动端 | 侧栏抽屉 + 卡片化列表，窄屏可用 |
 
-<img src="docs/images/stats.png" alt="用量统计" width="100%" />
-
-### 模型中心
-> 账号可用模型一览：显示名、上下文、最大输出、推理档位与系列分组
-
-数据直连腾讯模型接口，因此有**显示名**和**推理档位**（上游 `/v1/models` 会丢掉这两项）。
-顶部统计卡与列表全部由真实数据计算；来源取不到时回退上游简表并如实标注，不编造字段。
-
-<img src="docs/images/models.png" alt="模型中心" width="100%" />
-
-### 聊天测试台
-> 不建密钥直接试调模型；真实模型选择、思考强度与实时积分消耗
-
-请求经管理端登录态转发到上游（与下游同一账号池），**仅管理员可用**——
-试调会真实扣积分。右下角显示本次会话累计消耗，每条回答下标注该次扣费与 token 数。
-
-<img src="docs/images/playground.png" alt="聊天测试台" width="100%" />
-
-### 安全与 IP 管控
-> 全局白/黑名单、CIDR 规则、访问审计与拦截记录
-
-<img src="docs/images/security.png" alt="安全与 IP 管控" width="100%" />
-
-### 设置
-> 上游配置可视化，中文说明 + 开关 / 数字框
-
-<img src="docs/images/settings.png" alt="设置" width="100%" />
 
 ---
 
 ## 架构
+
+<img src="docs/images/architecture.svg" alt="智汇网关架构" width="100%" />
+
+<details>
+<summary>纯文本版本（便于粘贴到终端或邮件）</summary>
 
 ```
    下游客户端 / sub2api（OpenAI SDK）
@@ -360,6 +328,8 @@ Token 后面的缓存标记（绿色「缓存 N%」/ 琥珀色「未命中」）
         腾讯 CodeBuddy / copilot.tencent.com
 ```
 
+</details>
+
 **单进程单端口**：前端由 `next build` 静态导出，交由 FastAPI 托管，`/api` 与 `/v1` 同源，无需 CORS。
 
 **技术栈**
@@ -369,6 +339,18 @@ Token 后面的缓存标记（绿色「缓存 N%」/ 琥珀色「未命中」）
 | 前端 | Next.js 15（App Router）· React 19 · TypeScript · shadcn/ui · Tailwind CSS v4 · motion · recharts · sonner |
 | 后端 | Python 3.11+ · FastAPI · uvicorn · httpx · SQLite（标准库，无重依赖） |
 | 部署 | systemd 常驻 + 1Panel 反向代理 + Let's Encrypt HTTPS |
+
+### 三平台怎么分派
+
+<img src="docs/images/routing.svg" alt="三平台请求分派" width="100%" />
+
+控制面按「平台标识 + 路径白名单」二分；数据面按 URL 前缀锁定引擎。
+
+- **控制面**：`X-QTG-Platform: qoder | trae` 且路径命中 10 条白名单前缀时，才重写进 qtgcore；
+  其余路径（登录、会话、用户、令牌、系统、设置）一律留在原生实现。
+- **数据面**：`/v1/*`、`/qoder/v1/*`、`/trae/v1/*` 各自锁定一个引擎，重写成 `/v1/*` 后复用同一段转发逻辑。
+- **语义**：平台标识有两个入口（请求头 / `?platform=`），解析收敛到一处 —— 两条路径返回逐字节相同的结果。
+  平台切换只改变「看哪个平台的数据」，不影响登录与会话。
 
 ---
 
@@ -512,7 +494,7 @@ docker pull ghcr.io/<你的用户名>/zhihui-gateway-multiarch:latest
 > 镜像名比上游多一个 `-multiarch` 后缀，这**不是笔误**：`zhihui-gateway` 这个
 > 包名可能已被一个未链接到本仓库的同名包占用，那种包 fork 拿不到写权限、推送会
 > 失败。也可以顺便推一份到 Docker Hub（加两个 Secret 即自动启用）。完整说明见
-> [deploy/fork-image/README.md](deploy/fork-image/README.md)。
+> [deploy/fork-image/README.md](manager/deploy/fork-image/README.md)。
 
 **容器版与宿主版的能力是一致的** —— compose 里默认挂载了三样东西让它们对齐：
 
@@ -538,7 +520,7 @@ docker pull ghcr.io/<你的用户名>/zhihui-gateway-multiarch:latest
 本项目依赖上游 workbuddy2api（账号池与 OpenAI 兼容接口），**单独 clone 本仓库无法运行**。
 **发布包里已自带上游源码**（源码由本项目随包分发），
 一键脚本会装好两者；要改用自己那份源码见
-[部署指南](deploy/README.md#〇上游源码从哪来随发布包分发)：
+[部署指南](manager/deploy/README.md#〇上游源码从哪来随发布包分发)：
 
 ```bash
 # 推荐：用 Release 包（内含已构建的前端，无需 Node.js）
@@ -573,7 +555,7 @@ journalctl -u workbuddy-web | grep -A3 '初始管理员'
 1Panel 用户：网站 → 创建反向代理 → 目标 `http://127.0.0.1:7864` →
 申请 Let's Encrypt 证书 → 开启强制 HTTPS。
 完整部署说明（含 Nginx 配置、加固建议、常见问题）见
-[deploy/README.md](deploy/README.md)。
+[deploy/README.md](manager/deploy/README.md)。
 
 <details>
 <summary><b>环境变量一览</b></summary>
@@ -601,7 +583,7 @@ journalctl -u workbuddy-web | grep -A3 '初始管理员'
 | `WB_SYNC_DEPLOY` | `1` | 更新管理端时是否让 `deploy/` 一起更新（`0` = 保持本地不动） |
 | `WB_HTTP_PROXY` | 空 | 出口代理，留空 = 全部直连 |
 
-完整清单见 [`.env.example`](.env.example)。
+完整清单见 [`.env.example`](src/three-platform/web/.env.example)。
 
 </details>
 
@@ -873,7 +855,7 @@ CI 会构建前端、打包产物、从 CHANGELOG 提取对应版本段落作为
 
 ### 爱维云 · 免备案云服务器
 
-[![爱维云 · lovevps.cn](docs/images/lovevps.png)](https://lovevps.cn/)
+[爱维云 · lovevps.cn](https://lovevps.cn/)
 
 **长期七五折**，下单时填优惠码 **`catfk`** ｜ 官网：<https://lovevps.cn/>
 
