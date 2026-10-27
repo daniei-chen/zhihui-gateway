@@ -342,10 +342,14 @@ app.include_router(qtg_panel.router)
 
 # Qoder/Trae compat control plane (was qtg:8795), mounted under an internal
 # prefix so its /api/* handlers cannot collide with manager own endpoints.
-from .qtgcore.routers import (actions as _qa, compat as _qc,
+# 2026-10-27 审计 H-001（第一步）：以下 11 个 router 文件的**全部端点**都不在
+# _QTGP_ROUTE_PREFIXES 白名单内（67 条路由、命中 0 次），已整文件删除：
+#   actions adapter anthropic auth authz capabilities data_admin health ip_guard read system
+# proxy.py **未删**：路由同样不可达，但 compat.py 依赖其中的
+# _base / _catalog / _upstream_key（函数级引用）。
+from .qtgcore.routers import (compat as _qc,
     compat_accounts_ext as _qace, compat_fixes as _qcf, compat_settings as _qcs,
-    compat_stats as _qst, data_admin as _qda, health as _qh,
-    read as _qread, system as _qsys)
+    compat_stats as _qst)
 _QTG_INTERNAL = "/__qtg"
 # Only PLATFORM DATA endpoints are routed to the merged qtg control plane.
 # Everything else (login/session/users/tokens/system/settings/keys/security)
@@ -370,7 +374,7 @@ def _qtg_should_route(path):
 # Order matters: qtg registers compat LAST (catch-all fallback, see
 # qtg/routeaudit.py REGISTRATION_ORDER); real handlers must come first,
 # otherwise /api/accounts hits compat not_implemented stub.
-for _qr in (_qh, _qread, _qa, _qda, _qsys, _qcf, _qst, _qcs, _qace, _qc):
+for _qr in (_qcf, _qst, _qcs, _qace, _qc):
     app.include_router(_qr.router, prefix=_QTG_INTERNAL)
 
 @app.middleware('http')

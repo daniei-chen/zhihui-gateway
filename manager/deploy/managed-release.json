@@ -179,7 +179,7 @@
       "mode": 420
     },
     "server/main.py": {
-      "candidate_sha256": "763d53ba339c974da1af18e0e513969354db7964e50d05115b17b99a3122db70",
+      "candidate_sha256": "aed2a418a8ec288ee4e21ac5469a787fb3654cf0dcc2bee0f3ffa8b5f0a4c3f3",
       "mode": 420
     },
     "server/metering.py": {
@@ -220,6 +220,142 @@
     },
     "server/qtgadapter.py": {
       "candidate_sha256": "07bec95cf6a6948f53af8cd3a627a8995271d92be6ae59ed9b7984cdee82f07e",
+      "mode": 420
+    },
+    "server/qtgcore/__init__.py": {
+      "candidate_sha256": "51ebdae24cb77db43ac389e1a6ed8eb78e90861f854711367a1344ec0bf4bffd",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/__init__.py": {
+      "candidate_sha256": "1b920caa804636604193642fc6e2fac70f5f538a518868ca4e996cdfb9b7922c",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/base.py": {
+      "candidate_sha256": "8197eb8e964dc7a227c05ac1d01741fa0407d0048e25d8686f760f30bd744b06",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/qoder.py": {
+      "candidate_sha256": "ed6cf27cf20b2fd4b055fe74d4774c6991acd9de8b2538a0aee79dc46c417db3",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/qoder2.py": {
+      "candidate_sha256": "4609c687fa265630012405da2d310331203cc40d8b12fd78bd54670313270e3c",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/trae.py": {
+      "candidate_sha256": "c3da63fe01ce1dd54d17be104d665c0da6e007940f74dc56346cfd495793d11e",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/trae2.py": {
+      "candidate_sha256": "41b48b86e2984891c54484842daec65fdb33d7c38dfd249546d981b9c44b90b4",
+      "mode": 420
+    },
+    "server/qtgcore/adapters/workbuddy.py": {
+      "candidate_sha256": "efcefb363d83b60ad45348c26bdffa80ac394958f8a96f80a5ad4909bd9406dd",
+      "mode": 420
+    },
+    "server/qtgcore/audit.py": {
+      "candidate_sha256": "455e985272d6f08eb9a93b6ecf09f8bd16821e350dd449084d823aa1a11d15ac",
+      "mode": 420
+    },
+    "server/qtgcore/authz.py": {
+      "candidate_sha256": "7421d4d7d2692b83248ec77f0e8c99d0e738a304c21d329869c05c3a0db1acc1",
+      "mode": 420
+    },
+    "server/qtgcore/cache.py": {
+      "candidate_sha256": "b97873b6c8488931a9412ef97a6eb07f0d1cc39944e7239a6229c8eee435341c",
+      "mode": 420
+    },
+    "server/qtgcore/capabilities.py": {
+      "candidate_sha256": "3bb3a0fdd3f6a57fa0b582479010df173d9e9b36e17390729e95d212d242b17e",
+      "mode": 420
+    },
+    "server/qtgcore/checkin_scheduler.py": {
+      "candidate_sha256": "80f19a4b3e4e3713ded190721f2949522aeff90b0f79fe97f458daf7da7bbad2",
+      "mode": 420
+    },
+    "server/qtgcore/config.py": {
+      "candidate_sha256": "08a502effd9a6d10905a5a943fb83de655ebcea89f9230b45f97d3396c40c693",
+      "mode": 420
+    },
+    "server/qtgcore/configcontract.py": {
+      "candidate_sha256": "49c7de65955b7b56a864ede47369cacd398ccf42954ec5ef94ffa27399b8a282",
+      "mode": 420
+    },
+    "server/qtgcore/errors.py": {
+      "candidate_sha256": "588f789bbf63699cc38bae5cf1333cb64c9981c7fbffedfc1514379010c612b3",
+      "mode": 420
+    },
+    "server/qtgcore/identity.py": {
+      "candidate_sha256": "9983c704c33eb6515c4d293c13763a7a73efe936f95318dcdc9d2f6deb9cf223",
+      "mode": 420
+    },
+    "server/qtgcore/manager_api.py": {
+      "candidate_sha256": "95a75a229499c1bda5aa43848ad60fd4e9ddacad53e6c878b3e709d012f8c745",
+      "mode": 420
+    },
+    "server/qtgcore/manager_session.py": {
+      "candidate_sha256": "48947ea931e71d270e69826c871511d5ca5290014723088c2946247a4a3cdd66",
+      "mode": 420
+    },
+    "server/qtgcore/metrics.py": {
+      "candidate_sha256": "4c257c69a1a850d8058cd6e47be5acc9ae56dc0492404c1e4e1047917e13a037",
+      "mode": 420
+    },
+    "server/qtgcore/model_map.py": {
+      "candidate_sha256": "da353188271bc4b8c1e080e99332bfcdb3de51a0b43797cb16fa752fd7b0bd78",
+      "mode": 420
+    },
+    "server/qtgcore/models.py": {
+      "candidate_sha256": "fad40fca2a7fbcc8db9057c80f57096b4dc36d798e79c9958ed3d0ea33d1babd",
+      "mode": 420
+    },
+    "server/qtgcore/routeaudit.py": {
+      "candidate_sha256": "9a1c8dd00eb770885f3bc6885263ae044364b0bf238fef6ed034f92aa7555584",
+      "mode": 420
+    },
+    "server/qtgcore/routers/__init__.py": {
+      "candidate_sha256": "c5ec70bf8f59dfbb81a1e18b543d09b32008ed6eb4829f9af1ac23dd1cb9fa37",
+      "mode": 420
+    },
+    "server/qtgcore/routers/compat.py": {
+      "candidate_sha256": "a1010b0d124fb78ed260e386e074f5d5860c6150f9fe82a0a6d510e8f62fb633",
+      "mode": 420
+    },
+    "server/qtgcore/routers/compat_accounts_ext.py": {
+      "candidate_sha256": "65e4ba8903c962bbdabc6e9c0cddfdf664ab878af4986875eea41576cdbb31a0",
+      "mode": 420
+    },
+    "server/qtgcore/routers/compat_fixes.py": {
+      "candidate_sha256": "36c04b4ee34cebb48ee2fba8bf532e5f715cfa9b7aa76912d3e66c93d93dde78",
+      "mode": 420
+    },
+    "server/qtgcore/routers/compat_settings.py": {
+      "candidate_sha256": "c0e32ce7e8e25e096fe51b7085c1db762a5bea8d444a7e00a640e01a4066fc79",
+      "mode": 420
+    },
+    "server/qtgcore/routers/compat_stats.py": {
+      "candidate_sha256": "a6d96ca0938761e6d444828fbc81a43596ea3830572c434dcbb8894c0f7c16f8",
+      "mode": 420
+    },
+    "server/qtgcore/routers/proxy.py": {
+      "candidate_sha256": "d74b43a369dcac1597a7e2db0c101c3a1a2614363f40975ca5ff7dd95eb52861",
+      "mode": 420
+    },
+    "server/qtgcore/runtime.py": {
+      "candidate_sha256": "38467a1e442e9ec1406920d8eaced23e28631fb9659f2cf40d8559fbca426d5f",
+      "mode": 420
+    },
+    "server/qtgcore/security.py": {
+      "candidate_sha256": "e39c9b4d59198114be544a78f8db1f62b1683a46112d915052d765eae836bac0",
+      "mode": 420
+    },
+    "server/qtgcore/service.py": {
+      "candidate_sha256": "b35c9de490dd328c78d2ae43d39f4405766dcf32ba05ce2df2a4410c4a890392",
+      "mode": 420
+    },
+    "server/qtgcore/store.py": {
+      "candidate_sha256": "12385ce4984900c14e56dd3968cb72f109964115c7bce3d256b46bc2347deffd",
       "mode": 420
     },
     "server/redpacket.py": {
