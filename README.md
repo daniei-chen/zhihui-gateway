@@ -97,9 +97,9 @@
 
 | 来源 | 数据面入口 | 对应引擎 |
 | :--- | :--- | :--- |
-| **WorkBuddy** | \`/v1/*\` | \`workbuddy2api\` |
-| **Qoder** | \`/qoder/v1/*\` | \`qoder2\` |
-| **Trae** | \`/trae/v1/*\` | \`aiwork-server\` |
+| **WorkBuddy** | `/v1/*` | `workbuddy2api` |
+| **Qoder** | `/qoder/v1/*` | `qoder2` |
+| **Trae** | `/trae/v1/*` | `aiwork-server` |
 
 控制面也支持平台维度的数据视图与相关路由适配；**切换控制台的平台，不代表已经改变下游调用 URL**。
 
@@ -113,7 +113,7 @@
 
 上游可能已经处理了请求，却没有返回完整的用量信息。
 
-**“不知道用了多少”不等于“没有消耗”。** 智汇在代码层面使用预留与结算逻辑；当缺少可靠的 \`usage\` 时保留 \`unknown\` 状态，等待后续核对，而不是直接把这笔支出归零。
+**“不知道用了多少”不等于“没有消耗”。** 智汇在代码层面使用预留与结算逻辑；当缺少可靠的 `usage` 时保留 `unknown` 状态，等待后续核对，而不是直接把这笔支出归零。
 
 | 状态 | 处理原则 |
 | :--- | :--- |
@@ -161,7 +161,7 @@
 
 ### 清晰的控制面，与可扩展的平台适配
 
-\`\`\`text
+```text
              下游客户端 / 开发工具
                        │
            对应平台前缀及授权 Key
@@ -177,15 +177,15 @@
            ▼          ▼          ▼
       WorkBuddy      Qoder      Trae
       workbuddy2api  qoder2     aiwork-server
-\`\`\`
+```
 
 | 组成 | 技术与职责 | 源码 |
 | :--- | :--- | :--- |
-| **Web 控制台** | Next.js 15、React 19、Tailwind CSS 4；静态导出 | [\`src/three-platform/web/\`](src/three-platform/web/) |
-| **Manager** | FastAPI、身份认证、管理接口、账本与代理 | [\`manager/server/\`](manager/server/) |
-| **平台适配层** | 三平台适配、路由与控制面兼容 | [\`manager/server/qtgcore/\`](manager/server/qtgcore/) |
-| **运行与部署** | 安装、更新、签名、回退与运维配置 | [\`manager/deploy/\`](manager/deploy/) · [\`ops/\`](ops/) |
-| **工程验证** | 单元测试、契约测试与隔离测试工具 | [\`manager/server/tests/\`](manager/server/tests/) · [\`tests/\`](tests/) |
+| **Web 控制台** | Next.js 15、React 19、Tailwind CSS 4；静态导出 | [`src/three-platform/web/`](src/three-platform/web/) |
+| **Manager** | FastAPI、身份认证、管理接口、账本与代理 | [`manager/server/`](manager/server/) |
+| **平台适配层** | 三平台适配、路由与控制面兼容 | [`manager/server/qtgcore/`](manager/server/qtgcore/) |
+| **运行与部署** | 安装、更新、签名、回退与运维配置 | [`manager/deploy/`](manager/deploy/) · [`ops/`](ops/) |
+| **工程验证** | 单元测试、契约测试与隔离测试工具 | [`manager/server/tests/`](manager/server/tests/) · [`tests/`](tests/) |
 
 前端构建产物由 FastAPI 托管，开发模式可独立启动 Next.js。Manager 与 QTG 的控制面收敛仍有历史兼容事项；不要仅凭相同 API 路径推断数据来源相同，详见 [统一控制面盘点](design/H08-U0-control-plane.md)。
 
@@ -198,16 +198,16 @@
 
 **01 · 获取代码**
 
-\`\`\`bash
+```bash
 git clone https://github.com/daniei-chen/zhihui-gateway.git
 cd zhihui-gateway
-\`\`\`
+```
 
 **02 · 启动管理服务**
 
 需要 Python 3.11+。以下命令适用于 Linux / macOS 的本地开发环境：
 
-\`\`\`bash
+```bash
 cd manager
 python -m venv venv
 venv/bin/pip install -r server/requirements.txt
@@ -215,29 +215,29 @@ venv/bin/pip install -r server/requirements.txt
 WB_ADMIN_PASSWORD='change-to-your-own-strong-password' \
 WB_DATA_DIR=./data \
 venv/bin/python -m uvicorn server.main:app --host 127.0.0.1 --port 7864
-\`\`\`
+```
 
 **03 · 启动 Web 前端**
 
 另开终端，从仓库根目录进入前端：
 
-\`\`\`bash
+```bash
 cd src/three-platform/web
 npm ci
 npm run dev
-\`\`\`
+```
 
-开发前端默认访问 \`http://localhost:3000\`，后端反向代理配置见 [\`next.config.ts\`](src/three-platform/web/next.config.ts)。完整三平台功能仍需要相应上游引擎、账号与授权配置，不能只靠启动管理进程获得。
+开发前端默认访问 `http://localhost:3000`，后端反向代理配置见 [`next.config.ts`](src/three-platform/web/next.config.ts)。完整三平台功能仍需要相应上游引擎、账号与授权配置，不能只靠启动管理进程获得。
 
 **04 · 隔离环境测试**
 
-\`\`\`bash
+```bash
 cd manager
 python -B -X utf8 ../tests/zhihui_harness/run_tests.py --target manager-assets --keep
-\`\`\`
+```
 
 > [!CAUTION]
-> 不要直接在生产服务器上运行示例部署、测试、计量对账、更新或回滚命令。项目测试应遵循已有隔离运行器要求，不建议直接执行无隔离的全量 \`pytest\`。
+> 不要直接在生产服务器上运行示例部署、测试、计量对账、更新或回滚命令。项目测试应遵循已有隔离运行器要求，不建议直接执行无隔离的全量 `pytest`。
 
 <br />
 
@@ -257,7 +257,7 @@ python -B -X utf8 ../tests/zhihui_harness/run_tests.py --target manager-assets -
 <details>
 <summary><b>项目目录速览</b></summary>
 
-\`\`\`text
+```text
 zhihui-gateway/
 ├── manager/
 │   ├── server/                # FastAPI / 账本 / 路由 / 鉴权
@@ -269,7 +269,7 @@ zhihui-gateway/
 ├── tests/                     # 隔离测试与浏览器测试
 ├── tools/                     # 审计、计量等辅助工具
 └── CHANGELOG.md
-\`\`\`
+```
 
 </details>
 
