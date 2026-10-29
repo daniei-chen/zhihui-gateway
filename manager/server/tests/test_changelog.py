@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -151,7 +152,7 @@ class LoadChangelogTest(unittest.TestCase):
             self.assertEqual(data['versions'][0]['version'], '9.9.9')
             self.assertTrue(data['path'].endswith(str(Path('server') / 'CHANGELOG.md')))
 
-    def test_root_copy_wins_over_server_copy(self) -> None:
+    def test_release_owned_server_copy_wins_over_stale_root_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'server').mkdir()
@@ -161,8 +162,8 @@ class LoadChangelogTest(unittest.TestCase):
                 '## [9.9.9] - 2026-01-01\n\n### 新增\n\n- server 副本\n', encoding='utf-8')
             with mock.patch.object(changelog.config, 'ROOT', root):
                 data = changelog.load_changelog()
-            self.assertEqual(data['versions'][0]['version'], '8.8.8')
-            self.assertFalse(data['path'].endswith(str(Path('server') / 'CHANGELOG.md')))
+            self.assertEqual(data['versions'][0]['version'], '9.9.9')
+            self.assertTrue(data['path'].endswith(str(Path('server') / 'CHANGELOG.md')))
 
 
 class ChangelogOrderTest(unittest.TestCase):
@@ -186,7 +187,10 @@ class ChangelogOrderTest(unittest.TestCase):
 
     def test_versions_are_newest_first(self) -> None:
         heads = self._headings()
-        self.assertGreater(len(heads), 50, f'只解析到 {len(heads)} 个版本段落，解析可能失效')
+        product = json.loads((self.ROOT_CHANGELOG.parent / 'server/product-release.json').read_bytes())
+        self.assertEqual(heads, [product['version']], '只展示智汇自己的发版记录')
+        self.assertEqual(self.ROOT_CHANGELOG.read_bytes(),
+                         (self.ROOT_CHANGELOG.parent / 'server/CHANGELOG.md').read_bytes())
         released = [h for h in heads if h not in ('未发布', 'Unreleased')]
         keys = [self._key(v) for v in released]
         self.assertEqual(
@@ -262,8 +266,9 @@ class ChangelogIsUserFacingTest(unittest.TestCase):
     def test_sections_parsed(self) -> None:
         """先确认切段有效，否则下面几条会在空集合上「通过」。"""
         secs = self._sections()
-        self.assertGreater(len(secs), 10, '没切出版本段落，守卫会空转')
-        self.assertIn('1.0.49', [v for v, _ in secs])
+        product = json.loads((Path(__file__).resolve().parents[1] / 'product-release.json').read_bytes())
+        self.assertEqual([v for v, _ in secs], [product['version']])
+        self.assertTrue(all(body.strip() for _, body in secs), '产品日志不能空转')
 
     def test_no_content_before_the_first_version_heading(self) -> None:
         """第一个 `## [版本]` 之前不能有**条目**（审查发现的空档）。
@@ -275,9 +280,7 @@ class ChangelogIsUserFacingTest(unittest.TestCase):
 
         （文件头部的说明文字允许存在：它在第一个 `---` 之前，这里只看分隔线之后。）
         """
-        head = self.text.split('\n---\n', 1)[0]
-        body = self.text[len(head):]
-        before = body.split('\n## [', 1)[0]
+        before = self.text.split('\n## [', 1)[0]
         loose = [ln for ln in before.splitlines()
                  if ln.startswith(('- ', '### ')) or re.match(r'^\d+\.\s', ln)]
         self.assertEqual(loose, [],
@@ -338,7 +341,7 @@ class ChangelogIsUserFacingTest(unittest.TestCase):
     def test_released_versions_have_sections(self) -> None:
         """每个已发布段落都要有分类标题（否则页面渲染成一片裸文本）。"""
         blocks = re.split(r'^## \[[\d.]+\] - \d{4}-\d{2}-\d{2}$', self.text, flags=re.M)[1:]
-        self.assertGreater(len(blocks), 10, '没切出版本段落')
+        self.assertEqual(len(blocks), 1, '本产品从当前版本开始记录')
         for i, block in enumerate(blocks):
             self.assertIn('###', block, f'第 {i + 1} 个版本段落没有分类标题')
 

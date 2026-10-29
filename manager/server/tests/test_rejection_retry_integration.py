@@ -51,6 +51,10 @@ REJECT_BODY = {
     'type': 'api_error',
 }
 OTHER_503 = {'error': {'message': 'upstream pool exhausted'}, 'type': 'api_error'}
+CHANNEL_REJECTION = {'error': {'type': 'api_error', 'code': 'channel_check_rejected',
+    'message': json.dumps({'code': 11128, 'msg': 'Illegal API invocation from an unapproved channel',
+                           'requestId': 'synthetic-provider-channel-id'}),
+    'gateway_hint': 'upstream channel verification rejected this request; account availability is unchanged'}}
 PAYLOAD = {'model': 'm', 'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 8}
 
 
@@ -140,6 +144,25 @@ class RejectionRetryIntegrationTest(unittest.TestCase):
         r, n = self._post(script=[(200, _OK)])
         self.assertEqual(n, 1)
         self.assertEqual(r.status_code, 200, r.text)
+
+    def test_channel_rejection_is_not_retried_and_preserves_evidence(self) -> None:
+        for stream in (False, True):
+            with self.subTest(stream=stream):
+                r, n = self._post(script=[(400, CHANNEL_REJECTION), (200, _OK)], stream=stream)
+                self.assertEqual(n, 1, 'A channel refusal is not a transient replay candidate')
+                self.assertEqual(r.status_code, 400)
+                self.assertEqual(r.json()['error'], CHANNEL_REJECTION['error'])
+                self.assertNotIn('usage', r.json(), 'Missing usage must stay missing')
+                row = db.query_one('SELECT usage_complete,request_id '
+                                   'FROM request_logs ORDER BY id DESC LIMIT 1')
+                outcome = db.query_one('SELECT error_code,error_source FROM request_outcomes '
+                                       'WHERE request_id=?', (row['request_id'],))
+                self.assertEqual(outcome['error_code'], 'channel_check_rejected')
+                self.assertEqual(outcome['error_source'], 'upstream')
+                self.assertFalse(row['usage_complete'])
+                reservation = db.query_one('SELECT state FROM budget_reservations WHERE request_id=?',
+                                           (row['request_id'],))
+                self.assertEqual(reservation['state'], 'unknown')
 
     # ── 流式 ──────────────────────────────────────────────────────────
     def test_stream_rejection_then_success_is_retried(self) -> None:

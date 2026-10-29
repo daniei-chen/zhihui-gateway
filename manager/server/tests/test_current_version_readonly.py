@@ -38,3 +38,12 @@ class ImmutableVersionReadTest(unittest.TestCase):
             with mock.patch.object(config, 'ROOT', root), mock.patch.object(updater, '_app_version', return_value='0.0.0'):
                 self.assertEqual(updater.current_version(), 'v1.2.3')
             self.assertEqual(marker.read_text(), 'v1.2.3\n')
+
+    def test_build_metadata_is_not_a_new_product_version(self):
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            marker = root / '.version'
+            marker.write_text('v0.0.2+stats.20261029.1\n')
+            with mock.patch.object(config, 'ROOT', root), mock.patch.object(updater, '_app_version', return_value='0.0.2'):
+                self.assertEqual(updater.current_version(), 'v0.0.2')
+            self.assertEqual(marker.read_text(), 'v0.0.2+stats.20261029.1\n')

@@ -63,8 +63,8 @@ def _epoch_since(days: int) -> int:
     return int(time.mktime(time.strptime(_since(days), '%Y-%m-%d')))
 
 
-def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
-    """按模型算**输出速率**（tokens/秒，issue #214）。
+def _throughput_by_dimension(days: int, realm: str | None, dimension: str) -> dict:
+    """按模型或稳定密钥 ID 计算输出速率（tokens/秒）。
 
     数据源必须是 `request_logs`：`usage_daily` 只累计请求数与 token 数，没有耗时。
 
@@ -78,25 +78,28 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
       · 只覆盖**请求日志保留期**内的数据，返回 `throughput_samples` 让界面如实
         标注样本量（统计页的时间范围可能比日志保留期长）。
     """
+    group = {'model': MODEL_BARE_SQL, 'key': 'key_id'}[dimension]
     since = _epoch_since(days)
     rf = ' AND realm = ?' if _norm_realm(realm) else ''
     args: tuple = (since,) + ((realm,) if rf else ())
     rows = db.query(
-        'SELECT ' + MODEL_BARE_SQL + ' AS name, COUNT(*) AS samples, '
+        'SELECT ' + group + ' AS name, COUNT(*) AS samples, '
         'SUM(completion_tokens) AS ct, '
         'SUM(CASE WHEN latency_ms > COALESCE(first_token_ms, 0) '
         '         THEN latency_ms - COALESCE(first_token_ms, 0) ELSE 0 END) AS gen_ms '
         'FROM request_logs '
         'WHERE ts >= ? AND status >= 200 AND status < 300 AND completion_tokens > 0 '
+        "AND (terminal_state IS NULL OR terminal_state = 'completed') "
+        'AND COALESCE(first_token_ms, 0) >= 0 '
         # 生成耗时必须为正：latency=0 或 latency<=first_token 的记录算不出速率，
         # 留在分母外也不该把它们的 token 计进分子（否则速率会虚高一倍）。
         'AND latency_ms > COALESCE(first_token_ms, 0)'
-        f'{rf} GROUP BY ' + MODEL_BARE_SQL,
+        f'{rf} GROUP BY ' + group,
         args,
     )
-    out: dict[str, dict] = {}
+    out: dict = {}
     for r in rows:
-        name = r['name'] or '未知'
+        name = (r['name'] or '未知') if dimension == 'model' else r['name']
         gen_ms = float(r['gen_ms'] or 0)
         ct = float(r['ct'] or 0)
         out[name] = {
@@ -104,6 +107,20 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
             'throughput_samples': int(r['samples'] or 0),
         }
     return out
+
+
+def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
+    return _throughput_by_dimension(days, realm, 'model')
+
+
+def _throughput_by_key(days: int, realm: str | None) -> dict[int, dict]:
+    return _throughput_by_dimension(days, realm, 'key')
+
+
+def _cache_hit_rate(hit: int, miss: int) -> float | None:
+    """Only reported cache tokens form the denominator; missing data is not 0%."""
+    total = hit + miss
+    return round(hit / total, 6) if hit >= 0 and miss >= 0 and total > 0 else None
 
 
 @router.get('/credit-reconcile')
@@ -898,6 +915,8 @@ def by_model(days: int = 30, realm: str | None = None,
             'credit': float(r['credit'] or 0),
             'cache_hit_tokens': int(r['cache_hit_tokens'] or 0),
             'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
+            'cache_hit_rate': _cache_hit_rate(int(r['cache_hit_tokens'] or 0),
+                                            int(r['cache_miss_tokens'] or 0)),
             **tmap.get(name, {'tokens_per_sec': None, 'throughput_samples': 0}),
         })
     return out
@@ -915,17 +934,20 @@ def by_key(days: int = 30, realm: str | None = None,
     rf = ' AND u.realm = ?' if _norm_realm(realm) else ''
     args = (_since(max(1, days)),) + ((realm,) if rf else ())
     rows = db.query(
-        'SELECT COALESCE(k.name, u.key_id || "") AS name, SUM(u.requests) AS requests, '
+        'SELECT k.id AS key_id, k.name AS name, SUM(u.requests) AS requests, '
         'SUM(u.prompt_tokens) AS prompt_tokens, SUM(u.completion_tokens) AS completion_tokens, '
         'COALESCE(SUM(u.credit),0) AS credit, '
         'COALESCE(SUM(u.cache_hit_tokens),0) AS cache_hit_tokens, '
         'COALESCE(SUM(u.cache_miss_tokens),0) AS cache_miss_tokens '
-        'FROM usage_daily u LEFT JOIN api_keys k ON k.id = u.key_id '
+        'FROM usage_daily u INNER JOIN api_keys k ON k.id = u.key_id '
         f'WHERE u.day >= ?{rf} GROUP BY u.key_id ORDER BY SUM(u.prompt_tokens + u.completion_tokens) DESC',
         args,
     )
+    # Deleted keys remain in totals and the ledger, not in the current-key list.
+    tmap = _throughput_by_key(days, realm)
     return [
         {
+            'key_id': int(r['key_id']),
             'name': r['name'] or '未知',
             'requests': int(r['requests'] or 0),
             'prompt_tokens': int(r['prompt_tokens'] or 0),
@@ -933,6 +955,9 @@ def by_key(days: int = 30, realm: str | None = None,
             'credit': float(r['credit'] or 0),
             'cache_hit_tokens': int(r['cache_hit_tokens'] or 0),
             'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
+            'cache_hit_rate': _cache_hit_rate(int(r['cache_hit_tokens'] or 0),
+                                            int(r['cache_miss_tokens'] or 0)),
+            **tmap.get(r['key_id'], {'tokens_per_sec': None, 'throughput_samples': 0}),
         }
         for r in rows
     ]

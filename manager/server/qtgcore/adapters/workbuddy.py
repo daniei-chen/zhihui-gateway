@@ -74,6 +74,31 @@ def _schema_ok(conn: sqlite3.Connection, known: set[str]) -> bool:
     return bool(names & known)
 
 
+def _reported_cache_rate(hit: int, miss: int) -> float | None:
+    return round(hit / (hit + miss), 6) if hit >= 0 and miss >= 0 and hit + miss > 0 else None
+
+
+def _sql_throughput(conn: sqlite3.Connection, since: str, realm: str, dimension: str) -> dict:
+    group = {"model": "model", "key": "key_id"}[dimension]
+    epoch = int(_time.mktime(_time.strptime(since, "%Y-%m-%d")))
+    rf = " AND realm = ?" if realm in ("cn", "global") else ""
+    try:
+        rows = conn.execute(
+            "SELECT " + group + ", SUM(completion_tokens), "
+            "SUM(latency_ms - COALESCE(first_token_ms,0)), COUNT(*) FROM request_logs "
+            "WHERE ts >= ? AND status >= 200 AND status < 300 AND completion_tokens > 0 "
+            "AND (terminal_state IS NULL OR terminal_state = 'completed') "
+            "AND COALESCE(first_token_ms,0) >= 0 "
+            "AND latency_ms > COALESCE(first_token_ms,0)" + rf + " GROUP BY " + group,
+            (epoch,) + ((realm,) if rf else ()),
+        ).fetchall()
+    except sqlite3.Error:
+        # Old Manager databases may lack timing/terminal columns. No invented rate.
+        return {}
+    return {r[0]: {"tokens_per_sec": round(float(r[1]) * 1000 / float(r[2]), 2),
+                   "throughput_samples": int(r[3])} for r in rows}
+
+
 def _i(v: Any, default: int = 0) -> int:
     try:
         return int(float(v))
@@ -726,6 +751,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 " GROUP BY model ORDER BY SUM(prompt_tokens + completion_tokens) DESC",
                 args,
             )
+            rows = cur.fetchall()
+            throughput = _sql_throughput(conn, since, realm, "model")
             return [{
                 "name": r[0] or "未知",
                 "requests": _i(r[1]),
@@ -734,14 +761,16 @@ class WorkBuddyAdapter(BaseAdapter):
                 "credit": round(_f(r[4]), 4),
                 "cache_hit_tokens": _i(r[5]),
                 "cache_miss_tokens": _i(r[6]),
-            } for r in cur.fetchall()]
+                "cache_hit_rate": _reported_cache_rate(_i(r[5]), _i(r[6])),
+                **throughput.get(r[0], {"tokens_per_sec": None, "throughput_samples": 0}),
+            } for r in rows]
         except sqlite3.Error:
             return []
         finally:
             conn.close()
 
     async def usage_by_key(self, days: int = 30, realm: str = "") -> List[Dict[str, Any]]:
-        """照抄 manager 的 /stats/by-key（LEFT JOIN api_keys 取密钥名）。
+        """按仍存在的 manager 密钥聚合，不删除历史用量。
 
         K26/RV05：http 模式读 Manager，失败向上抛；sqlite 模式走本地实现。
         """
@@ -770,17 +799,20 @@ class WorkBuddyAdapter(BaseAdapter):
             rf = " AND u.realm = ?" if realm in ("cn", "global") else ""
             args = (since,) + ((realm,) if rf else ())
             cur = conn.execute(
-                "SELECT COALESCE(k.name, u.key_id || '') AS name, SUM(u.requests),"
+                "SELECT k.name AS name, SUM(u.requests),"
                 "       SUM(u.prompt_tokens), SUM(u.completion_tokens),"
                 "       COALESCE(SUM(u.credit),0),"
                 "       COALESCE(SUM(u.cache_hit_tokens),0),"
-                "       COALESCE(SUM(u.cache_miss_tokens),0)"
-                "  FROM usage_daily u LEFT JOIN api_keys k ON k.id = u.key_id"
+                "       COALESCE(SUM(u.cache_miss_tokens),0), k.id"
+                "  FROM usage_daily u INNER JOIN api_keys k ON k.id = u.key_id"
                 " WHERE u.day >= ?" + rf +
                 " GROUP BY u.key_id ORDER BY SUM(u.prompt_tokens + u.completion_tokens) DESC",
                 args,
             )
+            rows = cur.fetchall()
+            throughput = _sql_throughput(conn, since, realm, "key")
             return [{
+                "key_id": int(r[7]),
                 "name": r[0] or "未知",
                 "requests": _i(r[1]),
                 "prompt_tokens": _i(r[2]),
@@ -788,7 +820,9 @@ class WorkBuddyAdapter(BaseAdapter):
                 "credit": round(_f(r[4]), 4),
                 "cache_hit_tokens": _i(r[5]),
                 "cache_miss_tokens": _i(r[6]),
-            } for r in cur.fetchall()]
+                "cache_hit_rate": _reported_cache_rate(_i(r[5]), _i(r[6])),
+                **throughput.get(r[7], {"tokens_per_sec": None, "throughput_samples": 0}),
+            } for r in rows]
         except sqlite3.Error:
             return []
         finally:

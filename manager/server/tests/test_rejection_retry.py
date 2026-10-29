@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -66,6 +67,13 @@ class IsNotProcessedRejectionTest(unittest.TestCase):
     def test_2xx_never_counts(self) -> None:
         self.assertFalse(gateway._is_not_processed_rejection(
             200, '{"code":11102}'))
+
+    def test_channel_rejections_never_replayed(self) -> None:
+        for code in ('11128', '11-128', 'channel_check_rejected', 'channelcheckrejected'):
+            for status in (400, 502, 503):
+                self.assertFalse(gateway._is_not_processed_rejection(
+                    status, json.dumps({'error': {'code': code, 'message':
+                        'Illegal API invocation from an unapproved channel'}})))
 
 
 class RetryLimitTest(unittest.TestCase):

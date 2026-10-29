@@ -200,9 +200,7 @@ async def stats_by_model(request: Request, days: int = Query(default=30),
     # 带 cache 字段）。早期实现从 14 天窗口数请求数，数字偏多且 tokens 恒 0。
     w = getattr(_rt(request), "wb", None)
     if _platform(request) == "workbuddy" and w is not None:
-        rows = await w.usage_by_model(days, realm)
-        if rows:
-            return rows
+        return await w.usage_by_model(days, realm)
     if not await _realm_available(request, _platform(request), realm):
         return []
     _, payload = await _payload(request, days)
@@ -222,6 +220,9 @@ async def stats_by_model(request: Request, days: int = Query(default=30),
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "credit": float(_get(m, "credit", 0) or 0),
+            "cache_hit_rate": None,
+            "tokens_per_sec": None,
+            "throughput_samples": 0,
         })
     return out
 
@@ -234,13 +235,12 @@ async def stats_by_key(request: Request, days: int = Query(default=30),
     这里修了两处审计问题：① token 数以前恒 0（SQL 已经算出 `t` 却没返回）；
     ② 以前不按平台过滤，qoder 页面会混进 trae 的密钥用量。
     """
-    # workbuddy：按 manager 的 SQL（LEFT JOIN api_keys 取密钥名）。qtg 自己的
+    # workbuddy：只列仍存在的 manager 密钥。qtg 自己的
     # 流水表里没有 workbuddy 的调用（它不经过 qtg 转发时不会落库），直接查库才对。
     w = getattr(_rt(request), "wb", None)
     if _platform(request) == "workbuddy" and w is not None:
-        wb_rows = await w.usage_by_key(days, realm)
-        if wb_rows:
-            return wb_rows
+        # An empty current-key list is authoritative, not a fallback signal.
+        return await w.usage_by_key(days, realm)
     rt = _rt(request)
     rows = rt.store.stats(days, _platform(request)).get("by_key") or []
     out: List[Dict[str, Any]] = []
@@ -253,6 +253,9 @@ async def stats_by_key(request: Request, days: int = Query(default=30),
             "prompt_tokens": 0,
             "completion_tokens": tokens,
             "credit": 0,
+            "cache_hit_rate": None,
+            "tokens_per_sec": None,
+            "throughput_samples": 0,
         })
     return out
 

@@ -37,7 +37,9 @@ def _candidate_paths() -> list:
     因此发布打包时会在 `server/CHANGELOG.md` 放一份副本：`server/` 每次更新
     都会被整体替换，这条路一定拿得到最新的日志。
     """
-    return [config.ROOT / 'CHANGELOG.md', config.ROOT / 'server' / 'CHANGELOG.md']
+    # The server copy is covered by the release manifest; a shared root copy
+    # can survive old upgrades and must not resurrect inherited release notes.
+    return [config.ROOT / 'server' / 'CHANGELOG.md', config.ROOT / 'CHANGELOG.md']
 
 
 def _strip_inline(text: str) -> str:
