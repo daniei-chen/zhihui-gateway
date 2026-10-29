@@ -10,7 +10,8 @@
   * 幂等键是 `ledger_receipts.receipt_id`（= request_id，无 request_id 时用
     spool 文件名），不是调用方的 `X-Request-ID`——后者可伪造、可重复。
   * 只有「请求日志尚不存在」时才执行累加类副作用（密钥用量、日聚合、预算结算）；
-    日志已存在说明原事务已提交，重放只补不可变事件（均 INSERT OR IGNORE）。
+    累计只应用相对持久 charged 的非负差额，人工结清不重复扣减。
+    日志已存在时只从已提交事实补事件；冲突回执保留待核对，不覆盖原账。
   * 同一磁盘写不进时 spool 也写不进：这时 `spill()` 返回 None，调用方必须把
     `ledger_spool_failed` 置真并让就绪判定失败，停止继续放大新生成，而不是
     假装用量已经恢复。
@@ -23,6 +24,7 @@ import logging
 import os
 import time
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from . import config, db
@@ -153,36 +155,75 @@ def spill(entry: dict) -> str | None:
         return None
 
 
-def _settle(entry: dict) -> None:
+class ReplayConflict(ValueError):
+    """Retain contradictory receipts for review instead of rewriting confirmed usage."""
+
+
+def _settle(entry: dict) -> dict:
     """重放预算结算：按预留当前状态决定 settled / released / unknown。
 
     不走 `budget.settle()`：它按 `owner`+`fence` 校验归属，重放进程已不是原
     owner，会被判成 fenced。这里只依据持久化状态推进，且不重复扣减。
     """
     facts = entry.get('facts') or {}
+    from . import budget, ledger
+    pt = int(facts.get('prompt_tokens') or 0)
+    ct = int(facts.get('completion_tokens') or 0)
+    credit_units = ledger.units(facts.get('credit'))
+    if pt < 0 or ct < 0 or (credit_units is not None and credit_units < 0):
+        raise ReplayConflict('negative receipt usage')
+    event_ts = int(facts.get('ts') if facts.get('ts') is not None else entry.get('spilled_at') or time.time())
+    plan = {'tokens': pt + ct, 'credit_units': credit_units or 0, 'ts': event_ts}
     request_id = facts.get('request_id')
-    if not request_id:
-        return
-    row = db.query_one('SELECT state FROM budget_reservations WHERE request_id=?', (request_id,))
-    if row is None or row['state'] in ('settled', 'released'):
-        return
+    row = db.query_one('SELECT * FROM budget_reservations WHERE request_id=?', (request_id,)) if request_id else None
+    if row is None:
+        return plan
     key_id = facts.get('key_id')
-    quota = db.query_one('SELECT quota_credit FROM api_keys WHERE id=?', (key_id,)) if key_id else None
-    known = facts.get('terminal_state') == 'completed' and bool(facts.get('usage_complete'))
-    if quota and quota['quota_credit'] and facts.get('credit') is None:
+    if key_id != row['key_id']:
+        raise ReplayConflict('receipt key differs from its budget reservation')
+    charged_tokens = int(row['charged_tokens'] or 0)
+    charged_units = ledger.units(row['charged_credit'] or 0) or 0
+    complete = bool(facts.get('usage_complete'))
+    final = row['state'] in ('settled', 'released')
+    if final:
+        # A manual/automatic resolution is authoritative even when it confirmed
+        # zero. Weaker partial evidence may be retained, never charged again.
+        if ((complete and pt + ct != charged_tokens) or pt + ct > charged_tokens
+                or (credit_units is not None and credit_units != charged_units)):
+            raise ReplayConflict('receipt conflicts with confirmed budget usage')
+        plan.update(tokens=0, credit_units=0)
+    else:
+        if complete and pt + ct < charged_tokens:
+            raise ReplayConflict('complete receipt would erase charged tokens')
+        if credit_units is not None and credit_units < charged_units:
+            raise ReplayConflict('receipt would erase charged credit')
+        target_tokens = max(pt + ct, charged_tokens)
+        target_credit = Decimal(max(credit_units or 0, charged_units)) / ledger.SCALE
+        td, cd = budget.usage_delta(target_tokens, target_credit, charged_tokens, row['charged_credit'])
+        plan.update(tokens=td, credit_units=cd)
+    # A previous charge without a log was assigned to the reservation's day.
+    # Do not silently move a confirmed charge across the midnight boundary.
+    if (charged_tokens or charged_units) and db.day_of(event_ts) != db.day_of(row['created_at']):
+        raise ReplayConflict('receipt accounting day differs from prior charged evidence')
+    if final:
+        return plan
+    quota = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (key_id,)) if key_id else None
+    known = facts.get('terminal_state') == 'completed' and complete
+    if quota and (quota['quota_credit'] or quota['daily_credit_quota']) and facts.get('credit') is None:
         known = False
     next_state = 'settled' if known else 'released' if row['state'] == 'reserved' else 'unknown'
     db.execute(
         'UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? '
         'WHERE request_id=?',
         (next_state,
-         int(facts.get('prompt_tokens') or 0) + int(facts.get('completion_tokens') or 0),
-         facts.get('credit') or 0, int(time.time()), request_id))
+         charged_tokens + plan['tokens'],
+         (charged_units + plan['credit_units']) / ledger.SCALE, int(time.time()), request_id))
+    return plan
 
 
-def _touch(entry: dict) -> None:
+def _touch(entry: dict, plan: dict) -> None:
     """重放密钥用量与日/小时聚合（与原 `keysvc.touch` + `db.bump_usage` 同口径）。"""
-    from .ledger import units, SCALE
+    from . import budget
     facts = entry.get('facts') or {}
     key_id = facts.get('key_id')
     if not key_id:
@@ -200,13 +241,7 @@ def _touch(entry: dict) -> None:
                    (key_id, ip, event_ts))
     db.execute('UPDATE api_keys SET last_used_at=max(coalesce(last_used_at,0),?) WHERE id=?', (event_ts, key_id))
     total = pt + ct
-    if total:
-        db.execute('UPDATE api_keys SET used_tokens = used_tokens + ? WHERE id = ?', (total, key_id))
-    if credit:
-        db.execute('UPDATE api_keys SET used_credit_units=coalesce(used_credit_units,'
-                   'round(used_credit*1000000))+? WHERE id=?', (units(credit), key_id))
-        db.execute('UPDATE api_keys SET used_credit=used_credit_units*1.0/? WHERE id=?',
-                   (SCALE, key_id))
+    budget.charge_delta(key_id, plan['tokens'], plan['credit_units'], plan['ts'])
     if total or credit:
         db.bump_usage(key_id, facts.get('model') or '', pt, ct, credit,
                       realm=facts.get('realm'),
@@ -214,7 +249,7 @@ def _touch(entry: dict) -> None:
                              facts.get('cache_miss_tokens') or 0), ts=event_ts)
 
 
-def _events(entry: dict) -> None:
+def _events(entry: dict, *, counted: bool | None = None) -> None:
     """补不可变账本事件；两张表都是 INSERT OR IGNORE，天然幂等。"""
     from . import ledger
     facts = entry.get('facts') or {}
@@ -226,7 +261,7 @@ def _events(entry: dict) -> None:
     credit = facts.get('credit')
     ledger.record(request_id, facts.get('key_id'), facts.get('model'), facts.get('realm'),
                   pt, ct, credit,
-                  bool(facts.get('key_id') and (pt + ct or credit)),
+                  bool(facts.get('key_id') and (pt + ct or credit)) if counted is None else counted,
                   facts.get('terminal_state'), entry.get('release_id'))
     config_hash = entry.get('config_hash')
     if config_hash:
@@ -247,19 +282,37 @@ def apply(entry: dict, receipt_id: str) -> str:
     with db.transaction():
         if db.query_one('SELECT 1 FROM ledger_receipts WHERE receipt_id=?', (receipt_id,)):
             return 'duplicate'
-        existing = bool(request_id) and bool(
-            db.query_one('SELECT 1 FROM request_logs WHERE request_id=?', (request_id,)))
-        if not existing:
+        existing = db.query_one('SELECT * FROM request_logs WHERE request_id=?', (request_id,)) if request_id else None
+        if existing is None:
+            if request_id and db.query_one('SELECT 1 FROM usage_events WHERE request_id=?', (request_id,)):
+                raise ReplayConflict('immutable usage exists without its request log; review required')
             db.add_request_log(**facts)
-            _settle(entry)
-            _touch(entry)
-        _events(entry)
+            plan = _settle(entry)
+            _touch(entry, plan)
+            _events(entry, counted=bool(facts.get('key_id') and (plan['tokens'] or plan['credit_units'])))
+        else:
+            _validate_existing(facts, existing)
+            # Attribution labels and errors can be enriched later. Backfill only
+            # the canonical committed facts, never a stale receipt's replacements.
+            canonical = dict(entry, facts={name: existing[name] for name in FACTS_FIELDS})
+            _events(canonical)
         db.execute(
             'INSERT INTO ledger_receipts(receipt_id,request_id,attempt,applied_at,source,release_id) '
             'VALUES(?,?,?,?,?,?)',
             (receipt_id, request_id, int(entry.get('attempts') or 0) + 1,
              int(time.time()), 'spool-replay', entry.get('release_id')))
     return 'applied'
+
+
+def _validate_existing(facts: dict, existing) -> None:
+    from . import ledger
+    for name in ('key_id', 'prompt_tokens', 'completion_tokens', 'usage_complete', 'usage_source'):
+        if facts.get(name) != existing[name]:
+            raise ReplayConflict('receipt differs from committed accounting facts: ' + name)
+    if ledger.units(facts.get('credit')) != ledger.units(existing['credit']):
+        raise ReplayConflict('receipt differs from committed accounting credit')
+    if facts.get('ts') is None or existing['ts'] is None or db.day_of(facts['ts']) != db.day_of(existing['ts']):
+        raise ReplayConflict('receipt differs from committed accounting day')
 
 
 def replay_batch(limit: int | None = None) -> dict:

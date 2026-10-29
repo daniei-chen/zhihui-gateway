@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -15,13 +16,17 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from server import config, security
+from server import config, db, security
+from server.tests.authorization_test_support import (
+    IsolatedDataTestCase, install_users, isolated_data, owner, web_root,
+)
 from server.routers import accounts
 from server.services import modelcatalog, renew, tencent, wb2api
 
 
-class AccountProxyTest(unittest.TestCase):
+class AccountProxyTest(IsolatedDataTestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -32,7 +37,12 @@ class AccountProxyTest(unittest.TestCase):
             'route-a': 'http://proxy.example:8080',
             'route-b': 'https://proxy.example:8443',
         }}))
+        self.original_conn = db._conn
+        db._conn = None
+        self.addCleanup(self.close_db)
         for name, value in [('AUTH_DIR', self.auth_dir), ('UPSTREAM_CONFIG', self.cfg),
+                            ('DATA_DIR', self.root), ('DB_PATH', self.root / 'fixture.db'),
+                            ('USERS_FILE', self.root / 'users.json'),
                             ('DEFAULT_ACCOUNT_PROXY', '')]:
             patch = mock.patch.object(config, name, value)
             patch.start()
@@ -45,12 +55,19 @@ class AccountProxyTest(unittest.TestCase):
         app = FastAPI()
         app.include_router(accounts.router)
         self.app = app
-        app.dependency_overrides[security.current_user] = lambda: {'username': 'test', 'role': 'admin'}
-        app.dependency_overrides[security.require_admin] = lambda: {'username': 'test', 'role': 'admin'}
+        install_users('test')
+        self.user = owner('test')
+        app.dependency_overrides[security.current_user] = lambda: self.user
+        app.dependency_overrides[security.require_admin] = lambda: self.user
         self.client = TestClient(app)
         patch = mock.patch.object(accounts.reload, 'request_restart', return_value=True)
         self.restart = patch.start()
         self.addCleanup(patch.stop)
+
+    def close_db(self):
+        if db._conn is not None:
+            db._conn.close()
+        db._conn = self.original_conn
 
     def test_route_list_never_exposes_proxy_urls(self):
         response = self.client.get('/api/proxies')
@@ -221,7 +238,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class ProxyUiGatingTest(unittest.TestCase):
+class ProxyUiGatingTest(IsolatedDataTestCase):
     """「线路」这一列没东西可绑时**不能显示**（维护者复核补）。
 
     线路表读自上游配置的 `proxies`；没配过时那个下拉里只有「直连」一项 —— 摆出来
@@ -229,8 +246,8 @@ class ProxyUiGatingTest(unittest.TestCase):
     线路」（配置被移除后仍要看得见、改得回来）时显示。
     """
 
-    PAGE = Path(__file__).resolve().parents[2] / 'web' / 'app' / '(main)' / 'accounts' / 'page.tsx'
-    DIALOG = (Path(__file__).resolve().parents[2] / 'web' / 'components' / 'common'
+    PAGE = web_root() / 'app' / '(main)' / 'accounts' / 'page.tsx'
+    DIALOG = (web_root() / 'components' / 'common'
               / 'accounts' / 'AddAccountDialog.tsx')
 
     def test_accounts_page_hides_the_column_when_there_is_nothing_to_bind(self) -> None:
@@ -247,11 +264,11 @@ class ProxyUiGatingTest(unittest.TestCase):
 
     def test_dialog_hides_the_selector_without_routes(self) -> None:
         src = self.DIALOG.read_text(encoding='utf-8')
-        self.assertRegex(src, r'\{proxyRoutes\.length > 0 && \(',
+        self.assertRegex(src, r'\{workbuddy && proxyRoutes\.length > 0 && \(',
                          '添加账号弹窗在没有线路可选时仍会渲染那个下拉')
 
 
-class LoginNetworkHintTest(unittest.TestCase):
+class LoginNetworkHintTest(IsolatedDataTestCase):
     """扫码登录/轮询的网络失败要给**可执行的中文**（issue #194）。
 
     现场：用户配了一条解析不了 .cn 的国家线路，点「添加账号（国内版）」二维码一直
@@ -297,3 +314,30 @@ class LoginNetworkHintTest(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn('route-y', msg)
         self.assertIn('换一条线路', msg)
+
+
+class IsolatedDataFixtureTest(IsolatedDataTestCase):
+    def test_nested_fixture_preserves_connection_and_paths_on_failure(self):
+        parent_connection = db.connect()
+        parent_paths = (config.DATA_DIR, config.DB_PATH, config.USERS_FILE)
+        db.set_setting('fixture-parent-marker', 'preserved')
+        nested_connection = None
+        nested_root = None
+        with self.assertRaisesRegex(RuntimeError, 'synthetic fixture failure'):
+            with isolated_data() as root:
+                nested_root = root
+                self.assertIsNone(db._conn)
+                self.assertEqual((config.DATA_DIR, config.DB_PATH, config.USERS_FILE),
+                                 (root, root / 'fixture.db', root / 'users.json'))
+                nested_connection = db.connect()
+                self.assertIsNot(nested_connection, parent_connection)
+                db.set_setting('fixture-nested-marker', 'temporary')
+                raise RuntimeError('synthetic fixture failure')
+        self.assertIs(db._conn, parent_connection)
+        self.assertEqual((config.DATA_DIR, config.DB_PATH, config.USERS_FILE), parent_paths)
+        self.assertEqual(db.get_setting('fixture-parent-marker'), 'preserved')
+        self.assertIsNone(db.get_setting('fixture-nested-marker'))
+        self.assertFalse(nested_root.exists())
+        with self.assertRaises(sqlite3.ProgrammingError) as closed:
+            nested_connection.execute('SELECT 1')
+        self.assertIn('closed', str(closed.exception).lower())

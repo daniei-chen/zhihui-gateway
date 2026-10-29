@@ -1,8 +1,9 @@
 import axios, {AxiosError} from 'axios';
+import type {AxiosRequestConfig} from 'axios';
 import {BASE_PATH} from './base-path';
 import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
 import {t, tp} from './i18n';
-import {platformStore} from './platform-store';
+import {platformStore, type Platform} from './platform-store';
 import type {Realm} from './realm-context';
 import type {
   Account,
@@ -133,7 +134,11 @@ export function channelRejectionText(detail: ChannelRejection): string {
  * 这个头**；从未选择过就不带，由后端按自己的默认平台处理（`explicit()` 的注释）。
  */
 http.interceptors.request.use((config) => {
-  const platform = platformStore.explicit();
+  // An in-flight authorization belongs to its captured scope, not to a later
+  // platform switch. Explicit request scope must win over the global store.
+  const scoped = typeof config.headers.get === 'function' ? config.headers.get('X-QTG-Platform') :
+    (config.headers['X-QTG-Platform'] ?? config.headers['x-qtg-platform']);
+  const platform = typeof scoped === 'string' ? scoped : platformStore.explicit();
   if (platform) {
     (config.headers as Record<string, string>)['X-QTG-Platform'] = platform;
     if (config.params instanceof URLSearchParams) {
@@ -187,8 +192,8 @@ http.interceptors.response.use(
 
 const get = async <T>(url: string, params?: Record<string, unknown>): Promise<T> =>
   (await http.get<T>(url, {params})).data;
-const post = async <T>(url: string, body?: unknown): Promise<T> =>
-  (await http.post<T>(url, body)).data;
+const post = async <T>(url: string, body?: unknown, scope?: AxiosRequestConfig): Promise<T> =>
+  (await (scope ? http.post<T>(url, body, scope) : http.post<T>(url, body))).data;
 const patch = async <T>(url: string, body?: unknown): Promise<T> =>
   (await http.patch<T>(url, body)).data;
 const put = async <T>(url: string, body?: unknown): Promise<T> =>
@@ -212,6 +217,50 @@ export const authApi = {
  */
 const groupQs = (upstreamId?: number | null): string =>
   upstreamId == null ? '' : `?upstream_id=${encodeURIComponent(String(upstreamId))}`;
+
+export interface AccountAuthStart {
+  state: string;
+  authUrl: string;
+  platform: Platform;
+  realm: Realm;
+  mode: 'poll' | 'callback';
+  expires_at?: number;
+}
+
+export interface AccountAuthResult {
+  status: 'waiting' | 'success' | 'expired' | 'invalid' | 'realm_mismatch' | 'unconfirmed';
+  platform?: Platform;
+  realm?: Realm;
+  uid?: string;
+  nickname?: string;
+  updated?: boolean;
+  region_note?: string;
+  expected?: Realm;
+  got?: Realm;
+}
+
+export interface AccountAuthReviewItem {
+  reference: string;
+  platform: Platform;
+  realm: Realm;
+  status: 'waiting' | 'processing' | 'success' | 'expired' | 'invalid' | 'unconfirmed' | 'engine_changed';
+  engine_binding: 'current' | 'changed' | 'unavailable';
+  expires_at: number;
+  requires_reconciliation: boolean;
+  uid?: string;
+  nickname?: string;
+}
+
+export interface AccountAuthReview {
+  platform: Platform;
+  realm: Realm;
+  reviewed_at: number;
+  sessions: AccountAuthReviewItem[];
+}
+
+const authScope = (platform: Platform, realm?: Realm): AxiosRequestConfig => ({
+  headers: {'X-QTG-Platform': platform}, params: {platform, realm},
+});
 
 export const accountApi = {
   proxies: () => get<{routes: string[]; default: string}>('/api/proxies'),
@@ -257,32 +306,26 @@ export const accountApi = {
     }>('/api/accounts/upload' + group + separator + `overwrite=${overwrite ? 'true' : 'false'}`, body)
       .then((r) => r.data);
   },
-  /**
-   * 发起扫码登录；realm 决定国内版 / 国际版端点。
-   *
-   * region 也一并带上：服务端会替我们盯着这张码（前端被节流也不影响），
-   * 而地区登记必须在落盘**前**完成 —— 后台那条路径拿不到 region 就会漏掉它
-   * （国际版新号聊天报 14017）。用户在弹窗里改地区会重新发码，所以这里带的
-   * 总是当前这张码对应的地区。
-   */
-  start: (realm: Realm = 'cn', upstreamId?: number | null, region?: string, proxy?: string) =>
-    post<{state: string; authUrl: string; realm: Realm}>(
-      // realm 同时进 query：转发中间件读不到已被消费的 body，query 始终可读；
-      // qtg 用 query 里的 realm 决定扫码端点（cn / intl）。
-      '/api/auth/start' + groupQs(upstreamId) + (upstreamId ? '&' : '?') + 'realm=' + realm,
-      {realm, region, proxy}),
+  /** Explicit captured platform/realm; only WorkBuddy accepts region/proxy/group. */
+  start: (realm: Realm = 'cn', upstreamId?: number | null, region?: string, proxy?: string,
+          platform: Platform = platformStore.peek()) =>
+    post<AccountAuthStart>(
+      '/api/auth/start' + groupQs(upstreamId),
+      {realm, region, proxy, platform}, authScope(platform, realm)),
   /** 轮询扫码结果。region 仅国际版需要（新号必须先做地区注册） */
-  poll: (state: string, realm?: Realm, region?: string, upstreamId?: number | null) =>
-    get<{
-      status: 'waiting' | 'success' | 'expired' | 'invalid' | 'realm_mismatch';
-      uid?: string;
-      nickname?: string;
-      updated?: boolean;
-      realm?: Realm;
-      region_note?: string;
-      expected?: Realm;
-      got?: Realm;
-    }>('/api/auth/poll', {state, realm, region, upstream_id: upstreamId ?? undefined}),
+  poll: (state: string, realm?: Realm, region?: string, upstreamId?: number | null,
+         platform: Platform = platformStore.peek()) =>
+    http.get<AccountAuthResult>('/api/auth/poll', {
+      ...authScope(platform, realm),
+      params: {state, realm, region, platform, upstream_id: upstreamId ?? undefined},
+    }).then(r => r.data),
+  finish: (state: string, callbackUrl: string, platform: Platform, realm: Realm) =>
+    post<AccountAuthResult>('/api/auth/finish', {state, callback_url: callbackUrl, platform, realm},
+                           authScope(platform, realm)),
+  review: (state: string | undefined, platform: Platform, realm: Realm) =>
+    post<AccountAuthReview>('/api/auth/review', {state, platform, realm}, authScope(platform, realm)),
+  cancel: (state: string, platform: Platform, realm: Realm) =>
+    post<{ok: boolean}>('/api/auth/cancel', {state, platform, realm}, authScope(platform, realm)),
   remove: (file: string, upstreamId?: number | null) =>
     del<{success: boolean}>(`/api/accounts/${encodeURIComponent(file)}${groupQs(upstreamId)}`),
   /**

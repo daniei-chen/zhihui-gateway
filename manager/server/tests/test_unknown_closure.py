@@ -1,14 +1,12 @@
 """U02 回归：unknown 的分类、下界展示与「有证据才结清」。
 
-背景（2026-10-28 生产实测）：41 条 unknown 全部是上游明确拒绝
-（`no_healthy_account` / 模型不存在），status 502/503、`usage_source=unknown`、
-`credit IS NULL`、`charged_*=0`。这类请求没有到达模型，零用量是可复核结论；
-而 `client_cancelled`、已有部分计费、无日志、未解释的必须保留给人看。
+拒绝错误只用于诊断，不能证明请求级零计费。自动结清必须有完整上游回执
+和一致的不可变用量记录；未知、部分计费和日志缺失继续保留。
 
 这里锁定：
   1. 六类互斥分类的判定；
   2. 汇总里的下界语义（token 是预留估算、credit 恒为 0，不编造）；
-  3. 自动结清只碰 `upstream_rejected`，且不改动密钥累计用量、留下审计痕迹；
+  3. 自动结清只碰完整零用量证据，且不改动密钥累计用量、留下审计痕迹；
   4. 幂等与年龄门槛。
 """
 from __future__ import annotations
@@ -21,7 +19,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from server import budget, config, db, keysvc  # noqa: E402
+from server import budget, config, db, keysvc, ledger  # noqa: E402
 
 
 class UnknownClosureTest(unittest.TestCase):
@@ -74,6 +72,10 @@ class UnknownClosureTest(unittest.TestCase):
         return db.query_one('SELECT state FROM budget_reservations WHERE request_id=?',
                             (request_id,))['state']
 
+    def _zero_receipt(self, request_id):
+        db.execute("UPDATE request_logs SET usage_source='upstream',usage_complete=1,credit=0 WHERE request_id=?", (request_id,))
+        ledger.record(request_id, self.key['id'], 'm', 'cn', 0, 0, 0, False, 'completed', 'fixture')
+
     def _usage(self) -> tuple[int, int]:
         row = db.query_one('SELECT used_tokens, used_credit_units FROM api_keys WHERE id=?',
                            (self.key['id'],))
@@ -99,8 +101,8 @@ class UnknownClosureTest(unittest.TestCase):
         self.assertEqual(summary['by_class']['no_request_log'], 1)
         self.assertEqual(summary['by_class']['unexplained'], 1)
         self.assertEqual(summary['unknown_total'], 6)
-        self.assertEqual(summary['auto_reconcilable'], 1)
-        self.assertEqual(summary['needs_human'], 5)
+        self.assertEqual(summary['auto_reconcilable'], 0)
+        self.assertEqual(summary['needs_human'], 6)
 
     # ── 2. 下界语义 ────────────────────────────────────────────────────
     def test_summary_bounds_are_estimates_not_bills(self) -> None:
@@ -117,6 +119,7 @@ class UnknownClosureTest(unittest.TestCase):
     def test_evidenced_reconcile_only_upstream_rejected(self) -> None:
         self._reserve('ok')
         self._log('ok')
+        self._zero_receipt('ok')
         self._reserve('cancel')
         self._log('cancel', status=499, terminal_state='client_cancelled')
         self._reserve('partial', charged_tokens=7)
@@ -131,12 +134,14 @@ class UnknownClosureTest(unittest.TestCase):
         before = self._usage()
         self._reserve('ok', reserved=5000)
         self._log('ok')
+        self._zero_receipt('ok')
         budget.reconcile_evidenced_unknowns(int(time.time()))
         self.assertEqual(self._usage(), before)
 
     def test_evidenced_reconcile_writes_audit(self) -> None:
         self._reserve('ok')
         self._log('ok')
+        self._zero_receipt('ok')
         budget.reconcile_evidenced_unknowns(int(time.time()))
         self.assertIsNotNone(db.query_one(
             'SELECT 1 FROM budget_adjustments WHERE request_id=?', ('ok',)))
@@ -144,18 +149,20 @@ class UnknownClosureTest(unittest.TestCase):
             'SELECT 1 FROM adjustment_events WHERE request_id=?', ('ok',)))
         row = db.query_one('SELECT resolution FROM budget_reservations WHERE request_id=?',
                            ('ok',))
-        self.assertIn('上游明确拒绝', row['resolution'] or '')
+        self.assertIn('完整上游回执', row['resolution'] or '')
 
     # ── 4. 幂等与年龄门槛 ─────────────────────────────────────────────
     def test_evidenced_reconcile_is_idempotent(self) -> None:
         self._reserve('ok')
         self._log('ok')
+        self._zero_receipt('ok')
         self.assertEqual(budget.reconcile_evidenced_unknowns(int(time.time())), 1)
         self.assertEqual(budget.reconcile_evidenced_unknowns(int(time.time())), 0)
 
     def test_min_age_gate_keeps_fresh_unknown(self) -> None:
         self._reserve('fresh', age=60)
         self._log('fresh')
+        self._zero_receipt('fresh')
         self.assertEqual(budget.reconcile_evidenced_unknowns(int(time.time())), 0)
         self.assertEqual(self._state('fresh'), 'unknown')
 
@@ -167,9 +174,9 @@ class UnknownClosureTest(unittest.TestCase):
         self._reserve('fresh-cancel', age=60)
         self._log('fresh-cancel', status=499, terminal_state='client_cancelled')
         summary = budget.unresolved_summary()['summary']
-        self.assertEqual(summary['needs_human'], 2)
-        self.assertEqual(summary['needs_human_old'], 1)
-        self.assertEqual(summary['auto_reconcilable'], 1)
+        self.assertEqual(summary['needs_human'], 3)
+        self.assertEqual(summary['needs_human_old'], 2)
+        self.assertEqual(summary['auto_reconcilable'], 0)
 
 
 if __name__ == '__main__':

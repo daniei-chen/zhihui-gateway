@@ -279,6 +279,10 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
 
     # 服务级 / 不可逆 / 能提权或抹痕迹的动作，只对**会话**开放。
     SESSION_ONLY = {
+        'POST /api/auth/start',  # Authorization can persist provider credentials.
+        'POST /api/auth/review',  # Owner-bound evidence; human admin session only.
+        'POST /api/auth/finish',
+        'POST /api/auth/cancel',
         'DELETE /api/accounts/{filename}',
         'DELETE /api/system/update-status',   # 清除更新结果与日志：属于「抹掉痕迹」类
         'DELETE /api/security/rules/{rule_id}',
@@ -341,9 +345,7 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
     }
     # 写方法但只要求「已登录」——只读令牌也能调。必须逐个有理由。
     ANY_LOGGED_IN = {
-        # Existing local viewer policy: start a login task and invalidate cached reads.
-        # Preserve these explicit exceptions while rejecting undeclared writes.
-        'POST /api/auth/start',
+        # These existing read-side refresh exceptions do not import credentials.
         'POST /api/v1/cache/invalidate',  # No credentials or persistent business data are changed.
         'POST /api/accounts/refresh-credits',   # 刷新积分快照；force=true 内部再查 admin
         'POST /api/keys/check-models',          # 只比对已缓存模型清单，不发网络
@@ -399,11 +401,12 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         out = set()
         for key, names in self.rows:
             if kind == 'session_only':
-                if 'require_session_admin' in names:
+                if set(names) & {'require_session_admin', 'require_account_adder'}:
                     out.add(key)
             elif kind == 'any_logged_in':
                 if ('current_user' in names and 'require_admin' not in names
                         and 'require_session_admin' not in names
+                        and 'require_account_adder' not in names
                         and 'require_keys_writer' not in names):
                     out.add(key)
         return out

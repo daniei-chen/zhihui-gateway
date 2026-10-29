@@ -25,7 +25,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from server import (budget, config, db, keysvc, ledgerreplay,  # noqa: E402
+from server import (budget, budgetowner, config, db, keysvc, ledgerreplay,  # noqa: E402
                     observability, operational)
 
 
@@ -36,6 +36,7 @@ class _ChannelFixture(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_db = config.DB_PATH
         self._orig_users = config.USERS_FILE
+        self._orig_data = config.DATA_DIR
         self._orig_spool = os.environ.get('WB_LEDGER_SPOOL_DIR')
         self._orig_backpressure = os.environ.get('WB_LEDGER_BACKPRESSURE')
         self._orig_healthy = operational.ledger_write_healthy
@@ -43,6 +44,7 @@ class _ChannelFixture(unittest.TestCase):
         self._orig_streak = operational._ledger_replay_streak
         self._orig_alerts = dict(operational.alerts)
         root = pathlib.Path(self._tmp.name)
+        config.DATA_DIR = root
         config.DB_PATH = root / 'm.db'
         config.USERS_FILE = root / 'users.json'
         self.spool = root / 'spool'
@@ -68,9 +70,12 @@ class _ChannelFixture(unittest.TestCase):
             pass
 
     def tearDown(self) -> None:
+        budgetowner.close()
         if db._conn is not None:
             db._conn.close()
         db._conn = None
+        self._drop_used_marker()
+        config.DATA_DIR = self._orig_data
         config.DB_PATH = self._orig_db
         config.USERS_FILE = self._orig_users
         if self._orig_spool is None:
@@ -86,7 +91,6 @@ class _ChannelFixture(unittest.TestCase):
         operational._ledger_replay_streak = self._orig_streak
         operational.alerts.clear()
         operational.alerts.update(self._orig_alerts)
-        self._drop_used_marker()
         self._tmp.cleanup()
 
     # ── helpers ────────────────────────────────────────────────────────

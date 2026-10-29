@@ -4,6 +4,7 @@ import {Bot, Cloud, Sparkles} from 'lucide-react';
 import {motion} from 'motion/react';
 
 import {usePlatform, type Platform} from '@/lib/platform-context';
+import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 
 /**
@@ -16,22 +17,23 @@ import {cn} from '@/lib/utils';
  */
 export function PlatformToggle({compact = false}: {compact?: boolean}) {
   const {platform, setPlatform} = usePlatform();
+  const t = useT();
   const options: {id: Platform; label: string; title: string; icon: typeof Bot}[] = [
     {
       id: 'workbuddy',
       label: 'WorkBuddy',
-      title: 'WorkBuddy 平台（只读合并：账号 / 模型 / 用量 / 日志来自 workbuddy2api）',
+      title: t('platform.workbuddyHint'),
       icon: Cloud,
     },
-    {id: 'qoder', label: 'Qoder', title: 'Qoder 平台（账号池 / 模型 / 用量）', icon: Sparkles},
-    {id: 'trae', label: 'Trae', title: 'Trae 平台（账号池 / 模型 / 用量）', icon: Bot},
+    {id: 'qoder', label: 'Qoder', title: t('platform.qoderHint'), icon: Sparkles},
+    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
   ];
 
   return (
     <div
       className="inline-flex items-center gap-0.5 rounded-full border border-border/60 bg-muted/60 p-0.5"
       role="tablist"
-      aria-label="平台切换"
+      aria-label={t('platform.switch')}
     >
       {options.map(({id, label, title, icon: Icon}) => {
         const active = platform === id;

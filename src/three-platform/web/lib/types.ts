@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'viewer';
+export type Role = 'admin' | 'account_admin' | 'viewer';
 
 export interface Me {
   username: string;
@@ -460,6 +460,12 @@ export interface ApiKey {
    * 按 token 估不出实际花了多少积分（提需求的人遇到的正是这个问题）。
    */
   quota_credit: number;
+  daily_token_quota?: number;
+  daily_credit_quota?: number;
+  daily_used_tokens?: number;
+  daily_used_credit?: number;
+  daily_quota_day?: string;
+  assigned_to?: string;
   used_credit: number;
   /**
    * 绑定的上游接入点（多上游 / 分组隔离）；null = 默认上游。

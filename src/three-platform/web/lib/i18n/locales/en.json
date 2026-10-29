@@ -113,7 +113,9 @@
     "revoked": "All sessions revoked — please sign in again",
     "revokeHint": "Invalidate every issued sign-in credential server-side (no password change needed)",
     "revokeTitle": "Revoke all sessions?",
-    "revokeDesc": "Every signed-in session (including this one) is invalidated immediately and you will need to sign in again. Use it when you suspect a credential was captured — e.g. you signed in on someone else's computer, an old device is still signed in, or a backup contains the cookie. It is stronger than Sign out: sign-out only clears this device, revocation voids every credential on the server."
+    "revokeDesc": "Every signed-in session (including this one) is invalidated immediately and you will need to sign in again. Use it when you suspect a credential was captured — e.g. you signed in on someone else's computer, an old device is still signed in, or a backup contains the cookie. It is stronger than Sign out: sign-out only clears this device, revocation voids every credential on the server.",
+    "roleSuperAdmin": "Super Administrator",
+    "roleAccountAdmin": "Administrator"
   },
   "theme": {
     "light": "Light mode",
@@ -685,7 +687,13 @@
     "upstreamsFailed": "Could not load the upstream list — new keys will only offer the default upstream. Retry before creating one.",
     "platforms": "Allowed platforms",
     "platformsHelp": "Select the platforms this key may call. Selecting none blocks all platforms.",
-    "platformPolicyInvalid": "Platform policy is invalid; repair it before use."
+    "platformPolicyInvalid": "Platform policy is invalid; repair it before use.",
+    "dailyTokens": "Daily token limit",
+    "dailyCredit": "Daily credit limit",
+    "dailyHint": "0 means unlimited. Resets by server-local calendar day. Credit admission uses provider-reported spend; one request may exceed the remainder. Unknown spend needs review. This is not a hard billing cap.",
+    "assignedTo": "Assigned user",
+    "assignmentHint": "Choose an existing user or leave unassigned. Ownership does not grant console access or reveal the secret key again.",
+    "unassigned": "Unassigned"
   },
   "upstreams": {
     "title": "Multiple upstreams (account pool groups)",
@@ -1170,7 +1178,44 @@
     "shareText": "Open this link to authorise (sign in with a browser, or scan the code). The account is then checked in and added automatically",
     "retry": "Get a new code",
     "stateLost": "Authorization is no longer valid (the server restarted while waiting). Please request a new one",
-    "realmMismatch": "This QR code belongs to the other edition (CN / Global). Please request a new one"
+    "realmMismatch": "This QR code belongs to the other edition (CN / Global). Please request a new one",
+    "titlePlatform": "Connect {platform} · {realm}",
+    "descWbCn": "Sign in and authorize on the official WorkBuddy page to connect your account to Zhihui.",
+    "descWbGlobal": "Authorize on the international WorkBuddy site. Choose a registration region for a new account; this setting does not apply to other platforms.",
+    "descQoder": "Complete device authorization on the official Qoder site for the selected region. The account joins the Qoder pool only.",
+    "descTrae": "Authorize on the Trae China site, then paste the callback address from your browser to confirm the connection.",
+    "traeGlobalUnsupported": "This Trae engine does not support international authorization yet. Select China instead; it will not redirect to WorkBuddy.",
+    "requestingPlatform": "Creating a {platform} authorization session…",
+    "waitingPlatform": "Waiting for {platform} authorization. Return here after signing in to confirm the result.",
+    "waitingCallback": "After authorizing Trae, paste the callback address. This flow does not poll or add the account automatically.",
+    "openPlatform": "Authorize with {platform}",
+    "privateLink": "Only authorize accounts you have permission to use. This link is bound to this session; do not share it publicly.",
+    "connectedTitle": "{platform} connected",
+    "connected": "{platform} account “{name}” connected",
+    "connectedDetail": "Authorization saved. Check the {realm} account list for availability, credits and scheduling membership.",
+    "scopeMismatch": "The authorization result does not match this platform or region. The redirect was stopped; request a new link.",
+    "callbackLabel": "Callback address for this session",
+    "callbackHint": "After redirecting to 127.0.0.1, copy the full address from the address bar even if the browser cannot connect. It contains a one-time code; do not send it to others.",
+    "confirmCallback": "Confirm Trae connection",
+    "cancelAuthorization": "Cancel authorization",
+    "resultUnconfirmed": "Authorization was submitted, but the account result is unconfirmed. Refresh the account list before submitting again.",
+    "reviewTitle": "Authorization Status",
+    "reviewRefresh": "Refresh status",
+    "reviewBeforeNew": "An authorization is processing or needs review. No new connection was started. Refreshing status does not resubmit it.",
+    "reviewHint": "Read-only evidence. This does not retry authorization or release a lock. Check the platform account list for availability.",
+    "reviewState": {
+      "waiting": "Awaiting authorization",
+      "processing": "Processing",
+      "success": "Save confirmed",
+      "expired": "Expired",
+      "invalid": "Ended or invalid",
+      "unconfirmed": "Needs review",
+      "engine_changed": "Authorization engine changed"
+    },
+    "reviewEngine": {
+      "changed": "The engine changed; the old authorization cannot be submitted.",
+      "unavailable": "Engine unavailable; showing stored evidence only."
+    }
   },
   "region": {
     "HK": "Hong Kong SAR China",
@@ -1444,11 +1489,14 @@
     "mapAdd": "Add mapping",
     "mapEmpty": "No mappings yet; downstream can use the names from Available models above",
     "usersNew": "Add console user",
-    "usersNewDesc": "Administrators can add or remove accounts and change settings; read-only users can only look, which suits sharing status with colleagues.",
+    "usersNewDesc": "Super administrators have full control. Administrators can only add authorized accounts, not view pools, keys or statistics, or change settings.",
     "usersRole": "Role",
     "roleAdmin": "Administrator (read/write)",
     "roleViewer": "Read-only (view only)",
     "usersRequired": "Enter a username and password",
+    "managedPasswordHint": "Use at least 8 characters. Letters, digits and Chinese characters are welcome.",
+    "managedPasswordPlaceholder": "Password (at least 8 characters)",
+    "resetManagedPasswordDesc": "Set a password of at least 8 characters. All of this user's existing sessions will be revoked.",
     "usersCreated": "User created",
     "resetPassword": "Reset password",
     "passwordUpdated": "Password updated",
@@ -1656,6 +1704,7 @@
     "失败次数过多，请 10 分钟后再试": "Too many failed attempts; try again in 10 minutes",
     "密码至少 8 位": "Password must be at least 8 characters",
     "密码至少 12 位": "Password must be at least 12 characters",
+    "用户登录密码至少 8 位": "User sign-in passwords must contain at least 8 characters",
     "密码过于常见，请换一个": "This password is too common; choose another",
     "密码不能是用户名加数字": "Password cannot be the username followed by digits",
     "密码不能全是数字": "Password cannot be all digits",
@@ -1850,7 +1899,12 @@
     "请求上限（旧版上游）": "Request limit (legacy upstream)",
     "需要管理员或密钥管理权限": "Administrator or key management permission is required",
     "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "A read-only service token may only read existing data (no writes, and no access to credential or user surfaces).",
-    "仅允许本机调用": "Only local calls are allowed"
+    "仅允许本机调用": "Only local calls are allowed",
+    "管理员仅可添加账号，其他操作需要超级管理员权限": "Administrators can only add accounts. Other actions require a super administrator.",
+    "添加账号需要管理员或超级管理员本人会话": "Adding accounts requires an administrator or super administrator session.",
+    "管理员添加账号仅使用默认账号池和默认线路": "Administrators can add accounts only to the default pool using the default route.",
+    "用户管理仅对超级管理员开放": "User management is restricted to super administrators.",
+    "只有超级管理员本人可以分配密钥归属": "Only a super administrator session can assign key ownership."
   },
   "redPacket": {
     "title": "Red packets",
@@ -2015,5 +2069,18 @@
     "providerBoundary": "This repository owns product source, versions and upgrades. Model-provider endpoints are managed separately.",
     "controlledTitle": "Controlled upgrades. Evidence at every step.",
     "controlledDetail": "Acquire an immutable version from the ZHIHUI repository, verify hashes, signatures and test gates, then switch with the trusted publisher. Legacy web overwrite installation is disabled here. Code rollback never restores an older business ledger."
+  },
+  "platform": {
+    "switch": "Switch platform",
+    "workbuddyHint": "WorkBuddy · Accounts, models, usage and authorization",
+    "qoderHint": "Qoder · Separate China and international device authorization",
+    "traeHint": "Trae · China callback authorization is currently supported"
+  },
+  "intake": {
+    "eyebrow": "ZHIHUI · ACCOUNT CONNECTION",
+    "title": "Connect an account to Zhihui.",
+    "description": "Choose a platform and region, then authorize on the official site. Super administrators manage everything else.",
+    "permission": "This role can only add accounts. Account pools, keys, statistics and system settings are not available.",
+    "completed": "{count} authorizations confirmed saved in this visit."
   }
 }

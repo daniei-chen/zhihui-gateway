@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import contextvars
 import json
 import os
 import re
@@ -15,9 +16,11 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Callable
 
 import httpx
+from fastapi import HTTPException
 
 from .. import config
 from .realm import (
@@ -39,6 +42,28 @@ from .realm import (
 
 from .errtext import err_text
 from .filelock import file_lock
+
+_authorization_check: contextvars.ContextVar[Callable[[], object] | None] = contextvars.ContextVar(
+    'tencent_authorization_check', default=None)
+
+
+@contextmanager
+def authorization_scope(check: Callable[[], object]):
+    """Fence each human-authorized HTTP step without changing scheduled clients."""
+    if not callable(check):
+        raise TypeError('authorization check must be callable')
+    token = _authorization_check.set(check)
+    try:
+        yield
+    finally:
+        _authorization_check.reset(token)
+
+
+def _check_authorization():
+    check = _authorization_check.get()
+    if check is not None:
+        check()
+
 
 class AccountExistsError(ValueError):
     """Raised when an import attempts to replace an existing account without consent."""
@@ -177,12 +202,15 @@ async def start_login(realm: Realm = CN, proxy_name: str = '') -> dict:
     """
     try:
         async with _account_http_client({'proxy': proxy_name}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{chat_base(realm)}/v2/plugin/auth/state',
                 params={'platform': 'CLI'},
                 json={},
                 headers=_hdr(realm),
             )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(_login_net_hint(proxy_name, exc)) from exc
     code, data = _envelope(resp)
@@ -232,6 +260,7 @@ async def poll_login(state: str, realm: Realm | None = None) -> dict:
     # 前端轮询此前会拿到英文 500，用户看不出是线路的问题。
     try:
         async with _account_http_client({'proxy': proxy_name}) as client:
+            _check_authorization()
             resp = await client.get(
                 f'{chat_base(realm)}/v2/plugin/auth/token',
                 params={'state': state},
@@ -246,11 +275,14 @@ async def poll_login(state: str, realm: Realm | None = None) -> dict:
             expires_in = int(data.get('expiresIn', 3600) or 3600)
             domain = data.get('domain', '')
 
+            _check_authorization()
             acct_resp = await client.get(
                 f'{chat_base(realm)}/v2/plugin/login/account',
                 params={'state': state},
                 headers=_hdr(realm, access_token),
             )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(_login_net_hint(proxy_name, exc)) from exc
     _, acct = _envelope(acct_resp)
@@ -619,6 +651,7 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
         return -2, '国际版无签到体系，已跳过'
     try:
         async with _account_http_client(access_token if isinstance(access_token, dict) else {}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}{billing_paths(realm, "daily-checkin")[0]}',
                 json={},
@@ -641,6 +674,8 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
             # 调用方才不会把失败记成成功（issue #256）。
             return -3, msg or '签到失败，请稍后重试'
         return code, f'签到返回 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return -1, f'签到异常: {err_text(exc)}'
 
@@ -1412,6 +1447,7 @@ async def registration_status(auth: dict) -> tuple[bool, str]:
         # 上游参照实现（scripts/global_region.py activate_region）明确带 X-User-Id，
         # 这里走 billing 域头（含身份头），保持一致
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.get(url, params={'userId': uid}, headers=_billing_hdr(realm, auth))
         code, data = _envelope(resp)
         if code == 200 or code == 0:
@@ -1423,6 +1459,8 @@ async def registration_status(auth: dict) -> tuple[bool, str]:
         if 'region required' in text.lower():
             return False, '尚未完成地区注册'
         return False, f'注册状态未知 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'查询注册状态异常: {err_text(exc)}'
 
@@ -1464,6 +1502,7 @@ async def submit_region(auth: dict, region_code: str) -> tuple[bool, str]:
     body = {'attributes': attrs}
     try:
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}/console/login/account',
                 json=body,
@@ -1473,6 +1512,8 @@ async def submit_region(auth: dict, region_code: str) -> tuple[bool, str]:
         if code == 0 or code == 200:
             return True, f'地区已提交（{code_upper}）'
         return False, f'提交地区失败 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'提交地区异常: {err_text(exc)}'
 
@@ -1487,6 +1528,7 @@ async def _region_fields(ios2: str, auth: dict | None = None) -> tuple[str, str,
     fallback = (ios2, ios2, ios2)
     try:
         async with _account_http_client(auth or {}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(GLOBAL)}/billing/area/get-country-code',
                 json={'filterForbidden': 1},
@@ -1508,6 +1550,8 @@ async def _region_fields(ios2: str, auth: dict | None = None) -> tuple[str, str,
                     str(item.get('EnName') or ios2),
                     str(item.get('Code') or ios2),
                 )
+    except HTTPException:
+        raise
     except Exception:  # noqa: BLE001
         pass
     return fallback
@@ -1526,6 +1570,7 @@ async def claim_trial(auth: dict) -> tuple[bool, str]:
         return False, '缺少 accessToken'
     try:
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}/billing/ide/trial',
                 json={},
@@ -1537,5 +1582,7 @@ async def claim_trial(auth: dict) -> tuple[bool, str]:
         if code == 14051 or '14051' in str(data or ''):
             return True, 'trial 此前已领取（幂等）'
         return False, f'领取 trial 失败 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'领取 trial 异常: {err_text(exc)}'

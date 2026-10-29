@@ -27,7 +27,7 @@ export default function LoginPage() {
   const [expired, setExpired] = useState(false);
 
   useEffect(() => {
-    if (!loading && me) router.replace('/dashboard');
+    if (!loading && me) router.replace(me.role === 'account_admin' ? '/accounts' : '/dashboard');
   }, [loading, me, router]);
 
   useEffect(() => {
@@ -67,7 +67,6 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(finalUser, finalPass);
-      router.replace('/dashboard');
     } catch (err) {
       setError(errText(err));
     } finally {

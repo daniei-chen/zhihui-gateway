@@ -249,7 +249,8 @@ class TestInstanceRuntime(unittest.IsolatedAsyncioTestCase):
         from fastapi.testclient import TestClient
         from server import main, security
 
-        with patch.object(security, 'load_users', return_value={'users': []}), \
+        with patch.object(security, 'load_users', return_value={'role_policy_version': 2,
+                'users': [{'username': 'admin', 'role': 'admin'}]}), \
                 patch.object(security, 'weak_admin_passwords', return_value=[]):
             with TestClient(main.app) as client:
                 runtime = main.app.state.instance_runtime

@@ -77,7 +77,7 @@ function fixture(url, request) {
   if (p === '/api/settings/upstream') return {available: false, error: 'Local fixture; no production configuration loaded'};
   if (p === '/api/settings/model-map') return {};
   if (p === '/api/settings/pg-sync') return {config: {enabled: false, host: '', port: 5432, dbname: '', user: '', password: '', sslmode: 'prefer', interval_minutes: 0, keep_local_backup: true, last_export_at: 0, last_import_at: 0}, status: {running: false, kind: '', ok: null, step: '', percent: 0, tables_total: 0, tables_done: 0, rows: 0, logs: [], started_at: 0, finished_at: 0}};
-  if (p === '/api/users') return [{username: 'reconstruction-fixture', role: 'viewer'}];
+  if (p === '/api/users') return process.env.QA_ROLES_ONLY ? [{username: 'admin', role: 'admin'}, {username: 'alice', role: 'account_admin'}] : [{username: 'reconstruction-fixture', role: 'viewer'}];
   if (p === '/api/settings/github-token') return {configured: false, masked: ''};
   if (p === '/api/settings/github-mirror') return {mirror: '', stored: '', env_mirror: '', source: '', presets: []};
   if (p === '/api/system/versions') return {manager: 'v0.0.2', upstream_connected: false, upstream_accounts: 0, upstream_dir: '', product: {...product, managed: managedFixture, web_update_enabled: !managedFixture}};
@@ -132,7 +132,14 @@ const server = http.createServer((request, response) => {
   const result = {scope: 'Local reconstructed static export with synthetic API fixtures; no production/provider access. Not destructive-action/backend acceptance.', routes: [], hydration: [], contextSwitches: [], responsive: [], guards: [], errors: []};
   try {
     const context = await browser.newContext({viewport: {width: 1440, height: 1000}, reducedMotion: 'reduce'});
-    await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+    await context.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.origin === origin) return route.continue();
+      if (process.env.QA_AUTH_ONLY && ['qoder.com.cn', 'qoder.com', 'www.trae.cn'].includes(url.hostname)) {
+        return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Synthetic provider</title><p>Offline authorization fixture</p>'});
+      }
+      return route.abort();
+    });
     await context.addInitScript(() => { localStorage.setItem('workbuddy-manager:dock-tip-dismissed', 'true'); });
     const page = await context.newPage();
     let errors = [];
@@ -172,6 +179,27 @@ const server = http.createServer((request, response) => {
       if (message.type() === 'error' || (process.env.QA_HEADER_CAPTURE && message.text().startsWith('HYDRATION_'))) console.log('CONSOLE', message.text());
       if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) runtimeConsoleErrors.push({url: page.url(), message: message.text()});
     });
+    if (process.env.QA_AUTH_ONLY) {
+      result.authorization = await require('./authorization-browser-scenarios.cjs').run(context, page, origin, output);
+      assert.equal(allErrors.length, 0, JSON.stringify(allErrors));
+      assert.equal(runtimeConsoleErrors.length, 0, JSON.stringify(runtimeConsoleErrors));
+      fs.writeFileSync(path.join(output, 'authorization-results.json'), JSON.stringify(result, null, 2));
+      console.log('AUTHORIZATION_COMPLETE', JSON.stringify(result.authorization));
+      return;
+    }
+    if (process.env.QA_ROLES_ONLY) {
+      result.roles = await require('./role-quota-browser-scenarios.cjs').run(context, page, origin, output, {
+        trace, setRole: value => { fixtureRole = value; }, setLogout: value => { logoutMode = value; },
+        authenticate: () => { authenticated = true; },
+      });
+      assert.deepEqual(allErrors, []);
+      assert.deepEqual(runtimeConsoleErrors, []);
+      assert.deepEqual([...unknown], []);
+      assert.deepEqual([...missingStatic], []);
+      fs.writeFileSync(path.join(output, 'role-quota-results.json'), JSON.stringify(result, null, 2));
+      console.log('ROLE_QUOTA_COMPLETE', JSON.stringify(result.roles));
+      return;
+    }
     if (process.env.QA_HOME_PREVIEW) {
       const crypto = require('node:crypto');
       const before = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'app/brand.css'))).digest('hex');

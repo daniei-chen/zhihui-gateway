@@ -24,6 +24,7 @@ import {
   Route,
 } from 'lucide-react';
 import {usePathname} from 'next/navigation';
+import {BASE_PATH} from '@/lib/base-path';
 import {notify} from '@/lib/toast';
 import {getExpiryDailyGroup, setExpiryDailyGroup} from '@/lib/display-prefs';
 import {useI18n} from '@/lib/i18n/provider';
@@ -34,6 +35,7 @@ import {useAsyncAll} from '@/lib/use-async-data';
 import {UpstreamEndpoints} from '@/components/settings/UpstreamEndpoints';
 import {usePlatform} from '@/lib/platform-context';
 import {scheduleDelayError} from '@/lib/schedule-validation';
+import {isManagedUserPassword} from '@/lib/managed-user-password';
 import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,
@@ -1036,7 +1038,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   const [mapAlias, setMapAlias] = useState('');
   const [mapTarget, setMapTarget] = useState('');
-  const [newUser, setNewUser] = useState({username: '', password: '', role: 'viewer'});
+  const [newUser, setNewUser] = useState({username: '', password: '', role: 'account_admin'});
   const [busy, setBusy] = useState(false);
   /** Upstash（Redis 持久化）表单 */
   const [upstashForm, setUpstashForm] = useState({url: '', token: ''});
@@ -2048,36 +2050,49 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               </div>
               <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-muted-foreground">{t('login.username')}</Label>
-                  <Input value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="bg-background" />
+                  <Label htmlFor="new-user-username" className="text-[11px] text-muted-foreground">{t('login.username')}</Label>
+                  <Input id="new-user-username" autoComplete="off" value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="bg-background" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-muted-foreground">{t('login.password')}</Label>
-                  <Input type="password" value={newUser.password} onChange={(e) => setNewUser({...newUser, password: e.target.value})} className="bg-background" />
+                  <Label htmlFor="new-user-password" className="text-[11px] text-muted-foreground">{t('login.password')}</Label>
+                  <Input id="new-user-password" type="password"
+                    autoComplete="new-password" value={newUser.password}
+                    onChange={(e) => setNewUser({...newUser, password: e.target.value})}
+                    placeholder={t('settings.managedPasswordPlaceholder')}
+                    aria-describedby="new-user-password-hint"
+                    aria-invalid={newUser.password.length > 0 && !isManagedUserPassword(newUser.password)}
+                    className="bg-background" />
+                  <p id="new-user-password-hint" className="text-[11px] text-muted-foreground">
+                    {t('settings.managedPasswordHint')}
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-muted-foreground">{t('settings.usersRole')}</Label>
                   <Select value={newUser.role} onValueChange={(v) => setNewUser({...newUser, role: v})}>
                     <SelectTrigger className="bg-background" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="admin">{t('settings.roleAdmin')}</SelectItem>
-                      <SelectItem value="viewer">{t('settings.roleViewer')}</SelectItem>
+                      <SelectItem value="account_admin">{t('profile.roleAccountAdmin')}</SelectItem>
+                      <SelectItem value="admin">{t('profile.roleSuperAdmin')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <Button
                   className="rounded-full"
-                  disabled={busy}
+                  disabled={busy || !newUser.username.trim() || !isManagedUserPassword(newUser.password)}
                   onClick={async () => {
                     if (!newUser.username.trim() || !newUser.password) {
                       notify.err(t('settings.usersRequired'));
+                      return;
+                    }
+                    if (!isManagedUserPassword(newUser.password)) {
+                      notify.err(t('settings.managedPasswordHint'));
                       return;
                     }
                     setBusy(true);
                     try {
                       await settingsApi.addUser(newUser);
                       notify.ok(t('settings.usersCreated'));
-                      setNewUser({username: '', password: '', role: 'viewer'});
+                      setNewUser({username: '', password: '', role: 'account_admin'});
                       reload();
                     } catch (e) {
                       notify.err(errText(e));
@@ -2107,9 +2122,20 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   <TableRow key={u.username} className="border-b border-border/40">
                     <TableCell className="pl-4 text-sm font-medium">{u.username}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary" className="rounded-full">
-                        {u.role === 'admin' ? t('profile.roleAdmin') : t('profile.roleViewer')}
-                      </Badge>
+                      {isAdmin && u.username !== 'admin' ? <Select value={u.role} onValueChange={async role => {
+                        try {
+                          const result = await settingsApi.updateUser(u.username, {role});
+                          if (result.relogin_required) { window.location.href = `${BASE_PATH}/login`; return; }
+                          await reload();
+                        }
+                        catch (error) { notify.err(errText(error)); }
+                      }}>
+                        <SelectTrigger className="h-8 w-40 rounded-full text-xs" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="account_admin">{t('profile.roleAccountAdmin')}</SelectItem>
+                          <SelectItem value="admin">{t('profile.roleSuperAdmin')}</SelectItem>
+                        </SelectContent>
+                      </Select> : <Badge variant="secondary" className="rounded-full">{u.role === 'admin' ? t('profile.roleSuperAdmin') : t('profile.roleAccountAdmin')}</Badge>}
                     </TableCell>
                     {isAdmin && (
                       <TableCell className="pr-4 text-right">

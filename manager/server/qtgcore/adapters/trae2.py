@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -69,6 +70,7 @@ class Trae2Adapter(BaseAdapter):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings.aiwork_base, settings)
         self.cfg = settings
+        self.authorization_generation = secrets.token_hex(16)
 
     # ---- 鉴权（admin token → 会话 Cookie，httpx 自己维护） ----
     def _credentials(self) -> str:
@@ -93,6 +95,9 @@ class Trae2Adapter(BaseAdapter):
             body = {}
         if body.get("ok") is False:
             raise UpstreamError(f"aiwork 登录被拒绝: {str(body.get('error'))[:120]}")
+        # A new engine session (including after restart) invalidates the previous
+        # in-memory PKCE slot. Never complete an old callback after re-authentication.
+        self.authorization_generation = secrets.token_hex(16)
 
     async def _cmd(self, name: str, body: Optional[Dict[str, Any]] = None,
                    required: bool = True) -> Dict[str, Any]:
@@ -459,17 +464,22 @@ class Trae2Adapter(BaseAdapter):
         return {"ok": False, "error": "aiwork 的 API Key 请在它自己的设置页维护"}
 
     async def oauth_login_url(self) -> Dict[str, Any]:
-        """aiwork 的命令名不固定，按候选逐个试。"""
-        for name in ("oauth_get_login_url", "get_login_url", "login_url", "oauth_url"):
-            r = await self._cmd(name, required=False)
-            if isinstance(r, dict) and (r.get("data") or r.get("url")):
-                return r
-        return {"ok": False, "error": "aiwork 未提供登录取链命令"}
+        """Pinned aiwork command; never probe aliases or WorkBuddy OAuth."""
+        out = await self._json("POST", "/api/cmd/oauth_get_login_url", json_body={}, retry=False)
+        if not isinstance(out, dict) or out.get('ok') is not True or not isinstance(out.get('data'), dict):
+            raise UpstreamError('Trae authorization response was not confirmed')
+        return out['data']
 
     async def oauth_finish(self, callback_url: str, name: str = "") -> Dict[str, Any]:
-        return await self._cmd(
-            "oauth_login", {"callback_url": callback_url, "name": name}, required=False
-        ) or {"ok": False}
+        body = {"callback_url": callback_url}
+        if name:
+            body['account_name'] = name
+        # Do not transparently log in again here: the engine may have restarted
+        # and lost PKCE state. A 401 is an explicit unconfirmed completion.
+        out = await self._json("POST", "/api/cmd/oauth_login", json_body=body, retry=False, auth=False)
+        if not isinstance(out, dict) or out.get('ok') is not True or not isinstance(out.get('data'), dict):
+            raise UpstreamError('Trae account insertion was not confirmed')
+        return out['data']
 
     # ---- 健康 ----
     async def health(self) -> Dict[str, Any]:

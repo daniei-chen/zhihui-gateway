@@ -65,6 +65,7 @@ import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {AddAccountDialog} from '@/components/common/accounts/AddAccountDialog';
+import {AccountIntake} from '@/components/common/accounts/AccountIntake';
 import {UploadAccountsButton} from '@/components/common/accounts/UploadAccountsButton';
 import {CreditCountdown} from '@/components/common/accounts/CreditCountdown';
 import {AccountNoteDialog} from '@/components/common/accounts/AccountNoteDialog';
@@ -115,6 +116,12 @@ const PAGE_SIZE = 20;
 const groupOf = (a: Account) => availabilityGroup(availabilityOf(a));
 
 export default function AccountsPage() {
+  const {role, loading, me} = useAuth();
+  if (loading || !me) return null;
+  return role === 'account_admin' ? <AccountIntake /> : <FullAccountsPage />;
+}
+
+function FullAccountsPage() {
   const {realm, label: realmName} = useRealm();
   const {label: platformName} = usePlatform();
   const t = useT();

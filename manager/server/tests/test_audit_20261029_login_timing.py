@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fastapi import HTTPException
@@ -13,13 +15,22 @@ from server.routers import auth
 
 class LoginTimingRegressionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.user = {'username': 'fixture-admin', 'role': 'admin', 'pwd_hash': 'fixture-hash'}
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        for name, value in [('DATA_DIR', root), ('DB_PATH', root / 'timing.db'),
+                            ('USERS_FILE', root / 'users.json')]:
+            patcher = mock.patch.object(config, name, value)
+            patcher.start(); self.addCleanup(patcher.stop)
+        self.user = {'username': 'fixture-admin', 'role': 'admin', 'pwd_hash': 'fixture-hash', 'sv': 0}
+        self.cfg = {'secret': 'synthetic-login-timing-secret', 'users': [self.user]}
+        security.save_users(self.cfg)
         self.request = mock.Mock()
         self.request.json = mock.AsyncMock(return_value={
             'username': 'fixture-admin', 'password': 'fixture-password'})
         self.mocks = {}
         values = {
-            'login_blocked': False, 'load_users': {'users': [self.user]},
+            'login_blocked': False, 'load_users': self.cfg,
             'verify_pwd': False, 'dummy_verify': None, 'record_fail': None,
             'audit': None, 'clear_fail': None, 'insecure_cookie_warning': None,
             'issue_token': 'fixture-session', 'cookie_secure': True,
@@ -48,7 +59,7 @@ class LoginTimingRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.mocks['clear_fail'].assert_not_called()
         self.mocks['issue_token'].assert_not_called()
 
-        self.mocks['load_users'].return_value = {'users': [self.user]}
+        self.mocks['load_users'].return_value = self.cfg
         self.assertEqual(await self.failure(401), detail)
 
     async def test_known_user_wrong_password_checks_only_real_hash(self):
@@ -72,6 +83,7 @@ class LoginTimingRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.mocks['record_fail'].assert_not_called()
         self.mocks['clear_fail'].assert_called_once_with('192.0.2.1', 'fixture-admin')
         self.assertEqual(self.mocks['audit'].call_args.args[1], 'login')
+        self.mocks['issue_token'].assert_called_once_with('fixture-admin', 'admin', expected_sv=0)
 
     async def test_blocked_login_stops_before_password_work(self):
         self.mocks['login_blocked'].return_value = True

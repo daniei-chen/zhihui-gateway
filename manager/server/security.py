@@ -8,11 +8,14 @@ import json
 import os
 import secrets
 import time
+import inspect
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 
-from . import config, tokensvc
+from . import config, tokensvc, userroles
 from .iputil import client_ip
 from .iputil import _is_trusted_proxy  # noqa: SLF001 —— 与 client_ip 同一份可信代理判据
 
@@ -61,8 +64,8 @@ _WEAK_PASSWORDS = frozenset({
 def password_problem(pwd: str, username: str = '') -> str | None:
     """返回密码不合规的原因；合规返回 None。
 
-    给 bootstrap（WB_ADMIN_PASSWORD）、新建用户、重置密码共用同一套判据，
-    避免「启动时能设弱口令、界面改密码时却被拦」这种不一致。
+    主账号 bootstrap（WB_ADMIN_PASSWORD）与重置保持同一强口令判据。
+    其他受管理用户使用独立的至少八位策略，不追溯拒绝已有登录密码。
     """
     value = str(pwd or '')
     if len(value) < MIN_PASSWORD_LENGTH:
@@ -78,6 +81,13 @@ def password_problem(pwd: str, username: str = '') -> str | None:
         return '密码不能全是数字'
     if len(set(value)) == 1:
         return '密码不能是重复字符'
+    return None
+
+
+def managed_user_password_problem(pwd: str) -> str | None:
+    """Count raw Unicode characters; root retains its separate strong policy."""
+    if not isinstance(pwd, str) or len(pwd) < 8:
+        return '用户登录密码至少 8 位'
     return None
 
 
@@ -118,7 +128,17 @@ def dummy_verify(pwd: str) -> None:
 
 
 # ── 用户存储 ─────────────────────────────────────────────
-def load_users() -> dict:
+def user_mutation(fn):
+    @wraps(fn)
+    def serialized(*args, **kwargs):
+        from . import userstore
+        with userstore.locked(config.USERS_FILE):
+            return fn(*args, **kwargs)
+    serialized.__signature__ = inspect.signature(fn, eval_str=True)
+    return serialized
+
+
+def load_users(*, allow_bootstrap: bool = True) -> dict:
     """读取 users.json。
 
     **绝不因解析失败而自动重建**：原实现在文件损坏（半写、磁盘满、进程被杀、
@@ -132,6 +152,8 @@ def load_users() -> dict:
     """
     config.ensure_dirs()
     if not config.USERS_FILE.exists():
+        if not allow_bootstrap:
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
         return bootstrap_users()
     try:
         data = json.loads(config.USERS_FILE.read_text(encoding='utf-8'))
@@ -162,6 +184,7 @@ def _restrict_permissions(path) -> None:
         pass
 
 
+@user_mutation
 def save_users(data: dict) -> None:
     """原子写入 users.json。
 
@@ -178,26 +201,23 @@ def save_users(data: dict) -> None:
     config.ensure_dirs()
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     target = config.USERS_FILE
-    tmp = target.with_name(f'.{target.name}.tmp')
+    tmp = target.with_name(f'.{target.name}.{secrets.token_hex(12)}.tmp')
 
-    # 支持不支持 O_CREAT 指定 mode 的平台：退化为默认权限创建后再 chmod
-    try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    except OSError:
-        fd = None
+    # Exclusive random temporary names avoid collisions and symlink truncation.
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 
     try:
-        if fd is not None:
-            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())  # 落盘后再替换，避免断电留下空/半截文件
-        else:
-            # 先写临时文件（非目标文件），仍然保证目标只在原子替换时改变
-            tmp.write_text(payload, encoding='utf-8')
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
         _restrict_permissions(tmp)
         os.replace(tmp, target)  # 原子替换：要么旧、要么新，不会半截
         _restrict_permissions(target)
+        if os.name == 'posix':
+            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
     except OSError:
         try:
             os.unlink(tmp)
@@ -207,11 +227,25 @@ def save_users(data: dict) -> None:
         raise
 
 
+@user_mutation
+def migrate_user_roles() -> None:
+    """Run once before serving; a failed migration must not expose old privileges."""
+    cfg = load_users()
+    updated, changed = userroles.migration(cfg)
+    if updated is cfg:
+        return
+    save_users(updated)
+    audit({'username': 'system'}, 'users.role-policy', '', f'policy=2; changed={changed}')
+
+
+@user_mutation
 def bootstrap_users() -> dict:
     """首次启动：创建 admin 用户，密码取 WB_ADMIN_PASSWORD 或随机生成。"""
     import os
     import sys
 
+    if config.USERS_FILE.exists():
+        return load_users()
     env_pwd = os.environ.get('WB_ADMIN_PASSWORD', '').strip()
     if env_pwd:
         problem = password_problem(env_pwd, 'admin')
@@ -223,6 +257,7 @@ def bootstrap_users() -> dict:
     # 随机密码也留足长度；token_urlsafe(12) 约 16 字符。
     pwd = env_pwd or secrets.token_urlsafe(12)
     data = {
+        'role_policy_version': userroles.POLICY_VERSION,
         'secret': config.new_secret(),
         'users': [{'username': 'admin', 'role': 'admin', 'pwd_hash': make_hash(pwd)}],
         'api_keys': [],
@@ -581,6 +616,7 @@ def session_version(cfg: dict, username: str) -> int:
     return 0
 
 
+@user_mutation
 def revoke_sessions(username: str) -> int:
     """递增该用户的会话版本，返回新值。其全部既有 cookie 立即失效。"""
     cfg = load_users()
@@ -662,7 +698,8 @@ def _cookie_identity(request: Request, cfg: dict) -> dict:
         # 闲置超时（滑动窗口）：常用的人会不断续期，放着不用的到点失效。
         # 与上面那条分开报，是为了让用户知道「不是我密码/权限变了，是太久没用」。
         raise HTTPException(status_code=401, detail='登录已超时（长时间未操作），请重新登录')
-    user = {'username': username, 'role': row.get('role', 'viewer')}
+    user = {'username': username, 'role': row.get('role', 'viewer'),
+            '_authorization_binding': _authorization_fingerprint(cfg, row)}
     # 续期请求交给中间件写 cookie（这里**不产生副作用**：current_user 只解析身份，
     # 被 FastAPI 依赖注入在任意接口上调用，若在这里写响应会耦合不必要的层）。
     # 记录在 request.state 上，由 main.py 的中间件统一处理。
@@ -749,6 +786,9 @@ def _current_user(request: Request) -> dict:
 
 def current_user(request: Request) -> dict:
     user = _current_user(request)
+    if user.get('role') == userroles.ACCOUNT_ADMIN and not user.get('scope'):
+        if not userroles.account_route_allowed(request.method, request.url.path):
+            raise HTTPException(status_code=403, detail='管理员仅可添加账号，其他操作需要超级管理员权限')
     # scope=keys is a service boundary, not a generic viewer credential. Keep
     # even read-only account/log/settings endpoints outside its authority.
     if user.get('scope') == 'keys':
@@ -963,3 +1003,43 @@ def require_session_admin(request: Request,
         raise HTTPException(status_code=403,
                             detail='该接口不接受 API Token，请用会话登录后操作')
     return user
+
+
+def require_account_adder(request: Request,
+                          user: dict = Depends(current_user)) -> dict:
+    if (getattr(request.state, 'token_id', None) is not None
+            or user.get('scope') or user.get('role') not in userroles.HUMAN_ROLES):
+        raise HTTPException(status_code=403, detail='添加账号需要管理员或超级管理员本人会话')
+    return authorization_owner(user)
+
+
+def _authorization_fingerprint(cfg: dict, row: dict) -> str:
+    identity = [row.get('username'), row.get('role'), row.get('sv', 0), row.get('pwd_hash')]
+    return hmac.new(str(cfg['secret']).encode(),
+                    json.dumps(identity, ensure_ascii=True, separators=(',', ':')).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def authorization_owner(user: dict) -> dict:
+    """Bind a human grant to the current account generation, not just its name."""
+    cfg = load_users(allow_bootstrap=False)
+    row = next((u for u in cfg.get('users', []) if u.get('username') == user.get('username')), None)
+    if (user.get('scope') or row is None or row.get('role') not in userroles.HUMAN_ROLES
+            or row.get('role') != user.get('role')):
+        raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+    binding = _authorization_fingerprint(cfg, row)
+    prior = user.get('_authorization_binding')
+    if not isinstance(prior, str) or not hmac.compare_digest(prior, binding):
+        raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+    return {**user, '_authorization_binding': binding}
+
+
+@contextmanager
+def authorization_guard(user: dict):
+    """Short local commit guard; never hold this OS lock across provider awaits."""
+    from . import userstore
+    if not isinstance(user.get('_authorization_binding'), str):
+        raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+    with userstore.locked(config.USERS_FILE):
+        authorization_owner(user)
+        yield

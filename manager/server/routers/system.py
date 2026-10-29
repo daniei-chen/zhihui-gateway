@@ -449,8 +449,9 @@ def internal_session_verify(request: Request,
     import json as _json
     import time as _time
     import uuid as _uuid
-    role = str(user.get('role') or 'viewer')
-    scopes = ['*'] if role == 'admin' else ['read']
+    role = 'admin' if user.get('role') == 'admin' else 'viewer'
+    scopes = (['accounts:add'] if user.get('role') == 'account_admin' else
+              ['*'] if role == 'admin' else ['read'])
     now = int(_time.time())
     payload = {
         'sub': str(user.get('username') or 'unknown'),

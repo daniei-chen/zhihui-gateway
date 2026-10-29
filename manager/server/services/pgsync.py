@@ -360,7 +360,12 @@ class _SqliteSource:
 
     def rows(self, table: str, columns: list[str], batch: int = BATCH) -> Iterator[list]:
         collist = ', '.join(f'"{c}"' for c in columns)
-        cur = self._conn.execute(f'SELECT {collist} FROM "{table}"')
+        if table == 'settings' and 'key' not in columns:
+            return
+        predicate = (' WHERE "key" IN (' + ','.join('?' for _ in _SETTING_ALLOWLIST) + ')'
+                     if table == 'settings' else '')
+        cur = self._conn.execute(f'SELECT {collist} FROM "{table}"' + predicate,
+                                 tuple(sorted(_SETTING_ALLOWLIST)) if table == 'settings' else ())
         while True:
             chunk = cur.fetchmany(batch)
             if not chunk:
@@ -404,9 +409,16 @@ class _PgSource:
 
     def rows(self, table: str, columns: list[str], batch: int = BATCH) -> Iterator[list]:
         collist = ', '.join(f'"{c}"' for c in columns)
+        if table == 'settings' and 'key' not in columns:
+            return
         cur = self._conn.cursor()
         try:
-            cur.execute(f'SELECT {collist} FROM "{table}"')
+            predicate = (' WHERE "key" IN (' + ','.join('%s' for _ in _SETTING_ALLOWLIST) + ')'
+                         if table == 'settings' else '')
+            if table == 'settings':
+                cur.execute(f'SELECT {collist} FROM "{table}"' + predicate, tuple(sorted(_SETTING_ALLOWLIST)))
+            else:
+                cur.execute(f'SELECT {collist} FROM "{table}"')
             while True:
                 chunk = cur.fetchmany(batch)
                 if not chunk:

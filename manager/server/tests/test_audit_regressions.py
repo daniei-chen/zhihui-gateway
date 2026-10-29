@@ -75,10 +75,15 @@ class ConservativeReconciliationTests(unittest.TestCase):
                 self.assertEqual(operational.reconcile_zero_reservation_unknowns(100000),0)
                 resolve.assert_not_called()
 
-    def test_zero_unknown_is_resolved_with_atomic_zero_guard(self):
-        with patch.object(budget,'iter_unresolved',return_value=iter([self.row()])),patch.object(budget,'resolve',return_value=True) as resolve:
+    def test_zero_unknown_with_receipt_is_resolved_with_atomic_zero_guard(self):
+        with patch.object(budget,'iter_unresolved',return_value=iter([self.row()])),patch.object(budget,'_confirmed_zero_usage',return_value=True),patch.object(budget,'resolve',return_value=True) as resolve:
             self.assertEqual(operational.reconcile_zero_reservation_unknowns(100000),1)
             self.assertIs(resolve.call_args.kwargs['zero_only'],True)
+
+    def test_zero_unknown_without_receipt_is_not_a_zero_bill(self):
+        with patch.object(budget,'iter_unresolved',return_value=iter([self.row()])),patch.object(budget,'_confirmed_zero_usage',return_value=False),patch.object(budget,'resolve') as resolve:
+            self.assertEqual(operational.reconcile_zero_reservation_unknowns(100000),0)
+            resolve.assert_not_called()
 
     def test_amount_changed_since_scan_is_rechecked_inside_transaction(self):
         for field in ('reserved_tokens','reserved_credit','charged_tokens','charged_credit'):
@@ -87,9 +92,11 @@ class ConservativeReconciliationTests(unittest.TestCase):
                 execute.assert_not_called()
 
     def test_manual_resolution_remains_available_for_verified_usage(self):
-        with patch.object(budget.db,'transaction',return_value=nullcontext()),patch.object(budget.db,'query_one',return_value=self.row(reserved_tokens=500)),patch.object(budget.db,'execute') as execute,patch.object(budget.ledger,'adjust'),patch.object(budget.db,'add_audit_log'):
+        from server import dailyquota
+        with patch.object(budget.db,'transaction',return_value=nullcontext()),patch.object(budget.db,'query_one',side_effect=[self.row(reserved_tokens=500), None]),patch.object(budget.db,'execute') as execute,patch.object(budget.ledger,'adjust'),patch.object(budget.db,'add_audit_log'),patch.object(dailyquota,'charge') as daily:
             self.assertTrue(budget.resolve('fixture',10,0,'audit','verified fixture'))
             self.assertTrue(execute.called)
+            daily.assert_called_once_with(1, 10, '0', 1)
 
 
 class PublicSignaturePermissionsTests(unittest.TestCase):

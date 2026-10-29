@@ -23,13 +23,15 @@ class MetricsAuthTest(unittest.TestCase):
             db._close_connection_locked()
         for key, value in {
             'DB_PATH': self.root / 'metrics.db', 'USERS_FILE': self.root / 'users.json',
+            'DATA_DIR': self.root,
             'METRICS_TOKEN': 'wbm_' + 'test-collector-' * 4, 'METRICS_TOKEN_FILE': '',
         }.items():
             self.patches.enter_context(mock.patch.object(config, key, value))
         config.USERS_FILE.write_text(json.dumps({
-            'secret': 'qa-session-signing-' * 4,
+            'secret': 'qa-session-signing-' * 4, 'role_policy_version': 2,
             'users': [{'username': 'operator', 'role': 'admin', 'pwd_hash': 'unused'},
-                      {'username': 'reader', 'role': 'viewer', 'pwd_hash': 'unused'}],
+                      {'username': 'reader', 'role': 'account_admin', 'pwd_hash': 'unused'},
+                      {'username': 'admin', 'role': 'admin', 'pwd_hash': 'unused'}],
         }), encoding='utf-8')
         db.connect()
         from server import main
@@ -80,7 +82,7 @@ class MetricsAuthTest(unittest.TestCase):
                 self.assertEqual(result.status_code, expected, result.text)
 
     def test_role_is_checked_for_cookie_sessions(self):
-        for name, role, status in (('operator', 'admin', 200), ('reader', 'viewer', 403)):
+        for name, role, status in (('operator', 'admin', 200), ('reader', 'account_admin', 403)):
             self.client.cookies.clear()
             self.client.cookies.set(config.COOKIE_NAME, security.issue_token(name, role))
             self.assertEqual(self.client.get('/metrics').status_code, status)

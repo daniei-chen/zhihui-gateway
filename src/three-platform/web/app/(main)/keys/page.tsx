@@ -5,9 +5,9 @@ import {KeyRound, Plus, Trash2, Ban, CircleCheck, Pencil, RotateCcw} from 'lucid
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {notify} from '@/lib/toast';
-import {keyApi, upstreamsApi, errText} from '@/lib/api';
+import {keyApi, settingsApi, upstreamsApi, errText} from '@/lib/api';
 import {BASE_PATH} from '@/lib/base-path';
-import type {ApiKey, KeyImportResult, KeyImportStatus, UpstreamEndpoint} from '@/lib/types';
+import type {ApiKey, KeyImportResult, KeyImportStatus, UpstreamEndpoint, UserItem} from '@/lib/types';
 import {fmtDateTime, fmtNumber} from '@/lib/format';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {PageSectionTabs} from '@/components/common/layout/PageSectionTabs';
@@ -68,6 +68,9 @@ interface FormState {
   quota: string;
   /** 积分额度（issue #27）：0 = 不限。按上游返回的**真实扣费**累计 */
   quotaCredit: string;
+  dailyTokens: string;
+  dailyCredit: string;
+  assignedTo: string;
   /** 版本归属：'cn' | 'global' | ''（不限制，仅存量密钥） */
   realm: Realm | '';
   /** 绑定的上游（账号池分组）：null = 默认上游。见 server/upstreamsvc.py */
@@ -84,6 +87,9 @@ const emptyForm: FormState = {
   models: '',
   quota: '0',
   quotaCredit: '0',
+  dailyTokens: '0',
+  dailyCredit: '0',
+  assignedTo: '',
   realm: 'cn',
   upstream_id: null,
 };
@@ -101,6 +107,7 @@ function toLines(v: string): string[] {
  */
 const EMPTY_KEYS: ApiKey[] = [];
 const EMPTY_UPSTREAMS: UpstreamEndpoint[] = [];
+const EMPTY_USERS: UserItem[] = [];
 
 export default function KeysPage() {
   const t = useT();
@@ -119,10 +126,12 @@ export default function KeysPage() {
   const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     keys: () => keyApi.list(),
     upstreams: () => upstreamsApi.list(),
-  }, []);
+    users: () => isAdmin ? settingsApi.users() : Promise.resolve(EMPTY_USERS),
+  }, [isAdmin]);
 
   const keys: ApiKey[] = values.keys ?? EMPTY_KEYS;
   const upstreams: UpstreamEndpoint[] = values.upstreams?.items ?? EMPTY_UPSTREAMS;
+  const users: UserItem[] = values.users ?? EMPTY_USERS;
   /**
    * 密钥列表**这一份**没取到。
    *
@@ -242,6 +251,9 @@ export default function KeysPage() {
       models: (k.models || []).join(', '),
       quota: String(k.quota ?? 0),
       quotaCredit: String(k.quota_credit ?? 0),
+      dailyTokens: String(k.daily_token_quota ?? 0),
+      dailyCredit: String(k.daily_credit_quota ?? 0),
+      assignedTo: k.assigned_to ?? '',
       realm: k.realm || '',
       upstream_id: k.upstream_id ?? null,
     });
@@ -268,6 +280,9 @@ export default function KeysPage() {
         models: toLines(form.models),
         quota: Number(form.quota) || 0,
         quota_credit: Number(form.quotaCredit) || 0,
+        daily_token_quota: Number(form.dailyTokens) || 0,
+        daily_credit_quota: Number(form.dailyCredit) || 0,
+        assigned_to: form.assignedTo.trim(),
         platforms: form.platforms,
         // '' 是有意义的取值（不限制版本），必须照传——后端以它区分
         // 「存量密钥，两版都能调」与「限定了某一版」
@@ -604,7 +619,9 @@ export default function KeysPage() {
               // 否则会出现「列表显示正常、调用却被 429」，用户会以为是网关坏了。
               const overQuota =
                 (!!k.quota && k.used_tokens >= k.quota) ||
-                (!!k.quota_credit && k.used_credit >= k.quota_credit);
+                (!!k.quota_credit && k.used_credit >= k.quota_credit) ||
+                (!!k.daily_token_quota && (k.daily_used_tokens ?? 0) >= k.daily_token_quota) ||
+                (!!k.daily_credit_quota && (k.daily_used_credit ?? 0) >= k.daily_credit_quota);
               return (
                 <TableRow key={k.id} className="border-b border-border/40">
                   <TableCell className="pl-4 text-sm font-medium">
@@ -624,6 +641,7 @@ export default function KeysPage() {
                         </Badge>
                       </div>
                     ) : null}
+                    {k.assigned_to && <div className="mt-1 text-[11px] text-muted-foreground">{t('keys.assignedTo')}: {k.assigned_to}</div>}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{k.prefix}…</TableCell>
                   <TableCell>
@@ -685,6 +703,8 @@ export default function KeysPage() {
                           : 'text-muted-foreground';
                       return (
                         <span className="flex flex-col">
+                          {!!k.daily_token_quota && <span className="text-[10px] text-muted-foreground">{t('keys.dailyTokens')}: {fmtNumber(k.daily_used_tokens ?? 0)} / {fmtNumber(k.daily_token_quota)}</span>}
+                          {!!k.daily_credit_quota && <span className="text-[10px] text-muted-foreground">{t('keys.dailyCredit')}: {k.daily_used_credit ?? 0} / {k.daily_credit_quota}</span>}
                           <span className={tone}>
                             {fmtNumber(k.used_tokens)}
                             {k.quota ? ` / ${fmtNumber(k.quota)}` : ''}
@@ -900,6 +920,26 @@ export default function KeysPage() {
                   <p className="text-[11px] leading-4 text-muted-foreground">
                     {t('keys.quotaCreditHint')}
                   </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 rounded-2xl border border-border/60 p-4 sm:grid-cols-2">
+                <div className="space-y-1.5"><Label htmlFor="daily-tokens" className="text-[11px] text-muted-foreground">{t('keys.dailyTokens')}</Label>
+                  <Input id="daily-tokens" type="number" min={0} step={1} value={form.dailyTokens} onChange={event => setForm({...form, dailyTokens: event.target.value})} />
+                </div>
+                <div className="space-y-1.5"><Label htmlFor="daily-credit" className="text-[11px] text-muted-foreground">{t('keys.dailyCredit')}</Label>
+                  <Input id="daily-credit" type="number" min={0} step="any" value={form.dailyCredit} onChange={event => setForm({...form, dailyCredit: event.target.value})} />
+                </div>
+                <p className="text-[11px] leading-5 text-muted-foreground sm:col-span-2">{t('keys.dailyHint')}</p>
+                <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="key-assigned-to" className="text-[11px] text-muted-foreground">{t('keys.assignedTo')}</Label>
+                  <Select value={form.assignedTo ? `user:${form.assignedTo}` : 'none'} onValueChange={value => setForm({...form, assignedTo: value === 'none' ? '' : value.slice(5)})} disabled={'users' in errors}>
+                    <SelectTrigger id="key-assigned-to" aria-label={t('keys.assignedTo')} className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t('keys.unassigned')}</SelectItem>
+                      {users.map(user => <SelectItem key={user.username} value={`user:${user.username}`}>{user.username}</SelectItem>)}
+                      {form.assignedTo && !users.some(user => user.username === form.assignedTo) && <SelectItem value={`user:${form.assignedTo}`}>{form.assignedTo}</SelectItem>}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] leading-5 text-muted-foreground">{t('keys.assignmentHint')}</p>
                 </div>
               </div>
               <div className="space-y-1.5">

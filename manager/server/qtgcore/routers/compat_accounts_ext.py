@@ -1,6 +1,7 @@
-"""账号扩展动作 + 扫码登录（`/api/auth/*`、`/api/accounts/{file}/test|clear-cooling|proxy|weight|move`）。
+"""账号扩展动作（`/api/accounts/{file}/test|clear-cooling|proxy|weight|move`）。
 
-原则与 `compat_settings.py` 一致：能真实做到的做到（测活、清冷却、扫码入池），
+授权由 Manager 的 accounts + services/platformauth 显式分流，不经过兼容层兜底。
+原则与 `compat_settings.py` 一致：能真实做到的做到（测活、清冷却），
 做不到的（代理/权重/分组——qoder-bff 是单账号池、账号 JSON 里没有这些字段）
 如实 409，绝不假装成功。
 
@@ -58,14 +59,6 @@ def _account_path(rt, uid: str) -> Path:
     except ValueError as exc:
         raise BadRequest("账号 ID 非法") from exc
     return target
-
-
-# ------------------------------------------------------------------ 扫码登录
-
-
-
-
-
 
 
 # ------------------------------------------------------------------ 单账号动作

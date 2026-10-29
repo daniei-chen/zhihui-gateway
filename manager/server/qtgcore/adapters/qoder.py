@@ -123,11 +123,12 @@ class QoderAdapter(BaseAdapter):
             "POST",
             "/api/up/accounts/login/start",
             json_body={"platform": "CLI", "realm": realm or "cn"},
+            retry=False,
         ) or {}
 
     async def oauth_poll(self, state: str) -> Dict[str, Any]:
         return await self._json(
-            "GET", "/api/up/accounts/login/poll", params={"state": state}, required=False
+            "GET", "/api/up/accounts/login/poll", params={"state": state}, retry=False
         ) or {}
 
     async def health(self) -> Dict[str, Any]:

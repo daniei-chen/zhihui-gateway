@@ -92,11 +92,11 @@ class TraeAdapter(BaseAdapter):
         return await self._json("POST", "/api/keys", json_body=body) or {}
 
     async def oauth_login_url(self) -> Dict[str, Any]:
-        return await self._json("POST", "/api/up/oauth_get_login_url", json_body={}, required=False) or {}
+        return await self._json("POST", "/api/up/oauth_get_login_url", json_body={}, retry=False) or {}
 
     async def oauth_finish(self, callback_url: str, name: str = "") -> Dict[str, Any]:
         return await self._json(
-            "POST", "/api/up/oauth_login", json_body={"callback_url": callback_url, "name": name}
+            "POST", "/api/up/oauth_login", json_body={"callback_url": callback_url, "name": name}, retry=False
         ) or {}
 
     async def fetch_remaining_credits(self, user_id: str) -> Dict[str, Any]:

@@ -300,6 +300,13 @@ RULES: Tuple[Rule, ...] = PUBLIC_RULES + (
         evidence="qtg/app/qtg/routers/compat_accounts_ext.py:49-108",
     ),
     Rule(
+        action="A18-REVIEW", title="只读核对本人的平台授权台账",
+        methods=frozenset({"POST"}), paths=("/api/auth/review",),
+        allow=frozenset({ROLE_ADMIN}), human_only=True,
+        evidence="server/routers/accounts.py:auth_review",
+        notes="只读投影，不访问上游、不释放授权锁；POST 避免 state 进入 URL 日志",
+    ),
+    Rule(
         action="A19", title="签到（单账号/全量）", methods=frozenset({"POST"}),
         paths=("/api/accounts/*/checkin", "/api/accounts/checkin-all"),
         allow=_WRITE_ROLES,

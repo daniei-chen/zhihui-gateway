@@ -19,7 +19,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from server import budget, budgetowner, config, db, deadline, keysvc, ledgerreplay
+from server import budget, budgetowner, config, db, deadline, keysvc, ledger, ledgerreplay
 from server import observability, operational, platformpolicy
 from server.routers import anthropic, gateway, responses
 
@@ -447,6 +447,11 @@ class AggregationAndUnknownScanTest(_Fixture):
         db.execute('UPDATE budget_reservations SET reserved_tokens=0 WHERE request_id=?', (zero_id,))
         db.execute('UPDATE api_keys SET used_tokens=77,used_credit_units=1234000,used_credit=1.234 '
                    'WHERE id=?', (key['id'],))
+        db.add_request_log(ts=now - 7200, request_id=zero_id, key_id=key['id'],
+                           prompt_tokens=0, completion_tokens=0, credit=0,
+                           usage_source='upstream', usage_complete=1, status=200,
+                           terminal_state='completed', model='m', realm='cn')
+        ledger.record(zero_id, key['id'], 'm', 'cn', 0, 0, 0, False, 'completed', 'fixture')
         with mock.patch.object(budget, 'resolve', wraps=budget.resolve) as resolve:
             self.assertEqual(operational.reconcile_zero_reservation_unknowns(now), 1)
             self.assertEqual(resolve.call_count, 1)
@@ -553,7 +558,9 @@ class AggregationAndUnknownScanTest(_Fixture):
         db.add_request_log(ts=now, key_id=key['id'], ip='127.0.0.1', model='m', mapped_model='m',
                            status=503, prompt_tokens=0, completion_tokens=0, latency_ms=1, ua='test',
                            error='{"error":{"code":"no_healthy_account"}}', stream=0,
-                           request_id=request_id, usage_source='unknown', terminal_state='upstream_error')
+                           request_id=request_id, usage_source='upstream', usage_complete=1,
+                           credit=0, terminal_state='upstream_error')
+        ledger.record(request_id, key['id'], 'm', 'cn', 0, 0, 0, False, 'upstream_error', 'fixture')
         self.assertEqual(budget.reconcile_evidenced_unknowns(now), 1)
         self.assertEqual(db.query_one('SELECT state FROM budget_reservations WHERE request_id=?',
                                      (request_id,))[0], 'settled')

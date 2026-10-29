@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "productionDataIncluded": false,
+  "consoleBuildId": "L56xJIgc6_WtFFG8UVFfz",
+  "scope": "README artwork and historical synthetic console preview, not current production proof",
+  "assets": [
+    {
+      "path": "brand/zhihui-z.svg",
+      "bytes": 706,
+      "sha256": "b4da49287f1690ebc27c950774f8adf2877324de3b24a65add3143cbc9c29652"
+    },
+    {
+      "path": "docs/images/readme/button-develop.svg",
+      "bytes": 1077,
+      "sha256": "e05d2f4b94cdab3034d275c190fc48c13b8d3a3b6d5fcf185629823a2a843505"
+    },
+    {
+      "path": "docs/images/readme/button-home.svg",
+      "bytes": 1068,
+      "sha256": "4e98ad2911b0981f6cb84cbd5d1dce28aa4ff0ebc63c4b2f38cde6223e073141"
+    },
+    {
+      "path": "docs/images/readme/button-release.svg",
+      "bytes": 1074,
+      "sha256": "156bce1b4b608e05f7d7c2337419696b104212f409cd51f542bcffa20a9e9b8c"
+    },
+    {
+      "path": "docs/images/readme/capabilities-mobile.svg",
+      "bytes": 4949,
+      "sha256": "84c4e9583bf3054328d384cb016e4c57ab1038a5decf35da2ab4c11a826f967a"
+    },
+    {
+      "path": "docs/images/readme/capabilities.svg",
+      "bytes": 4949,
+      "sha256": "8df1ef0ce067551a6fab9384bc5ecfeeeb21a9c1cda75d006346cd7a3e8666cd"
+    },
+    {
+      "path": "docs/images/readme/cover-mobile.svg",
+      "bytes": 5120,
+      "sha256": "e15a8c5ae7cc9d53bf2b662e9183b8c58a65ed900f3f2650b00599d6c35111c5"
+    },
+    {
+      "path": "docs/images/readme/cover.svg",
+      "bytes": 5690,
+      "sha256": "dd507865925e21bafe3c0ceefd4b33e0d6ca53c30a5f32766de44187d29da0d9"
+    },
+    {
+      "path": "docs/images/readme/routing-mobile.svg",
+      "bytes": 5625,
+      "sha256": "5c35305e2aa8a07d41584662a58dbcb5a2d918a8acb5e6fd733080b87063a173"
+    },
+    {
+      "path": "docs/images/readme/routing.svg",
+      "bytes": 5703,
+      "sha256": "21b1aac7de91526d3a06d6d78ab995a836708d4a0c1292100ae033ed50b920b3"
+    },
+    {
+      "path": "docs/images/zhihui-home-mobile.png",
+      "bytes": 141408,
+      "sha256": "385271a509820ca591106213336e6b74a69a6b794cc6980c6dd9e048f08aac45"
+    },
+    {
+      "path": "docs/images/zhihui-home.png",
+      "bytes": 506651,
+      "sha256": "05723feb85b4e2c0df4b2a4e35ba02a4f41654b9f9d2a7443507ea739e3de94c"
+    },
+    {
+      "path": "site/home/preview/accounts-desktop.jpg",
+      "bytes": 78803,
+      "sha256": "9a1f2505d8c2b8eb2f5d83d9b86b33359949b1b5d1c40c80e4b324faa352bed7"
+    },
+    {
+      "path": "site/home/preview/dashboard-desktop.jpg",
+      "bytes": 94497,
+      "sha256": "82b6a815892d154b612c8a2fec876f22435d26749037a1c3aed96379c0cf8d10"
+    },
+    {
+      "path": "site/home/preview/dashboard-mobile.jpg",
+      "bytes": 28912,
+      "sha256": "d64d190a5529cf33388579d7564ef41a1b81e7d192e05c81f571d3fc2974ea28"
+    },
+    {
+      "path": "site/home/preview/keys-desktop.jpg",
+      "bytes": 56627,
+      "sha256": "301f67b285e569b7cab02737bf2802db8e99af91ea9625a2617e2c2bb3c98aeb"
+    },
+    {
+      "path": "site/home/preview/models-desktop.jpg",
+      "bytes": 86991,
+      "sha256": "da722b4b0bcf485d3a832dc3be1ed76d73901e3602b69b7413af0484d7958d9a"
+    },
+    {
+      "path": "site/home/preview/stats-desktop.jpg",
+      "bytes": 89576,
+      "sha256": "169889f6994056ea00f89f58e305d10351b70594701669bf302ebc8a1db04492"
+    }
+  ]
+}

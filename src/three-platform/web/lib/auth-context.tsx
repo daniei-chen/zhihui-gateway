@@ -33,6 +33,7 @@ interface AuthContextValue {
   me: Me | null;
   loading: boolean;
   isAdmin: boolean;
+  canAddAccounts: boolean;
   role: Role | null;
   refresh: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -95,7 +96,9 @@ export function AuthProvider({children}: {children: ReactNode}) {
 
   return (
     <AuthContext.Provider
-      value={{me, loading, isAdmin: me?.role === 'admin', role: me?.role ?? null, refresh, login, logout}}
+      value={{me, loading, isAdmin: me?.role === 'admin',
+        canAddAccounts: me?.role === 'admin' || me?.role === 'account_admin',
+        role: me?.role ?? null, refresh, login, logout}}
     >
       {children}
     </AuthContext.Provider>
@@ -106,5 +109,5 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   const hydrated = useHydrated();
   if (!ctx) throw new Error('useAuth 必须在 AuthProvider 内使用');
-  return hydrated ? ctx : {...ctx, me: null, loading: true, isAdmin: false, role: null};
+  return hydrated ? ctx : {...ctx, me: null, loading: true, isAdmin: false, canAddAccounts: false, role: null};
 }

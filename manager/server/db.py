@@ -213,6 +213,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS idx_keys_prefix ON api_keys(prefix);
 
+CREATE TABLE IF NOT EXISTS key_daily_usage (
+  key_id INTEGER NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0,
+  credit_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(key_id,day)
+);
+
 CREATE TABLE IF NOT EXISTS api_key_ips (
   key_id     INTEGER NOT NULL,
   ip         TEXT    NOT NULL,
@@ -768,6 +773,9 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ('usage_daily', 'cache_hit_tokens', 'INTEGER NOT NULL DEFAULT 0'),
     ('usage_daily', 'cache_miss_tokens', 'INTEGER NOT NULL DEFAULT 0'),
     ('api_keys', 'quota_credit', 'REAL NOT NULL DEFAULT 0'),
+    ('api_keys', 'daily_token_quota', 'INTEGER NOT NULL DEFAULT 0'),
+    ('api_keys', 'daily_credit_quota', 'REAL NOT NULL DEFAULT 0'),
+    ('api_keys', 'assigned_to', "TEXT NOT NULL DEFAULT ''"),
     ('api_keys', 'used_credit', 'REAL NOT NULL DEFAULT 0'),
     # 密钥来源（K01-S1）：'manager' = 本管理端创建；'qtg-legacy' = 从 QTG 旧库迁移。
     # **先扩后收**：存量行一律默认 'manager'，升级后行为与从前完全一致；迁移脚本
@@ -844,6 +852,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f'UPDATE {table} SET {new}=? WHERE rowid=?', (units(row[1] or 0),row[0]))
 
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id) WHERE request_id IS NOT NULL')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_key_daily_day ON key_daily_usage(day,key_id)')
+    from . import dailyquota
+    dailyquota.seed_existing(conn)
 
 
 def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:

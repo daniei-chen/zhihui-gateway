@@ -252,7 +252,7 @@ class UnknownArchiveTest(unittest.TestCase):
             self.assertIsNone(self._row(request_id)['resolution'], request_id)
         summary = self._summary()
         self.assertEqual(summary['archived_pending'], 0)
-        self.assertEqual(summary['auto_reconcilable'], 1)
+        self.assertEqual(summary['auto_reconcilable'], 0)
         self.assertEqual(summary['by_class']['charged_partial'], 1)
         self.assertEqual(summary['by_class']['usage_present'], 1)
 

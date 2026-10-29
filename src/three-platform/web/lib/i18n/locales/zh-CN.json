@@ -242,7 +242,44 @@
     "shareText": "打开这个链接完成授权（浏览器里登录即可，也可扫码），之后会自动签到并纳入账号池",
     "retry": "重新获取",
     "stateLost": "授权已失效（服务端在等待期间重启过），请重新获取",
-    "realmMismatch": "这个二维码是另一个版本（国内 / 国际）的，请重新获取"
+    "realmMismatch": "这个二维码是另一个版本（国内 / 国际）的，请重新获取",
+    "titlePlatform": "连接 {platform} · {realm}",
+    "descWbCn": "在 WorkBuddy 官方页面登录并授权，将账号连接到智汇网关。",
+    "descWbGlobal": "在 WorkBuddy 国际站完成授权。新账号请先选择注册地区；地区不影响其他平台。",
+    "descQoder": "在当前版本的 Qoder 官方页面完成设备授权，账号仅加入 Qoder 账号池。",
+    "descTrae": "在 Trae 国内站完成授权，再将浏览器跳转后的回调地址粘贴回来，确认连接。",
+    "traeGlobalUnsupported": "当前 Trae 引擎尚未接入国际版授权，请切换国内版；不会转到 WorkBuddy。",
+    "requestingPlatform": "正在创建 {platform} 授权连接…",
+    "waitingPlatform": "等待 {platform} 授权。完成登录后返回此处，智汇将确认连接结果。",
+    "waitingCallback": "完成 Trae 授权后，请粘贴回调地址。此流程不会自动轮询入池。",
+    "openPlatform": "前往 {platform} 授权",
+    "privateLink": "仅授权你有权使用的账号。此链接与本次会话绑定，请勿公开分享。",
+    "connectedTitle": "{platform} 已连接",
+    "connected": "{platform} 账号「{name}」已连接",
+    "connectedDetail": "授权已保存。可用状态、积分与是否参与调度，以{realm}账号列表为准。",
+    "scopeMismatch": "授权结果与当前平台或版本不一致，已停止跳转，请重新获取。",
+    "callbackLabel": "本次授权的回调地址",
+    "callbackHint": "跳转到 127.0.0.1 后即使浏览器提示无法连接，也可复制地址栏中的完整地址。回调含一次性授权码，请勿发送给他人。",
+    "confirmCallback": "确认连接 Trae",
+    "cancelAuthorization": "取消本次授权",
+    "resultUnconfirmed": "授权已提交，但尚不能确认入池结果。请先刷新账号列表核对，避免重复提交。",
+    "reviewTitle": "授权状态核对",
+    "reviewRefresh": "刷新状态",
+    "reviewBeforeNew": "有授权仍在处理或待核对，暂不发起新连接。可刷新状态；这不会重复提交。",
+    "reviewHint": "只读核对，不重试授权、不释放锁。账号是否可用，以对应平台账号列表为准。",
+    "reviewState": {
+      "waiting": "等待授权",
+      "processing": "处理中",
+      "success": "已确认保存",
+      "expired": "已过期",
+      "invalid": "已结束或无效",
+      "unconfirmed": "结果待核对",
+      "engine_changed": "授权引擎已变更"
+    },
+    "reviewEngine": {
+      "changed": "引擎已变更；旧授权不能继续提交。",
+      "unavailable": "引擎暂不可读；当前仅显示已存证据。"
+    }
   },
   "brand": {
     "name": "智汇网关",
@@ -588,7 +625,13 @@
     "upstreamsFailed": "上游列表没取到 —— 新建密钥的「绑定上游」只会显示默认项，先重试再建。",
     "platforms": "允许的平台",
     "platformsHelp": "选择此密钥可调用的平台。不选择任何平台会阻止全部平台调用。",
-    "platformPolicyInvalid": "平台策略无效，请修复后使用。"
+    "platformPolicyInvalid": "平台策略无效，请修复后使用。",
+    "dailyTokens": "每日 Token 上限",
+    "dailyCredit": "每日积分上限",
+    "dailyHint": "0 为不限；按服务器本地日历日重置。积分按上游已报告消耗限制接单，单次请求可能超出剩余额度；未知消耗待核对，不承诺硬计费封顶。",
+    "assignedTo": "分配给用户",
+    "assignmentHint": "选择已有用户，亦可不分配。只记录归属，不授予后台权限，也不重新展示密钥明文。",
+    "unassigned": "未分配"
   },
   "language": {
     "switch": "切换语言"
@@ -860,7 +903,9 @@
     "revoked": "已吊销所有会话，请重新登录",
     "revokeHint": "让服务端所有已签发的登录凭证立即失效（不必改密码）",
     "revokeTitle": "确认吊销所有会话？",
-    "revokeDesc": "所有已登录的会话（包括本机这次）会立即失效，需要重新登录。用于怀疑会话被人拿到时——例如在别人电脑上登录过、旧设备没退出、或备份里含有 Cookie。它比「退出登录」更强：退出只清本机，吊销是让服务端把全部凭证作废。"
+    "revokeDesc": "所有已登录的会话（包括本机这次）会立即失效，需要重新登录。用于怀疑会话被人拿到时——例如在别人电脑上登录过、旧设备没退出、或备份里含有 Cookie。它比「退出登录」更强：退出只清本机，吊销是让服务端把全部凭证作废。",
+    "roleSuperAdmin": "超级管理员",
+    "roleAccountAdmin": "管理员"
   },
   "realm": {
     "switch": "版本切换",
@@ -1084,11 +1129,14 @@
     "mapAdd": "添加映射",
     "mapEmpty": "暂无映射，下游可直接使用上方「可用模型」中的名字",
     "usersNew": "新增登录用户",
-    "usersNewDesc": "管理员可以增删账号与改设置；只读用户只能查看，适合给同事看状态用。",
+    "usersNewDesc": "超级管理员拥有完整管理权限；管理员仅可添加授权账号，不能查看账号池、密钥、统计或修改设置。",
     "usersRole": "权限",
     "roleAdmin": "管理员（可修改）",
     "roleViewer": "只读用户（仅查看）",
     "usersRequired": "请填写用户名与密码",
+    "managedPasswordHint": "密码至少 8 位，可使用字母、数字或中文。",
+    "managedPasswordPlaceholder": "密码（至少 8 位）",
+    "resetManagedPasswordDesc": "设置至少 8 位的密码后，该用户的既有登录会全部失效。",
     "usersCreated": "用户已创建",
     "resetPassword": "重置密码",
     "passwordUpdated": "密码已更新",
@@ -1749,5 +1797,18 @@
     "providerBoundary": "仓库负责智汇的源码、版本与升级；模型供应商的调用地址独立管理。",
     "controlledTitle": "受控升级，保留每一步的依据。",
     "controlledDetail": "从智汇仓库获取固定版本，经哈希、签名和测试门禁核验后，由可信发布器切换。此部署不开放旧式网页覆盖安装，回退代码不回退业务账本。"
+  },
+  "platform": {
+    "switch": "平台切换",
+    "workbuddyHint": "WorkBuddy · 账号、模型、用量与授权",
+    "qoderHint": "Qoder · 国内／国际独立设备授权",
+    "traeHint": "Trae · 当前支持国内版回调授权"
+  },
+  "intake": {
+    "eyebrow": "ZHIHUI · 账号接入",
+    "title": "把账号连接到智汇。",
+    "description": "选择平台和版本，完成官方授权。其余配置由超级管理员统一管理。",
+    "permission": "当前身份仅可添加账号，不开放账号池、密钥、统计或系统配置。",
+    "completed": "本次已确认保存 {count} 个授权。"
   }
 }

@@ -138,7 +138,7 @@ class BaseAdapter:
                     {"upstream": self.name, "method": method},
                 )
                 metrics.inc("qtg_upstream_requests_total", {"upstream": self.name, "method": method})
-                if resp.status_code == 401 and auth and attempt == 0:
+                if resp.status_code == 401 and auth and retry and attempt == 0:
                     # 会话过期：重登后重试一次
                     await self.ensure_auth(force=True)
                     continue

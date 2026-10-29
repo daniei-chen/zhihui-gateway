@@ -65,6 +65,19 @@ async def login(request: Request) -> JSONResponse:
                        f'来源 {ip}', ip=ip)
         raise HTTPException(status_code=401, detail='用户名或密码错误')
 
+    # Password verification is intentionally outside the user-store lock. Bind
+    # signing to that exact snapshot so a concurrent reset cannot mint a fresh
+    # session for an old password, deleted account or previous role.
+    from .. import userstore
+    with userstore.locked(config.USERS_FILE):
+        current_cfg = security.load_users(allow_bootstrap=False)
+        current = next((row for row in current_cfg['users'] if row.get('username') == username), None)
+        if (current is None or security._authorization_fingerprint(cfg, user)
+                != security._authorization_fingerprint(current_cfg, current)):
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+        token = security.issue_token(username, user.get('role', 'viewer'),
+                                     expected_sv=int(user.get('sv', 0)))
+
     security.clear_fail(ip, username)
     # URL 与 Host 都写进日志，便于在反馈里直接看出真实监听形态
     logger.info('登录成功: %s（来源 %s）', username, ip)
@@ -74,7 +87,6 @@ async def login(request: Request) -> JSONResponse:
     if warn:
         logger.warning(warn)
     # orig 缺省 = 现在（首次登录）：这次是会话的**起点**，后续续期不会推后它。
-    token = security.issue_token(username, user.get('role', 'viewer'))
     security.audit(user, 'login', username, f'来源 {ip}', ip=ip)
     resp = JSONResponse({'ok': True, 'username': username, 'role': user.get('role', 'viewer')})
     resp.set_cookie(

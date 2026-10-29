@@ -163,10 +163,20 @@ def _json_list(raw: object) -> list[str]:
     return [str(x) for x in parsed if x]
 
 
-def _parse(row) -> dict:
+def _parse(row, *, daily=None, day=None) -> dict:
     from . import platformpolicy
+    from . import dailyquota
     platforms, policy_valid = platformpolicy.stored_policy(row['platforms'])
+    day = day or db.day_of()
+    if daily is None:
+        daily = dailyquota.snapshot(row['id'], day)
     return {
+        'assigned_to': row['assigned_to'],
+        'daily_token_quota': row['daily_token_quota'],
+        'daily_credit_quota': row['daily_credit_quota'],
+        'daily_used_tokens': daily['tokens'],
+        'daily_used_credit': daily['credit_units'] / 1_000_000,
+        'daily_quota_day': day,
         'platforms': platforms,
         'platform_policy_valid': policy_valid,
         'id': row['id'],
@@ -222,9 +232,12 @@ def list_keys() -> list[dict]:
         '             WHERE s.key_id = k.id LIMIT 1) AS packet_id '
         'FROM api_keys k ORDER BY k.id DESC'
     )
+    from . import dailyquota
+    day = db.day_of()
+    daily = dailyquota.snapshots(day)
     out = []
     for r in rows:
-        item = _parse(r)
+        item = _parse(r, daily=daily.get(r['id'], {'tokens': 0, 'credit_units': 0}), day=day)
         item['packet_id'] = r['packet_id']      # None = 手工建的
         out.append(item)
     return out
@@ -242,6 +255,9 @@ def create_key(
     upstream_id: int | None = None,
     *,
     platforms: list[str] | None = None,
+    daily_token_quota: int = 0,
+    daily_credit_quota: float = 0,
+    assigned_to: str = '',
     _conn: sqlite3.Connection | None = None,
 ) -> dict:
     """创建一个密钥。返回含**明文 token** 的字典（库里只存哈希）。
@@ -259,7 +275,8 @@ def create_key(
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     sql = ('INSERT INTO api_keys(name, key_hash, prefix, enabled, expires_at, max_ips, '
            'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, used_credit_units, '
-           'created_at, upstream_id, platforms) VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, ?, ?, ?)')
+           'created_at, upstream_id, platforms, daily_token_quota,daily_credit_quota,assigned_to) '
+           'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, ?, ?, ?, ?, ?, ?)')
     args = (
         name,
         _hash(token),
@@ -274,6 +291,9 @@ def create_key(
         int(time.time()),
         _norm_upstream_id(upstream_id),
         json.dumps(policy),
+        int(daily_token_quota),
+        _norm_credit_quota(daily_credit_quota),
+        assigned_to,
     )
     if _conn is not None:
         key_id = int(_conn.execute(sql, args).lastrowid or 0)
@@ -291,6 +311,12 @@ def update_key(key_id: int, patch: dict) -> dict | None:
     if not row:
         return None
     fields: dict[str, object] = {}
+    if 'daily_token_quota' in patch:
+        fields['daily_token_quota'] = int(patch['daily_token_quota'] or 0)
+    if 'daily_credit_quota' in patch:
+        fields['daily_credit_quota'] = _norm_credit_quota(patch['daily_credit_quota'])
+    if 'assigned_to' in patch:
+        fields['assigned_to'] = str(patch['assigned_to'] or '')
     if 'platforms' in patch:
         from . import platformpolicy
         fields['platforms'] = json.dumps(platformpolicy.normalize(patch['platforms'], default=False))
@@ -646,13 +672,15 @@ def validate(key: dict, ip: str, model: str | None,
     return None
 
 
-def touch(key: dict, ip: str, tokens: int = 0, credit: float | None = None) -> None:
+def touch(key: dict, ip: str, tokens: int = 0, credit: float | None = None, *, ts=None) -> None:
     """记账：来源 IP、最近使用、已用 token 与已用积分。
 
     credit 为本次调用的**真实扣费**（上游 usage.credit）。None / 0 表示上游
     没返回该字段（本版本之前的上游、或非计费端点）——**不计入而不是按 0 记**，
     与 request_logs.credit、usage_daily.credit 的口径一致。
     """
+    from . import dailyquota
+    dailyquota.charge(key['id'], tokens, credit, ts)
     db.execute(
         'INSERT OR IGNORE INTO api_key_ips(key_id, ip, first_seen) VALUES(?, ?, ?)',
         (key['id'], ip, int(time.time())),

@@ -99,6 +99,10 @@ class _RaceFixture(unittest.TestCase):
         db.execute('INSERT OR IGNORE INTO attempt_events VALUES(?,?,?,?,?,?,?,?,?)',
                    (request_id, attempt, phase, self.now, 'acct', 'm', 'cn', 200, ''))
 
+    def _zero_receipt(self, request_id):
+        db.execute("UPDATE request_logs SET usage_source='upstream',usage_complete=1,credit=0 WHERE request_id=?", (request_id,))
+        ledger.record(request_id, self.key['id'], 'm', 'cn', 0, 0, 0, False, 'completed', 'fixture')
+
     def _late_usage(self, request_id: str, tokens: int = 50, credit: float = 1.0) -> None:
         """模拟"扫描之后、事务之前"落库的晚到部分用量。"""
         db.execute('UPDATE budget_reservations SET charged_tokens=?,charged_credit=? '
@@ -153,6 +157,7 @@ class ExpectChargedZeroTest(_RaceFixture):
     def test_allows_when_charged_is_still_zero(self) -> None:
         self._reserve('rid-clean')
         self._rejected_log('rid-clean')
+        self._zero_receipt('rid-clean')
         self.assertTrue(budget.resolve('rid-clean', 0, 0.0, 'auto-reconcile',
                                        '零用量结清', expect_charged_zero=True))
         self.assertEqual(self._row('rid-clean')['state'], 'settled')
@@ -208,12 +213,14 @@ class ReconcileEvidenceTest(_RaceFixture):
         self._reserve('rid-selected')
         self._rejected_log('rid-selected')
         self._attempt('rid-selected', 'selected')     # 选号阶段，未到达上游
+        self._zero_receipt('rid-selected')
         self.assertEqual(budget.reconcile_evidenced_unknowns(self.now), 1)
         self.assertEqual(self._row('rid-selected')['state'], 'settled')
 
     def test_clean_row_still_settles(self) -> None:
         self._reserve('rid-ok')
         self._rejected_log('rid-ok')
+        self._zero_receipt('rid-ok')
         self.assertEqual(budget.reconcile_evidenced_unknowns(self.now), 1)
         row = self._row('rid-ok')
         self.assertEqual(row['state'], 'settled')
@@ -224,19 +231,20 @@ class ReconcileEvidenceTest(_RaceFixture):
         """竞态窗口：证据检查通过之后、事务之前，晚到用量落库。"""
         self._reserve('rid-race')
         self._rejected_log('rid-race')
+        self._zero_receipt('rid-race')
         before_usage = self._usage()
-        original = budget._reached_upstream
+        original = budget.resolve
 
-        def inject_then_check(request_id: str) -> bool:
+        def inject_then_check(request_id: str, *args, **kwargs) -> bool:
             # 模拟"检查完之后、进事务之前"落库的晚到用量
             self._late_usage(request_id, tokens=50, credit=1.0)
-            return original(request_id)
+            return original(request_id, *args, **kwargs)
 
-        budget._reached_upstream = inject_then_check
+        budget.resolve = inject_then_check
         try:
             settled = budget.reconcile_evidenced_unknowns(self.now)
         finally:
-            budget._reached_upstream = original
+            budget.resolve = original
         self.assertEqual(settled, 0, '晚到用量出现后必须放弃结清')
         self._assert_nothing_written('rid-race', before_usage)
         row = self._row('rid-race')
@@ -277,6 +285,7 @@ class ThreeWayInterleaveTest(_RaceFixture):
     def test_auto_settle_first_then_manual_resolve_is_noop(self) -> None:
         self._reserve('rid-auto')
         self._rejected_log('rid-auto')
+        self._zero_receipt('rid-auto')
         self.assertEqual(budget.reconcile_evidenced_unknowns(self.now), 1)
         before = self._row('rid-auto')
         self.assertFalse(budget.resolve('rid-auto', 120, 0.5, 'ops', '再来一次'))
@@ -288,6 +297,7 @@ class ThreeWayInterleaveTest(_RaceFixture):
     def test_settled_row_is_never_reopened_by_late_usage(self) -> None:
         self._reserve('rid-stable')
         self._rejected_log('rid-stable')
+        self._zero_receipt('rid-stable')
         self.assertEqual(budget.reconcile_evidenced_unknowns(self.now), 1)
         # 结清之后晚到的用量只能落在这行之外（request_logs/usage_events），
         # 本函数不再碰它 —— 断言"不会被自动改回 unknown"
@@ -307,6 +317,8 @@ class ZeroOnlyPathUnchangedTest(_RaceFixture):
 
     def test_zero_only_allows_fully_zero_row(self) -> None:
         self._reserve('rid-zero', reserved=0)
+        self._rejected_log('rid-zero')
+        self._zero_receipt('rid-zero')
         self.assertTrue(budget.resolve('rid-zero', 0, 0.0, 'auto-reconcile',
                                        '零预扣对账', zero_only=True))
         self.assertEqual(self._row('rid-zero')['state'], 'settled')

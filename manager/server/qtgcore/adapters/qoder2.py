@@ -308,12 +308,13 @@ class Qoder2Adapter(BaseAdapter):
 
     async def oauth_start(self, realm: str = "cn") -> Dict[str, Any]:
         return await self._json(
-            "POST", "/accounts/login/start", json_body={"platform": "CLI", "realm": realm or "cn"}
+            "POST", "/accounts/login/start", json_body={"platform": "CLI", "realm": realm or "cn"},
+            retry=False,
         ) or {}
 
     async def oauth_poll(self, state: str) -> Dict[str, Any]:
         return await self._json(
-            "GET", "/accounts/login/poll", params={"state": state}, required=False
+            "GET", "/accounts/login/poll", params={"state": state}, retry=False
         ) or {}
 
     # ---- 健康 ----

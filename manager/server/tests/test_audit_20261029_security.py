@@ -50,6 +50,11 @@ def request(path='/api/me', *, method='GET', cookie='', query='', platform=''):
 
 class RenewalRegressionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for name, value in {'DATA_DIR': Path(tmp.name), 'USERS_FILE': Path(tmp.name) / 'users.json'}.items():
+            patcher = mock.patch.object(config, name, value)
+            patcher.start(); self.addCleanup(patcher.stop)
         self.cfg = {'secret': 'SYNTHETIC-TEST-SECRET', 'users': [
             {'username': 'audit-admin', 'role': 'admin', 'sv': 0}]}
         for patcher in (mock.patch.object(security, 'load_users', side_effect=lambda: self.cfg),

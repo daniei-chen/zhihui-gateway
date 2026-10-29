@@ -22,6 +22,8 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
@@ -30,7 +32,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from fastapi import FastAPI, Depends  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from server import config, db, security  # noqa: E402
+from server import budgetowner, config, db, security  # noqa: E402
+
+
+@contextmanager
+def _isolated_auth_data():
+    """Exercise real lockout persistence without borrowing another test's database."""
+    original_conn = db._conn
+    fail_state = (deepcopy(security._fail), deepcopy(security._user_fail), security._FAILS_LOADED)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        with mock.patch.multiple(config, DATA_DIR=root, DB_PATH=root / 'auth.db',
+                                 USERS_FILE=root / 'users.json', STATIC_DIR=root / 'no-static'):
+            db._conn = None
+            security._fail.clear()
+            security._user_fail.clear()
+            security._FAILS_LOADED = False
+            try:
+                db.connect()
+                yield root
+            finally:
+                if budgetowner._database == str(config.DB_PATH):
+                    budgetowner.close()
+                if db._conn is not None and db._conn is not original_conn:
+                    db._conn.close()
+                db._conn = original_conn
+                security._fail.clear()
+                security._fail.update(fail_state[0])
+                security._user_fail.clear()
+                security._user_fail.update(fail_state[1])
+                security._FAILS_LOADED = fail_state[2]
 
 
 def _users_file(tmp: Path, **kw) -> Path:
@@ -53,20 +84,10 @@ class AuthBypassTest(unittest.TestCase):
     """直接测依赖函数，不经过 HTTP 层——它就是唯一的身份入口。"""
 
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self._dir = Path(self._tmp.name)
-        self._orig = config.USERS_FILE
+        self._dir = self.enterContext(_isolated_auth_data())
         self._path = _users_file(self._dir)
-        config.USERS_FILE = self._path
         security.clear_fail('1.2.3.4')
         security.clear_fail('9.9.9.9', 'admin')
-
-    def tearDown(self) -> None:
-        config.USERS_FILE = self._orig
-        try:
-            self._tmp.cleanup()
-        except PermissionError:
-            pass
 
     def _req(self, *, cookie: str | None = None, api_key: str | None = None):
         """构造一个最小的 Request，只带我们关心的头。"""
@@ -203,12 +224,7 @@ class LoginLockoutTest(unittest.TestCase):
     """锁定计数不能因为字典被灌满而被清零。"""
 
     def setUp(self) -> None:
-        security._fail.clear()
-        security._user_fail.clear()
-
-    def tearDown(self) -> None:
-        security._fail.clear()
-        security._user_fail.clear()
+        self.enterContext(_isolated_auth_data())
 
     def test_flooding_does_not_reset_admin_lockout(self) -> None:
         """灌满 5000 个陌生用户名后，admin 的失败计数必须还在。
@@ -267,6 +283,27 @@ class LoginLockoutTest(unittest.TestCase):
         security.clear_fail('2.2.2.2', 'admin')
         self.assertFalse(security.login_blocked('2.2.2.2', 'admin'))
 
+    def test_fixture_uses_real_private_database_and_restores_live_connection(self) -> None:
+        original = (config.DATA_DIR, config.DB_PATH, config.USERS_FILE, config.STATIC_DIR)
+        connection = db._conn
+        security.record_fail('fixture-outer', 'outer-user')
+        fail_state = (deepcopy(security._fail), deepcopy(security._user_fail), security._FAILS_LOADED)
+        with _isolated_auth_data() as root:
+            self.assertEqual(config.DATA_DIR, root)
+            self.assertEqual(config.USERS_FILE.parent, root)
+            self.assertNotEqual(config.DB_PATH, original[1])
+            self.assertIsNot(db._conn, connection)
+            self.assertEqual(Path(db.query_one('PRAGMA database_list')[2]), config.DB_PATH)
+            security.record_fail('fixture-inner', 'inner-user')
+            self.assertEqual(db.query_one('SELECT fails FROM login_fails_ip WHERE ip=?', ('fixture-inner',))[0], 1)
+            self.assertEqual(db.query_one('SELECT fails FROM login_fails_user WHERE username=?', ('inner-user',))[0], 1)
+        self.assertFalse(root.exists())
+        self.assertEqual(original, (config.DATA_DIR, config.DB_PATH, config.USERS_FILE, config.STATIC_DIR))
+        self.assertIs(db._conn, connection)
+        self.assertEqual((security._fail, security._user_fail, security._FAILS_LOADED), fail_state)
+        self.assertIsNone(db.query_one('SELECT 1 FROM login_fails_ip WHERE ip=?', ('fixture-inner',)))
+        self.assertEqual(db.query_one('SELECT fails FROM login_fails_ip WHERE ip=?', ('fixture-outer',))[0], 1)
+
 
 class UserAdminHttpTest(unittest.TestCase):
     """走真实 HTTP 的用户管理流程。
@@ -277,45 +314,9 @@ class UserAdminHttpTest(unittest.TestCase):
     改密码是本次事故的核心操作，必须端到端跑通。
     """
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        import os
-        cls._tmp = tempfile.TemporaryDirectory()
-        cls._dir = Path(cls._tmp.name)
-        cls._orig_db = config.DB_PATH
-        cls._orig_users = config.USERS_FILE
-        cls._orig_static = config.STATIC_DIR
-        config.DB_PATH = cls._dir / 'h.db'
-        config.USERS_FILE = cls._dir / 'users.json'
-        config.STATIC_DIR = cls._dir / 'no-static'
-        os.environ['WB_ADMIN_PASSWORD'] = 'http-admin-pw'
-        _users_file(cls._dir, users=[
-            {'username': 'admin', 'role': 'admin',
-             'pwd_hash': security.make_hash('http-admin-pw')},
-            {'username': 'guest', 'role': 'viewer',
-             'pwd_hash': security.make_hash('guest-pw-123')},
-        ], api_keys=['wbk_leaked_from_production'])
-        db._conn = None
-        db.connect()
-        from server.main import app
-        cls.app = app
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if db._conn is not None:
-            db._conn.close()
-        db._conn = None
-        config.DB_PATH = cls._orig_db
-        config.USERS_FILE = cls._orig_users
-        config.STATIC_DIR = cls._orig_static
-        try:
-            cls._tmp.cleanup()
-        except PermissionError:
-            pass
-
     def setUp(self) -> None:
-        # 每个用例重置 users.json：改密码/删用户会改共享文件，
-        # 不重置就会互相污染（前一个用例把密码改了，后一个就登不进来）
+        self._dir = self.enterContext(_isolated_auth_data())
+        self.enterContext(mock.patch.dict('os.environ', {'WB_ADMIN_PASSWORD': 'http-admin-pw'}))
         _users_file(self._dir, users=[
             {'username': 'admin', 'role': 'admin',
              'pwd_hash': security.make_hash('http-admin-pw')},
@@ -323,11 +324,10 @@ class UserAdminHttpTest(unittest.TestCase):
              'pwd_hash': security.make_hash('guest-pw-123')},
         ], api_keys=['wbk_leaked_from_production'])
         security.initial_password_path().unlink(missing_ok=True)
-        try:
-            db.execute('DELETE FROM audit_logs')
-        except Exception:  # noqa: BLE001
-            pass
+        from server.main import app
+        self.app = app
         self.c = TestClient(self.app)
+        self.addCleanup(self.c.close)
 
     def _login(self, username: str, password: str) -> int:
         r = self.c.post('/api/login', json={'username': username, 'password': password})
@@ -367,7 +367,7 @@ class UserAdminHttpTest(unittest.TestCase):
         password_path.write_text('initial-admin-pw\n', encoding='utf-8')
 
         self.assertEqual(self._login('admin', 'http-admin-pw'), 200)
-        r = self.c.patch('/api/users/guest', json={'password': 'guest-new-pw-1'})
+        r = self.c.patch('/api/users/guest', json={'password': '6842097531'})
 
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(password_path.exists())
@@ -378,14 +378,14 @@ class UserAdminHttpTest(unittest.TestCase):
         r = self.c.patch('/api/users/admin', json={'password': 'abc'})
         self.assertEqual(r.status_code, 400)
 
-    def test_weak_password_rejected_on_create_and_change(self) -> None:
-        """生产事故根因：admin123 这类弱口令不能再被设置。"""
+    def test_managed_short_password_and_root_weak_password_are_rejected(self) -> None:
+        """Managed users require eight characters; root keeps its strong policy."""
         self.assertEqual(self._login('admin', 'http-admin-pw'), 200)
 
         r = self.c.post('/api/users', json={
-            'username': 'weakling', 'password': 'admin123', 'role': 'viewer'})
+            'username': 'weakling', 'password': 'seven12', 'role': 'account_admin'})
         self.assertEqual(r.status_code, 400)
-        self.assertIn('12', r.json().get('detail', ''))
+        self.assertIn('8', r.json().get('detail', ''))
 
         r = self.c.patch('/api/users/admin', json={'password': 'admin9876543210'})
         self.assertEqual(r.status_code, 400)
@@ -408,8 +408,10 @@ class UserAdminHttpTest(unittest.TestCase):
     def test_delete_user_revokes_its_session(self) -> None:
         """删号后其 cookie 立即失效（此前 7 天内仍可用）。"""
         admin = TestClient(self.app)
+        self.addCleanup(admin.close)
         admin.post('/api/login', json={'username': 'admin', 'password': 'http-admin-pw'})
         victim = TestClient(self.app)
+        self.addCleanup(victim.close)
         victim.post('/api/login', json={'username': 'guest', 'password': 'guest-pw-123'})
         self.assertEqual(victim.get('/api/me').status_code, 200)
         self.assertEqual(admin.delete('/api/users/guest').status_code, 200)
@@ -420,8 +422,9 @@ class UserAdminHttpTest(unittest.TestCase):
         self._login('admin', 'http-admin-pw')
 
         # 攻击者试密码（登录失败也要记）
-        TestClient(self.app).post('/api/login',
-                                  json={'username': 'admin', 'password': 'wrong-guess'})
+        attacker = TestClient(self.app)
+        self.addCleanup(attacker.close)
+        attacker.post('/api/login', json={'username': 'admin', 'password': 'wrong-guess'})
 
         # 改密码：会吊销自己的会话，所以之后必须用新密码重新登录
         r = self.c.patch('/api/users/admin', json={'password': 'final-pw-123'})
@@ -442,9 +445,6 @@ class UserAdminHttpTest(unittest.TestCase):
             self.assertTrue(row.get('ip'), f'{action} 应记录结构化来源 IP')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 class KeysAuditRegressionTest(unittest.TestCase):
     """v1.0.23 回归：创建/删除密钥因漏导入 client_ip 而 500。
 
@@ -454,46 +454,17 @@ class KeysAuditRegressionTest(unittest.TestCase):
     外部安全报告以 500 的形式发现；这里补测试，避免同类"加了调用忘了导入"再发生。
     """
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        import os
-        cls._tmp = tempfile.TemporaryDirectory()
-        cls._dir = Path(cls._tmp.name)
-        cls._orig_db = config.DB_PATH
-        cls._orig_users = config.USERS_FILE
-        cls._orig_static = config.STATIC_DIR
-        config.DB_PATH = cls._dir / 'k.db'
-        config.USERS_FILE = cls._dir / 'users.json'
-        config.STATIC_DIR = cls._dir / 'no-static'
-        os.environ['WB_ADMIN_PASSWORD'] = 'keys-admin-pw'
-        _users_file(cls._dir, users=[
-            {'username': 'admin', 'role': 'admin',
-             'pwd_hash': security.make_hash('keys-admin-pw')},
-        ], api_keys=[])
-        db._conn = None
-        db.connect()
-        from server.main import app
-        cls.app = app
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if db._conn is not None:
-            db._conn.close()
-        db._conn = None
-        config.DB_PATH = cls._orig_db
-        config.USERS_FILE = cls._orig_users
-        config.STATIC_DIR = cls._orig_static
-        try:
-            cls._tmp.cleanup()
-        except PermissionError:
-            pass
-
     def setUp(self) -> None:
+        self._dir = self.enterContext(_isolated_auth_data())
+        self.enterContext(mock.patch.dict('os.environ', {'WB_ADMIN_PASSWORD': 'keys-admin-pw'}))
         _users_file(self._dir, users=[
             {'username': 'admin', 'role': 'admin',
              'pwd_hash': security.make_hash('keys-admin-pw')},
         ], api_keys=[])
+        from server.main import app
+        self.app = app
         self.c = TestClient(self.app)
+        self.addCleanup(self.c.close)
         self.c.post('/api/login', json={'username': 'admin', 'password': 'keys-admin-pw'})
 
     def test_create_key_returns_200_with_secret_once(self) -> None:
@@ -519,10 +490,6 @@ class KeysAuditRegressionTest(unittest.TestCase):
         self.assertIn('create_key', {it['action'] for it in rows})
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class MalformedLoginBodyTest(unittest.TestCase):
     """登录接口对「合法 JSON 但非对象」的 body 必须返回 400，而不是 500。
 
@@ -538,27 +505,15 @@ class MalformedLoginBodyTest(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self._dir = Path(tempfile.mkdtemp())
-        self._orig = (config.DB_PATH, config.USERS_FILE, config.STATIC_DIR)
-        config.DB_PATH = self._dir / 'malformed.db'
-        config.USERS_FILE = self._dir / 'users.json'
-        config.STATIC_DIR = self._dir / 'no-static'
-
-        def _restore() -> None:
-            config.DB_PATH, config.USERS_FILE, config.STATIC_DIR = self._orig
-
-        self.addCleanup(_restore)
+        self._dir = self.enterContext(_isolated_auth_data())
         security.save_users({
             'users': [{'username': 'admin', 'role': 'admin',
                        'pwd_hash': security.make_hash('pw'), 'sv': 1}],
             'secret': 'test-secret',
         })
-        security._fail.clear()
-        security._user_fail.clear()
-        self.addCleanup(security._fail.clear)
-        self.addCleanup(security._user_fail.clear)
         from server.main import app
         self.c = TestClient(app)
+        self.addCleanup(self.c.close)
 
     def test_non_object_json_returns_400_not_500(self) -> None:
         for body in ('null', '[]', '"str"', '123', 'true'):
@@ -583,3 +538,7 @@ class MalformedLoginBodyTest(unittest.TestCase):
     def test_correct_password_still_logs_in(self) -> None:
         r = self.c.post('/api/login', json={'username': 'admin', 'password': 'pw'})
         self.assertEqual(r.status_code, 200, r.text)
+
+
+if __name__ == '__main__':
+    unittest.main()

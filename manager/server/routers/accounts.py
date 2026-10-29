@@ -19,7 +19,7 @@ from .. import config, db, security, upstreamsvc
 from ..iputil import client_ip
 from ..services import (
     credits as creditsvc, dailyplan, modelcatalog, reload, renew, tasklog, taskrun,
-    tencent, wb2api,
+    tencent, wb2api, platformauth,
 )
 from ..services.realm import realm_of, supports_checkin
 
@@ -288,10 +288,44 @@ _login_regions: dict[str, str] = {}
 # 成功了就完成，失败则把「去修目录权限」那条可执行提示原样报给前端。
 _login_ready: dict[str, tuple[dict, str, str, float]] = {}      # state → 国际版地区（可能晚于 auth/start 到达）
 _login_owner: dict[str, str] = {}        # state → 发起人，用于收掉同一用户的旧轮询
+_login_scopes: dict[str, tuple[str, str, int | None, float]] = {}
+_login_bindings: dict[str, str] = {}
+_login_locks: dict[str, asyncio.Lock] = {}
+
+
+def _bind_login(state, user, realm, upstream_id):
+    user = security.authorization_owner(user)
+    _login_scopes[state] = (user['username'], realm, upstream_id, time.time())
+    _login_bindings[state] = user['_authorization_binding']
+    return user
+
+
+def _check_login_scope(state, user, realm, upstream_id):
+    user = security.authorization_owner(user)
+    scope = _login_scopes.get(state)
+    if (scope is None or scope[:3] != (user['username'], realm, upstream_id)
+            or _login_bindings.get(state) != user['_authorization_binding']
+            or time.time() - scope[3] > _LOGIN_RESULT_TTL):
+        raise HTTPException(status_code=404, detail='授权会话不存在或与当前平台、版本不匹配')
+    return user
 
 
 def _owner_key(user: dict, upstream_id: int | None) -> str:
     return f"{user.get('username') or ''}|{upstream_id if upstream_id is not None else ''}"
+
+
+def _discard_login(state: str) -> None:
+    """Discard only a quiescent session; never cancel an in-flight provider write."""
+    lock = _login_locks.get(state)
+    if lock is not None and lock.locked():
+        return
+    task = _login_tasks.pop(state, None)
+    if task is not None and not task.done():
+        task.cancel()
+    for mapping in (_login_scopes, _login_bindings, _login_locks, _login_ready,
+                    _login_polls, _login_regions, _login_owner, _provisioned_states):
+        mapping.pop(state, None)
+    tencent.drop_state(state)
 
 
 def _cancel_other_login_polls(state: str, owner: str) -> None:
@@ -309,6 +343,10 @@ def _cancel_other_login_polls(state: str, owner: str) -> None:
         if task.done():
             # 已跑完的别动：它的终态结果前端可能还没来取（结果留 TTL 那么久）
             continue
+        lock = _login_locks.get(st)
+        if lock is not None and lock.locked():
+            # An in-flight provider write cannot safely be cancelled and replayed.
+            continue
         task.cancel()
         _login_tasks.pop(st, None)
         _login_polls.pop(st, None)
@@ -320,16 +358,18 @@ def _cancel_other_login_polls(state: str, owner: str) -> None:
 def _prune_login_polls() -> None:
     # 清掉过期结果（state 是短命的，但别让它无限增长）
     now = time.time()
+    for st in [k for k, v in _login_scopes.items() if now - v[3] > _LOGIN_RESULT_TTL]:
+        _discard_login(st)
+    for st, lock in list(_login_locks.items()):
+        if st not in _login_scopes and not lock.locked():
+            _discard_login(st)
     for st in [k for k, v in _login_polls.items()
                if now - float(v.get('_at') or 0) > _LOGIN_RESULT_TTL]:
-        _login_polls.pop(st, None)
-        _login_tasks.pop(st, None)
-        _login_regions.pop(st, None)
-        _login_owner.pop(st, None)
+        _discard_login(st)
     # 「等重试落盘」的备忘也要按同样的 TTL 清（它没有 _login_polls 条目，
     # 上面那轮扫不到它）
     for st in [k for k, v in _login_ready.items() if now - float(v[3]) > _LOGIN_RESULT_TTL]:
-        _login_ready.pop(st, None)
+        _discard_login(st)
 
 
 def _today_start() -> int:
@@ -595,7 +635,8 @@ async def auth_start(
     ),
     upstream_id: int | None = Query(None),
     body: dict | None = Body(None),
-    user: dict = Depends(security.current_user),
+    user: dict = Depends(security.require_account_adder),
+    request: Request = None,
 ) -> dict:
     """发起扫码登录。realm 决定国内版 / 国际版端点（缺省国内版）。
 
@@ -603,20 +644,27 @@ async def auth_start(
     而早先这里声明的是普通标量参数 —— FastAPI 对标量默认按 **query** 解析，
     body 里的 realm 被静默忽略、恒回落到默认值 'cn'。后果是：切到「国际版」
     点添加账号，拿到的仍是国内版二维码（`copilot.tencent.com`），且**不报错**。
-    现同时接受两处，body 优先（与前端一致），query 保留兼容旧调用方。
+    现同时接受两处；冲突时明确拒绝，query 保留兼容旧调用方。
 
     region 也在这里收：后台轮询（见 `_poll_login_background`）要用它做地区注册，
     而它**不能只靠前端轮询带上来** —— 窗口被遮挡时前端可能一次都不补，那条
     路径正是这个后台轮询存在的原因。用户在弹窗里改地区会重新发码，所以这里
     拿到的就是当前那张码对应的地区。
     """
+    user = security.authorization_owner(user)
+    platform = platformauth.platform_for(request, body)
+    r = platformauth.realm_from(request, body, realm)
+    if user.get('role') == 'account_admin' and (upstream_id is not None or (body or {}).get('proxy')):
+        raise HTTPException(status_code=403, detail='管理员添加账号仅使用默认账号池和默认线路')
+    if platform != 'workbuddy':
+        if request is None:
+            raise HTTPException(status_code=400, detail='授权缺少平台请求上下文')
+        if region:
+            raise HTTPException(status_code=409, detail='当前平台不支持 WorkBuddy 的注册地区选项')
+        return await platformauth.start(request, user, platform, r, upstream_id, body or {})
     # 分组在这里只做**提前校验**：真正的落盘发生在 auth/poll（那里也要带
     # 同一个分组）。先拒掉不存在的分组，用户不会扫完码才发现目标分组没了。
     _group(upstream_id)
-    raw = realm
-    if isinstance(body, dict) and body.get('realm') is not None:
-        raw = str(body.get('realm'))
-    r = 'global' if str(raw or '').strip().lower() == 'global' else 'cn'
     raw_region = region
     if isinstance(body, dict) and body.get('region') is not None:
         raw_region = str(body.get('region'))
@@ -631,10 +679,13 @@ async def auth_start(
             config.account_proxy({'proxy': proxy_name})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        out = await tencent.start_login(r, proxy_name) if proxy_name else await tencent.start_login(r)
+        with tencent.authorization_scope(lambda: security.authorization_owner(user)):
+            out = await tencent.start_login(r, proxy_name) if proxy_name else await tencent.start_login(r)
+        security.authorization_owner(user)
         # 起后台轮询：前端是否被节流都不影响检测节奏（见文件上方说明）
         st = str(out.get('state') or '')
         if st:
+            _bind_login(st, user, r, upstream_id)
             if reg:
                 _login_regions[st] = reg
             if st not in _login_tasks or _login_tasks[st].done():
@@ -644,7 +695,7 @@ async def auth_start(
                 _login_owner[st] = _owner_key(user, upstream_id)
                 _login_tasks[st] = asyncio.create_task(
                     _poll_login_background(st, r, reg, upstream_id, user))
-        return out
+        return {**out, 'platform': 'workbuddy', 'mode': 'poll'}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -655,15 +706,37 @@ async def auth_poll(
     realm: str | None = None,
     region: str | None = None,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.current_user),
+    user: dict = Depends(security.require_account_adder),
+    request: Request = None,
 ) -> dict:
     """轮询扫码结果；成功则落盘并触发上游重载。
 
     region：国际版账号的地区代码（如 HK）。国际版新号必须先完成地区注册，
     否则聊天会报 14017；地区由用户在弹窗里选，这里只负责提交，不替他决定。
     """
+    platform = platformauth.platform_for(request)
+    realm = platformauth.realm_from(request, fallback=realm)
+    if platform != 'workbuddy':
+        if request is None:
+            raise HTTPException(status_code=400, detail='授权缺少平台请求上下文')
+        return await platformauth.poll(request, user, platform, realm, state, upstream_id)
     if not state:
         return {'status': 'invalid'}
+    platformauth.check_poll_origin(request)
+    user = _check_login_scope(state, user, realm, upstream_id)
+    lock = _login_locks.setdefault(state, asyncio.Lock())
+    async with lock:
+        user = _check_login_scope(state, user, realm, upstream_id)
+        with tencent.authorization_scope(lambda: security.authorization_owner(user)):
+            result = await _poll_workbuddy(state, realm, region, upstream_id, user)
+        if result.get('status') == 'success':
+            # Commit the memo while still serialized; concurrent foreground polls
+            # must not repeat a completed provision before the background sees it.
+            _login_polls[state] = {**result, '_at': time.time()}
+        return result
+
+
+async def _poll_workbuddy(state, realm, region, upstream_id, user):
     # 出站网络失败（线路连不上等）→ 502 + 中文原因：与 /auth/start 同一口径。
     # 不转的话前端拿到的是英文 500，用户看不出「是线路的问题、该换线路」。
 
@@ -695,7 +768,7 @@ async def auth_poll(
         # 上次已经拿到授权、只是没落盘：直接重试落盘（不再问腾讯——那边可能已经
         # 不再报 ready，继续问只会让用户一直「等待中」）。
         memo_result, memo_realm, memo_msg = ready[0], ready[1], ready[2]
-        return _save_and_finish(memo_result, memo_realm, memo_msg, state, group=group)
+        return _save_and_finish(memo_result, memo_realm, memo_msg, state, group=group, owner=user)
 
     try:
         result = await tencent.poll_login(state, r)
@@ -704,13 +777,15 @@ async def auth_poll(
         # 不转的话界面上只有一句英文 500，用户看不出「是线路的问题、该换线路」。
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result.get('status') != 'ready':
+        security.authorization_owner(user)
         return result
+    security.authorization_owner(user)
 
     realm_of_result = result.get('realm') or 'cn'
     if provisioned:
         # 已经供给过：只补落盘（上次就是败在这一步），其余一律不重做
         return _save_and_finish(result, realm_of_result, region_msg='', state=state,
-                                group=group)
+                                group=group, owner=user)
 
     # 探测 dict：billing 域身份头（X-User-Id / X-Domain 等）需要这些字段，
     # 与 _auth_dict 同构；device_token 此刻还没有（落盘时由外部写入）
@@ -732,6 +807,7 @@ async def auth_poll(
             done, why = await tencent.registration_status(auth_probe)
             if not done:
                 region_msg = '尚未完成地区注册，请在弹窗中选择地区后重试（否则聊天会报 14017）'
+        security.authorization_owner(user)
         # 注册完成后再领一次性 trial（失败不阻断，已领过按幂等）
         if region_msg == '' or region_msg.startswith('地区已提交'):
             ok_t, trial_msg = await tencent.claim_trial(auth_probe)
@@ -739,7 +815,9 @@ async def auth_poll(
                 region_msg = f'{region_msg}；{trial_msg}'.strip('；')
 
     # 自动签到（幂等，不阻断落盘）。国际版无签到体系，checkin 会直接跳过
+    security.authorization_owner(user)
     code, message = await tencent.checkin(auth_probe, realm_of_result)
+    security.authorization_owner(user)
     db.add_checkin_log(
         str(result.get('uid', '')), str(result.get('nickname', '')),
         'add', code in (0, 10001), code, message,
@@ -751,9 +829,58 @@ async def auth_poll(
     creditsvc.invalidate(str(result.get('uid', '')))
     # 落盘前记下这份结果：万一落盘失败，重试要能只重做落盘（见 _login_ready 注释）
     _login_ready[state] = (result, realm_of_result, region_msg, time.time())
-    out = _save_and_finish(result, realm_of_result, region_msg, state, group=group)
+    out = _save_and_finish(result, realm_of_result, region_msg, state, group=group, owner=user)
     _login_ready.pop(state, None)
     return out
+
+
+@router.post('/auth/review')
+def auth_review(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    """Read stored authorization evidence only; never consume an upstream grant."""
+    from fastapi.responses import JSONResponse
+
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    if 'upstream_id' in request.query_params:
+        raise HTTPException(status_code=404, detail='当前平台授权不支持 WorkBuddy 账号分组')
+    out = platformauth.review(request, user, platform, realm, body.get('state'),
+                              body.get('upstream_id'))
+    # POST keeps the session capability out of access-log URL queries.
+    return JSONResponse(out, headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'})
+
+
+@router.post('/auth/finish')
+async def auth_finish(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    return await platformauth.finish(request, user, platform, realm,
+                                    body.get('state'), body.get('callback_url'))
+
+
+@router.post('/auth/cancel')
+async def auth_cancel(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    if platform == 'workbuddy':
+        state = body.get('state')
+        scope = _login_scopes.get(state) if isinstance(state, str) else None
+        _check_login_scope(state if isinstance(state, str) else '', user, realm,
+                           scope[2] if scope is not None else None)
+        lock = _login_locks.get(state)
+        if lock is not None and lock.locked():
+            raise HTTPException(status_code=409, detail='授权正在处理，请等待结果核对后再取消')
+        _discard_login(state)
+        return {'ok': True}
+    return await platformauth.cancel(request, user, platform, realm, body.get('state'))
 
 
 def _mark_provisioned(state: str) -> None:
@@ -789,12 +916,16 @@ async def _poll_login_background(state: str, realm: str, region: str | None,
         except HTTPException as exc:
             # 落盘失败这类：不存终态，让前端走原路径（那里有「重试即重新落盘」的
             # 语义，且要保留 state 不丢）。
-            logger.warning('后台轮询遇到可重试的错误（等前端重试）: %s', exc.detail)
+            logger.warning('后台授权轮询已停止（HTTP %s）', exc.status_code)
             return
-        except Exception as exc:  # noqa: BLE001
-            logger.warning('后台轮询失败（不影响前端轮询）: %s', exc)
+        except Exception:  # noqa: BLE001
+            logger.warning('后台授权轮询失败；未记录上游响应或凭据')
             return
         if resp.get('status') != 'waiting':
+            try:
+                security.authorization_owner(user)
+            except HTTPException:
+                return
             _login_polls[state] = {**resp, '_at': time.time()}
             return
         await asyncio.sleep(_LOGIN_POLL_SECONDS)
@@ -862,18 +993,32 @@ _REVIVE_POLL_SECONDS = 2.0
 _revive_tasks: set[asyncio.Task] = set()
 
 
-async def _revive_after_login(uid: str, group: dict) -> None:
+async def _revive_after_login(uid: str, group: dict, *, owner: dict | None = None) -> None:
     """登录成功后的后台收尾：等账号入池，若仍被系统禁用就自动解除。
 
     **为什么重新登录应当自动恢复**：登录在语义上就是「刷新账号状态」—— 用户重新
     授权了一次，凭证是全新的，上游那句「需重新登录」的禁用理由已经消失，没有道理
     还让它留在池外。上游自己不做这件事（upsert 只换凭证），所以由面板补上。
     """
+    if owner is None:
+        return
+    try:
+        owner = security.authorization_owner(owner)
+    except HTTPException:
+        return
     base_url = group.get('base_url')
     api_key = upstreamsvc.forward_api_key(group)
     deadline = time.monotonic() + _REVIVE_WAIT_SECONDS
     while time.monotonic() < deadline:
+        try:
+            security.authorization_owner(owner)
+        except HTTPException:
+            return
         still = await wb2api.account_disabled(uid, base_url=base_url, api_key=api_key)
+        try:
+            security.authorization_owner(owner)
+        except HTTPException:
+            return
         if still is None:
             await asyncio.sleep(_REVIVE_POLL_SECONDS)   # 还没被上游收录，再等等
             continue
@@ -886,7 +1031,7 @@ async def _revive_after_login(uid: str, group: dict) -> None:
     logger.info('重新登录后等待账号入池超时，跳过自动解除禁用 uid=%s', uid[:8])
 
 
-def _schedule_revive_after_login(uid: str, group: dict) -> None:
+def _schedule_revive_after_login(uid: str, group: dict, *, owner: dict | None = None) -> None:
     """调度上面那个后台任务。
 
     登录**已经成功**（账号文件确实落盘了），所以这里任何失败都不该反过来影响
@@ -897,11 +1042,11 @@ def _schedule_revive_after_login(uid: str, group: dict) -> None:
     顺着 `_save_and_finish` 冒到 `auth_poll`，把一次**已经成功**的登录变成 500。
     """
     uid = str(uid or '').strip()
-    if not uid:
+    if not uid or owner is None:
         return
     try:
         loop = asyncio.get_running_loop()
-        task = loop.create_task(_revive_after_login(uid, group))
+        task = loop.create_task(_revive_after_login(uid, group, owner=owner))
         # 持有强引用：asyncio 只保留弱引用，没人接住的任务可能在执行途中被 GC 掉，
         # 症状是「有时不生效」且不报错（与 _login_tasks 同一套路）。
         if task is not None:
@@ -913,7 +1058,7 @@ def _schedule_revive_after_login(uid: str, group: dict) -> None:
 
 
 def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
-                     state: str, group: dict | None = None) -> dict:
+                     state: str, group: dict | None = None, *, owner: dict | None = None) -> dict:
     """落盘 + 收尾（重载上游、丢弃 state）。落盘失败时抛出**可执行**的提示。
 
     单独抽出来是因为它有两条进入路径：首次供给后、以及「上次就是败在落盘」
@@ -926,7 +1071,10 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     group = group or upstreamsvc.default_upstream()
     auth_dir = _group_dir(group)
     try:
-        filename, existed = tencent.write_auth_file(result, auth_dir)
+        if owner is None:
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+        with security.authorization_guard(owner):
+            filename, existed = tencent.write_auth_file(result, auth_dir)
     except ValueError as exc:
         # uid 形态异常（`write_auth_file` 会校验后才拼文件名）。这不是权限问题，
         # 给「去 chown」的提示会把用户引到错方向 —— 如实说明是上游返回的数据异常。
@@ -954,6 +1102,7 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     # 账号已确实落盘，这时才丢 state（成功路径的收尾）
     tencent.drop_state(state)
     _provisioned_states.pop(state, None)
+    _login_ready.pop(state, None)
 
     # 让上游加载新账号：**先等它的 auths 热加载，超时才重启**（后台执行，
     # 不阻塞本次响应）。此前无脑重启，而重启期间上游 /status 不可用 —— 前端
@@ -963,7 +1112,7 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
                                      upstream=_reload_target(group))
     # 重新登录 = 刷新账号状态：若它此前被系统禁用（12153 连败 / 11140 被封），
     # 这时后台自动解除 —— 否则「重新登录」救不回账号，用户报的就是这条。
-    _schedule_revive_after_login(str(result.get('uid') or ''), group)
+    _schedule_revive_after_login(str(result.get('uid') or ''), group, owner=owner)
 
     return {
         'status': 'success',

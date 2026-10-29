@@ -931,7 +931,7 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                 ledger.forwarding(state,'terminal',terminal)
             if key and (status < 400 or pt+ct>0 or credit):
                 total=max(0,pt)+max(0,ct)
-                keysvc.touch(key,ip,total,credit)
+                keysvc.touch(key,ip,total,credit,ts=facts['ts'])
                 if total or credit:
                     db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0),ts=facts['ts'])
         if state:

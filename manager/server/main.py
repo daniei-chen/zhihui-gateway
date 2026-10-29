@@ -77,6 +77,7 @@ async def lifespan(app: FastAPI):
     app.state.configuration_snapshot = validate_environment()
     config.ensure_dirs()
     db.connect()
+    security.migrate_user_roles()
     # U01（2026-10-28）：启动时先消化「上次事务失败留下的完成回执」。失败不阻断
     # 启动——monitor 循环会继续重放，且就绪判定会因积压>0 保持失败。
     from . import ledgerreplay
@@ -96,7 +97,6 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
     monitor_task = asyncio.create_task(operational.monitor())
-    security.load_users()  # 首次启动会自动生成管理员并打印一次密码
     # 弱口令巡检改后台线程（原 sitecustomize 猴子补丁收编进源码，2026-10-27）：
     # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
     # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要

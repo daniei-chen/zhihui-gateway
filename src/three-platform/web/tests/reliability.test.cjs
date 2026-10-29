@@ -76,6 +76,72 @@ test('usage cache rates preserve missing data, true zero and provider denominato
   }
 });
 
+test('user password reset keeps root policy distinct, preserves raw input and clears on close', async () => {
+  const policy = load('lib/managed-user-password.ts', {});
+  const jsx = (type, props) => ({type, props});
+  for (const username of ['admin', 'alice']) {
+    const h = hookHarness(), writes = [];
+    const {ResetPasswordDialog} = load('components/common/settings/ResetPasswordDialog.tsx', {
+      react: {...h.react, useId: () => 'password-hint'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
+      '@/components/common/layout/ConfirmDialog': {ConfirmDialog: 'dialog'},
+      '@/components/ui/input': {Input: 'input'}, '@/lib/base-path': {BASE_PATH: ''},
+      '@/lib/managed-user-password': policy, '@/lib/i18n/provider': {useT: () => key => key},
+      '@/lib/toast': {notify: {ok() {}, err() {}}},
+      '@/lib/api': {errText: String, settingsApi: {async updateUser(name, payload) {
+        writes.push({name, payload}); return {relogin_required: false};
+      }}},
+    });
+    const render = () => h.render(() => ResetPasswordDialog({username, trigger: null}));
+    const input = tree => tree.props.content.props.children[0];
+    let tree = render();
+    assert.equal(tree.props.confirmDisabled, true);
+    assert.equal(input(tree).props.maxLength, undefined);
+    assert.equal(input(tree).props.inputMode, undefined);
+    assert.equal(input(tree).props.pattern, undefined);
+    assert.equal(tree.props.description, username === 'admin' ? 'settings.resetPasswordDesc' : 'settings.resetManagedPasswordDesc');
+    for (const value of ['1234567', 'letters', '\u{1f600}'.repeat(3)]) {
+      input(tree).props.onChange({target: {value}});
+      tree = render();
+      assert.equal(input(tree).props.value, value);
+      assert.equal(tree.props.confirmDisabled, true);
+      await tree.props.onConfirm();
+    }
+    assert.equal(writes.length, 0);
+    if (username !== 'admin') {
+      for (const value of ['123456789', '1234567890', '12345678901', 'long-mixed-password',
+        '\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b', '\u{1f600}'.repeat(8)]) {
+        input(tree).props.onChange({target: {value}});
+        tree = render();
+        assert.equal(input(tree).props.value, value);
+        assert.equal(tree.props.confirmDisabled, false);
+      }
+      input(tree).props.onChange({target: {value: '\u{1f600}'.repeat(7)}});
+      tree = render();
+      assert.equal(tree.props.confirmDisabled, true);
+    }
+    input(tree).props.onChange({target: {value: username === 'admin' ? 'Root-Password!' : 'mixed123'}});
+    tree = render();
+    assert.equal(tree.props.confirmDisabled, false);
+    await tree.props.onConfirm();
+    assert.deepEqual(JSON.parse(JSON.stringify(writes[0])), {name: username, payload: {password: username === 'admin' ? 'Root-Password!' : 'mixed123'}});
+    tree.props.onOpenChange(false);
+    assert.equal(input(render()).props.value, '');
+  }
+});
+
+test('five languages explain managed password minimum and translate the backend rejection', () => {
+  const phrase = '用户登录密码至少 8 位';
+  for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(root, 'lib/i18n/locales', locale + '.json'), 'utf8'));
+    for (const key of ['managedPasswordHint', 'managedPasswordPlaceholder', 'resetManagedPasswordDesc']) {
+      assert.match(dict.settings[key], /8/, locale + ':' + key);
+    }
+    if (locale === 'zh-CN') assert.deepEqual(dict.phrases, {});
+    else assert.ok(dict.phrases[phrase], locale);
+    assert.match(dict.settings.resetPasswordDesc, /12/, locale + ':root policy');
+  }
+});
+
 test('output speed never displays absent or nonfinite measurements as zero', () => {
   const {formatOutputRate} = load('lib/usage-metrics.ts', {});
   assert.equal(formatOutputRate(37.5), '37.5');
@@ -225,12 +291,28 @@ test('API platform query defaults preserve explicit values and storage failure d
   }
   const override = requestInterceptor({headers: {}, params: {platform: 'trae', page: 2}});
   assert.equal(override.params.platform, 'trae'); assert.equal(override.params.page, 2);
+  const captured = requestInterceptor({headers: {'X-QTG-Platform': 'trae'}, params: {platform: 'trae', realm: 'cn'}});
+  assert.equal(captured.headers['X-QTG-Platform'], 'trae', 'A captured authorization must not move to the current qoder store');
+  assert.equal(captured.params.platform, 'trae');
   const encoded = requestInterceptor({headers: {}, params: new URLSearchParams('realm=global')});
   assert.equal(encoded.params.get('platform'), 'qoder'); assert.equal(encoded.params.get('realm'), 'global');
   explicit = null;
   assert.equal(requestInterceptor({headers: {}}).params, undefined);
   await assert.rejects(responseError({response: {status: 401}}));
   assert.equal(window.location.href, '/login');
+});
+
+test('authorization popup nulls its opener and never reads a cross-origin location', () => {
+  const navigated = [];
+  const child = {opener: 'fixture', location: {replace: value => navigated.push(value)}, focus() {}, close() {}};
+  const window = {screen: {availWidth: 1440, availHeight: 900}, screenX: 0, screenY: 0,
+    outerWidth: 1440, outerHeight: 900, open: () => child};
+  const {openAuthorizationWindow} = load('lib/authorization-window.ts', {globals: {window}});
+  assert.equal(openAuthorizationWindow('https://qoder.com/device/selectAccounts'), true);
+  assert.equal(child.opener, null);
+  assert.deepEqual(navigated, ['https://qoder.com/device/selectAccounts']);
+  window.open = () => null;
+  assert.equal(openAuthorizationWindow('https://qoder.com/device/selectAccounts'), false, 'Blocked popups leave the ordinary link fallback');
 });
 
 test('logout failure keeps identity/cache/location; confirmed success clears them', async () => {

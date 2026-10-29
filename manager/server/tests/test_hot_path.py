@@ -32,7 +32,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from server import budget, config, db, instancelease, keysvc, observability  # noqa: E402
+from server import budget, budgetowner, config, db, instancelease, keysvc, observability  # noqa: E402
 
 
 class _HotPathBase(unittest.TestCase):
@@ -57,6 +57,7 @@ class _HotPathBase(unittest.TestCase):
         self.key = keysvc.resolve(keysvc.create_key(name='u27', realm='cn')['key'])
 
     def tearDown(self) -> None:
+        budgetowner.close()
         if db._conn is not None:
             db._conn.close()
         db._conn = None

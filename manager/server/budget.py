@@ -9,6 +9,8 @@ import logging
 import math
 import os
 import time
+from datetime import date, timedelta
+from decimal import Decimal
 from . import db, observability, budgetowner, ledger, config
 
 SCHEMA = '''
@@ -123,7 +125,6 @@ def prepare(key, body):
     state.key_id = int(key['id'])
     # Unlimited keys also get a durable forwarding marker, allowing a killed
     # process or failed settlement to expose uncertain spending after recovery.
-    limited = bool(key.get('quota') or key.get('quota_credit'))
     # U01（2026-10-28）：回执积压时对**新请求**背压。判据是「已落盘但还没进库」
     # 的条数，不是「数据库已经写失败」——那时新请求已经接进来了，只能事后补救。
     # 达到上限时拒绝新生成，让重放先追上；已在途的请求不受影响。
@@ -138,8 +139,10 @@ def prepare(key, body):
     initialize()
     rid = state.request_id
     with db.transaction():
-        fresh = db.query_one('SELECT quota,used_tokens,quota_credit,used_credit,used_credit_units FROM api_keys WHERE id=?', (key['id'],))
+        fresh = db.query_one('SELECT quota,used_tokens,quota_credit,used_credit,used_credit_units,'
+                             'daily_token_quota,daily_credit_quota FROM api_keys WHERE id=?', (key['id'],))
         if fresh is None: raise BudgetRejected('密钥已被删除', 'invalid_api_key')
+        limited = bool(fresh['quota'] or fresh['quota_credit'] or fresh['daily_token_quota'] or fresh['daily_credit_quota'])
         states = "('reserved','forwarded','unknown')" if limited else "('reserved','forwarded')"
         if limited:
             # A-002 修复（2026-10-27 审计 S1）：unknown = 「上游没回 usage，等核对」。
@@ -173,6 +176,33 @@ def prepare(key, body):
         if requested is not None and (isinstance(requested,bool) or not isinstance(requested,int) or requested <= 0):
             raise BudgetRejected('max_tokens 必须为正整数', 'invalid_max_tokens')
         output = requested or 4096
+        if fresh['daily_token_quota'] or fresh['daily_credit_quota']:
+            from . import dailyquota
+            now = int(time.time())
+            day = db.day_of(now)
+            daily = dailyquota.snapshot(key['id'], day)
+            start = int(time.mktime(time.strptime(day, '%Y-%m-%d')))
+            end = int(time.mktime(time.strptime(str(date.fromisoformat(day) + timedelta(days=1)), '%Y-%m-%d')))
+            # Recovery/replay updates updated_at, not the accounting day. Active
+            # streams still carry over midnight until their terminal facts arrive.
+            outstanding = db.query("SELECT b.state,b.reserved_tokens,b.charged_tokens FROM budget_reservations b "
+                                   "WHERE b.key_id=? AND (b.state IN ('reserved','forwarded') OR "
+                                   "(b.state='unknown' AND coalesce((SELECT l.ts FROM request_logs l "
+                                   "WHERE l.request_id=b.request_id),b.created_at)>=? AND "
+                                   "coalesce((SELECT l.ts FROM request_logs l WHERE l.request_id=b.request_id),"
+                                   "b.created_at)<?))", (key['id'], start, end))
+            held = sum(max(0, int(r['reserved_tokens']) - int(r['charged_tokens'])) for r in outstanding)
+            if fresh['daily_token_quota']:
+                remaining_daily = int(fresh['daily_token_quota']) - int(daily['tokens']) - held
+                if remaining_daily <= estimated_input:
+                    raise BudgetRejected('今日 Token 额度不足，次日按服务器时区重置', 'daily_token_quota_exhausted')
+                output = min(output, remaining_daily - estimated_input)
+                body[output_field] = output
+            if fresh['daily_credit_quota']:
+                if any(r['state'] == 'unknown' for r in outstanding):
+                    raise BudgetRejected('今日有未确认积分消耗，请先核对后继续', 'daily_credit_unconfirmed')
+                if int(daily['credit_units']) >= ledger.units(fresh['daily_credit_quota']):
+                    raise BudgetRejected('今日积分额度已用尽，次日按服务器时区重置', 'daily_credit_quota_exhausted')
         if q:
             remaining = q - used
             if remaining <= estimated_input:
@@ -215,9 +245,9 @@ def settle(usage, pt, ct, credit):
     if row is None or row['state'] in ('settled','released'): return
     if not _owned(row, state):
         raise BudgetRejected('预算预留已被恢复进程隔离', 'budget_fenced')
-    fresh = db.query_one('SELECT quota_credit FROM api_keys WHERE id=?', (state.key_id,))
+    fresh = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (state.key_id,))
     known = state.terminal_state == 'completed' and isinstance(usage,dict) and all(k in usage for k in ('prompt_tokens','completion_tokens'))
-    if fresh and fresh['quota_credit'] and credit is None: known = False
+    if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
     next_state = 'settled' if known else 'released' if row['state']=='reserved' else 'unknown'
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
@@ -274,6 +304,45 @@ def _unresolved_with_logs(key_id=None):
         for row in rows:
             yield row, logs.get(row['request_id'])
 
+
+def usage_delta(tokens, credit, charged_tokens=0, charged_credit=0, *, allow_negative=False):
+    """Compute integer deltas against durable charged evidence, never a scan snapshot."""
+    td = tokens - int(charged_tokens or 0)
+    cd_units = ledger.units(credit) - (ledger.units(charged_credit or 0) or 0)
+    if not allow_negative and (td < 0 or cd_units < 0):
+        raise ValueError(
+            '该请求已有计费用量（charged_tokens=%d / charged_credit=%s），'
+            '不能用更小的数值覆盖；确需下调请显式声明 allow_negative'
+            % (charged_tokens or 0, charged_credit or 0))
+    return td, cd_units
+
+
+def charge_delta(key_id, token_delta, credit_units_delta, ts, *, allow_negative=False):
+    """Apply one reconciled delta inside the caller's ledger transaction."""
+    if not allow_negative and (token_delta < 0 or credit_units_delta < 0):
+        raise ValueError('negative accounting delta requires explicit approval')
+    from . import dailyquota
+    dailyquota.charge(key_id, token_delta, str(Decimal(credit_units_delta) / ledger.SCALE), ts)
+    db.execute('UPDATE api_keys SET used_tokens=max(0,used_tokens+?),used_credit_units=max(0,coalesce(used_credit_units,round(used_credit*1000000))+?) WHERE id=?',
+               (token_delta, credit_units_delta, key_id))
+    db.execute('UPDATE api_keys SET used_credit=used_credit_units*1.0/? WHERE id=?',
+               (ledger.SCALE, key_id))
+
+
+def _confirmed_zero_usage(request_id, key_id) -> bool:
+    """Require complete request-level provider evidence, not missing charges."""
+    return _zero_usage_proof(_logs_for([request_id]).get(request_id), key_id)
+
+
+def _zero_usage_proof(row, key_id) -> bool:
+    if (row is None or row['key_id'] != key_id or row['usage_source'] != 'upstream'
+            or row['usage_complete'] != 1 or row['prompt_tokens'] != 0
+            or row['completion_tokens'] != 0 or row['credit'] is None
+            or Decimal(str(row['credit'])) != 0):
+        return False
+    return row['usage_event_count'] == 1 and row['zero_event_count'] == 1
+
+
 def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
             expect_charged_zero=False, allow_negative=False):
     """把一条 unknown 预留核对结清（写 charged_* + 增量调整 + 审计）。
@@ -303,7 +372,8 @@ def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
       确实需要"下调"的核对（管理员判定实际用量更小）必须显式
       `allow_negative=True` —— 把"覆盖已记用量"变成一次**主动声明**而不是默认行为。
 
-    `zero_only=True` 的语义保持不变（四个字段全零才放行，供零预扣对账用）。
+    自动对账（含旧定时脚本）和 zero_only 还必须在事务内重读完整的零用量回执。
+    零预扣、超期、拒绝错误字符串或未采集到 attempt 都不能证明没有计费。
     """
     if tokens < 0 or credit < 0 or not math.isfinite(credit) or not reason.strip():
         raise ValueError('需要非负实际用量和核对原因')
@@ -323,17 +393,15 @@ def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
                          'request_id=%s charged_tokens=%d charged_credit=%s',
                          request_id, charged_tokens, row['charged_credit'])
             return False
-        td = tokens - charged_tokens
-        cd_units = ledger.units(credit) - charged_credit_units
-        # N05 闸 2：默认不允许负向调整（= 用更小的数覆盖已记用量）。
-        if not allow_negative and (td < 0 or cd_units < 0):
-            raise ValueError(
-                '该请求已有计费用量（charged_tokens=%d / charged_credit=%s），'
-                '不能用更小的数值覆盖；确需下调请显式声明 allow_negative'
-                % (charged_tokens, row['charged_credit']))
+        td, cd_units = usage_delta(tokens, credit, charged_tokens, row['charged_credit'],
+                                   allow_negative=allow_negative)
+        if actor == 'auto-reconcile' or zero_only:
+            if tokens != 0 or ledger.units(credit) != 0 or not _confirmed_zero_usage(request_id, row['key_id']):
+                return False
         cd = cd_units / ledger.SCALE
-        db.execute('UPDATE api_keys SET used_tokens=max(0,used_tokens+?),used_credit_units=max(0,coalesce(used_credit_units,round(used_credit*1000000))+?) WHERE id=?', (td,cd_units,row['key_id']))
-        db.execute('UPDATE api_keys SET used_credit=used_credit_units*1.0/? WHERE id=?', (ledger.SCALE,row['key_id']))
+        usage_log = db.query_one('SELECT ts FROM request_logs WHERE request_id=?', (request_id,))
+        charge_delta(row['key_id'], td, cd_units, usage_log['ts'] if usage_log else row['created_at'],
+                     allow_negative=allow_negative)
         db.execute('INSERT INTO budget_adjustments VALUES(?,?,?,?,?,?,?)', (request_id,row['key_id'],int(time.time()),td,cd,actor[:128],reason[:500]))
         ledger.adjust(request_id, row['key_id'], td, cd, actor, reason)
         db.execute("UPDATE budget_reservations SET state='settled',charged_tokens=?,charged_credit=?,resolution=?,updated_at=? WHERE request_id=?", (tokens,credit,reason[:500],int(time.time()),request_id))
@@ -341,17 +409,13 @@ def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
     return True
 
 # ── U02（2026-10-28）：unknown 的分类、下界展示与「有证据才结清」 ────────────
-# 现场数据（2026-10-28 生产实测）：41 条 unknown 全部是上游明确拒绝 ——
-#   error 含 no_healthy_account（池里没有可用账号 / 模型不存在），status 502/503，
-#   usage_source=unknown/not_reported，credit IS NULL，charged_*=0。
-# 这类请求根本没有到达模型，零用量是**可复核的结论**，不该永久占着「待核对」；
-# 而 client_cancelled / 无日志 / 已有部分计费的必须保留给人看。
+# 错误分类只用于诊断，不能充当计费结论。自动结清另须完整零用量回执。
 #
 # 分类口径（互斥，按优先级）：
 #   charged_partial   已有 charged_tokens/credit > 0 —— 有部分计费，保留
 #   usage_present     request_logs.usage_source=upstream 或 credit 非 NULL —— 有用量，保留
 #   client_cancelled  499 / client_cancelled —— 可能已部分计费，保留
-#   upstream_rejected 上游明确拒绝且未回 usage —— **可自动按零用量结清**
+#   upstream_rejected 上游拒绝且未回 usage —— 仍待核对，不能猜作零用量
 #   no_request_log    没有请求日志 —— 证据不足，保留
 #   unexplained       其他 —— 保留
 UNKNOWN_CLASSES = ('charged_partial', 'usage_present', 'client_cancelled',
@@ -386,8 +450,13 @@ def _logs_for(request_ids) -> dict:
     if not ids:
         return {}
     placeholders = ','.join('?' * len(ids))
-    rows = db.query('SELECT request_id,status,terminal_state,usage_source,credit,error '
-                    'FROM request_logs WHERE request_id IN (' + placeholders + ')', tuple(ids))
+    rows = db.query('SELECT l.request_id,l.status,l.terminal_state,l.usage_source,l.credit,l.error,'
+                    'l.key_id,l.prompt_tokens,l.completion_tokens,l.usage_complete,'
+                    'count(e.event_id) usage_event_count,'
+                    'sum(CASE WHEN e.key_id=l.key_id AND e.prompt_tokens=0 AND e.completion_tokens=0 '
+                    "AND e.credit_units=0 AND e.provenance='provider-reported' THEN 1 ELSE 0 END) zero_event_count "
+                    'FROM request_logs l LEFT JOIN usage_events e ON e.request_id=l.request_id '
+                    "AND e.event_type='usage' WHERE l.request_id IN (" + placeholders + ') GROUP BY l.request_id', tuple(ids))
     return {r['request_id']: r for r in rows}
 
 
@@ -405,7 +474,7 @@ def _logs_for(request_ids) -> dict:
 #     **不改用量**、不动 updated_at（避免把旧行重新算成「在途」）。
 #
 # 只归档「无上游证据」的三类：charged_partial / usage_present 有用量证据、
-# upstream_rejected 由 reconcile_evidenced_unknowns 结清 —— 三者都不归档。
+# upstream_rejected 仍需核对 —— 三者都不归档。
 ARCHIVE_RESOLUTION_PREFIX = '已归档待核对：'
 #: 没有任何上游用量证据的分类（可归档）。有证据的一律留在 needs_human。
 EVIDENCELESS_CLASSES = ('client_cancelled', 'no_request_log', 'unexplained')
@@ -495,7 +564,7 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
     items = []
     by_class = {name: 0 for name in UNKNOWN_CLASSES}
     by_state = {state: 0 for state in ('reserved', 'forwarded', 'unknown')}
-    total = unknown_total = needs_human = needs_human_old = 0
+    total = unknown_total = needs_human = needs_human_old = auto_reconcilable = 0
     archived_pending = archived_pending_tokens = token_lower_bound = 0
     for row, log in _unresolved_with_logs(key_id):
         cls = _classify(row, log)
@@ -509,12 +578,15 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         if row['state'] != 'unknown':
             continue
         unknown_total += 1
+        confirmed_zero = (not any(row.get(field) or 0 for field in ('charged_tokens', 'charged_credit'))
+                          and _zero_usage_proof(log, row['key_id']))
+        auto_reconcilable += int(confirmed_zero)
         reserved = int(row.get('reserved_tokens') or 0)
         token_lower_bound += reserved
         if archived:
             archived_pending += 1
             archived_pending_tokens += reserved
-        elif cls != 'upstream_rejected':
+        elif not confirmed_zero:
             needs_human += 1
             needs_human_old += int(int(row.get('created_at') or now) < now - stale_after)
     return {
@@ -526,7 +598,7 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
             'unknown_total': unknown_total,
             'by_state': by_state,
             'by_class': by_class,
-            'auto_reconcilable': by_class['upstream_rejected'],
+            'auto_reconcilable': auto_reconcilable,
             'needs_human': needs_human,
             'needs_human_old': needs_human_old,
             'archived_pending': archived_pending,
@@ -563,9 +635,8 @@ def _reached_upstream(request_id: str) -> bool:
     到达上游的阶段。
 
     局限（写清楚，不夸大）：`attempt_events` 由上游日志轮询异步采集（约 15 秒一轮）。
-    自动结清的年龄门槛是 1 小时，正常早就到了；但**没有事件**严格来说只是
-    "没有证据表明到达过上游"，不是"证明没到达"。这也是保留 unknown 而不是
-    直接删除的原因 —— 结清只是"按零用量记一笔"，随时可被人工更正。
+    **没有事件**只是"没有证据表明到达过上游"，不是"证明没到达"。
+    此函数仅供诊断，自动结清不再把事件缺失当作零用量证据。
     """
     if not _UPSTREAM_PHASES:
         return False
@@ -577,17 +648,7 @@ def _reached_upstream(request_id: str) -> bool:
 
 
 def reconcile_evidenced_unknowns(now: int, min_age: int = 3600) -> int:
-    """把「上游明确拒绝且未回 usage」的 unknown 按零用量结清（U02）。
-
-    只处理 `_classify` 判定为 upstream_rejected 的行：这类请求没有到达模型，
-    零用量是可复核结论（证据是 request_logs.error 里的上游拒绝标识）。
-    其余分类（client_cancelled / charged_partial / 无日志 / 未解释）一律保留。
-
-    N05（2026-10-28）加了两道保险：
-      * 结清前确认 `attempt_events` 里没有 attempt 到达过上游（有则跳过）；
-      * `resolve(..., expect_charged_zero=True, allow_negative=False)` ——
-        事务内重读 charged，晚到的部分用量会让结清**失败**而不是被抹掉。
-    """
+    """Settle only complete, immutable request-level zero-usage evidence."""
     now = int(now)
     settled = 0
     for row, log in _unresolved_with_logs():
@@ -595,14 +656,12 @@ def reconcile_evidenced_unknowns(now: int, min_age: int = 3600) -> int:
             continue
         if int(row.get('created_at') or now) > now - min_age:
             continue
-        if _classify(row, log) != 'upstream_rejected':
-            continue
-        # N05：错误字符串只说明"上游拒绝过"，不说明"所有 attempt 都没被处理"。
-        if _reached_upstream(row['request_id']):
+        if (any(row.get(field) or 0 for field in ('charged_tokens', 'charged_credit'))
+                or not _zero_usage_proof(log, row['key_id'])):
             continue
         try:
             if resolve(row['request_id'], 0, 0.0, 'auto-reconcile',
-                       '上游明确拒绝且未返回 usage（no_healthy_account/模型不存在），按零用量结清',
+                       '完整上游回执与不可变用量事件均确认零用量，自动核对结清',
                        zero_only=False, expect_charged_zero=True, allow_negative=False):
                 settled += 1
         except Exception:  # noqa: BLE001 - 单条失败不中断本轮

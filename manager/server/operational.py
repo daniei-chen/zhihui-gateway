@@ -269,18 +269,8 @@ def evaluate_backup_health(now):
                'backup approaching 50 MiB ciphertext limit')
 
 # ── 预算 unknown 的应用内增量对账（2026-10-27 审计 P1-1）─────────────────
-# 此前 unknown 只靠每日 06:10 的 wb-budget-autoreconcile.timer 清理（阈值 3 天、
-# 仅零预扣），而 budget_unknown 告警 1 小时就进入告警态——中间隔着两天的
-# 「已知积压、无人处理」，7 天里该告警反复进出 60 次，真正需要人看的信号被稀释。
-# 这里把定时脚本「零预扣 unknown 按零用量自动结清」的同一套语义搬进 monitor 循环：
-#   · 每 WB_BUDGET_RECONCILE_INTERVAL_SEC（默认 900s）跑一轮；
-#   · 只碰 charged_tokens / charged_credit 均为 0 的 unknown——有真实用量的
-#     仍必须人工核对，安全边界与定时脚本完全一致；
-#   · 年龄阈值 WB_BUDGET_RECONCILE_MIN_AGE_SEC（默认 7200s）：大于告警线 1h
-#     （正常在途请求在上游看门狗最坏 ~600s 后早已终结），既保住「1h 内 unknown
-#     是刚发生、等结算」的信号语义，又让告警态最多存在 1 小时即被对账消化。
-# 结清走 budget.resolve（零用量）——与定时脚本同一入口，budget_adjustments /
-# ledger / audit 痕迹一致；resolve 只接受 unknown 态，天然碰不到进行中的请求。
+# 定期扫描不是计费证明。零预扣及超期只决定扫描候选；完整上游零回执和
+# 不可变用量事件必须一致，并在 resolve 的写事务内重读。缺少证据继续 unknown。
 def _reconcile_env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if not raw:
@@ -293,7 +283,7 @@ def _reconcile_env_int(name: str, default: int) -> int:
 
 
 def reconcile_zero_reservation_unknowns(now: int) -> int:
-    """按零用量结清超期的零预扣 unknown 预留；返回本轮结清条数。"""
+    """Reconcile zero reservations only when a complete zero receipt exists."""
     from . import budget
     horizon = now - _reconcile_env_int('WB_BUDGET_RECONCILE_MIN_AGE_SEC', 7200)
     settled = 0
@@ -304,9 +294,11 @@ def reconcile_zero_reservation_unknowns(now: int) -> int:
             continue          # 有真实用量：必须人工核对，自动对账不碰
         if int(row.get('created_at') or now) > horizon:
             continue          # 未到年龄阈值：先等真实结算
+        if not budget._confirmed_zero_usage(row['request_id'], row['key_id']):
+            continue          # 未记账不等于上游未计费；事务内还会再次校验
         try:
             if budget.resolve(row['request_id'], 0, 0.0, 'auto-reconcile',
-                               '应用内增量对账：预留与已计费用量均为零的超期 unknown', zero_only=True):
+                               '完整上游回执与不可变用量事件均确认零用量', zero_only=True):
                 settled += 1
         except Exception:  # noqa: BLE001  单条失败不中断本轮
             log.exception('incremental budget reconcile failed request_id=%s',
@@ -402,8 +394,7 @@ async def monitor():
         now=int(time.time())
         try:
             # U02（2026-10-28）：告警只统计**真正需要人工**的 unknown。
-            # 上游明确拒绝（no_healthy_account/模型不存在）的那部分有可复核证据，
-            # 由 reconcile_evidenced_unknowns 按零用量结清，不该长期占着告警。
+            # 只有完整零回执可自动结清；拒绝错误和采集缺失仍需核对。
             # U02 收尾：超过处理期限仍无上游证据的已归档待核对，也不再触发告警。
             from . import budget as _budget
             _summary = _budget.unresolved_summary(now=now)['summary']
@@ -424,7 +415,7 @@ async def monitor():
             next_reconcile = now + _reconcile_env_int('WB_BUDGET_RECONCILE_INTERVAL_SEC', 900)
             try:
                 settled_zero = reconcile_zero_reservation_unknowns(now)
-                # U02：有证据的 unknown（上游明确拒绝且未回 usage）按零用量结清。
+                # 完整上游零回执与不可变用量记录必须一致。
                 from . import budget as _budget
                 settled_evidenced = _budget.reconcile_evidenced_unknowns(now)
                 # U02 收尾：超期无证据的 unknown 标记「已归档待核对」（不改 state、

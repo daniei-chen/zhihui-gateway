@@ -171,7 +171,7 @@ MATRIX = (
     ('GET', '/api/settings/github-mirror', 'admin', 'ok', None),
     ('PUT', '/api/settings/github-mirror', 'admin', 'ok', {'mirror': ''}),
     ('GET', '/api/settings/panel', 'current_user', 'ok', None),
-    ('GET', '/api/users', 'current_user', 'ok', None),
+    ('GET', '/api/users', 'session_admin', 'ok', None),
     ('POST', '/api/users', 'session_admin', 'skip', None),
     ('PATCH', '/api/users/{username}', 'session_admin', 'skip', None),
     ('DELETE', '/api/users/{username}', 'session_admin', 'skip', None),

@@ -76,6 +76,9 @@ class KeyIn(BaseModel):
     # 积分额度（issue #27）：0 = 不限。与 token 额度各自独立，任一超限即拒绝。
     # 用 float：上游 credit 是小数（如 0.05 表示按倍率扣费）。
     quota_credit: float = 0
+    daily_token_quota: int = Field(default=0, ge=0, le=9_000_000_000_000_000)
+    daily_credit_quota: float = Field(default=0, ge=0, le=9_000_000_000_000, allow_inf_nan=False)
+    assigned_to: str = Field(default='', max_length=32)
     # 版本归属：'' = 不限制（存量密钥的形态）。非 cn/global 的值由
     # keysvc._norm_realm 归一化成 ''——不报错，免得旧前端（不带该字段）被拒。
     realm: str = Field(default='', max_length=16)
@@ -93,6 +96,9 @@ class KeyPatch(BaseModel):
     models: list[str] | None = None
     quota: int | None = None
     quota_credit: float | None = None
+    daily_token_quota: int | None = Field(default=None, ge=0, le=9_000_000_000_000_000)
+    daily_credit_quota: float | None = Field(default=None, ge=0, le=9_000_000_000_000, allow_inf_nan=False)
+    assigned_to: str | None = Field(default=None, max_length=32)
     realm: str | None = None
     platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
 
@@ -157,6 +163,8 @@ def create_key(body: KeyIn, request: Request,
     _check_name(body.name)
     _check_ip_allowlist(body.ip_allowlist)
     _check_upstream(body.upstream_id)
+    if body.assigned_to:
+        _check_assignment(body.assigned_to, user)
     created = keysvc.create_key(
         name=body.name,
         expires_at=body.expires_at,
@@ -168,6 +176,9 @@ def create_key(body: KeyIn, request: Request,
         quota_credit=body.quota_credit,
         upstream_id=body.upstream_id,
         platforms=body.platforms,
+        daily_token_quota=body.daily_token_quota,
+        daily_credit_quota=body.daily_credit_quota,
+        assigned_to=body.assigned_to,
     )
     # 密钥是拿额度用的凭证，发放必须留痕（含来源 IP）
     upstream_name = '默认上游'
@@ -189,11 +200,22 @@ def update_key(key_id: int, body: KeyPatch, user: dict = Depends(security.requir
         _check_ip_allowlist(patch['ip_allowlist'])
     if 'upstream_id' in patch:
         _check_upstream(patch['upstream_id'])
+    if 'assigned_to' in patch:
+        _check_assignment(patch['assigned_to'], user)
     updated = keysvc.update_key(key_id, patch)
     if not updated:
         raise HTTPException(status_code=404, detail='密钥不存在')
     security.audit(user,'update_key',str(key_id),'fields='+','.join(sorted(patch)))
     return updated
+
+
+def _check_assignment(username, user):
+    if user.get('scope') or user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail='只有超级管理员本人可以分配密钥归属')
+    if not username:
+        return
+    if not any(u.get('username') == username for u in security.load_users().get('users', [])):
+        raise HTTPException(status_code=400, detail='分配的用户不存在')
 
 
 @router.post('/{key_id}/reset-usage')

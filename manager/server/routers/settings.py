@@ -6,7 +6,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import db, security
 from ..iputil import client_ip
@@ -195,12 +195,20 @@ def save_github_mirror(body: dict, user: dict = Depends(security.require_admin))
 class UserIn(BaseModel):
     username: str = Field(min_length=1, max_length=32)
     password: str = Field(min_length=1)
-    role: str = Field(pattern='^(admin|viewer)$')
+    role: str = Field(pattern='^(admin|account_admin)$')
+
+    @field_validator('username')
+    @classmethod
+    def valid_username(cls, value: str) -> str:
+        if (value in ('.', '..') or any(c.isspace() or ord(c) < 32 or ord(c) == 127
+                                      or c in '/\\?#%' for c in value)):
+            raise ValueError('用户名不能含空白、控制字符或路径分隔符')
+        return value
 
 
 class UserPatch(BaseModel):
     password: str | None = None
-    role: str | None = Field(default=None, pattern='^(admin|viewer)$')
+    role: str | None = Field(default=None, pattern='^(admin|account_admin)$')
 
 
 def _public(cfg: dict) -> list[dict]:
@@ -281,11 +289,14 @@ def settings_panel(user: dict = Depends(security.current_user)) -> dict:
 
 
 @router.get('/users')
-def list_users(user: dict = Depends(security.current_user)) -> list[dict]:
+def list_users(user: dict = Depends(security.require_session_admin)) -> list[dict]:
+    if user.get('role') != 'admin' or user.get('scope'):
+        raise HTTPException(status_code=403, detail='用户管理仅对超级管理员开放')
     return _public(security.load_users())
 
 
 @router.post('/users')
+@security.user_mutation
 def add_user(body: UserIn, request: Request,
              user: dict = Depends(security.require_session_admin)) -> dict:
     """新建管理用户。
@@ -294,9 +305,10 @@ def add_user(body: UserIn, request: Request,
     而这一步当时没有任何记录。新建用户写随机 sv，避免同名重建后旧 cookie 复活。
     """
     pw = str(body.password)
-    problem = security.password_problem(pw, body.username)
+    problem = security.managed_user_password_problem(pw)
     if problem:
         raise HTTPException(status_code=400, detail=problem)
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     if any(u.get('username') == body.username for u in cfg.get('users', [])):
         raise HTTPException(status_code=409, detail='用户名已存在')
@@ -315,6 +327,7 @@ def add_user(body: UserIn, request: Request,
 
 
 @router.patch('/users/{username}')
+@security.user_mutation
 def update_user(username: str, body: UserPatch, request: Request,
                 user: dict = Depends(security.require_session_admin)) -> dict:
     """改密码 / 改角色。
@@ -326,21 +339,26 @@ def update_user(username: str, body: UserPatch, request: Request,
 
     吊销按用户进行（递增其 sv），不影响其他已登录用户。
     """
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     target = next((u for u in cfg.get('users', []) if u.get('username') == username), None)
     if not target:
         raise HTTPException(status_code=404, detail='用户不存在')
 
     changed_pwd = changed_role = False
-    if body.password:
+    if body.password is not None:
         pw = str(body.password)
-        # 管理端是公网入口：弱口令等于没有防护，统一走与启动时相同的策略。
-        problem = security.password_problem(pw, username)
+        # The root keeps its strong policy; role changes do not change other
+        # users' password format or invalidate existing passwords by themselves.
+        problem = (security.password_problem(pw, username) if username == 'admin'
+                   else security.managed_user_password_problem(pw))
         if problem:
             raise HTTPException(status_code=400, detail=problem)
         target['pwd_hash'] = security.make_hash(pw)
         changed_pwd = True
     if body.role and body.role != target.get('role'):
+        if username == 'admin':
+            raise HTTPException(status_code=400, detail='admin 主账号必须保留超级管理员权限')
         admins = [u for u in cfg.get('users', []) if u.get('role') == 'admin']
         if target.get('role') == 'admin' and len(admins) <= 1:
             raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
@@ -368,7 +386,7 @@ def update_user(username: str, body: UserPatch, request: Request,
         security.audit(user, 'update_user', username,
                        '、'.join(parts) + f'；来源 {ip}', ip=ip)
     # 把自己的密码改了，当前会话也会失效——前端据此提示重新登录
-    self_revoked = bool(changed_pwd and username == user.get('username'))
+    self_revoked = bool((changed_pwd or changed_role) and username == user.get('username'))
     return {
         'username': target['username'],
         'role': target.get('role', 'viewer'),
@@ -378,13 +396,17 @@ def update_user(username: str, body: UserPatch, request: Request,
 
 
 @router.delete('/users/{username}')
+@security.user_mutation
 def delete_user(username: str, request: Request,
                 user: dict = Depends(security.require_session_admin)) -> dict:
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     users = cfg.get('users', [])
     target = next((u for u in users if u.get('username') == username), None)
     if not target:
         raise HTTPException(status_code=404, detail='用户不存在')
+    if username == 'admin':
+        raise HTTPException(status_code=400, detail='不能删除 admin 主账号')
     admins = [u for u in users if u.get('role') == 'admin']
     if target.get('role') == 'admin' and len(admins) <= 1:
         raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
