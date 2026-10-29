@@ -7,7 +7,7 @@
 <meta content="light" name="color-scheme"/>
 <meta content="#f8f9fb" name="theme-color"/>
 <meta content="智汇 ZHIHUI，面向授权用户的多平台 AI 网关。统一管理 WorkBuddy、Qoder 与 Trae 账号池，提供兼容 API、访问凭证、调用记录及用量管理。" name="description"/>
-<title>智汇 ZHIHUI 3.0 — 多源汇入，一核择路</title>
+<title>智汇 ZHIHUI — 多平台 AI 网关</title>
 <style>
 :root{--paper:#f8f9fb;--white:#fff;--ink:#13151b;--soft:#6e727e;--border:#e9ebef;--blue:#4969f6;--lav:#796aff;--mint:#5edbd5;--shadow:0 38px 100px rgba(38,47,75,.075);--radius:20px}
 *,*::before,*::after{box-sizing:border-box}
@@ -354,7 +354,7 @@ section.section{padding:124px 0}.section-eyebrow{text-transform:uppercase;letter
 }
 </style>
 <style id="zh3-refinements">
-/* ====================== ZHIHUI 3.0 / Connected Experience ======================
+/* ====================== ZHIHUI / Connected Experience ==========================
    Editorial hierarchy + coherent interaction feedback. No new content sections. */
 :root{--zh3-blue:#617cf1;--zh3-ice:#eef4ff;--zh3-line:#e6ecf7;--zh3-ink:#171c29;--zh3-ease:cubic-bezier(.22,1,.36,1)}
 body{background:#fff;overflow-x:clip}
@@ -490,8 +490,119 @@ section.section,section.ext-section,section.arch-section{scroll-margin-top:88px}
 <link rel="icon" href="/favicon/zhihui-z-20261029/favicon.svg" type="image/svg+xml" sizes="any">
 <link rel="apple-touch-icon" href="/favicon/zhihui-z-20261029/apple-touch-icon.png" sizes="180x180">
 <link rel="manifest" href="/favicon/zhihui-z-20261029/site.webmanifest">
+<style id="zh-blue-awareness">
+:root{--awareness-blue:#557df2}
+#top .hero{position:relative;z-index:1}
+.intelligence-field{position:absolute;inset:70px 0 auto;width:100%;height:min(110vh,1100px);z-index:0;pointer-events:none;opacity:.82;contain:strict;mask-image:linear-gradient(transparent,#000 12%,#000 76%,transparent);-webkit-mask-image:linear-gradient(transparent,#000 12%,#000 76%,transparent)}
+.intelligence-field canvas{display:block;width:100%;height:100%}
+.motion-control{display:inline-flex;gap:6px;align-items:center;background:transparent;border:0;border-bottom:1px solid #dbe4f5;padding:3px 0;margin:0 0 0 9px;font-size:10px;color:#7a8caa;vertical-align:baseline;transition:color .2s}
+.motion-control:hover{color:#5577cd}
+.motion-control::before{content:"";width:4px;height:4px;background:#7194e9;border-radius:50%;box-shadow:0 0 0 3px #ecf2ff}
+.motion-control[aria-pressed="true"]::before{background:#a6afbe;box-shadow:none}
+.motion-control[hidden]{display:none}
+.pointer-aura{position:fixed;top:0;left:0;width:min(720px,90vw);aspect-ratio:1;border-radius:50%;z-index:190;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(75,128,255,.075),rgba(96,153,255,.035) 35%,transparent 69%);transform:translate3d(-100%,-100%,0);transition:opacity .65s ease;contain:strict}
+html[data-blue-pointer] .pointer-aura{opacity:1}
+#top .hero h1 .muted{background-image:none;color:#202a3d;-webkit-text-fill-color:currentColor}
+.feature[data-blue-card]{position:relative;overflow:hidden;isolation:isolate;--spot-x:50%;--spot-y:50%;--card-light:0}
+.feature[data-blue-card]::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(320px circle at var(--spot-x) var(--spot-y),rgba(97,147,255,.095),transparent 72%);opacity:var(--card-light);transition:opacity .45s ease}
+.quota-ribbon{margin-top:19px;max-width:260px}
+.quota-ribbon-label{display:flex;justify-content:space-between;gap:10px;font-size:9px;color:#8d96a7;letter-spacing:.15px;margin-bottom:10px}
+.quota-ribbon-label small{font-size:9px;color:#a1a9b6}
+.quota-track{height:7px;border-radius:20px;background:#e9eef7;overflow:hidden;position:relative}
+.quota-fill{display:block;width:64%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#a7bdf3,#6f94f0);position:relative}
+.quota-fill::after{content:"";position:absolute;inset:-3px -65%;background:linear-gradient(105deg,transparent 25%,rgba(255,255,255,.7) 49%,transparent 69%);transform:translateX(calc(var(--quota-light,0) * 35%));opacity:.38;transition:opacity .4s}
+.quota-track::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(12.5% - 2px),rgba(255,255,255,.8) calc(12.5% - 2px),rgba(255,255,255,.8) 12.5%);pointer-events:none}
+@media(hover:hover) and (pointer:fine){.feature[data-blue-card]:hover{border-color:#d5e1fa}.feature[data-blue-card]:hover .quota-fill::after{opacity:.8}}
+@media(prefers-reduced-motion:reduce),(hover:none),(pointer:coarse){.pointer-aura{display:none!important}.feature[data-blue-card]::before{display:none}.quota-fill::after{transform:none;transition:none}}
+</style>
+<style id="zh-home-layout">
+/* One hierarchy for the public home; product chapters retain their own state. */
+:root{--home-ink:#202a3d;--home-blue:#557df2;--home-muted:#778397;--home-line:#e4ebf7;--home-ease:cubic-bezier(.22,1,.36,1)}
+body{font-family:"MiSans","HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",sans-serif;color:var(--home-ink)}
+.container{width:min(1120px,calc(100% - 80px))}
+.navigation-wrap{width:min(1120px,calc(100% - 40px));top:20px}
+.nav{min-height:61px;padding:8px 22px;gap:28px}
+.logo{font-size:18px;font-weight:650;gap:9px}.logo-caption{font-size:9px;letter-spacing:1.3px}.logo-sign{width:27px;height:27px}
+.nav-center{gap:31px;margin-right:auto;margin-left:auto}.nav-center a{font-size:12px;color:#68758c}
+.nav-source{display:flex;gap:12px;font-size:12px;font-weight:580;color:#465671;padding:8px 2px}.nav-source:hover{color:var(--home-blue)}
+#top{background:radial-gradient(ellipse 48% 66% at 76% 50%,#eff5ffb8,transparent 86%),linear-gradient(165deg,#fbfcff,#fff 75%)}
+#top:before{top:60px;left:73%;width:740px;height:620px;background:radial-gradient(ellipse,#e3eeff73,transparent 68%);filter:blur(26px)}
+.hero{display:grid;grid-template-columns:.95fr 1.12fr;align-items:center;gap:35px;text-align:left;padding:169px 0 52px;min-height:680px}
+.hero-copy{min-width:0;padding-bottom:23px;position:relative;z-index:2}
+.hero .eyebrow{font-size:10px;letter-spacing:1.4px;border:0;background:none;padding:0;color:#7685a2;gap:10px}
+.hero .eyebrow .dot{width:5px;height:5px;background:#7396ef;box-shadow:0 0 0 4px #eaf0fc}
+.hero h1{font-size:clamp(32px,3.5vw,48px);line-height:1.38;letter-spacing:-1.65px;font-weight:580;margin:25px 0 21px;max-width:none}
+.hero h1 .zh23-phrase{display:block}.hero h1 .muted{color:var(--home-ink)!important;background:none!important;-webkit-text-fill-color:currentColor}
+.hero .intro{font-size:13px;line-height:1.95;color:#7c879a;margin:0;letter-spacing:.25px;max-width:390px}
+.hero-actions{margin:28px 0 0;justify-content:flex-start;gap:23px;flex-wrap:wrap}
+.hero-actions .btn{width:auto;min-width:137px;max-width:none;border-radius:12px;padding:13px 19px;font-size:12px;font-weight:580}
+.hero-actions .btn-dark{background:#202a3d;box-shadow:0 7px 18px #2d426f12;gap:26px}.hero-actions .btn-dark:hover{background:#30425f}
+.hero-explore{display:inline-flex;align-items:center;gap:14px;padding:10px 0;font-size:11px;color:#7c879b;transition:color .2s}.hero-explore:hover{color:var(--home-blue)}
+.hero-tagline{justify-content:flex-start;gap:8px;font-size:9px;letter-spacing:.4px;margin:24px 0 0;color:#99a4b5}
+.hero-access-dot{width:4px;height:4px;border-radius:50%;background:#a8b8d4;display:inline-block}
+.hero-scroll{grid-column:1/-1;display:flex;align-items:center;gap:12px;justify-self:start;font-size:9px;color:#9aa7be;letter-spacing:1px;margin-top:12px}.hero-scroll>span{color:#7f9ce0;font-size:16px}
+.hero .visual-wrap{min-width:0;width:100%;margin:0;padding:0;max-width:none;align-self:center;perspective:1200px}
+.visual-halo{top:3%;left:45%;width:115%;height:95%;filter:blur(36px);opacity:.8;background:radial-gradient(ellipse,#c6d9ff47,transparent 70%)}
+.signal-surface{position:relative;border:1px solid #e6edf880;border-radius:28px;background:linear-gradient(150deg,#ffffffa8,#f8fbff6b);box-shadow:0 18px 80px #476da006,inset 0 1px #fff;transform:rotateX(var(--tilt-x,0deg)) rotateY(var(--tilt-y,0deg));transition:transform .55s var(--home-ease);padding:20px 23px 19px;isolation:isolate}
+.signal-heading,.signal-foot{position:relative;display:flex;justify-content:space-between;align-items:center;gap:10px;color:#a1afc4;font-size:8px;letter-spacing:1.25px}
+.signal-heading>span{font-family:Consolas,monospace;letter-spacing:1.9px;color:#96a8c7;font-size:8px}
+.signal-heading .motion-control{font-size:9px;letter-spacing:0;border:0;margin:0;padding:1px;color:#91a2bf}.signal-heading .motion-control:before{display:none}
+.signal-diagram{height:335px;position:relative;isolation:isolate}
+.signal-diagram:before{content:"";position:absolute;inset:15px 4%;z-index:-1;background-image:radial-gradient(#9dbbe0a8 .65px,transparent .8px);background-size:19px 19px;mask-image:radial-gradient(ellipse,#0004,transparent 73%)}
+.signal-wires{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.signal-wires path{fill:none;stroke:#dbe5f6;stroke-width:1.1;transition:stroke .65s,opacity .65s}
+.signal-wires .signal-input,.signal-wires path.is-selected{stroke:url(#signalWire);stroke-width:1.3}
+.signal-wires .signal-travel{stroke:#89acf7;stroke-width:2;stroke-dasharray:4 145;animation:signalFlow 6s linear infinite;opacity:.8}
+@keyframes signalFlow{to{stroke-dashoffset:-300}}
+.signal-orbit{position:absolute;width:167px;height:167px;left:44.5%;top:50%;border:1px solid #9cb8ed40;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
+.signal-orbit:before{content:"";position:absolute;inset:-1px;border-radius:50%;border:1px solid transparent;border-top-color:#97b4f5a0;animation:signalOrbit 22s linear infinite}
+.signal-orbit.orbit-outer{width:239px;height:239px;opacity:.45;border-style:dashed;border-color:#a4bee74d;transform:translate(-50%,-50%) rotate(-24deg) scaleY(.72)}.signal-orbit.orbit-outer:before{display:none}
+@keyframes signalOrbit{to{transform:rotate(360deg)}}
+.signal-client{position:absolute;left:2%;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:10px;color:#93a3be;font-size:9px}
+.signal-client svg{width:25px;height:25px;background:#ffffffb3;border:1px solid #e2eafa;padding:10px;box-sizing:content-box;border-radius:14px;color:#839bc8}
+.signal-core{position:absolute;left:44.5%;top:50%;transform:translate(-50%,-50%);width:91px;height:91px;border:1px solid #c7d8f7;border-radius:27px;padding:7px;background:linear-gradient(138deg,#fffffffa,#e6efffc9);box-shadow:0 16px 38px #6084cc1f,0 2px 3px #fff,inset 0 0 13px #fff}
+.signal-core-inner{height:100%;border-radius:20px;display:grid;place-items:center;background:linear-gradient(140deg,#fcfdff,#e4edff);border:1px solid #dbe6fb;box-shadow:inset 0 1px 2px #fff}
+.signal-core svg{width:48px;height:48px;color:#7597ef;filter:drop-shadow(0 3px 1px #d5e1fb)}
+.signal-core>span{position:absolute;left:50%;top:calc(100% + 15px);transform:translateX(-50%);white-space:nowrap;font-size:9px;color:#7b91b4;letter-spacing:1.2px}
+.signal-platforms{position:absolute;top:11%;bottom:11%;right:0;display:flex;flex-direction:column;justify-content:space-between;width:34%}
+.signal-source{position:relative;display:flex;align-items:center;gap:9px;width:100%;padding:12px 11px;border:1px solid #e1e9f5;border-radius:14px;background:#ffffffad;color:#8b9cb7;text-align:left;box-shadow:0 4px 15px #476da005;transition:background .35s,border-color .35s,transform .35s,box-shadow .35s}
+.signal-source strong{display:block;font-size:10px;font-weight:600;color:#6c7f9c;letter-spacing:.1px}.signal-source small{display:block;font:8px Consolas,monospace;color:#a3b1c6;margin-top:5px}
+.signal-source-mark{width:25px;height:25px;border-radius:8px;display:grid;place-items:center;background:#f2f6fc;color:#91a5c7;font:11px Consolas,monospace;flex:none}.signal-source-arrow{font-size:11px;margin-left:auto;color:#adc0df}
+.signal-source.is-selected{border-color:#b9cef7;background:#fffffff0;box-shadow:0 8px 24px #6c8dc912;transform:translateX(-3px)}
+.signal-source.is-selected strong{color:#4e6fb0}.signal-source.is-selected .signal-source-mark{background:#edf3ff;color:#6687d7}.signal-source:hover{border-color:#a7c1f5;background:#fff}
+.signal-foot{border-top:1px solid #e3ebf780;padding-top:15px;font-size:8px;letter-spacing:.45px;flex-wrap:wrap;color:#9baac1}.signal-foot b{font:8px Consolas,monospace;color:#829ac4;margin-right:3px}.signal-foot i{font-style:normal;padding:0 10px;color:#c0cde0}.signal-demo-label{font-size:8px;color:#aab5c6}
+.intelligence-field{height:710px;inset:60px 0 auto;opacity:1}
+.partners-marquee{border-color:#eef2f8;background:#fff;mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.partner-track{padding:22px 0;font-size:10px;gap:37px;color:#9ca9be}.partner-track b{font-size:10px;color:#8595b0}.partner-track .sep{font-size:10px;color:#c7d5eb}
+section.section,section.ext-section,section.arch-section,.console-section,.faq-section{padding:84px 0;scroll-margin-top:100px}
+.section-title,.big-title,.dark-feature h2,.footcta h2{font-size:clamp(26px,2.7vw,36px)!important;line-height:1.4;letter-spacing:-.95px!important;font-weight:560;margin:14px 0 16px}
+.section-eyebrow,.overline{font-size:8px;letter-spacing:2px;font-weight:600;color:#93a4c1}
+.section-header-row{grid-template-columns:1.1fr 1fr;gap:35px;margin-bottom:31px;align-items:center}
+.section-header-row p,.section-description,.section-lead{font-size:12px;line-height:1.9;color:#8a96a9;max-width:420px}
+.ext-header{align-items:center;margin-bottom:31px}.ext-header .section-lead{max-width:320px}
+.feature-grid{gap:14px}.feature{border-radius:19px;padding:25px;min-height:220px;background:linear-gradient(140deg,#fbfcff,#f9fbfd);border-color:#eaf0f8}
+.feature-ico{width:35px;height:35px;border-radius:11px;color:#7089b5}.feature-ico svg{width:18px;height:18px}.feature h3{font-size:16px;font-weight:570;margin:24px 0 12px}.feature p{font-size:11px;line-height:1.9;color:#8a97ac;max-width:245px}
+.quota-ribbon{margin-top:18px}.quota-ribbon-label,.quota-ribbon-label small{font-size:8px}.quota-track{height:5px}
+.platform-stage{grid-template-columns:280px minmax(0,1fr);border-radius:23px}.platform-aside{padding:30px}.platform-aside h3{font-size:19px;letter-spacing:-.5px;font-weight:570;margin:18px 0 12px}.platform-aside p{font-size:11px;line-height:1.8}.platform-choices{margin-top:25px}.platform-choice{padding:13px}.platform-choice .choice-name{font-size:12px}.platform-choice .choice-desc{font-size:9px}
+.platform-display{padding:30px}.platform-caption,.zh3-linkline{font-size:10px}.flow-chain{margin:33px 0}.p-fact{padding:17px 12px}.p-fact strong{font-size:12px}
+#routing{padding:0 0 76px!important}.dark-feature{border-radius:24px;min-height:455px;padding:42px}.dark-content{gap:33px}.dark-feature p{font-size:12px}.network{min-height:330px}
+.mode{font-size:10px;padding:9px 12px}.route-live,.zh23-route-result{font-size:10px}.route-live{flex-wrap:wrap;gap:7px}.route-live-disclaimer{font-size:9px}.zh23-scenario{font-size:9px;padding:8px 7px}.zh23-run{font-size:10px}.route-step{font-size:9px;padding:6px 8px}.zh23-route-experience{gap:8px}
+.ledger-head{max-width:640px;margin:0 auto 30px}.ledger-head .section-lead{max-width:none}.ledger-wrap{padding:25px;border-radius:22px}.ledger-card{min-height:160px;border-radius:16px;padding:22px}.ledger-card h3{font-size:17px}.ledger-card p,.ledger-result p{font-size:11px}.ledger-result{margin-top:18px;padding:16px}.ledger-switch{font-size:11px}
+.console-shell{margin-top:29px;border-radius:21px;min-height:535px;grid-template-columns:185px minmax(0,1fr)}.console-content{padding:24px}.console-panel h3{font-size:22px;letter-spacing:-.5px}.panel-description{font-size:11px;line-height:1.85}.console-kpi strong{font-size:21px}.console-kpi small,.box-sub,.zh3-table-hint{font-size:10px}.console-kpi{padding:18px}.console-sub{font-size:8px}.console-tab{font-size:11px}.console-brand{font-size:13px}.console-footer{font-size:9px}.zh23-guide{margin-bottom:18px}
+.code-layout{grid-template-columns:.8fr 1.2fr;gap:50px}.code-tab,.format-tabs button{font-size:10px;padding:9px 11px}.terminal pre{font-size:10px;padding:22px;line-height:1.9}.hint{font-size:10px;line-height:1.9}
+.boundary-points{border-radius:20px}.boundary-item{padding:20px 22px}.boundary-item h3{font-size:13px}.boundary-item p{font-size:11px}
+.faq-layout{grid-template-columns:.8fr 1.2fr;gap:55px}.faq-question{font-size:12px;padding:20px 2px}.faq-answer{font-size:11px}
+.footcta{padding:74px 0 84px}.footcta p{font-size:12px}.footcta .hero-actions{justify-content:center}.footer-content{min-height:110px}.footer-meta{font-size:9px}.footer-links{font-size:11px;gap:22px}
+@media(max-width:1000px) and (min-width:761px){.hero{gap:24px;grid-template-columns:.85fr 1.15fr;min-height:620px;padding-top:145px}.hero h1{font-size:35px}.signal-surface{padding:18px 15px}.signal-diagram{height:290px}.signal-source{padding:11px 8px;gap:6px}.signal-source-mark{width:20px;height:20px;font-size:9px}.signal-source-arrow{display:none}.signal-core{width:76px;height:76px;border-radius:24px}.signal-core-inner{border-radius:17px}.signal-orbit{width:145px;height:145px}.signal-orbit.orbit-outer{width:200px;height:200px}.signal-client svg{width:18px;height:18px;padding:8px}.signal-demo-label{font-size:7px}.signal-foot i{padding:0 5px}.nav-center{gap:24px}.platform-stage{grid-template-columns:240px minmax(0,1fr)}.platform-display{padding:25px}.dark-feature{padding:35px}.dark-content{grid-template-columns:1fr 1fr;gap:24px}.console-shell{grid-template-columns:150px minmax(0,1fr)}.console-content{padding:20px}.code-layout{gap:30px}}
+@media(max-width:760px){.container{width:calc(100% - 40px)}.navigation-wrap{top:14px;width:calc(100% - 28px)}.nav{min-height:56px;padding:9px 15px}.logo{font-size:17px}.nav-center,.nav-actions{display:none}.hero{display:flex;flex-direction:column;align-items:stretch;gap:20px;padding:133px 0 32px;min-height:0}.hero-copy{padding:0 13px 0}.hero h1{font-size:35px;line-height:1.39;letter-spacing:-1.2px;margin:22px 0 17px}.hero .eyebrow{font-size:9px;letter-spacing:1px}.hero .intro{font-size:12px;line-height:1.9}.hero .intro br{display:none}.hero-actions{gap:23px;margin-top:23px}.hero-actions .btn{min-width:132px;padding:12px 16px;font-size:11px}.hero-explore{font-size:10px}.hero-tagline{font-size:8px;margin-top:21px}.hero .visual-wrap{margin:13px 0 0;padding:0}.signal-surface{border-radius:22px;padding:17px 17px 16px}.signal-diagram{height:290px}.signal-heading>span{font-size:7px;letter-spacing:1.4px}.signal-heading .motion-control{font-size:8px}.signal-core{width:75px;height:75px;border-radius:22px;padding:6px}.signal-core-inner{border-radius:16px}.signal-core svg{width:40px;height:40px}.signal-orbit{width:139px;height:139px}.signal-orbit.orbit-outer{width:197px;height:197px}.signal-source{padding:10px 8px;gap:6px;border-radius:11px}.signal-source-mark{width:21px;height:21px;font-size:9px;border-radius:6px}.signal-source strong{font-size:9px}.signal-source small{font-size:7px;margin-top:4px}.signal-source-arrow{display:none}.signal-client{font-size:8px;gap:8px;left:0}.signal-client svg{width:18px;height:18px;padding:8px;border-radius:11px}.signal-core>span{font-size:8px}.signal-foot{font-size:7px;padding-top:13px;gap:9px;letter-spacing:0}.signal-foot b{font-size:7px}.signal-foot i{padding:0 5px}.signal-demo-label{font-size:7px}.hero-scroll{margin:0 13px;font-size:8px;gap:10px}.intelligence-field{height:900px;inset:65px 0 auto}.partner-track{font-size:9px;padding:18px 0;gap:25px}.partner-track b{font-size:9px}section.section,section.ext-section,.console-section,.faq-section{padding:62px 0}.section-title,.big-title,.dark-feature h2,.footcta h2{font-size:27px!important;letter-spacing:-.85px!important;line-height:1.42}.section-eyebrow,.overline{font-size:7px;letter-spacing:1.5px}.section-header-row{grid-template-columns:1fr;gap:0;margin-bottom:24px}.section-header-row p,.section-description,.section-lead{font-size:11px;line-height:1.9}.ext-header{margin-bottom:24px}.feature-grid{gap:10px}.feature{padding:23px;min-height:0;display:grid;grid-template-columns:35px minmax(0,1fr);column-gap:17px}.feature-ico{grid-row:1/3}.feature h3{font-size:14px;margin:1px 0 9px}.feature p{max-width:none;font-size:11px}.quota-ribbon{grid-column:2;width:100%;margin-top:14px;max-width:none}.platform-stage{grid-template-columns:1fr}.platform-aside{padding:24px}.platform-aside h3{font-size:18px;margin:13px 0 8px}.platform-choices{margin-top:19px}.platform-choice{padding:11px 9px}.platform-choice .choice-name{font-size:10px}.platform-choice .choice-desc{font-size:8px}.platform-display{padding:24px 17px}.p-fact strong{font-size:11px}.flow-chain{margin:27px 0}.platform-caption{font-size:9px}.zh3-linkline{font-size:9px;gap:9px}.flow-node{width:82px}.flow-node strong{font-size:9px}.flow-node small{font-size:8px}.flow-symbol{font-size:19px}#routing{padding:0 0 58px!important}.dark-feature{padding:30px 20px;border-radius:21px;min-height:0}.dark-content{grid-template-columns:1fr;gap:25px}.dark-feature p{font-size:11px}.network{min-height:295px}.mode-chips{margin-top:20px}.route-live{font-size:9px}.route-live-disclaimer{font-size:8px}.zh23-scenario{font-size:9px;padding:8px 7px}.zh23-run{font-size:10px;width:100%}.zh23-route-result{font-size:9px;min-height:30px}.route-step{font-size:8px;padding:6px}.ledger-wrap{padding:18px;border-radius:20px}.ledger-flow{grid-template-columns:1fr;gap:10px}.ledger-card{min-height:104px;display:grid;grid-template-columns:61px 1fr;gap:15px;padding:18px;align-items:center}.ledger-card .count{font-size:7px;line-height:1.8}.ledger-card .card-symbol{display:none}.ledger-card h3{margin:0 0 7px;font-size:15px}.ledger-card p{font-size:10px;margin:0}.ledger-result{padding:15px}.ledger-result p{font-size:10px}.ledger-switch{font-size:10px;padding:10px 9px}.console-shell{display:block;min-height:0}.console-side{display:flex;padding:11px;border-right:0;border-bottom:1px solid #e9ecf3;gap:4px;overflow:auto}.console-brand,.console-sub{display:none}.console-tab{font-size:10px;padding:10px;flex:0 0 auto;width:auto}.console-content{padding:17px}.console-kpis{grid-template-columns:1fr 1fr}.console-kpi:last-child{grid-column:1/-1}.console-kpi{padding:15px}.console-kpi strong{font-size:20px}.console-panel h3{font-size:20px}.panel-description{font-size:10px}.console-main-grid{grid-template-columns:1fr}.console-footer{font-size:8px}.code-layout{grid-template-columns:1fr;gap:22px}.terminal pre{font-size:9px;padding:17px;line-height:1.95}.boundary{grid-template-columns:1fr;gap:22px}.faq-layout{grid-template-columns:1fr;gap:20px}.faq-question{font-size:11px}.footcta{padding:62px 0}.footcta .hero-actions{gap:10px}.footcta p{font-size:11px}.footer-content{padding:26px 0;gap:20px}.footer-links{flex-wrap:wrap;gap:17px;font-size:10px}}
+@media(max-width:360px){.hero-copy{padding:0 5px}.hero h1{font-size:31px}.signal-surface{padding:15px 12px}.signal-diagram{height:263px}.signal-source{gap:5px;padding:9px 5px}.signal-source-mark{width:18px;height:18px}.signal-source strong{font-size:8px}.signal-source small{font-size:6px}.signal-core{width:65px;height:65px;border-radius:20px}.signal-core-inner{border-radius:14px}.signal-core svg{width:35px;height:35px}.signal-client svg{width:16px;height:16px;padding:7px}.signal-orbit{width:119px;height:119px}.signal-orbit.orbit-outer{width:164px;height:164px}.signal-foot{font-size:6px;gap:7px}.signal-demo-label{font-size:6px}.signal-foot i{padding:0 3px}.hero-actions{gap:19px}}
+@media(prefers-reduced-motion:reduce),(hover:none),(pointer:coarse){.signal-orbit:before,.signal-travel{animation:none!important}.signal-surface{transform:none!important;transition:none}.signal-source{transition:none}}
+html[data-home-flow-paused] .signal-orbit:before,html[data-home-flow-paused] .signal-travel{animation-play-state:paused}
+@media(prefers-reduced-motion:reduce),(hover:none),(pointer:coarse){.signal-heading .motion-control{display:none!important}}
+</style>
 </head>
 <body>
+<div class="pointer-aura" aria-hidden="true"></div>
 <div aria-hidden="true" class="scroll-progress" id="scrollProgress"></div>
 <main>
 <div aria-hidden="true" class="journey-rail">
@@ -505,6 +616,7 @@ section.section,section.ext-section,section.arch-section{scroll-margin-top:88px}
 <span class="journey-node" style="--stop:100%"></span>
 </div>
 <div id="top">
+<div class="intelligence-field" aria-hidden="true"><canvas id="zh-intelligence-canvas"></canvas></div>
 <div class="container navigation-wrap">
 <nav aria-label="主导航" class="nav">
 <a aria-label="智汇官网首页" class="logo" href="#top">
@@ -512,61 +624,68 @@ section.section,section.ext-section,section.arch-section{scroll-margin-top:88px}
         智汇 <span class="logo-caption">ZHIHUI</span>
 </a>
 <div class="nav-center">
-<a href="#product">产品</a><a href="#platforms">平台</a><a href="#routing">光路</a><a href="#ledger">账本</a><a href="#console">控制台</a><a href="#setup">接入</a>
+<a href="#platforms">平台</a><a href="#routing">光路</a><a href="#console">工作台</a><a href="#setup">接入</a>
 </div>
-<div class="nav-actions"><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码 ↗</a><a class="btn btn-dark" href="/dashboard/" rel="noopener noreferrer" target="_blank">进入智汇 <span aria-hidden="true">↗</span></a></div>
+<div class="nav-actions"><a class="nav-source" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank" aria-label="在 GitHub 查看智汇网关源码">GitHub <span aria-hidden="true">↗</span></a></div>
 <button aria-controls="mobileMenu" aria-expanded="false" aria-label="打开菜单" class="mobile-trigger" id="mobileTrigger" type="button"><svg fill="none" height="23" stroke="currentColor" stroke-linecap="round" stroke-width="1.7" viewbox="0 0 24 24" width="23"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
 </nav>
-<div class="mobile-menu" id="mobileMenu"><a href="#product">产品</a><a href="#platforms">平台接入</a><a href="#routing">路由机制</a><a href="#ledger">计量账本</a><a href="#console">控制台演示</a><a href="#setup">快速接入</a><a href="#boundary">安全边界</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码</a><a href="/dashboard/" rel="noopener noreferrer" target="_blank">进入智汇</a></div>
+<div class="mobile-menu" id="mobileMenu"><a href="#product">产品</a><a href="#platforms">平台接入</a><a href="#routing">路由机制</a><a href="#ledger">计量账本</a><a href="#console">控制台演示</a><a href="#setup">快速接入</a><a href="#boundary">安全边界</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码</a><a href="/dashboard/">进入首页 ↗</a></div>
 </div>
 <header aria-labelledby="hero-title" class="hero container">
-<div class="eyebrow"><i class="dot"></i> ZHIHUI GATEWAY · PRIVATE AI INFRASTRUCTURE</div>
-<h1 id="hero-title">多源汇入，一核择路。<br/><span class="muted"><span class="zh23-phrase">让每次调用，</span><span class="zh23-phrase">都走对路径。</span></span></h1>
-<p class="intro">把 WorkBuddy、Qoder 与 Trae 的授权账号汇入统一控制面。<br/>一个更清晰的入口，管理访问凭证、兼容 API、模型与调用记录。</p>
-<div class="hero-actions"><a class="btn btn-dark" href="#preview">探索产品演示 <span aria-hidden="true">↗</span></a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank"><svg aria-hidden="true" class="icon" viewbox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.69-.21.69-.48v-1.87c-2.8.61-3.39-1.19-3.39-1.19-.45-1.15-1.11-1.46-1.11-1.46-.91-.62.07-.61.07-.61 1 .07 1.53 1.02 1.53 1.02.9 1.53 2.35 1.09 2.93.83.09-.65.35-1.1.64-1.35-2.24-.25-4.6-1.12-4.6-4.94 0-1.09.39-1.98 1.03-2.67-.1-.26-.45-1.28.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.65.64.69 1.02 1.58 1.02 2.67 0 3.83-2.36 4.68-4.61 4.93.36.31.68.92.68 1.85V21c0 .27.18.58.69.48A10 10 0 0 0 12 2" fill="currentColor"></path></svg> 阅读项目源码</a></div>
-<div class="hero-note">仅供本人及获授权用户使用 · 3.0 交互式概念演示 · 不连接真实服务</div>
-<div aria-label="系统特征" class="hero-tagline"><span><i></i> 三平台接入</span><span><i></i> API 统一入口</span><span><i></i> 独立访问授权</span><span><i></i> 用量可核对</span></div>
+<div class="hero-copy">
+<div class="eyebrow"><i class="dot"></i> 多平台 AI 网关</div>
+<h1 id="hero-title"><span class="muted"><span class="zh23-phrase">让每次调用，</span><span class="zh23-phrase">都走对路径。</span></span></h1>
+<p class="intro">WorkBuddy、Qoder、Trae。<br/>一个入口，清晰掌控。</p>
+<div class="hero-actions"><a class="btn btn-dark" href="/dashboard/" aria-label="进入首页，打开网关控制台">进入首页 <span aria-hidden="true">↗</span></a><a class="hero-explore" href="#platforms">了解网关 <span aria-hidden="true">↓</span></a></div>
+<div class="hero-tagline"><span class="hero-access-dot" aria-hidden="true"></span> 私有部署 · 授权访问</div>
+</div>
 <div class="visual-wrap" id="preview">
-<div aria-hidden="true" class="visual-halo"></div>
-<svg aria-hidden="true" class="hero-beam" viewbox="0 0 180 155">
-<defs><lineargradient id="heroBeamGradient" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#7297f4" stop-opacity="0"></stop><stop offset=".5" stop-color="#92b2ff" stop-opacity=".72"></stop><stop offset="1" stop-color="#c0d2ff" stop-opacity=".15"></stop></lineargradient></defs>
-<path d="M90 3 C90 39 90 48 90 77 S90 131 90 150" fill="none" stroke="url(#heroBeamGradient)" stroke-width="1.8"></path>
-<circle class="hero-beam-bead" cx="90" cy="60" fill="#7b9afa" r="3.1"></circle>
-<circle cx="90" cy="148" fill="none" r="7" stroke="#d7e4ff" stroke-width="1"></circle>
+<div class="visual-halo" aria-hidden="true"></div>
+<div class="signal-surface" aria-label="网关路由示意，选择平台可联动下方光路与接入示例">
+<div class="signal-heading"><span>THE ROUTING FABRIC</span><button class="motion-control" id="zh-motion-control" type="button" aria-pressed="false" hidden>暂停粒子</button></div>
+<div class="signal-diagram" data-selected-platform="workbuddy">
+<div class="signal-orbit" aria-hidden="true"></div><div class="signal-orbit orbit-outer" aria-hidden="true"></div>
+<svg class="signal-wires" viewBox="0 0 520 360" preserveAspectRatio="none" aria-hidden="true">
+<defs><linearGradient id="signalWire" x1="0" x2="1"><stop stop-color="#b5cdfa"/><stop offset=".48" stop-color="#557ee4"/><stop offset="1" stop-color="#94b3f4"/></linearGradient></defs>
+<path class="signal-input" d="M75 180 C135 180 148 180 218 180"/>
+<path data-signal-route="workbuddy" class="is-selected" d="M260 180 C337 180 320 75 391 75"/>
+<path data-signal-route="qoder" d="M260 180 C325 180 331 180 391 180"/>
+<path data-signal-route="trae" d="M260 180 C337 180 320 285 391 285"/>
+<path class="signal-travel" d="M75 180 C135 180 148 180 218 180"/>
+<circle cx="183" cy="180" r="3" fill="#7e9ff1"/>
 </svg>
-<svg aria-hidden="true" class="prism-float" fill="none" viewbox="0 0 220 175"><defs><lineargradient gradientunits="userSpaceOnUse" id="heroZShade" x1="28" x2="182" y1="15" y2="162"><stop stop-color="#B3CDFF"></stop><stop offset=".5" stop-color="#7D98F5"></stop><stop offset="1" stop-color="#9DABF8"></stop></lineargradient><lineargradient gradientunits="userSpaceOnUse" id="heroZLight" x1="58" x2="167" y1="20" y2="139"><stop stop-color="#F8FCFF"></stop><stop offset="1" stop-color="#E6EDFF"></stop></lineargradient></defs><path d="M49 32H174L47 143H174" opacity=".88" stroke="url(#heroZLight)" stroke-linecap="round" stroke-linejoin="round" stroke-width="30"></path><path d="M49 32H174L47 143H174" stroke="url(#heroZShade)" stroke-linecap="round" stroke-linejoin="round" stroke-width="21"></path><path d="M49 23H174" opacity=".75" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2"></path></svg>
-<div aria-label="智汇管理控制台结构演示：左侧导航、调用和路由概览、账号池状态与请求追踪。所有状态为示意，未连接真实接口。" class="demo-browser" role="img">
-<div class="browser-top"><div class="traffic"><span></span><span></span><span></span></div><div class="browser-arrows"><span>‹</span><span>›</span></div><div class="address-bar"><svg class="address-lock" fill="none" stroke="#b6bcc7" stroke-width="2" viewbox="0 0 24 24"><rect height="11" rx="2" width="14" x="5" y="10"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg> Gateway Console · Preview</div></div>
-<div class="browser-view"><aside class="demo-sidebar"><div class="sidebar-brand"><svg aria-hidden="true" fill="none" viewbox="0 0 40 40"><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="#617DEE" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.5"></path></svg> 智汇</div><div class="sidebar-sub">WORKSPACE</div><div class="sidebar-item active"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><rect height="8" rx="1" width="7" x="3" y="3"></rect><rect height="5" rx="1" width="7" x="14" y="3"></rect><rect height="9" rx="1" width="7" x="14" y="12"></rect><rect height="6" rx="1" width="7" x="3" y="15"></rect></svg> 控制台概览</div><div class="sidebar-item"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-5 16-5 16 0"></path></svg> 账号池</div><div class="sidebar-item"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><path d="M3 12h5l4-8 4 16 4-8h1"></path></svg> 模型中心</div><div class="sidebar-item"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><rect height="12" rx="3" width="18" x="3" y="6"></rect><circle cx="8" cy="12" r="1"></circle><path d="M12 12h6"></path></svg> API 密钥</div><div class="sidebar-sub" style="margin-top:14px">OBSERVE</div><div class="sidebar-item"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><path d="M4 18V9m6 9V4m6 14v-6m4 6V7"></path></svg> 用量统计</div><div class="sidebar-item"><svg fill="none" stroke="currentColor" stroke-width="1.7" viewbox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5"></path></svg> 请求日志</div><div class="sidebar-bottom">PRODUCT PREVIEW<br/>非实时控制台数据</div></aside>
-<div class="demo-main"><div class="demo-head"><div><div class="demo-mini">Workspace / Overview</div><h3>掌控每一条调用路径</h3></div><div class="demo-head-actions"><span class="tiny-button">全部平台 ▾</span><span class="tiny-button strong">演示模式</span></div></div>
-<div class="metrics"><div class="metric"><div><div class="metric-label">授权来源</div><div class="metric-main">3 个平台</div><div class="metric-sub">以仓库接入模块为准</div></div><div class="metric-ico"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 2v6M12 16v6M2 12h6M16 12h6"></path><circle cx="12" cy="12" r="4"></circle></svg></div></div><div class="metric"><div><div class="metric-label">实时可用账号</div><div class="metric-main">—</div><div class="metric-sub">未连接实际服务</div></div><div class="metric-ico"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="m4 12 5 5L20 6"></path></svg></div></div><div class="metric"><div><div class="metric-label">最近调用与用量</div><div class="metric-main">—</div><div class="metric-sub">需要服务端授权数据</div></div><div class="metric-ico"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M5 18V9m7 9V5m7 13v-8"></path></svg></div></div></div>
-<div class="demo-panels"><div class="route-board"><div class="board-header"><div class="board-title">多平台统一控制</div><div class="board-tag">ARCHITECTURE · 示意</div></div><div class="routing-visual"><svg aria-hidden="true" preserveaspectratio="none" viewbox="0 0 500 150"><g class="route-lines"><path class="active" d="M72 28 C145 28 155 77 250 77 C326 77 345 43 425 43"></path><path class="mint" d="M72 75 C145 75 155 77 250 77 C326 77 345 105 425 105"></path><path class="purple" d="M72 125 C145 125 155 77 250 77"></path></g><circle class="flow-dot" fill="#687dff" r="4"><animatemotion dur="4s" path="M72 28 C145 28 155 77 250 77 C326 77 345 43 425 43" repeatcount="1"></animatemotion></circle></svg><div class="sourcenode node1"><i class="node-dot"></i> WorkBuddy</div><div class="sourcenode node2"><i class="node-dot"></i> Qoder</div><div class="sourcenode node3"><i class="node-dot"></i> Trae</div><div class="gate-core"><b>Z</b></div><div class="targetnode node1"><i class="node-dot"></i> API 入口</div><div class="targetnode node2"><i class="node-dot"></i> 管理控制</div></div><div class="board-bottom"><span>平台 / 版本隔离</span><strong>统一管理 · 分路由转发</strong></div></div>
-<div class="trace-board"><div class="board-header"><div class="board-title">请求生命周期</div><div class="board-tag">示例流程</div></div><div class="trace-list"><div class="trace-event"><div class="trace-track"><span class="trace-check">✓</span><span class="trace-line"></span></div><div class="trace-copy"><strong>访问 Key 校验</strong><time>Step 01</time></div></div><div class="trace-event"><div class="trace-track"><span class="trace-check">✓</span><span class="trace-line"></span></div><div class="trace-copy"><strong>IP / 模型权限核验</strong><time>Step 02</time></div></div><div class="trace-event"><div class="trace-track"><span class="trace-check">✓</span><span class="trace-line"></span></div><div class="trace-copy"><strong>指定平台路由</strong><time>Step 03</time></div></div><div class="trace-event"><div class="trace-track"><span class="trace-check last">✓</span></div><div class="trace-copy"><strong>日志与用量记录</strong><time>Step 04</time></div></div></div><div class="board-bottom"><span>示例仅说明调用结构</span></div></div></div>
+<div class="signal-client"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-12-2 14"/></svg><span>API 请求</span></div>
+<div class="signal-core"><div class="signal-core-inner"><svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.5"/></svg></div><span>智汇网关</span></div>
+<div class="signal-platforms" role="group" aria-label="选择首屏路由示意平台">
+<button class="signal-source is-selected" type="button" data-hero-platform="workbuddy" aria-pressed="true"><span class="signal-source-mark">W</span><span><strong>WorkBuddy</strong><small>/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
+<button class="signal-source" type="button" data-hero-platform="qoder" aria-pressed="false"><span class="signal-source-mark">Q</span><span><strong>Qoder</strong><small>/qoder/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
+<button class="signal-source" type="button" data-hero-platform="trae" aria-pressed="false"><span class="signal-source-mark">T</span><span><strong>Trae</strong><small>/trae/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
 </div>
 </div>
+<div class="signal-foot"><span><b>01</b> 鉴权 <i>→</i> <b>02</b> 路由 <i>→</i> <b>03</b> 记录</span><span class="signal-demo-label">交互示意 · 非实时数据</span></div>
 </div>
-<div class="demo-caption">* 产品演示界面，展示已知功能和结构；账号数量、健康状态及调用数据均不代表线上实时情况。</div>
 </div>
+<a class="hero-scroll" href="#product"><span aria-hidden="true">↓</span> 向下，了解智汇</a>
 </header>
 </div>
 <div aria-label="项目支持的上游平台和主要功能" class="partners-marquee"><div aria-hidden="true" class="partner-track"><span><b>WORKBUDDY</b> /v1</span><span class="sep">✳</span><span><b>QODER</b> /qoder/v1</span><span class="sep">✳</span><span><b>TRAE</b> /trae/v1</span><span class="sep">✳</span><span>UNIFIED ACCESS KEYS</span><span class="sep">✳</span><span>MODEL ROUTING</span><span class="sep">✳</span><span>USAGE LEDGER</span><span class="sep">✳</span><span><b>WORKBUDDY</b> /v1</span><span class="sep">✳</span><span><b>QODER</b> /qoder/v1</span><span class="sep">✳</span><span><b>TRAE</b> /trae/v1</span><span class="sep">✳</span><span>UNIFIED ACCESS KEYS</span><span class="sep">✳</span><span>MODEL ROUTING</span><span class="sep">✳</span><span>USAGE LEDGER</span><span class="sep">✳</span></div></div>
-<section class="section" id="product"><div class="container"><div class="section-header-row reveal"><div><div class="section-eyebrow">SIMPLIFY THE COMPLEX</div><h2 class="section-title">一个入口。<br/><span class="muted-title">复杂的留给网关。</span></h2></div><p>把分散在不同平台的授权资源，收拢到一个一致的管理体验。从 API 密钥到使用统计，再到账号健康，每件事都能找到清晰的位置。</p></div><div class="feature-grid"><article class="feature reveal"><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="7" rx="2" width="8" x="2" y="4"></rect><rect height="7" rx="2" width="8" x="14" y="4"></rect><rect height="7" rx="2" width="8" x="8" y="15"></rect><path d="M6 11v3h6m6-3v3h-6"></path></svg></div><h3>多平台统一管理</h3><p>集中查看 WorkBuddy、Qoder、Trae 的账号、模型与管理信息，同时保持各平台的数据与作用域边界。</p></article><article class="feature reveal"><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="11" rx="2" width="18" x="3" y="9"></rect><path d="M7 9V7a5 5 0 0 1 10 0v2M9 14h6"></path></svg></div><h3>权限不止一道门</h3><p>按访问 Key、IP 规则、模型白名单等维度定义使用边界。凭证、额度与授权范围可在控制面统一治理。</p></article><article class="feature reveal"><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><path d="M4 17l4-4 3 2 7-8 2 2"></path><path d="M3 3v18h18"></path></svg></div><h3>调用与用量可追溯</h3><p>在日志、统计和账本中理解调用表现。上游 usage 缺失时，保留 unknown 记录，不把未知消耗悄悄算成零。</p></article></div></div></section>
+<section class="section" id="product"><div class="container"><div class="section-header-row reveal"><div><div class="section-eyebrow">DESIGNED FOR CONTROL</div><h2 class="section-title">统一入口，独立边界。</h2></div><p>账号、密钥、模型与用量，在同一处管理。</p></div><div class="feature-grid"><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="7" rx="2" width="8" x="2" y="4"></rect><rect height="7" rx="2" width="8" x="14" y="4"></rect><rect height="7" rx="2" width="8" x="8" y="15"></rect><path d="M6 11v3h6m6-3v3h-6"></path></svg></div><h3>多源接入</h3><p>三种来源，各有边界。统一查看，分平台管理。</p></article><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="11" rx="2" width="18" x="3" y="9"></rect><path d="M7 9V7a5 5 0 0 1 10 0v2M9 14h6"></path></svg></div><h3>按需授权</h3><p>Key、IP、模型与额度，每一层都可控。</p></article><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><path d="M4 17l4-4 3 2 7-8 2 2"></path><path d="M3 3v18h18"></path></svg></div><h3>用量有据</h3><p>调用可查，用量可核对。未知不归零。</p><div class="quota-ribbon" aria-label="额度条外观演示，不代表真实余额"><div class="quota-ribbon-label"><span>额度边界</span><small>界面示意 · 非实时额度</small></div><div class="quota-track" aria-hidden="true"><span class="quota-fill"></span></div></div></article></div></div></section>
 <section class="ext-section soft" id="platforms"><div class="container">
-<div class="ext-header reveal"><div><div class="overline"><span class="eyedot"></span>THREE PLATFORMS · ONE CONTROL PLANE</div><h2 class="big-title">三种来源。<br/><span class="quiet">一处清晰管理。</span></h2></div><p class="section-lead">不把不同来源混成一个“万能账号池”。智汇按照平台入口、账号作用域和授权策略管理请求。选择平台，看看它在网关里的角色。</p></div>
+<div class="ext-header reveal"><div><div class="overline"><span class="eyedot"></span>01 / PLATFORMS</div><h2 class="big-title">各行其路，统一掌控。</h2></div><p class="section-lead">三套独立引擎，三个专用入口。</p></div>
 <div class="platform-stage reveal">
-<div class="platform-aside"><span class="overline">SOURCE SELECTOR / 01</span><h3>选择一个上游。</h3><p>这里展示的是仓库中的路由结构，不是实时运行状态，也不代表任何具体账号已登录。</p>
+<div class="platform-aside"><span class="overline">SELECT A SOURCE</span><h3>不同来源，同样从容。</h3><p>选择平台，光路与代码同步切换。</p>
 <div aria-label="切换平台介绍" class="platform-choices" role="group">
 <button aria-pressed="true" class="platform-choice active" data-platform="workbuddy" type="button"><span><span class="choice-name">WorkBuddy</span><span class="choice-desc">国内 / 国际版本</span></span><span class="choice-arrow">↗</span></button>
 <button aria-pressed="false" class="platform-choice" data-platform="qoder" type="button"><span><span class="choice-name">Qoder</span><span class="choice-desc">独立引擎入口</span></span><span class="choice-arrow">↗</span></button>
 <button aria-pressed="false" class="platform-choice" data-platform="trae" type="button"><span><span class="choice-name">Trae</span><span class="choice-desc">独立引擎入口</span></span><span class="choice-arrow">↗</span></button></div></div>
 <div aria-live="polite" class="platform-display">
-<div class="platform-topline"><div class="overline">ROUTING TO <strong id="platformName">WORKBUDDY</strong></div><span class="mini-pill">ARCHITECTURE DEMO · 非实时</span></div>
+<div class="platform-topline"><div class="overline">ROUTING TO <strong id="platformName">WORKBUDDY</strong></div><span class="mini-pill">路由示意</span></div>
 <div class="flow-chain"><div class="flow-node"><span class="flow-symbol">⌘</span><strong>AI 客户端</strong><small>请求入口</small></div><div class="flow-link"></div><div class="flow-node core"><span class="flow-symbol">Z</span><strong>智汇网关</strong><small>鉴权与路由</small></div><div class="flow-link"></div><div class="flow-node"><span class="flow-symbol">↗</span><strong id="platformNode">WorkBuddy</strong><small>授权上游</small></div></div>
 <div class="platform-grid"><div class="p-fact"><span>DATA PLANE PREFIX</span><strong id="platformPrefix">/v1/*</strong></div><div class="p-fact"><span>ENGINE / ADAPTER</span><strong id="platformEngine">workbuddy2api</strong></div><div class="p-fact"><span>MANAGEMENT</span><strong>统一控制面</strong></div></div>
-<div aria-live="polite" class="zh3-linkline"><span aria-hidden="true" class="zh3-sync-light"></span><span id="zh3PlatformContext">当前选择：WorkBuddy。路由演示与接入代码将同步更新。</span><a class="zh3-inline-action" href="#routing">查看这条路径 <span aria-hidden="true">↗</span></a></div><div class="platform-caption"><span>ⓘ</span><span id="platformText">各平台按专用前缀分派。平台切换只改变查看范围，不等同于改变登录身份。</span></div>
+<div aria-live="polite" class="zh3-linkline"><span aria-hidden="true" class="zh3-sync-light"></span><span id="zh3PlatformContext">WorkBuddy · 光路与代码已同步</span><a class="zh3-inline-action" href="#routing">查看这条路径 <span aria-hidden="true">↗</span></a></div><div class="platform-caption"><span>ⓘ</span><span id="platformText">各平台按专用前缀分派。平台切换只改变查看范围，不等同于改变登录身份。</span></div>
 </div>
 </div></div></section>
-<section id="routing" style="padding:0 0 100px"><div class="container"><div class="dark-feature reveal"><div class="dark-content"><div><div class="section-eyebrow">THE ROUTING CORE</div><h2>一眼看懂<br/>一条请求的旅程。</h2><p>从身份校验、平台路由到上游转发，复杂的链路可以用更直观的方式表达。切换下方场景，查看不同路径的模拟示意。</p><div aria-label="切换路由示意场景" class="mode-chips" role="group"><button aria-pressed="true" class="mode selected" data-route="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="mode" data-route="qoder" type="button">Qoder</button><button aria-pressed="false" class="mode" data-route="trae" type="button">Trae</button></div><div aria-live="polite" class="route-live"><span aria-hidden="true" class="route-live-dot"></span><span id="routeLiveSummary">当前展示：WorkBuddy · /v1/*</span><span class="route-live-disclaimer">逻辑模拟</span></div><div class="zh23-route-experience">
+<section id="routing" style="padding:0 0 100px"><div class="container"><div class="dark-feature reveal"><div class="dark-content"><div><div class="section-eyebrow">02 / ROUTING</div><h2>请求，自有去向。</h2><p>从鉴权到转发，看见每一步。</p><div aria-label="切换路由示意场景" class="mode-chips" role="group"><button aria-pressed="true" class="mode selected" data-route="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="mode" data-route="qoder" type="button">Qoder</button><button aria-pressed="false" class="mode" data-route="trae" type="button">Trae</button></div><div aria-live="polite" class="route-live"><span aria-hidden="true" class="route-live-dot"></span><span id="routeLiveSummary">当前展示：WorkBuddy · /v1/*</span><span class="route-live-disclaimer">逻辑模拟</span></div><div class="zh23-route-experience">
 <div aria-label="模拟场景" class="zh23-scenarios" role="group">
 <button aria-pressed="true" class="zh23-scenario on" data-scenario="fresh" type="button">首次请求</button>
 <button aria-pressed="false" class="zh23-scenario" data-scenario="sticky" type="button">连续会话</button>
@@ -585,32 +704,32 @@ section.section,section.ext-section,section.arch-section{scroll-margin-top:88px}
 <circle cx="80" cy="90" fill="#91aaff" id="zh23TravelerHalo" opacity="0" r="10"></circle>
 <circle cx="80" cy="90" fill="#6889f4" id="zh23Traveler" opacity="0" r="4.5"></circle></svg><div class="network-label input">Client Request<small>Authorization: Bearer ••••</small></div><div class="network-core"><span>Z</span></div><div class="network-label account-a is-current" data-platform-target="workbuddy"><i class="state-light"></i>WorkBuddy<small>/v1/*</small></div><div class="network-label account-c" data-platform-target="qoder"><i class="state-light purple"></i>Qoder<small>/qoder/v1/*</small></div><div class="network-label account-b" data-platform-target="trae"><i class="state-light teal"></i>Trae<small>/trae/v1/*</small></div><div class="network-label result">Gateway Core<small>权限校验 · 请求记录</small></div><div class="network-caption">INTERACTIVE ILLUSTRATION · NOT LIVE TELEMETRY</div></div></div></div></div></section>
 <section class="ext-section" id="ledger"><div class="container">
-<div class="ledger-head reveal"><div class="overline">LEDGER WITH INTEGRITY</div><h2 class="big-title">每一笔调用，<br/><span class="quiet">都应该有交代。</span></h2><p class="section-lead">智汇仓库对预算预留、计量结算和未知用量有单独的逻辑。最重要的不是展示一个漂亮数字，而是不把未知消耗算作零。</p></div>
+<div class="ledger-head reveal"><div class="overline">03 / LEDGER</div><h2 class="big-title">每笔用量，都有依据。</h2><p class="section-lead">已知结算，未知待核对。</p></div>
 <div class="ledger-wrap reveal"><div aria-label="切换计量流程模拟" class="ledger-select" role="group"><button aria-pressed="true" class="ledger-switch active" data-ledger="settled" type="button">正常结算</button><button aria-pressed="false" class="ledger-switch" data-ledger="unknown" type="button">上游未返回 usage</button><button aria-pressed="false" class="ledger-switch" data-ledger="reject" type="button">未通过准入</button></div>
 <div class="ledger-flow"><article class="ledger-card" id="ledgerCardA"><div class="count">01 · BEFORE REQUEST</div><div><div class="card-symbol">◇</div><h3>预算预留</h3><p>调用之前，为可能发生的使用量保留预算。</p></div></article><article class="ledger-card" id="ledgerCardB"><div class="count">02 · UPSTREAM RESULT</div><div><div class="card-symbol">↗</div><h3 id="ledgerMiddleTitle">接收用量</h3><p id="ledgerMiddleDesc">上游返回可核算的 usage 数据。</p></div></article><article class="ledger-card focus" id="ledgerCardC"><div class="count">03 · LEDGER STATE</div><div><div class="card-symbol">✓</div><h3 id="ledgerLastTitle">记录结算</h3><p id="ledgerLastDesc">按已确认的用量完成记录与结算。</p></div></article></div>
-<div aria-live="polite" class="ledger-result" id="ledgerResult"><div class="result-badge" id="ledgerBadge">SETTLED</div><p id="ledgerDetail">当上游提供可确认的用量时，执行相应结算。这是行为逻辑演示，没有读取任何生产账本。</p></div>
+<div aria-live="polite" class="ledger-result" id="ledgerResult"><div class="result-badge" id="ledgerBadge">SETTLED</div><p id="ledgerDetail">确认用量后结算，记录每一步。</p></div>
 </div>
-<p class="tiny-label" style="text-align:center;margin-top:18px">SOURCE: manager/server/budget.py · ledger.py · budgetowner.py — 行为说明以实际部署版本为准</p>
+<p class="tiny-label" style="text-align:center;margin-top:18px">流程示意 · 不读取生产账本</p>
 </div></section>
-<section class="section how" id="about" style="padding-top:12px"><div class="container"><div class="reveal"><div class="section-eyebrow">BUILT WITH INTENTION</div><h2 class="section-title">看起来简单。<br/><span class="muted-title">背后每一步都算数。</span></h2><p class="section-description">比起堆砌功能，我们更关心边界是否明确、账目是否准确，以及系统是否能被安全地维护。</p></div><div class="steps"><article class="step reveal"><div class="step-index">01 / ACCESS</div><div class="step-rule"></div><h3>先确认权限</h3><p>有效的 API Key、允许的 IP 与模型范围，是请求进入网关的第一道门。</p></article><article class="step reveal"><div class="step-index">02 / ROUTE</div><div class="step-rule"></div><h3>再决定去向</h3><p>按当前配置中的平台入口和上游策略转发，避免把不同来源的账号与数据混为一谈。</p></article><article class="step reveal"><div class="step-index">03 / RECORD</div><div class="step-rule"></div><h3>最后留下依据</h3><p>记录调用状态与可获得的计量数据。无法确认的部分保持未知，留待后续核对。</p></article></div></div></section>
+
 <section class="console-section" id="console"><div class="container">
-<div class="ext-header reveal"><div><div class="overline" style="color:#9aabeb"><span class="eyedot"></span>THE CONTROL ROOM</div><h2 class="big-title">把复杂交给系统。<br/><span class="quiet">把掌控留给你。</span></h2></div><p class="section-lead">仓库中已经包含账号、密钥、模型、日志、用量、任务、安全与设置等管理页面。这里把这些功能组织成一个可以点击探索的控制台概念。</p></div>
+<div class="ext-header reveal"><div><div class="overline" style="color:#9aabeb"><span class="eyedot"></span>04 / WORKSPACE</div><h2 class="big-title">复杂归系统，掌控归你。</h2></div><p class="section-lead">账号、密钥与调用记录，触手可及。</p></div>
 <div aria-label="智汇控制台交互原型，不连接实际业务" class="console-shell reveal"><aside class="console-side"><div class="console-brand"><span class="z">Z</span> 智汇控制台</div><div class="console-sub">WORKSPACE</div>
 <button aria-pressed="true" class="console-tab active" data-console="overview" type="button"><span class="tab-ico">▦</span> 总览</button><button aria-pressed="false" class="console-tab" data-console="accounts" type="button"><span class="tab-ico">◎</span> 账号池</button><button aria-pressed="false" class="console-tab" data-console="keys" type="button"><span class="tab-ico">⌘</span> 访问密钥</button><button aria-pressed="false" class="console-tab" data-console="models" type="button"><span class="tab-ico">◇</span> 模型中心</button><button aria-pressed="false" class="console-tab" data-console="logs" type="button"><span class="tab-ico">≡</span> 请求日志</button><button aria-pressed="false" class="console-tab" data-console="tasks" type="button"><span class="tab-ico">◷</span> 任务记录</button><div class="console-sub">SYSTEM</div><button aria-pressed="false" class="console-tab" data-console="security" type="button"><span class="tab-ico">◈</span> 安全</button></aside>
-<div class="console-body"><div class="console-toolbar"><div class="crumb">ZHIHUI / <span id="consoleCrumb">Overview</span></div><div class="toolbar-end"><span>WORKBUDDY · QODER · TRAE</span><span class="avatar">Z</span></div></div><div class="console-content"><div aria-label="界面为演示，不连接服务器" class="zh3-console-kicker"><span class="zh3-badge-dot"></span> PREVIEW ONLY <span class="zh3-kicker-sep"></span><span id="zh3ConsoleScope">WorkBuddy · 路由前缀 /v1/*</span></div>
+<div class="console-body"><div class="console-toolbar"><div class="crumb">ZHIHUI / <span id="consoleCrumb">Overview</span></div><div class="toolbar-end"><span>WORKBUDDY · QODER · TRAE</span><span class="avatar">Z</span></div></div><div class="console-content"><div aria-label="界面为演示，不连接服务器" class="zh3-console-kicker"><span class="zh3-badge-dot"></span> 界面演示 <span class="zh3-kicker-sep"></span><span id="zh3ConsoleScope">WorkBuddy · 路由前缀 /v1/*</span></div>
 <div aria-label="可选的产品体验路线" class="zh23-guide">
 <span class="zh23-guide-index" id="zh23GuideIndex">01 <small>/ 03</small></span>
 <div class="zh23-guide-message"><strong id="zh23GuideTitle">从概览开始</strong><span id="zh23GuideDesc">再去看看账号资源与调用记录。</span></div>
 <button class="zh23-guide-next" id="zh23GuideNext" type="button">下一步 <span aria-hidden="true">↗</span></button>
 </div>
-<div class="console-panel" data-panel="overview"><h3>工作台概览</h3><p class="panel-description">集中查看请求趋势、账号资源与异常状态。以下仅为 UI 样式预览，数值未接入真实接口。</p><div class="console-kpis"><div class="console-kpi"><small>授权平台</small><strong>3 个平台</strong><div class="fine">以仓库模块为依据</div></div><div class="console-kpi"><small>当前请求量</small><strong>—</strong><div class="fine">需登录后从真实接口获取</div></div><div class="console-kpi"><small>当前成功率</small><strong>—</strong><div class="fine">没有模拟实时指标</div></div></div><div class="console-main-grid"><div class="console-box"><div class="box-title">调用趋势 · 视觉占位</div><div class="box-sub">图形纯属示意，不表示实际业务流量</div><div aria-hidden="true" class="ghostbars"><span style="--h:36%"></span><span style="--h:59%"></span><span style="--h:44%"></span><span style="--h:70%"></span><span style="--h:50%"></span><span style="--h:80%"></span><span style="--h:62%"></span><span style="--h:96%"></span><span style="--h:74%"></span><span style="--h:82%"></span></div></div><div class="console-box"><div class="box-title">快速入口</div><div class="box-sub">选择左侧菜单，查看功能布局</div><div class="fake-entries" style="margin-top:18px"><div class="fake-entry"><i></i> 账号池 <em>授权上游管理</em></div><div class="fake-entry"><i></i> 访问 Key <em>额度 / 白名单</em></div><div class="fake-entry"><i></i> 请求日志 <em>状态 / 用量</em></div></div></div></div></div>
-<div class="console-panel" data-panel="accounts" hidden=""><h3>账号池</h3><p class="panel-description">WorkBuddy、Qoder 与 Trae 按平台和分组组织账号。健康、冷却、积分等字段应来自对应的真实作用域。</p><div class="console-box"><div class="box-title">上游资源目录</div><p class="zh3-table-hint">选择平台行，查看它的路由入口、引擎与数据边界。 <span aria-hidden="true">↗</span></p><table class="console-table"><thead><tr><th>平台</th><th>管理信息</th><th>路由入口</th><th>实时状态</th></tr></thead><tbody><tr><td>WorkBuddy</td><td>账号 / 版本 / 分组</td><td>/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr><tr><td>Qoder</td><td>账号 / 分组</td><td>/qoder/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr><tr><td>Trae</td><td>账号 / 分组</td><td>/trae/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr></tbody></table></div></div>
-<div class="console-panel" data-panel="keys" hidden=""><h3>访问密钥</h3><p class="panel-description">按 Key 限制平台、版本、IP、模型和额度。真实明文只在创建成功时展示一次。</p><div class="console-box"><div class="box-title">访问边界示意</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>Key 作用域</b><em>平台绑定 / 版本</em></div><div class="fake-entry"><i></i><b>网络访问</b><em>IP 白名单 / 上限</em></div><div class="fake-entry"><i></i><b>模型与额度</b><em>模型白名单 / 预算</em></div></div></div></div>
-<div class="console-panel" data-panel="models" hidden=""><h3>模型中心</h3><p class="panel-description">模型来源、系列、上下文与推理档位等能力由实际接口返回。这里显示分类信息，不宣称某模型实时可用。</p><div class="console-box"><div class="box-title">模型目录 · 类型示意</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>DeepSeek / Kimi</b><em>模型系列分类</em></div><div class="fake-entry"><i></i><b>GLM / MiniMax</b><em>模型系列分类</em></div><div class="fake-entry"><i></i><b>腾讯混元 / 其他</b><em>按实际上游目录展示</em></div></div></div></div>
-<div class="console-panel" data-panel="logs" hidden=""><h3>请求日志</h3><p class="panel-description">支持按时间、Key、状态查询记录，可查看客户端请求 ID、实际请求 ID、Token 统计以及可用的调用尝试事件。</p><div class="console-box"><div class="box-title">追踪字段示意</div><p class="zh3-table-hint">点击一个字段，了解它在请求追踪中的实际意义。 <span aria-hidden="true">↗</span></p><table class="console-table"><thead><tr><th>字段</th><th>意义</th><th>示例可视化</th></tr></thead><tbody><tr><td>request_id</td><td>服务端执行标识</td><td><span class="status-pill grey">不展示真实 ID</span></td></tr><tr><td>attempt_events</td><td>上游尝试阶段记录</td><td><span class="status-pill grey">时间线</span></td></tr><tr><td>usage</td><td>Token / 积分</td><td><span class="status-pill amber">可为 unknown</span></td></tr></tbody></table></div></div>
-<div class="console-panel" data-panel="tasks" hidden=""><h3>任务记录</h3><p class="panel-description">仓库中包含签到、活动任务和执行记录。具体可执行范围由平台、版本、用户权限和实际运行配置决定。</p><div class="console-box"><div class="box-title">任务与日志</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>签到日志</b><em>按实际平台功能显示</em></div><div class="fake-entry"><i></i><b>定时与手动执行</b><em>任务状态和结果</em></div><div class="fake-entry"><i></i><b>上游原始日志</b><em>权限控制 / 脱敏</em></div></div></div></div>
-<div class="console-panel" data-panel="security" hidden=""><h3>安全中心</h3><p class="panel-description">用户权限、IP 规则、安全审计、敏感操作保护。页面与服务端权限必须一致。</p><div class="console-box"><div class="box-title">访问控制层</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>会话与角色</b><em>管理员 / 普通用户</em></div><div class="fake-entry"><i></i><b>IP 规则</b><em>白名单 / 黑名单</em></div><div class="fake-entry"><i></i><b>操作审计</b><em>审计链 / 行为记录</em></div></div></div></div>
-</div><div class="console-footer">INTERACTIVE UI CONCEPT — no backend connection, no live metrics, no account data</div>
+<div class="console-panel" data-panel="overview"><h3>工作台概览</h3><p class="panel-description">账号资源、调用记录与用量，一眼有数。</p><div class="console-kpis"><div class="console-kpi"><small>授权平台</small><strong>3 个平台</strong><div class="fine">以仓库模块为依据</div></div><div class="console-kpi"><small>当前请求量</small><strong>—</strong><div class="fine">需登录后从真实接口获取</div></div><div class="console-kpi"><small>当前成功率</small><strong>—</strong><div class="fine">没有模拟实时指标</div></div></div><div class="console-main-grid"><div class="console-box"><div class="box-title">调用趋势 · 视觉占位</div><div class="box-sub">图形纯属示意，不表示实际业务流量</div><div aria-hidden="true" class="ghostbars"><span style="--h:36%"></span><span style="--h:59%"></span><span style="--h:44%"></span><span style="--h:70%"></span><span style="--h:50%"></span><span style="--h:80%"></span><span style="--h:62%"></span><span style="--h:96%"></span><span style="--h:74%"></span><span style="--h:82%"></span></div></div><div class="console-box"><div class="box-title">快速入口</div><div class="box-sub">选择左侧菜单，查看功能布局</div><div class="fake-entries" style="margin-top:18px"><div class="fake-entry"><i></i> 账号池 <em>授权上游管理</em></div><div class="fake-entry"><i></i> 访问 Key <em>额度 / 白名单</em></div><div class="fake-entry"><i></i> 请求日志 <em>状态 / 用量</em></div></div></div></div></div>
+<div class="console-panel" data-panel="accounts" hidden=""><h3>账号池</h3><p class="panel-description">按平台管理账号，按分组组织资源。</p><div class="console-box"><div class="box-title">上游资源目录</div><p class="zh3-table-hint">选择平台行，查看它的路由入口、引擎与数据边界。 <span aria-hidden="true">↗</span></p><table class="console-table"><thead><tr><th>平台</th><th>管理信息</th><th>路由入口</th><th>实时状态</th></tr></thead><tbody><tr><td>WorkBuddy</td><td>账号 / 版本 / 分组</td><td>/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr><tr><td>Qoder</td><td>账号 / 分组</td><td>/qoder/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr><tr><td>Trae</td><td>账号 / 分组</td><td>/trae/v1/*</td><td><span class="status-pill grey">未连接数据</span></td></tr></tbody></table></div></div>
+<div class="console-panel" data-panel="keys" hidden=""><h3>访问密钥</h3><p class="panel-description">按需授权。Key 明文仅在创建时展示一次。</p><div class="console-box"><div class="box-title">访问边界示意</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>Key 作用域</b><em>平台绑定 / 版本</em></div><div class="fake-entry"><i></i><b>网络访问</b><em>IP 白名单 / 上限</em></div><div class="fake-entry"><i></i><b>模型与额度</b><em>模型白名单 / 预算</em></div></div></div></div>
+<div class="console-panel" data-panel="models" hidden=""><h3>模型中心</h3><p class="panel-description">模型与能力分层呈现，可用范围以实际授权为准。</p><div class="console-box"><div class="box-title">模型目录 · 类型示意</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>DeepSeek / Kimi</b><em>模型系列分类</em></div><div class="fake-entry"><i></i><b>GLM / MiniMax</b><em>模型系列分类</em></div><div class="fake-entry"><i></i><b>腾讯混元 / 其他</b><em>按实际上游目录展示</em></div></div></div></div>
+<div class="console-panel" data-panel="logs" hidden=""><h3>请求日志</h3><p class="panel-description">按时间、Key 与状态筛选，沿请求 ID 追溯。</p><div class="console-box"><div class="box-title">追踪字段示意</div><p class="zh3-table-hint">点击一个字段，了解它在请求追踪中的实际意义。 <span aria-hidden="true">↗</span></p><table class="console-table"><thead><tr><th>字段</th><th>意义</th><th>示例可视化</th></tr></thead><tbody><tr><td>request_id</td><td>服务端执行标识</td><td><span class="status-pill grey">不展示真实 ID</span></td></tr><tr><td>attempt_events</td><td>上游尝试阶段记录</td><td><span class="status-pill grey">时间线</span></td></tr><tr><td>usage</td><td>Token / 积分</td><td><span class="status-pill amber">可为 unknown</span></td></tr></tbody></table></div></div>
+<div class="console-panel" data-panel="tasks" hidden=""><h3>任务记录</h3><p class="panel-description">查看任务状态与执行记录，能力依平台与权限开放。</p><div class="console-box"><div class="box-title">任务与日志</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>签到日志</b><em>按实际平台功能显示</em></div><div class="fake-entry"><i></i><b>定时与手动执行</b><em>任务状态和结果</em></div><div class="fake-entry"><i></i><b>上游原始日志</b><em>权限控制 / 脱敏</em></div></div></div></div>
+<div class="console-panel" data-panel="security" hidden=""><h3>安全中心</h3><p class="panel-description">会话、IP 规则与操作审计，各守一道边界。</p><div class="console-box"><div class="box-title">访问控制层</div><div class="fake-entries" style="margin-top:20px"><div class="fake-entry"><i></i><b>会话与角色</b><em>管理员 / 普通用户</em></div><div class="fake-entry"><i></i><b>IP 规则</b><em>白名单 / 黑名单</em></div><div class="fake-entry"><i></i><b>操作审计</b><em>审计链 / 行为记录</em></div></div></div></div>
+</div><div class="console-footer">界面演示 · 不读取真实账号与调用数据</div>
 <div class="zh3-inspector-backdrop" hidden="" id="zh3InspectorBackdrop"></div>
 <aside aria-hidden="true" aria-label="控制台信息详情" class="zh3-inspector" id="zh3Inspector" tabindex="-1">
 <div class="zh3-inspector-top"><span class="zh3-overline">CONTEXT / 详情说明</span><button aria-label="关闭详情" class="zh3-inspector-close" id="zh3InspectorClose" type="button">×</button></div>
@@ -622,21 +741,20 @@ section.section,section.ext-section,section.arch-section{scroll-margin-top:88px}
 </aside></div></div>
 <div class="console-preview-foot"><i></i> 点击导航可以切换模拟页面 · 原项目使用 Next.js / React，本原型不涉及生产代码</div>
 </div></section>
-<section class="section code-section" id="setup"><div class="container"><div class="code-layout"><div class="reveal"><div class="section-eyebrow">DEVELOPER FIRST</div><h2 class="section-title">熟悉的方式。<br/><span class="muted-title">统一的接入体验。</span></h2><p class="section-description">保持开发习惯，只需根据当前使用的平台、授权模型与实际部署地址配置客户端。点击切换不同入口示例。</p><div aria-label="接口路由示例" class="code-tabline" role="group"><button aria-pressed="true" class="code-tab on" data-code="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="code-tab" data-code="qoder" type="button">Qoder</button><button aria-pressed="false" class="code-tab" data-code="trae" type="button">Trae</button></div><div aria-label="切换代码示例格式" class="format-tabs" role="group"><button aria-pressed="true" class="on" data-format="curl" type="button">cURL</button><button aria-pressed="false" data-format="python" type="button">Python SDK</button><button aria-pressed="false" data-format="env" type="button">环境变量</button></div><p class="hint">示例基于仓库中三平台路由前缀；实际可用模型、域名与协议能力以当前部署为准。</p></div><div class="reveal"><div class="terminal"><div class="terminal-top"><div class="terminal-dots"><i></i><i></i><i></i></div><span class="terminal-filename" id="codeFilename">bash · gateway-request.sh</span><button class="copy-code" id="copyCode" type="button">复制代码 ↗</button></div><pre><code id="codeBlock"></code></pre></div></div></div></div></section>
-<section class="arch-section" id="engineering"><div class="container"><div class="architecture-layout"><div class="reveal"><div class="overline">ENGINEERING, NOT JUST A PROXY</div><h2 class="big-title">看得见的轻盈。<br/><span class="quiet">看不见的严谨。</span></h2><p class="section-lead">智汇仓库更重视可核对的计量、可理解的边界，以及有约束的发布和回退。把工程能力讲得准确，比堆砌空洞的性能数字更重要。</p><div class="architecture-list"><div class="architecture-item"><span class="architecture-num">01</span><div><h3>请求与账本</h3><p>预算预留、结算与 unknown 记录，不把未知消耗自动归零。</p></div></div><div class="architecture-item"><span class="architecture-num">02</span><div><h3>构建与发布</h3><p>以 Ed25519 签名和文件哈希为设计基础，实际是否生效由部署配置决定。</p></div></div><div class="architecture-item"><span class="architecture-num">03</span><div><h3>迁移与回退</h3><p>优先兼容性扩展，降低数据库变更对旧版本的影响。</p></div></div><div class="architecture-item"><span class="architecture-num">04</span><div><h3>权限与审计</h3><p>按 Key、IP、模型控制使用范围，管理操作需要独立鉴权。</p></div></div></div></div>
-<div class="architecture-panel reveal"><div class="overline" style="text-align:center;margin-bottom:27px">CONTROL PLANE / DATA PLANE</div><div class="arch-row"><div class="arch-chip"><b>Web Console</b><small>Next.js / React</small></div><div class="arch-chip"><b>Management API</b><small>FastAPI</small></div></div><div class="arch-branches"><span></span><span></span><span></span></div><div class="arch-middle"><span class="z-emblem">Z</span><div><strong>统一网关管理层</strong><br/><small>鉴权 / 路由 / 用量 / 审计</small></div><span style="margin-left:auto;font-size:21px;color:#b9c7ff">↗</span></div><div class="arch-branches"><span></span><span></span><span></span></div><div class="arch-row"><div class="arch-chip"><b>WorkBuddy</b><small>/v1/*</small></div><div class="arch-chip"><b>Qoder</b><small>/qoder/v1/*</small></div><div class="arch-chip"><b>Trae</b><small>/trae/v1/*</small></div></div><p class="arch-disclaimer">简化逻辑架构图 · 不代表 Manager 与 QTG 控制面已完成合并</p></div></div></div></section>
-<section class="section" id="boundary"><div class="container"><div class="boundary"><div class="reveal"><div class="section-eyebrow">PRIVATE BY DESIGN</div><h2 class="section-title">保持开放的接口。<br/><span class="muted-title">守住清晰的边界。</span></h2><p class="section-description">智汇是为本人及经授权用户而建立的网关管理平台，不是公开售卖 API 的开放注册服务。凭据和敏感配置不应出现在公开页面中。</p><div style="margin-top:27px"><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway/blob/main/README.md" rel="noopener noreferrer" target="_blank">阅读项目 README <span>↗</span></a></div></div><div class="boundary-points reveal"><div class="boundary-item"><div class="boundary-number">01</div><div><h3>仅向授权用户开放</h3><p>不承诺公开注册、售卖额度或面向公众的服务等级保障。</p></div></div><div class="boundary-item"><div class="boundary-number">02</div><div><h3>最小化凭据暴露</h3><p>真实密钥应由受控界面提供；本页面所有代码示例使用明确的占位符。</p></div></div><div class="boundary-item"><div class="boundary-number">03</div><div><h3>真实数据才叫实时</h3><p>控制台演示不冒充线上状态，实际账号健康、额度与请求量必须取自已授权的数据源。</p></div></div></div></div></div></section>
-<section class="faq-section" id="faq"><div class="container"><div class="faq-layout"><div class="reveal"><div class="overline">QUESTIONS, ANSWERED</div><h2 class="big-title">关于智汇。<br/><span class="quiet">你可能想知道。</span></h2><p class="section-lead">公开页面只介绍可核实的功能和使用边界。账号状态、额度和模型的实时可用性，以授权后的控制台为准。</p></div><div class="faq-list reveal">
+<section class="section code-section" id="setup"><div class="container"><div class="code-layout"><div class="reveal"><div class="section-eyebrow">05 / CONNECT</div><h2 class="section-title">接入，不必从头开始。</h2><p class="section-description">选择平台，复制兼容 API 示例。</p><div aria-label="接口路由示例" class="code-tabline" role="group"><button aria-pressed="true" class="code-tab on" data-code="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="code-tab" data-code="qoder" type="button">Qoder</button><button aria-pressed="false" class="code-tab" data-code="trae" type="button">Trae</button></div><div aria-label="切换代码示例格式" class="format-tabs" role="group"><button aria-pressed="true" class="on" data-format="curl" type="button">cURL</button><button aria-pressed="false" data-format="python" type="button">Python SDK</button><button aria-pressed="false" data-format="env" type="button">环境变量</button></div><p class="hint">替换域名、Key 与模型。可用范围以部署配置为准。</p></div><div class="reveal"><div class="terminal"><div class="terminal-top"><div class="terminal-dots"><i></i><i></i><i></i></div><span class="terminal-filename" id="codeFilename">bash · gateway-request.sh</span><button class="copy-code" id="copyCode" type="button">复制代码 ↗</button></div><pre><code id="codeBlock"></code></pre></div></div></div></div></section>
+
+<section class="section" id="boundary"><div class="container"><div class="boundary"><div class="reveal"><div class="section-eyebrow">PRIVATE BY DESIGN</div><h2 class="section-title">开放接口，清晰边界。</h2><p class="section-description">面向授权用户，保护凭据与业务数据。</p><div style="margin-top:27px"><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway/blob/main/README.md" rel="noopener noreferrer" target="_blank">阅读项目 README <span>↗</span></a></div></div><div class="boundary-points reveal"><div class="boundary-item"><div class="boundary-number">01</div><div><h3>仅向授权用户开放</h3><p>不承诺公开注册、售卖额度或面向公众的服务等级保障。</p></div></div><div class="boundary-item"><div class="boundary-number">02</div><div><h3>最小化凭据暴露</h3><p>真实密钥应由受控界面提供；本页面所有代码示例使用明确的占位符。</p></div></div><div class="boundary-item"><div class="boundary-number">03</div><div><h3>真实数据才叫实时</h3><p>控制台演示不冒充线上状态，实际账号健康、额度与请求量必须取自已授权的数据源。</p></div></div></div></div></div></section>
+<section class="faq-section" id="faq"><div class="container"><div class="faq-layout"><div class="reveal"><div class="overline">QUESTIONS, ANSWERED</div><h2 class="big-title">还有几个问题。</h2><p class="section-lead">实时状态，以登录后的控制台为准。</p></div><div class="faq-list reveal">
 <div class="faq-item open"><button aria-expanded="true" class="faq-question" type="button">智汇是公开注册的 API 平台吗？<span>+</span></button><div class="faq-answer"><p>不是。智汇主要面向本人及获授权用户。官网不提供公开注册与商业服务等级承诺。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">三平台是否共用同一套上游账号？<span>+</span></button><div class="faq-answer"><p>不是简单混用。仓库中 WorkBuddy、Qoder、Trae 分别拥有数据面路由前缀与相应引擎，前端平台切换也需要保持数据范围隔离。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">所有模型在任何时候都可用吗？<span>+</span></button><div class="faq-answer"><p>不保证。实际模型列表和可用性受平台、账号授权、版本、额度与运行状态影响，以当前部署和相应权限下的接口结果为准。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">上游没有返回 Token 用量怎么办？<span>+</span></button><div class="faq-answer"><p>账本设计会将不能确认的计量情况保留为 unknown 等待核对，而不是自动算成零。实际处理以对应版本源码和部署配置为准。</p></div></div>
-<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">网站会展示我的 API Key 吗？<span>+</span></button><div class="faq-answer"><p>这个公开视觉原型不会读取任何真实 Key。实际控制台中，仓库设计要求下游 Key 明文仅在创建响应中展示一次，并按相应权限管理。</p></div></div>
-<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">这个页面能直接替换生产官网吗？<span>+</span></button><div class="faq-answer"><p>当前是独立的前端概念稿，零业务请求、零后端连接。正式上线前，需要核对线上首页来源、链接、路由、内容安全策略、静态资源路径和移动端适配。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">网站会展示我的 API Key 吗？<span>+</span></button><div class="faq-answer"><p>不会。公开首页不读取真实 Key；密钥在授权后的控制台中管理。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">首页里的图表是实时数据吗？<span>+</span></button><div class="faq-answer"><p>不是。首页为功能演示，不读取真实账号或调用数据；实时用量请进入控制台查看。</p></div></div>
 </div></div></div></section>
-<section class="footcta"><div class="container reveal"><div class="section-eyebrow">ZHIHUI / UNIFIED AI GATEWAY</div><h2>少一点复杂。<br/><span class="muted-title">多一点掌控。</span></h2><p>把技术留给系统，把创造留给你。</p><div class="hero-actions"><a class="btn btn-dark" href="/dashboard/" rel="noopener noreferrer" target="_blank">打开控制台</a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">浏览 GitHub 项目 ↗</a></div></div></section>
+<section class="footcta"><div class="container reveal"><div class="section-eyebrow">ZHIHUI / UNIFIED AI GATEWAY</div><h2>让复杂，井然有序。</h2><p>一个入口，回到你的工作流。</p><div class="hero-actions"><a class="btn btn-dark" href="/dashboard/" rel="noopener noreferrer" target="_blank">进入首页 ↗</a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码 ↗</a></div></div></section>
 </main>
-<footer class="footer"><div class="container footer-content"><div><a class="logo" href="#top"><svg aria-hidden="true" class="logo-sign" fill="none" viewbox="0 0 40 40"><defs><lineargradient gradientunits="userSpaceOnUse" id="brandZGradient" x1="6" x2="34" y1="5" y2="35"><stop stop-color="#7391FA"></stop><stop offset="1" stop-color="#4D6CEB"></stop></lineargradient></defs><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="url(#brandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"></path></svg> 智汇</a><div class="footer-meta">Independent homepage redesign concept · 2026<br/>本 HTML 为纯前端演示，未连接任何生产服务。</div></div><div class="footer-links"><a href="#platforms">平台</a><a href="#ledger">账本</a><a href="#console">控制台</a><a href="#faq">常见问题</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">源码 ↗</a></div></div></footer>
+<footer class="footer"><div class="container footer-content"><div><a class="logo" href="#top"><svg aria-hidden="true" class="logo-sign" fill="none" viewbox="0 0 40 40"><defs><lineargradient gradientunits="userSpaceOnUse" id="footerBrandZGradient" x1="6" x2="34" y1="5" y2="35"><stop stop-color="#7391FA"></stop><stop offset="1" stop-color="#4D6CEB"></stop></lineargradient></defs><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="url(#footerBrandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"></path></svg> 智汇</a><div class="footer-meta">ZHIHUI · 智汇网关<br/>统一入口 · 独立边界</div></div><div class="footer-links"><a href="#platforms">平台</a><a href="#ledger">账本</a><a href="#console">控制台</a><a href="#faq">常见问题</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">源码 ↗</a></div></div></footer>
 <div aria-live="polite" class="toast" id="toast" role="status">已复制到剪贴板</div>
 <script>
 (()=>{'use strict';
@@ -668,9 +786,9 @@ const noMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 let scheduled=false;
 function updateScroll(){const doc=document.documentElement;const max=Math.max(1,doc.scrollHeight-innerHeight);$('#scrollProgress').style.width=(Math.min(1,scrollY/max)*100).toFixed(2)+'%';const nav=$('.nav');if(nav)nav.classList.toggle('is-scrolled',scrollY>30);scheduled=false}
 window.addEventListener('scroll',()=>{if(!scheduled){scheduled=true;requestAnimationFrame(updateScroll)}},{passive:true});updateScroll();
-const platformInfo={workbuddy:{name:'WORKBUDDY',node:'WorkBuddy',prefix:'/v1/*',engine:'workbuddy2api',text:'仓库中 /v1/* 走 WorkBuddy 数据面；国内版与国际版属于不同的授权和数据范围。'},qoder:{name:'QODER',node:'Qoder',prefix:'/qoder/v1/*',engine:'qoder2',text:'仓库中 /qoder/v1/* 被分派至独立 Qoder 引擎；后台读取需要注意 Manager 与引擎的控制面边界。'},trae:{name:'TRAE',node:'Trae',prefix:'/trae/v1/*',engine:'aiwork-server',text:'仓库中 /trae/v1/* 路由到对应服务；平台、账号池与日志不应与其他平台混用。'}};
+const platformInfo={workbuddy:{name:'WORKBUDDY',node:'WorkBuddy',prefix:'/v1/*',engine:'workbuddy2api',text:'WorkBuddy 专用入口。国内与国际版本独立授权。'},qoder:{name:'QODER',node:'Qoder',prefix:'/qoder/v1/*',engine:'qoder2',text:'Qoder 专用入口，独立引擎与账号资源。'},trae:{name:'TRAE',node:'Trae',prefix:'/trae/v1/*',engine:'aiwork-server',text:'Trae 专用入口，独立账号池与调用记录。'}};
 $$('[data-platform]').forEach(b=>b.addEventListener('click',()=>{let p=platformInfo[b.dataset.platform];if(!p)return;$$('[data-platform]').forEach(x=>{let on=x===b;x.classList.toggle('active',on);x.setAttribute('aria-pressed',String(on))});$('#platformName').textContent=p.name;$('#platformNode').textContent=p.node;$('#platformPrefix').textContent=p.prefix;$('#platformEngine').textContent=p.engine;$('#platformText').textContent=p.text;}));
-const ledgerStates={settled:{middle:'接收用量',mdesc:'上游返回可核算的 usage 数据。',last:'记录结算',ldesc:'按已确认的用量完成记录与结算。',badge:'SETTLED',detail:'当上游提供可确认的用量时，执行相应结算。这是行为逻辑演示，没有读取任何生产账本。'},unknown:{middle:'未返回用量',mdesc:'调用可能已发生，但暂时无法确认真实消耗。',last:'挂起待核对',ldesc:'以 unknown 记录等待有依据的核对，不擅自归零。',badge:'UNKNOWN',detail:'这是智汇账本设计的关键：不把“上游没有给 usage”误当成“本次成本为零”。'},reject:{middle:'请求未放行',mdesc:'根据授权、IP、模型或额度规则拒绝请求。',last:'不发往上游',ldesc:'拒绝原因可用于管理诊断，不能捏造上游结算。',badge:'REJECTED',detail:'未通过准入的请求不应继续上游转发。具体日志及额度处理依据实际代码和配置确定。'}};
+const ledgerStates={settled:{middle:'接收用量',mdesc:'上游返回可核算的 usage 数据。',last:'记录结算',ldesc:'按已确认的用量完成记录与结算。',badge:'SETTLED',detail:'确认用量后结算，记录每一步。'},unknown:{middle:'未返回用量',mdesc:'调用可能已发生，但暂时无法确认真实消耗。',last:'挂起待核对',ldesc:'以 unknown 记录等待有依据的核对，不擅自归零。',badge:'UNKNOWN',detail:'用量缺失不等于免费。保留 unknown，等待核对。'},reject:{middle:'请求未放行',mdesc:'根据授权、IP、模型或额度规则拒绝请求。',last:'不发往上游',ldesc:'拒绝原因可用于管理诊断，不能捏造上游结算。',badge:'REJECTED',detail:'未通过准入，不转发上游。'}};
 $$('[data-ledger]').forEach(b=>b.addEventListener('click',()=>{let id=b.dataset.ledger,t=ledgerStates[id];if(!t)return;$$('[data-ledger]').forEach(x=>{let on=x===b;x.classList.toggle('active',on);x.setAttribute('aria-pressed',String(on))});$('#ledgerMiddleTitle').textContent=t.middle;$('#ledgerMiddleDesc').textContent=t.mdesc;$('#ledgerLastTitle').textContent=t.last;$('#ledgerLastDesc').textContent=t.ldesc;$('#ledgerBadge').textContent=t.badge;$('#ledgerDetail').textContent=t.detail;$('#ledgerResult').className='ledger-result '+(id==='settled'?'':id);$$('.ledger-card').forEach((c,i)=>c.classList.toggle('focus',i===(id==='settled'?2:id==='unknown'?1:0)))}));
 const names={overview:'Overview',accounts:'Accounts',keys:'API Keys',models:'Models',logs:'Request Logs',tasks:'Tasks',security:'Security'};
 $$('[data-console]').forEach(b=>b.addEventListener('click',()=>{let id=b.dataset.console;$$('[data-console]').forEach(x=>{let on=x===b;x.classList.toggle('active',on);x.setAttribute('aria-pressed',String(on))});$$('[data-panel]').forEach(x=>x.hidden=x.dataset.panel!==id);$('#consoleCrumb').textContent=names[id]||id;}));
@@ -905,7 +1023,7 @@ function choose(platform,origin){
   }
   syncing=false;
   const context=$('#zh3PlatformContext'),box=$('.zh3-linkline'),scope=$('#zh3ConsoleScope');
-  if(context)context.textContent=`当前选择：${title[platform]}。路由演示与接入代码已同步更新。`;
+  if(context)context.textContent=`${title[platform]} · 光路与代码已同步`;
   if(scope)scope.textContent=`${title[platform]} · 路由前缀 ${prefix[platform]}`;
   if(box&&!reduce){box.classList.remove('is-updated');void box.offsetWidth;box.classList.add('is-updated');clearTimeout(flashTimeout);flashTimeout=setTimeout(()=>box.classList.remove('is-updated'),850)}
   const stage=$('.platform-stage');
@@ -967,6 +1085,116 @@ const ticker=$('.partners-marquee .partner-track'),tickerRoot=$('.partners-marqu
 if('IntersectionObserver' in window&&ticker&&tickerRoot){const obs=new IntersectionObserver(es=>{ticker.style.animationPlayState=es[0]?.isIntersecting?'running':'paused'},{threshold:0});obs.observe(tickerRoot);}
 // Lightly enrich card accessibility, no additional visual card clutter.
 $$('.console-tab').forEach(b=>b.setAttribute('aria-label',`切换控制台：${b.textContent.trim()}`));
+})();
+</script>
+<script id="zh-home-route-coordinator">
+(()=>{'use strict';
+const buttons=Array.from(document.querySelectorAll('[data-hero-platform]'));
+const diagram=document.querySelector('.signal-diagram');
+const sync=platform=>{
+ if(!['workbuddy','qoder','trae'].includes(platform))return;
+ diagram.dataset.selectedPlatform=platform;
+ buttons.forEach(button=>{const selected=button.dataset.heroPlatform===platform;button.classList.toggle('is-selected',selected);button.setAttribute('aria-pressed',String(selected))});
+ document.querySelectorAll('[data-signal-route]').forEach(path=>path.classList.toggle('is-selected',path.dataset.signalRoute===platform));
+};
+buttons.forEach(button=>button.addEventListener('click',()=>document.querySelector(`[data-platform="${button.dataset.heroPlatform}"]`)?.click()));
+document.addEventListener('zhihui:platform-selected',event=>sync(event.detail.platform));
+sync('workbuddy');
+})();
+</script>
+<script id="zh-blue-pointer">
+(()=>{'use strict';
+const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+const precise=matchMedia('(hover: hover) and (pointer: fine)');
+const root=document.documentElement,aura=document.querySelector('.pointer-aura');
+const cards=Array.from(document.querySelectorAll('[data-blue-card]'));
+let frame=0,x=0,y=0,activeCard=null,enabled=false;
+const reset=()=>{
+ if(frame)cancelAnimationFrame(frame);frame=0;root.removeAttribute('data-blue-pointer');
+ cards.forEach(card=>{for(const name of ['--spot-x','--spot-y','--card-light','--quota-light'])card.style.removeProperty(name)});
+ activeCard=null;
+};
+const paint=()=>{
+ frame=0;if(!enabled||document.hidden)return;
+ if(aura)aura.style.transform=`translate3d(${x-aura.offsetWidth/2}px,${y-aura.offsetHeight/2}px,0)`;
+ root.setAttribute('data-blue-pointer','');
+ if(activeCard){const box=activeCard.getBoundingClientRect();const local=Math.max(0,Math.min(1,(x-box.left)/Math.max(1,box.width)));activeCard.style.setProperty('--spot-x',(x-box.left).toFixed(1)+'px');activeCard.style.setProperty('--spot-y',(y-box.top).toFixed(1)+'px');activeCard.style.setProperty('--card-light','1');activeCard.style.setProperty('--quota-light',(local*2-1).toFixed(3))}
+};
+const move=event=>{
+ if(!enabled||event.pointerType!=='mouse'||document.hidden)return;
+ x=event.clientX;y=event.clientY;
+ const next=event.target instanceof Element?event.target.closest('[data-blue-card]'):null;
+ if(activeCard!==next){activeCard?.style.setProperty('--card-light','0');activeCard=next}
+ if(!frame)frame=requestAnimationFrame(paint);
+};
+const sync=()=>{enabled=!reduced.matches&&precise.matches;if(!enabled)reset()};
+document.addEventListener('pointermove',move,{passive:true});
+document.documentElement.addEventListener('pointerleave',reset,{passive:true});
+addEventListener('blur',reset);addEventListener('pagehide',reset);
+addEventListener('scroll',()=>{if(enabled&&root.hasAttribute('data-blue-pointer')&&!frame)frame=requestAnimationFrame(paint)},{passive:true});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)reset()});
+reduced.addEventListener('change',sync);precise.addEventListener('change',sync);sync();
+})();
+</script>
+<script id="zh-intelligence-flow">
+(()=>{'use strict';
+const canvas=document.getElementById('zh-intelligence-canvas'),host=canvas?.parentElement;
+const toggle=document.getElementById('zh-motion-control');
+if(!canvas||!host||!toggle)return;
+const ctx=canvas.getContext('2d',{alpha:true});if(!ctx)return;
+const reduce=matchMedia('(prefers-reduced-motion: reduce)'),fine=matchMedia('(hover: hover) and (pointer: fine)');
+let width=0,height=0,frame=0,last=0,elapsed=0,visible=true,paused=false,points=[],slowFrames=0;
+let pointer={x:-1000,y:-1000,active:false},budget=window.navigator.hardwareConcurrency<=4?190:380;
+const random=(index,salt)=>{const n=Math.sin(index*127.1+salt*311.7)*43758.5453;return n-Math.floor(n)};
+const stop=()=>{if(frame)cancelAnimationFrame(frame);frame=0;last=0;canvas.dataset.flowState='paused'};
+const live=()=>!paused&&!reduce.matches&&fine.matches&&!document.hidden&&visible;
+const render=(dt)=>{
+ ctx.clearRect(0,0,width,height);
+ const phase=elapsed*.00009;
+ for(const p of points){
+  p.u=(p.u+dt*p.speed/Math.max(width,1))%1;
+  const x=p.u*(width+160)-80;
+  const wave=Math.sin(p.u*5.8+p.lane*1.7+phase)*height*.11;
+  let y=p.lane*height+wave+Math.cos(p.u*8.4-phase*.7+p.seed)*height*.035;
+  let px=x,py=y;
+  if(pointer.active){const dx=pointer.x-x,dy=pointer.y-y,d=Math.hypot(dx,dy),pull=Math.max(0,1-d/230);px+=dx*pull*.16;py+=dy*pull*.16}
+  // Keep the headline and primary actions quieter than the side streams.
+  const quiet=width>760?Math.max(.06,Math.min(1,((px-width*.34)/Math.max(width*.26,1))**2)):.25;
+  const edge=Math.max(0,Math.min(1,(x+70)/100,(width+70-x)/100));
+  const alpha=(.18+p.seed*.31)*quiet*edge;
+  const slope=Math.cos(p.u*5.8+p.lane*1.7+phase)*.5;
+  ctx.beginPath();ctx.strokeStyle=`rgba(84,133,231,${alpha*.52})`;ctx.lineWidth=.65;
+  ctx.moveTo(px-4-p.seed*9,py-slope*5);ctx.lineTo(px,py);ctx.stroke();
+  ctx.beginPath();ctx.fillStyle=`rgba(76,125,224,${alpha})`;ctx.arc(px,py,p.radius,0,Math.PI*2);ctx.fill();
+  if(pointer.active&&p.seed>.88&&Math.hypot(pointer.x-px,pointer.y-py)<135){
+   ctx.beginPath();ctx.strokeStyle=`rgba(88,142,245,${alpha*.12})`;ctx.moveTo(px,py);ctx.lineTo(pointer.x,pointer.y);ctx.stroke();
+  }
+ }
+};
+const tick=now=>{
+ frame=0;if(!live()){sync();return}
+ if(last&&now-last<32){frame=requestAnimationFrame(tick);return}
+ const dt=last?Math.min(60,now-last):32;last=now;elapsed+=dt;
+ const started=performance.now();render(dt);
+ if(performance.now()-started>9&&points.length>110){if(++slowFrames>=8){points=points.slice(0,Math.max(110,Math.floor(points.length*.72)));slowFrames=0}}else slowFrames=0;
+ canvas.dataset.flowState='running';frame=requestAnimationFrame(tick);
+};
+const sync=()=>{stop();document.documentElement.toggleAttribute('data-home-flow-paused',paused||reduce.matches||!fine.matches);toggle.hidden=reduce.matches||!fine.matches;toggle.textContent=paused?'继续粒子':'暂停粒子';toggle.setAttribute('aria-pressed',String(paused));if(live())frame=requestAnimationFrame(tick);else render(0)};
+const resize=()=>{
+ const box=host.getBoundingClientRect();width=box.width;height=box.height;
+ const dpr=Math.min(1.5,window.devicePixelRatio||1);canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+ const count=reduce.matches||!fine.matches?75:Math.min(budget,Math.max(150,Math.floor(width*height/2900)));
+ points=Array.from({length:count},(_,i)=>({u:random(i,1),lane:random(i,2)*1.14-.07,seed:random(i,3),speed:.01+random(i,4)*.012,radius:.45+random(i,5)*.65}));
+ canvas.dataset.particleCount=String(count);sync();
+};
+toggle.addEventListener('click',()=>{paused=!paused;sync()});
+host.parentElement.addEventListener('pointermove',event=>{if(event.pointerType!=='mouse'||!live())return;const box=host.getBoundingClientRect();pointer={x:event.clientX-box.left,y:event.clientY-box.top,active:true}},{passive:true});
+host.parentElement.addEventListener('pointerleave',()=>{pointer.active=false},{passive:true});
+document.addEventListener('visibilitychange',sync);addEventListener('pagehide',stop);addEventListener('pageshow',sync);addEventListener('blur',()=>{pointer.active=false});
+reduce.addEventListener('change',resize);fine.addEventListener('change',resize);
+if('ResizeObserver' in window)new ResizeObserver(resize).observe(host);else addEventListener('resize',resize,{passive:true});
+if('IntersectionObserver' in window)new IntersectionObserver(entries=>{visible=!!entries[0]?.isIntersecting;sync()}).observe(host);
+resize();
 })();
 </script>
 </body>

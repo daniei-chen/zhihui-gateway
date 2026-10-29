@@ -4,7 +4,7 @@
 
 <p><sub>Z H I H U I　 /　 SELF-HOSTED AI GATEWAY　 /　 0.0.2</sub></p>
 
-# 多源汇入，一核择路。
+# 让每次调用，都走对路径。
 
 **把复杂留给网关，把清晰还给你。**
 
@@ -15,7 +15,7 @@ WorkBuddy · Qoder · Trae<br />
 
 <br />
 
-<a href="https://zhihui.kaogong.art/"><img src="docs/images/zhihui-home.png" width="100%" alt="智汇真实首页：多源汇入，一核择路；浅色留白、蓝色 Z 与统一平台入口" /></a>
+<a href="https://zhihui.kaogong.art/"><img src="docs/images/zhihui-home.png" width="100%" alt="智汇首页：紧凑深色标题、进入首页入口、蓝色 Z 与可切换的三平台光路" /></a>
 
 <sub>不是另一张概念稿。这就是网站首页的源码渲染；<a href="site/home/index.html">页面源码</a>也在这个仓库。</sub>
 
@@ -27,6 +27,10 @@ WorkBuddy · Qoder · Trae<br />
 
 首页负责讲清楚智汇，登录页负责安静地进入，控制台负责把事情做好。
 三者共享同一枚 Z、同一组留白与圆角、同一种克制的蓝。
+
+首页不再把功能写成大幅标语。左侧是一句清晰的介绍和“进入首页”入口，右侧是可切换的蓝色光路。
+选择一个平台，光路与接入代码随之联动；鼠标经过时，微粒与柔蓝光晕轻轻响应。
+手机、触屏和减少动态效果设置都有静态退化，不用动画换取可用性。图示只解释产品，不伪装实时业务数据。
 
 控制台不是删功能后的“极简版”。它保留平台切换、账号池、模型目录、访问 Key、
 用量、日志、任务与设置，也保留浮动 Dock、悬停放大、拖动位置记忆与明暗主题。
