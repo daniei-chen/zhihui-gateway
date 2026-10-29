@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import time
 import unittest
 from pathlib import Path
@@ -153,6 +154,43 @@ class ProductStatsTests(unittest.TestCase):
     def test_dynamic_throughput_dimension_cannot_be_sql(self):
         with self.assertRaises(KeyError):
             stats._throughput_by_dimension(1, None, 'key_id; DELETE FROM api_keys')
+
+    def test_sqlite_statistics_cutoff_matches_manager_local_date_not_fixed_china_date(self):
+        # Both sides must use the database writer's day convention, including
+        # the UTC evening where a fixed +08 clock has already entered tomorrow.
+        moments = (1793289600.0, 1793318399.0, 1793318400.0)
+        for now in moments:
+            with patch('time.time', return_value=now):
+                for days in (1, 7, 30, 400, 3650):
+                    with self.subTest(now=now, days=days):
+                        self.assertEqual(WorkBuddyAdapter._stats_since(days), stats._since(days))
+
+    @unittest.skipUnless(hasattr(time, 'tzset'), 'POSIX timezone conversion contract')
+    def test_statistics_keep_current_key_metrics_on_both_sides_of_local_midnight(self):
+        previous_tz = os.environ.get('TZ')
+        try:
+            for zone in ('UTC0', 'CST-8', 'EST5'):
+                os.environ['TZ'] = zone
+                time.tzset()
+                for now in (1793289599.0, 1793289601.0, 1793318399.0, 1793318401.0):
+                    with patch('time.time', return_value=now), self.subTest(zone=zone, now=now):
+                        db.execute('DELETE FROM usage_daily')
+                        db.execute('DELETE FROM request_logs')
+                        self.usage(32, ts=now)
+                        self.log(32, ts=now)
+                        adapter = WorkBuddyAdapter.__new__(WorkBuddyAdapter)
+                        adapter.cfg = SimpleNamespace(wb_read_mode='sqlite', wb_db=str(config.DB_PATH))
+                        rows = adapter._usage_by_key_from_sql(1, 'cn')
+                        self.assertEqual([row['key_id'] for row in rows], [32])
+                        self.assertEqual(rows[0]['cache_hit_rate'], 0.8)
+                        self.assertEqual(rows[0]['tokens_per_sec'], 25)
+                        self.assertEqual(adapter._usage_by_model_from_sql(1, 'cn')[0]['cache_hit_rate'], 0.8)
+        finally:
+            if previous_tz is None:
+                os.environ.pop('TZ', None)
+            else:
+                os.environ['TZ'] = previous_tz
+            time.tzset()
 
 
 class CompatStatsTests(unittest.IsolatedAsyncioTestCase):

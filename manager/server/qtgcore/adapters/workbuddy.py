@@ -703,10 +703,8 @@ class WorkBuddyAdapter(BaseAdapter):
     @staticmethod
     def _stats_since(days: int) -> str:
         """与 manager 的 _since(days) 同口径：本地时区、含今天。"""
-        import datetime as _dt
-        tz = _dt.timezone(_dt.timedelta(hours=8))
-        d = max(1, min(400, int(days)))
-        return (_dt.datetime.now(tz).date() - _dt.timedelta(days=d - 1)).isoformat()
+        d = max(1, min(3650, int(days)))
+        return _time.strftime('%Y-%m-%d', _time.localtime(_time.time() - (d - 1) * 86400))
 
     async def usage_by_model(self, days: int = 30, realm: str = "") -> List[Dict[str, Any]]:
         """照抄 manager 的 /stats/by-model：
