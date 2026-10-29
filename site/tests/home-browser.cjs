@@ -37,7 +37,7 @@ const server = http.createServer((req, res) => {
     assert.doesNotMatch(await page.locator('body').innerText(), /3\.0|仅供本人及获授权用户使用|交互式概念演示/);
     assert.ok(await title.evaluate(el => parseFloat(getComputedStyle(el.parentElement).fontSize) <= 48));
     assert.equal(await page.locator('.hero-copy .btn-dark').getAttribute('href'), '/dashboard/');
-    assert.match(await page.locator('.hero-copy .btn-dark').innerText(), /进入首页/);
+    assert.match(await page.locator('.hero-copy .btn-dark').innerText(), /进入控制台/);
     assert.equal(await page.locator('.nav-actions a[href="/dashboard/"]').count(), 0);
     assert.ok(await page.locator('.prism-float').isVisible());
     assert.ok(await page.locator('.demo-browser').isVisible());
