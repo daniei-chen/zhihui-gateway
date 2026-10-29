@@ -218,6 +218,18 @@ const server = http.createServer((request, response) => {
       await page.mouse.move(2, 2);
       await page.waitForTimeout(50);
       assert.equal(await card.evaluate(el => el.style.getPropertyValue('--surface-light')), '');
+      await page.waitForTimeout(1800);
+      for (const wrapper of await page.locator('.recharts-wrapper').all()) {
+        await wrapper.hover();
+        await page.waitForTimeout(100);
+      }
+      await page.mouse.move(2, 2);
+      for (const width of [320, 390, 768, 1440]) {
+        await page.setViewportSize({width, height: 950});
+        await page.waitForTimeout(400);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false,
+          'Hidden chart tooltips must not keep desktop coordinates at width ' + width);
+      }
       const mobileContext = await browser.newContext({hasTouch: true, isMobile: true, viewport: {width: 390, height: 844}});
       await mobileContext.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const mobile = await mobileContext.newPage();
@@ -228,7 +240,7 @@ const server = http.createServer((request, response) => {
       assert.deepEqual(allErrors, []);
       assert.deepEqual(runtimeConsoleErrors, []);
       assert.deepEqual([...unknown], []);
-      fs.writeFileSync(path.join(output, 'visual-results.json'), JSON.stringify({status: 'passed', pointer: true, reducedMotion: true, touchStatic: true, semanticColorsPreserved: true, errors: allErrors}, null, 2));
+      fs.writeFileSync(path.join(output, 'visual-results.json'), JSON.stringify({status: 'passed', pointer: true, reducedMotion: true, touchStatic: true, hiddenTooltipResize: true, semanticColorsPreserved: true, errors: allErrors}, null, 2));
       console.log('VISUAL_COMPLETE');
       return;
     }

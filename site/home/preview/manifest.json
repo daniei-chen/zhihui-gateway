@@ -1,7 +1,7 @@
 {
   "scope": "Actual exported console rendering with synthetic local fixtures. No production data or provider calls.",
-  "buildId": "CAcpVrZJGmFGd-iySJqt-",
-  "brandCssSha256": "a003ab61bb842bb22c9111c5b6718429482ab453a983920ec36442a3e15d6d2e",
+  "buildId": "L56xJIgc6_WtFFG8UVFfz",
+  "brandCssSha256": "10ae209aff9bc8e8168812b0c6136377e2208be71c8787ad7391145e386a92e9",
   "previews": [
     {
       "route": "/dashboard",
@@ -46,7 +46,7 @@
         "width": 1440,
         "height": 930
       },
-      "sha256": "f5920b45b12570cc36a0647b16cda16a87b88a5f7e0fc10411d0b31818b83ffe"
+      "sha256": "301f67b285e569b7cab02737bf2802db8e99af91ea9625a2617e2c2bb3c98aeb"
     },
     {
       "route": "/keys",
@@ -55,7 +55,7 @@
         "width": 390,
         "height": 650
       },
-      "sha256": "f7bd12ee86c6375a6d1f786598a7a9cb0362daacdcb3f52b88fc99492e97f7e8"
+      "sha256": "07b4dc904887f6ad70c575e17665b3a318ceb392a2a507d21df00b911f34e8b6"
     },
     {
       "route": "/models",
@@ -100,7 +100,7 @@
         "width": 1440,
         "height": 930
       },
-      "sha256": "75094e38f5033b15dbdbdaa1d68cc8509d2a9c544bbb4e70db66696ad846d321"
+      "sha256": "0428f132cdd467930c6a53c1d4f51a2febdc44dd387fed4eb59f00fa7a5c99f3"
     },
     {
       "route": "/tasks",

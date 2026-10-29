@@ -393,6 +393,11 @@ html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray
 html:not(.dark) #main-content .recharts-cartesian-grid-horizontal line { stroke-opacity: .8; }
 html:not(.dark) #main-content .recharts-cartesian-axis-tick-value { fill: #8c9fbf; }
 
+/* Recharts retains desktop coordinates on hidden tooltips after a viewport resize. */
+#main-content .recharts-tooltip-wrapper[style*="visibility: hidden"] {
+  transform: translate(0, 0) !important;
+}
+
 @media (max-width: 479px) {
   html:not(.dark) #main-content [data-slot="stat-card"] { min-height: 103px; }
 }
