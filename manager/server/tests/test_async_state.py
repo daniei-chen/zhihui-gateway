@@ -279,31 +279,24 @@ class AsyncStateInvariantTest(unittest.TestCase):
             '（modelQ / ipQ）要用**防抖落定值**，不是输入框的即时值。',
         )
 
-    def test_stats_keeps_upstream_out_of_the_main_group(self) -> None:
-        """用量统计页的上游那份数据必须**单独一个 hook**，不能和本页四份混在一起。
+    def test_stats_loads_only_product_usage_without_optional_success_stubs(self) -> None:
+        """产品页已移除上游累计和运维证据，不能继续请求或以假成功遮挡错误态。
 
-        上游统计的取数函数把失败吞成 `{available: false}` 而不是抛错——因为它取不到
-        是常态（上游没起来、镜像太旧），不该为它弹提示。代价是它**永远算一次成功的
-        取数**：混在一起的话，五份数据全挂时它照样有值，「一份都没取到」的判据就被
-        顶掉了——页面不进整页错误态，反而照常渲染四张 0 卡片和「暂无数据」，正是
-        这一批要修的那句谎话。
-
-        这条不是从代码读出来的：真实浏览器验收时把五个接口全打成 500，整页错误态
-        根本没出现，页面显示的是「部分数据加载失败 + 四张 0 + 暂无数据」。
+        旧版要求上游单独取数，防 `{available: false}` 被误算成主数据成功。
+        当前用户要求移除该展示，所以改验完整主数据组与无可选请求；主数据全失败
+        必须进入 LoadError 的守卫仍由下一项不变式及浏览器故障夹具共同覆盖。
         """
         code = _code(_STATS)
-        self.assertIn('available: false', code,
-                      '上游取数不再把失败吞成 {available: false}——本断言的前提变了，'
-                      '请重新确认它是否还需要单独一个 hook')
         args = _hook_args(code, 0)
         self.assertGreaterEqual(len(args), 2, '找不到 stats 页第一个 useAsyncAll 调用')
+        for name in ('summary', 'daily', 'hourly', 'byModel', 'byKey'):
+            self.assertRegex(args[0], rf'\b{name}\s*:', f'主数据组缺少 {name}')
         self.assertNotIn('upstream', args[0],
-                         '上游统计被放回了本页四份数据那一组：它把失败吞成 '
-                         '{available: false}，五份全挂时会被当成「有数据」，整页错误态'
-                         '就不再出现')
-        second = _hook_args(code, 1)
-        self.assertTrue(second and 'upstream' in second[0],
-                        'stats 页没有第二个 useAsyncAll 把上游统计单独接起来')
+                         '上游累计不能作为本页取数成功的判据')
+        self.assertNotIn('available: false', code, '不能用可选成功桩掩盖主数据加载失败')
+        self.assertNotRegex(code, r'statsApi\.(?:upstream|evidence)\s*\(',
+                            '已移除的技术展示不应继续请求接口')
+        self.assertEqual(_hook_args(code, 1), [], '本页不应继续挂载可选上游统计组')
 
     def test_pages_guard_before_rendering_empty_states(self) -> None:
         """每个接入状态系统的页面，首屏守卫都必须排在「没有数据」那些话之前。
