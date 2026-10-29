@@ -40,6 +40,7 @@ async function entryState(page) {
     const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
     return {
       titlePainted: painted(title), entryPainted: painted(link),
+      brandMarkPainted: painted(document.querySelector('.prism-float')),
       entryInViewport: box.top >= 0 && box.bottom <= innerHeight,
       entryHitTarget: target === link || link.contains(target),
       entryHref: link.getAttribute('href'),
@@ -55,6 +56,7 @@ async function assertEntry(page, label) {
   report.checks.push({label, ...state});
   assert.equal(state.titlePainted, true, label + ': title must actually be painted, not merely in layout');
   assert.equal(state.entryPainted, true, label + ': entry must not be transparent');
+  assert.equal(state.brandMarkPainted, true, label + ': floating brand mark must survive motion suspension');
   assert.equal(state.entryInViewport, true, label + ': entry must fit above the fold');
   assert.equal(state.entryHitTarget, true, label + ': entry must receive a tap');
   assert.equal(state.entryHref, '/dashboard/');
