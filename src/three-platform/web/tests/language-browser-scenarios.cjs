@@ -14,6 +14,8 @@ async function selected(page, locale) {
   await trigger.waitFor({state: 'visible'});
   assert.equal(await trigger.getAttribute('data-locale'), locale);
   assert.ok((await trigger.innerText()).includes(labels[locale]));
+  assert.equal(await page.locator('[data-slot=console-brand]').isVisible(), true);
+  assert.equal(await page.locator('.zh-console-brand-name').textContent(), '智汇网关');
 }
 
 async function choose(page, locale) {

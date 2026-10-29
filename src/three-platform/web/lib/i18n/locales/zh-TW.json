@@ -46,7 +46,10 @@
     "staleBuildHint": "你開啟的分頁使用舊版頁面，目前部署已找不到對應的腳本或資料。重新整理一次即可取得新版本；未儲存的輸入會遺失。",
     "reloadPage": "重新整理頁面",
     "forbidden": "權限不足：目前帳號無法執行這個操作",
-    "serverDetail": "伺服器錯誤：{detail}"
+    "serverDetail": "伺服器錯誤：{detail}",
+    "channelRejected": "上游拒絕了本次呼叫通路（11128）。請使用供應商支援的用戶端，或聯絡供應商確認 API 通路授權。閘道不自動重試此錯誤，也不據此判定帳號失效；未回傳的用量仍待核對。",
+    "requestId": "請求編號：{id}",
+    "upstreamRequestId": "上游編號：{id}"
   },
   "nav": {
     "groupOverview": "總覽",
@@ -287,7 +290,7 @@
     "upstreamNote": "取自上游自己的統計：包含直連上游的呼叫，且自上游行程啟動以來累計，與上面的時段篩選無關",
     "upstreamUnavailable": "取不到上游統計",
     "upstreamSuccess": "成功",
-    "cacheHitRate": "快取命中",
+    "cacheHitRate": "快取命中率",
     "dailyAgg": "依天彙總",
     "noUsageData": "暫無用量資料",
     "byModel": "依模型",
@@ -300,7 +303,9 @@
     "failedHint": "今日失敗 {n} 次（不計入上方請求數）",
     "hourlyAgg": "按小時（當日彙總）",
     "tokensPerSec": "輸出 tok/s",
-    "throughputHint": "依 {n} 筆成功請求的生成耗時估算（僅涵蓋日誌保留期間）"
+    "throughputHint": "依 {n} 筆成功請求的生成耗時估算（僅涵蓋日誌保留期間）",
+    "cacheHitHint": "命中 Token ÷ 已回報的命中與未命中 Token；未提供資料時顯示 —。",
+    "currentKeysHint": "僅列出目前保留的金鑰；已刪除金鑰的歷史用量仍計入總量。"
   },
   "accounts": {
     "proxyLine": "出口線路",

@@ -46,7 +46,10 @@
     "staleBuildHint": "Your tab is running an older version of the page and its scripts or data are no longer in the current deployment. Reloading gets the new version; unsaved input will be lost.",
     "reloadPage": "Reload page",
     "forbidden": "Permission denied — your account is not allowed to do this",
-    "serverDetail": "Server error: {detail}"
+    "serverDetail": "Server error: {detail}",
+    "channelRejected": "The provider rejected this request channel (11128). Use a provider-supported client or ask the provider to confirm API channel authorization. The gateway does not automatically retry this error or mark the account invalid. Unreported usage remains pending reconciliation.",
+    "requestId": "Request ID: {id}",
+    "upstreamRequestId": "Upstream ID: {id}"
   },
   "nav": {
     "groupOverview": "Overview",
@@ -314,7 +317,7 @@
     "upstreamNote": "Coming from the upstream itself: includes calls made directly to it, and counts since its process started — independent of the time range above",
     "upstreamUnavailable": "Upstream stats unavailable",
     "upstreamSuccess": "Succeeded",
-    "cacheHitRate": "Cache hit",
+    "cacheHitRate": "Cache hit rate",
     "dailyAgg": "Aggregated daily",
     "noUsageData": "No usage data yet",
     "byModel": "By model",
@@ -327,7 +330,9 @@
     "failedHint": "{n} failed today (not counted in the requests above)",
     "hourlyAgg": "Hourly (today)",
     "tokensPerSec": "Output tok/s",
-    "throughputHint": "Estimated from {n} successful requests (request-log retention window only)"
+    "throughputHint": "Estimated from {n} successful requests (request-log retention window only)",
+    "cacheHitHint": "Hit tokens ÷ reported hit and miss tokens. Missing data is shown as —.",
+    "currentKeysHint": "Only current keys are listed. Historical usage from deleted keys remains in totals."
   },
   "accounts": {
     "proxyLine": "Exit route",

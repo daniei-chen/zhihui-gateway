@@ -64,6 +64,34 @@ function load(relative, mocks) {
   return compiled.exports;
 }
 
+test('usage cache rates preserve missing data, true zero and provider denominator', () => {
+  const {formatCacheHitRate} = load('lib/usage-metrics.ts', {});
+  assert.equal(formatCacheHitRate({cache_hit_tokens: 94, cache_miss_tokens: 6}), '94%');
+  assert.equal(formatCacheHitRate({cache_hit_tokens: 0, cache_miss_tokens: 100}), '0%');
+  assert.equal(formatCacheHitRate({cache_hit_tokens: 0, cache_miss_tokens: 0}), '—');
+  assert.equal(formatCacheHitRate({cache_hit_tokens: 100}), '—');
+  assert.equal(formatCacheHitRate({cache_hit_rate: null, cache_hit_tokens: 10, cache_miss_tokens: 0}), '—');
+  for (const value of [NaN, Infinity, -1, 1.5, '1', true]) {
+    assert.equal(formatCacheHitRate({cache_hit_rate: value}), '—');
+  }
+});
+
+test('output speed never displays absent or nonfinite measurements as zero', () => {
+  const {formatOutputRate} = load('lib/usage-metrics.ts', {});
+  assert.equal(formatOutputRate(37.5), '37.5');
+  for (const value of [null, undefined, 0, -1, NaN, Infinity, '30', true]) {
+    assert.equal(formatOutputRate(value), '—');
+  }
+});
+
+test('usage page contains no operational or process-lifetime stats fetches', () => {
+  const source = fs.readFileSync(path.join(root, 'app/(main)/stats/page.tsx'), 'utf8');
+  assert.doesNotMatch(source, /OutcomeStatsPanel|UpstreamMetric|statsApi\.upstream\(/);
+  assert.match(source, /formatCacheHitRate\(it\)/);
+  assert.match(source, /formatOutputRate\(it.tokens_per_sec\)/);
+  assert.match(source, /currentKeysHint/);
+});
+
 function asyncHook() {
   const harness = hookHarness();
   const state = load('lib/async-state.ts', {});
@@ -248,7 +276,7 @@ test('backend error details remain authoritative and server diagnostics get loca
       request: {use() {}}, response: {use() {}},
     }})}},
     './base-path': {BASE_PATH: ''},
-    './err-envelope': {backendErrorText: body => typeof body?.detail === 'string' ? body.detail : ''},
+    './err-envelope': {backendErrorText: body => typeof body?.detail === 'string' ? body.detail : '', channelCheckDetails: () => null},
     './i18n': {t: (key, params) => params ? `${key}: ${params.detail}` : key, tp: text => text},
     './platform-store': {},
   });

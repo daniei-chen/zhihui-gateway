@@ -734,12 +734,17 @@ export interface CreditsFlow {
 }
 
 export interface UsageBreakdown {
+  key_id?: number;
   name: string;
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;
   /** 该维度实际扣费合计 */
   credit: number;
+  /** Only provider-reported cache tokens; unknown is null, not a zero rate. */
+  cache_hit_tokens?: number | null;
+  cache_miss_tokens?: number | null;
+  cache_hit_rate?: number | null;
   /**
    * 输出速率（tokens/秒，issue #214）：按「生成耗时 = 总耗时 − 首字耗时」估算。
    * null / 缺省 = 没有可用样本（日志已清或该模型没成功请求），界面显示「—」。

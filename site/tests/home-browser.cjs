@@ -14,7 +14,7 @@ const server = http.createServer((req, res) => {
   const name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   const file = path.join(root, name === '/' ? 'index.html' : name);
   if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) {res.writeHead(404).end(); return;}
-  res.setHeader('Content-Type', file.endsWith('.html') ? 'text/html; charset=utf-8' : file.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream');
+  res.setHeader('Content-Type', file.endsWith('.html') ? 'text/html; charset=utf-8' : file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.jpg') ? 'image/jpeg' : 'application/octet-stream');
   fs.createReadStream(file).pipe(res);
 });
 (async () => {
@@ -39,6 +39,12 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator('.hero-copy .btn-dark').getAttribute('href'), '/dashboard/');
     assert.match(await page.locator('.hero-copy .btn-dark').innerText(), /进入首页/);
     assert.equal(await page.locator('.nav-actions a[href="/dashboard/"]').count(), 0);
+    assert.ok(await page.locator('.prism-float').isVisible());
+    assert.ok(await page.locator('.demo-browser').isVisible());
+    await page.locator('.console-capture img').evaluate(el => el.decode());
+    assert.equal(await page.locator('.console-capture img').evaluate(el => el.naturalWidth), 1440);
+    const chapters = ['product', 'platforms', 'routing', 'ledger', 'about', 'console', 'setup', 'engineering', 'boundary', 'faq'];
+    assert.deepEqual(await page.locator('section[id]').evaluateAll(items => items.map(el => el.id)), chapters);
     await page.waitForFunction(() => document.querySelector('canvas').dataset.flowState === 'running');
     report.particles = await page.locator('canvas').evaluate(el => ({count: Number(el.dataset.particleCount), state: el.dataset.flowState, width: el.width, height: el.height}));
     assert.ok(report.particles.count >= 150 && report.particles.count <= 380);
@@ -68,18 +74,31 @@ const server = http.createServer((req, res) => {
     assert.equal(await title.evaluate(el => getComputedStyle(el).color), 'rgb(32, 42, 61)');
     await page.emulateMedia({reducedMotion: 'no-preference'});
     await page.waitForFunction(() => document.querySelector('canvas').dataset.flowState === 'running');
+    const geometry = await page.locator('.routing-fabric').evaluate(el => {
+      const core = el.querySelector('.signal-core').getBoundingClientRect();
+      return {width: el.getBoundingClientRect().width, sources: Array.from(el.querySelectorAll('.signal-source'), button => {
+        const r = button.getBoundingClientRect();
+        return {x: r.x, right: r.right, y: r.y, bottom: r.bottom, coreRight: core.right};
+      })};
+    });
+    assert.ok(geometry.width >= 400, 'Routing fabric must not shrink to its intrinsic text width');
+    assert.ok(geometry.sources.every(button => button.x > button.coreRight), 'Platform buttons must stay clear of the routing core');
+    report.routingGeometry = geometry;
     const quota = page.locator('.quota-fill');
     const fixed = await quota.evaluate(el => getComputedStyle(el).width);
-    await page.locator('[data-blue-card]').last().hover();
+    await page.locator('#product [data-blue-card]').last().hover();
     assert.equal(await quota.evaluate(el => getComputedStyle(el).width), fixed);
     assert.match(await page.locator('.quota-ribbon').innerText(), /非实时额度/);
     await page.locator('[data-ledger="unknown"]').click();
     assert.equal(await page.locator('#ledgerBadge').innerText(), 'UNKNOWN');
+    assert.equal(await page.locator('.ledger-wrap').getAttribute('data-ledger-state'), 'unknown');
     assert.match(await page.locator('#ledgerDetail').innerText(), /不等于免费/);
     await page.locator('[data-ledger="settled"]').click();
     for (const panel of ['overview', 'accounts', 'keys', 'models', 'logs', 'tasks', 'security']) {
       await page.locator(`[data-console="${panel}"]`).click();
       assert.equal(await page.locator(`[data-panel="${panel}"]`).isVisible(), true);
+      await page.locator(`[data-panel="${panel}"] .console-native-preview img`).evaluate(el => el.decode());
+      assert.equal(await page.locator(`[data-panel="${panel}"] .console-native-preview img`).evaluate(el => el.naturalWidth), 1440);
     }
     await page.locator('[data-console="accounts"]').click();
     await page.locator('[data-zh3-detail="WorkBuddy"]').click();
@@ -123,6 +142,13 @@ const server = http.createServer((req, res) => {
         await page.waitForTimeout(900);
         await page.evaluate(() => window.scrollTo({top: 0, behavior: 'instant'}));
         await page.screenshot({path: path.join(output, width === 390 ? 'home-mobile.png' : 'home-desktop.png'), fullPage: true});
+        for (const id of ['product', 'platforms', 'routing', 'ledger', 'about', 'console', 'setup', 'engineering', 'boundary', 'faq']) {
+          const section = page.locator('#' + id);
+          await section.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(450);
+          if (width === 1440) await section.screenshot({path: path.join(output, `chapter-${id}.png`)});
+          assert.equal(await section.evaluate(el => el.classList.contains('chapter-inview')), true);
+        }
       }
     }
     const touch = await browser.newContext({hasTouch: true, isMobile: true, viewport: {width: 390, height: 844}});
@@ -136,6 +162,8 @@ const server = http.createServer((req, res) => {
     await mobile.locator('#mobileMenu a[href="#product"]').click();
     assert.equal(await mobile.locator('#mobileTrigger').getAttribute('aria-expanded'), 'false');
     report.touchStaticFallback = true;
+    await mobile.locator('.console-capture img').evaluate(el => el.decode());
+    assert.equal(await mobile.locator('.console-capture img').evaluate(el => el.naturalWidth), 390);
     const noJsContext = await browser.newContext({javaScriptEnabled: false, viewport: {width: 390, height: 844}});
     const noJs = await noJsContext.newPage();
     await noJs.goto(origin);

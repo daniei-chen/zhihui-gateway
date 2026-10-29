@@ -1,19 +1,16 @@
-/* ZHIHUI Manager brand layer, v1.0.1.
- * Target: OgGJqnHFJqfP4M2FIdziD. Load after the signed application CSS.
- * No DOM, application state, route, SVG geometry, or Dock transform changes.
- */
+/* Shared public-home visual language; preserve application and Dock behavior. */
 html:has(#main-content) {
-  --zh-paper: #f8f9fb;
+  --zh-paper: #f7faff;
   --zh-ice: #eef4ff;
-  --zh-blue: #617cf1;
-  --zh-action: #4969f6;
-  --zh-ink: #171c29;
-  --zh-line: #e6ecf7;
+  --zh-blue: #7597e9;
+  --zh-action: #557df2;
+  --zh-ink: #202a3d;
+  --zh-line: #e2eaf8;
   --zh-soft: #6e727e;
   --zh-ease: cubic-bezier(.22, 1, .36, 1);
-  --zh-shadow: 0 14px 42px rgba(72, 97, 151, .055);
-  --font-sans: var(--font-inter, "Inter"), "SF Pro Display", -apple-system,
-    BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --zh-shadow: 0 14px 42px rgba(72, 97, 151, .045);
+  --font-sans: "MiSans", "HarmonyOS Sans SC", var(--font-inter),
+    var(--font-noto-sans-sc), "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 html:not(.dark):has(#main-content) {
@@ -34,6 +31,9 @@ html:not(.dark):has(#main-content) {
   --border: var(--zh-line);
   --input: #dbe4f2;
   --ring: #8299f1;
+  --chart-1: #7399e8;
+  --chart-2: #529da9;
+  --chart-3: #849cbf;
 }
 
 html:has(#main-content) body {
@@ -44,8 +44,9 @@ html:has(#main-content) body {
 html:not(.dark):has(#main-content) body {
   background-color: var(--zh-paper);
   background-image:
-    radial-gradient(ellipse 65% 380px at 87% 0, rgba(208, 223, 255, .34), transparent 80%),
-    linear-gradient(180deg, #fafcff 0, #f8f9fb 580px);
+    radial-gradient(ellipse 70% 480px at 78% 0, rgba(208, 226, 255, .36), transparent 80%),
+    radial-gradient(ellipse 40% 700px at 0 40%, rgba(234, 242, 255, .4), transparent 85%),
+    linear-gradient(180deg, #fcfdff 0, #f7faff 800px);
   background-repeat: no-repeat;
 }
 
@@ -56,9 +57,9 @@ html:not(.dark):has(#main-content) body {
 
 #main-content h1 {
   font-size: clamp(1.4rem, 1.1rem + .7vw, 1.85rem);
-  font-weight: 650;
-  letter-spacing: -.045em;
-  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -.035em;
+  line-height: 1.4;
 }
 
 #main-content h1 + p {
@@ -67,9 +68,86 @@ html:not(.dark):has(#main-content) body {
   line-height: 1.75;
 }
 
+.zh-console-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 1.5rem;
+  min-width: 0;
+}
+
+.zh-console-brand {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: .7rem;
+  min-height: 2.75rem;
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.zh-console-brand-mark {
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  color: #6384ef;
+  filter: drop-shadow(0 4px 7px rgba(111, 149, 226, .12));
+}
+
+.zh-console-brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+}
+
+.zh-console-brand-name {
+  font-size: .95rem;
+  font-weight: 650;
+  letter-spacing: .04em;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.zh-console-brand-caption {
+  color: var(--muted-foreground);
+  font-size: .5rem;
+  font-weight: 500;
+  letter-spacing: .19em;
+  line-height: 1.2;
+}
+
+.zh-console-controls {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+  margin-left: auto;
+}
+
+.dark .zh-console-brand-mark { color: #91adff; }
+
+@media (max-width: 767px) {
+  .zh-console-header { align-items: flex-start; }
+  .zh-console-brand { gap: .5rem; min-height: 2.4rem; }
+  .zh-console-brand-mark { width: 1.65rem; height: 1.65rem; }
+  .zh-console-brand-name { font-size: .85rem; }
+  .zh-console-brand-caption { font-size: .45rem; }
+  .zh-console-controls {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+    padding-top: .3rem;
+    gap: .4rem;
+  }
+}
+
 /* The existing control rail keeps platform / realm / command behavior. */
 #main-content > div:first-child {
-  padding-bottom: .5rem;
+  padding-bottom: .85rem;
   border-bottom: 1px solid var(--border);
   row-gap: .5rem;
 }
@@ -101,9 +179,12 @@ html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true
 
 /* Exact existing surface classes: not every bg-muted element is a card. */
 html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"] {
-  background: linear-gradient(145deg, #ffffff, #fcfdff);
+  background:
+    radial-gradient(ellipse 65% 95% at 100% 0, rgba(227, 238, 255, .3), transparent 85%),
+    linear-gradient(145deg, #ffffff, #fcfdff);
   border: 1px solid var(--zh-line);
   box-shadow: var(--zh-shadow);
+  transition: border-color .35s var(--zh-ease), box-shadow .35s var(--zh-ease);
 }
 
 html:not(.dark) #main-content [class~="rounded-2xl"][class~="bg-background/60"] {
@@ -126,7 +207,7 @@ html:not(.dark) #main-content [class~="text-violet-600"] {
   color: #4b68c8;
 }
 
-/* Keep semantic danger/success colors and chart series colors intact. */
+/* Blue carries neutral usage; danger and success remain semantic. */
 #main-content .recharts-text,
 #main-content .recharts-default-tooltip {
   font-family: var(--font-sans);
@@ -240,4 +321,84 @@ html:has(#main-content) .skip-link:focus {
 
 @media (prefers-reduced-motion: reduce) {
   html:has(#main-content) { scroll-behavior: auto; }
+}
+
+/* A single decorative light follows the pointer; it never changes data or controls. */
+.zh-console-aura {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: min(620px, 85vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(109, 161, 255, .065), transparent 70%);
+  pointer-events: none;
+  z-index: 20;
+  opacity: 0;
+  contain: strict;
+  transition: opacity .5s ease;
+}
+
+.zh-console-aura[data-active] { opacity: 1; }
+.dark .zh-console-aura { display: none; }
+
+html:not(.dark) #main-content [data-slot="stat-card"] {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  min-height: 112px;
+}
+
+html:not(.dark) #main-content [data-slot="stat-card"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(260px circle at var(--surface-x, 70%) var(--surface-y, 0%), rgba(133, 173, 248, .1), transparent 74%);
+  opacity: var(--surface-light, 0);
+  transition: opacity .5s ease;
+}
+
+html:not(.dark) #main-content [data-slot="stat-card"] > div:first-child > div:last-child:has(svg) {
+  background: linear-gradient(145deg, #ffffff, #eef4ff);
+  border: 1px solid #e8effb;
+}
+
+html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"]:hover {
+  border-color: #ccdafa;
+  box-shadow: 0 18px 45px rgba(76, 107, 161, .065);
+}
+
+html:not(.dark) #main-content [data-slot="table-header"] {
+  background: linear-gradient(90deg, #f5f8ff, #f9fbff);
+}
+
+html:not(.dark) #main-content [data-slot="table-head"] { color: #7b8eaf; }
+html:not(.dark) #main-content [data-slot="table-row"] { border-color: #eaf0fa; }
+html:not(.dark) #main-content [data-slot="table-body"] [data-slot="table-row"]:hover { background: #f4f8ff; }
+
+html:not(.dark) #main-content [data-slot="input"],
+html:not(.dark) #main-content [data-slot="select-trigger"] {
+  border-color: #dfe8f7;
+  background-color: rgba(255, 255, 255, .82);
+  box-shadow: 0 2px 7px rgba(65, 95, 147, .02);
+}
+
+html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray-200"] {
+  background: linear-gradient(145deg, #f1f6ff, #eaf1fd);
+  border: 1px solid #e3ecfc;
+  color: #6c86b4;
+}
+
+html:not(.dark) #main-content .recharts-cartesian-grid-horizontal line { stroke-opacity: .8; }
+html:not(.dark) #main-content .recharts-cartesian-axis-tick-value { fill: #8c9fbf; }
+
+@media (max-width: 479px) {
+  html:not(.dark) #main-content [data-slot="stat-card"] { min-height: 103px; }
+}
+
+@media (prefers-reduced-motion: reduce), (hover: none), (pointer: coarse) {
+  .zh-console-aura { display: none !important; }
+  html:not(.dark) #main-content [data-slot="stat-card"]::before { display: none; }
+  html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"] { transition: none; }
 }

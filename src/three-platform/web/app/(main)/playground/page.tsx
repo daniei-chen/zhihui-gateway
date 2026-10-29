@@ -19,7 +19,7 @@ import {Badge} from '@/components/ui/badge';
 import {Skeleton} from '@/components/ui/skeleton';
 import {AiChatInput, type ChatModelOption} from '@/components/ui/ai-chat-input';
 import {CopyButton} from '@/components/ui/copy-button';
-import {playgroundApi, errText} from '@/lib/api';
+import {playgroundApi, errText, channelRejectionText} from '@/lib/api';
 import {streamChat} from '@/lib/chat-stream';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {withBasePath} from '@/lib/base-path';
@@ -208,7 +208,8 @@ export default function PlaygroundPage() {
         // 用户点停止 / 切平台离页：保留已收到的内容，不标成错误
         patchLast({done: true, content: result.answer || t('playground.stopped')});
       } else if (result.error) {
-        patchLast({done: true, error: true, content: result.error});
+        patchLast({done: true, error: true, content: result.channelRejection
+          ? channelRejectionText(result.channelRejection) : result.error});
       } else {
         patchLast({
           done: true,

@@ -45,10 +45,21 @@ function fixture(url, request) {
   if (p === '/api/accounts') return {accounts, total: accounts.length, manageable: false, pool_available: true, upstream: {id: null, name: 'Fixture', is_default: true}};
   if (p === '/api/status') return {connected: true, total: 2, healthy: 2, cooling: 0, disabled: 0, in_flight_full: 0, accounts, realm_totals: {cn: {total: 1, healthy: 1, cooling: 0, disabled: 0, in_flight_full: 0}, global: {total: 1, healthy: 1, cooling: 0, disabled: 0, in_flight_full: 0}}};
   if (p === '/api/stats/summary') return {today_requests: amount, today_tokens: amount * 100, today_credit: 3.5, week_credit: 9.5, total_credit: 19.5, week_requests: amount, week_tokens: amount * 100, total_requests: amount, total_tokens: amount * 100, active_keys: 0, top_model: 'fixture-model', failures: {today_4xx: 1, today_5xx: 0, week_4xx: 1, week_5xx: 0}, usage_health: {ok: true}};
+  if (p === '/api/stats/daily' && process.env.QA_HOME_PREVIEW) return [18, 24, 37, 29, 52, 46, 61, 56, 73, 63, 82, 71, 101, 85].map((requests, index) => ({
+    day: new Date(Date.now() - (13 - index) * 86400000).toISOString().slice(0, 10), requests,
+    prompt_tokens: requests * 740, completion_tokens: requests * 180, failed: index % 5 === 0 ? 2 : 0,
+  }));
   if (p === '/api/stats/daily') return [{day: today, requests: amount, prompt_tokens: 1000, completion_tokens: 2000, failed: 1}];
   if (p === '/api/stats/hourly') return [{day: today, hour: 10, requests: amount, prompt_tokens: 1000, completion_tokens: 2000, failed: 1}];
   if (p === '/api/stats/credits') return {days: 7, from: today, to: today, today: {income: 19710, expense: 17014.094, net: 2695.906}, week: {income: 19710, expense: 17014.094, net: 2695.906}, total: {income: 19710, expense: 17014.094, net: 2695.906}, daily: [{day: today, income: 19710, expense: 17014.094, net: 2695.906}]};
-  if (['/api/stats/by-model', '/api/stats/by-key', '/api/keys', '/api/tokens', '/api/red-packets', '/api/security/rules', '/api/security/logs'].includes(p)) return [];
+  if (['/api/stats/by-model', '/api/stats/by-key'].includes(p)) return [
+    {name: p.endsWith('by-key') ? 'creative-studio' : 'fixture-model', key_id: 7, requests: 12,
+      prompt_tokens: 10000, completion_tokens: 2000, credit: 1.25, cache_hit_tokens: 9400,
+      cache_miss_tokens: 600, cache_hit_rate: 0.94, tokens_per_sec: 37.5, throughput_samples: 12},
+    {name: 'no-measurement', key_id: 8, requests: 2, prompt_tokens: 300, completion_tokens: 100,
+      credit: 0, cache_hit_rate: null, tokens_per_sec: null, throughput_samples: 0},
+  ];
+  if (['/api/keys', '/api/tokens', '/api/red-packets', '/api/security/rules', '/api/security/logs'].includes(p)) return [];
   if (p === '/api/stats/upstream') return {available: false, detail: 'Fixture has no live upstream'};
   if (p === '/api/logs') return {items: [], total: 0, page: 1, size: 20};
   if (p === '/api/proxies') return {routes: [], default: ''};
@@ -161,6 +172,66 @@ const server = http.createServer((request, response) => {
       if (message.type() === 'error' || (process.env.QA_HEADER_CAPTURE && message.text().startsWith('HYDRATION_'))) console.log('CONSOLE', message.text());
       if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) runtimeConsoleErrors.push({url: page.url(), message: message.text()});
     });
+    if (process.env.QA_HOME_PREVIEW) {
+      const crypto = require('node:crypto');
+      const before = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'app/brand.css'))).digest('hex');
+      const previews = [];
+      for (const route of ['/dashboard', '/accounts', '/keys', '/models', '/logs', '/tasks', '/security', '/stats']) {
+        for (const viewport of [{width: 1440, height: 930}, {width: 390, height: 650}]) {
+          await page.setViewportSize(viewport);
+          await page.goto(origin + route, {waitUntil: 'networkidle'});
+          await page.waitForTimeout(2000);
+          assert.equal(await page.locator('[data-slot=console-brand]').isVisible(), true);
+          const image = route.slice(1) + (viewport.width === 1440 ? '-desktop.jpg' : '-mobile.jpg');
+          await page.screenshot({path: path.join(output, image), type: 'jpeg', quality: 87, animations: 'disabled'});
+          previews.push({route, image, viewport, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(output, image))).digest('hex')});
+        }
+      }
+      assert.deepEqual([...unknown], []);
+      assert.deepEqual([...missingStatic], []);
+      assert.deepEqual(allErrors, []);
+      assert.deepEqual(runtimeConsoleErrors, []);
+      fs.writeFileSync(path.join(output, 'home-preview.json'), JSON.stringify({
+        scope: 'Actual exported console rendering with synthetic local fixtures. No production data or provider calls.',
+        buildId: fs.readFileSync(path.join(root, '.next/BUILD_ID'), 'utf8').trim(),
+        brandCssSha256: before, previews, errors: allErrors, unknownFixtures: [...unknown], status: 'passed',
+      }, null, 2));
+      console.log('HOME_PREVIEW_COMPLETE');
+      return;
+    }
+    if (process.env.QA_VISUAL_ONLY) {
+      await page.emulateMedia({reducedMotion: 'no-preference'});
+      await page.goto(origin + '/dashboard', {waitUntil: 'networkidle'});
+      const card = page.locator('[data-slot=stat-card]').first();
+      await card.hover();
+      await page.waitForTimeout(100);
+      assert.equal(await page.locator('.zh-console-aura').getAttribute('data-active'), '');
+      assert.equal(await card.evaluate(el => el.style.getPropertyValue('--surface-light')), '1');
+      assert.equal(await page.locator('html').evaluate(el => getComputedStyle(el).getPropertyValue('--chart-1').trim()), '#7399e8');
+      await page.emulateMedia({reducedMotion: 'reduce'});
+      await page.waitForTimeout(100);
+      assert.equal(await page.locator('.zh-console-aura').getAttribute('data-active'), null);
+      assert.equal(await page.locator('.zh-console-aura').evaluate(el => getComputedStyle(el).display), 'none');
+      await page.emulateMedia({reducedMotion: 'no-preference'});
+      await card.hover();
+      await page.waitForTimeout(100);
+      await page.mouse.move(2, 2);
+      await page.waitForTimeout(50);
+      assert.equal(await card.evaluate(el => el.style.getPropertyValue('--surface-light')), '');
+      const mobileContext = await browser.newContext({hasTouch: true, isMobile: true, viewport: {width: 390, height: 844}});
+      await mobileContext.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+      const mobile = await mobileContext.newPage();
+      await mobile.goto(origin + '/dashboard', {waitUntil: 'networkidle'});
+      assert.equal(await mobile.locator('.zh-console-aura').evaluate(el => getComputedStyle(el).display), 'none');
+      assert.equal(await mobile.locator('[data-slot=console-brand]').isVisible(), true);
+      await mobileContext.close();
+      assert.deepEqual(allErrors, []);
+      assert.deepEqual(runtimeConsoleErrors, []);
+      assert.deepEqual([...unknown], []);
+      fs.writeFileSync(path.join(output, 'visual-results.json'), JSON.stringify({status: 'passed', pointer: true, reducedMotion: true, touchStatic: true, semanticColorsPreserved: true, errors: allErrors}, null, 2));
+      console.log('VISUAL_COMPLETE');
+      return;
+    }
     if (process.env.QA_PRODUCT_ONLY) {
       result.product = [];
       for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
@@ -242,6 +313,14 @@ const server = http.createServer((request, response) => {
       await page.waitForTimeout(120);
       const facts = await page.evaluate(() => ({path: location.pathname, title: document.title, h1: document.querySelector('h1')?.textContent, main: !!document.querySelector('main'), text: document.body.innerText.slice(-240)}));
       result.routes.push({route, status: response.status(), ...facts, errors: [...errors]});
+      if (await page.locator('#main-content').count()) {
+        const brand = page.locator('[data-slot=console-brand]');
+        assert.equal(await brand.count(), 1, route + ' has one shared product brand');
+        assert.equal(await brand.isVisible(), true, route + ' product brand is visible');
+        assert.equal(await brand.locator('.zh-console-brand-name').textContent(), product.name);
+        assert.equal(await brand.getAttribute('href'), '/dashboard/');
+        assert.equal(await brand.locator('svg').count(), 1);
+      }
       if (process.env.QA_DOC_SHOTS && ['/dashboard', '/accounts', '/keys', '/tasks', '/logs', '/stats', '/models', '/playground', '/security', '/settings'].includes(route)) {
         await page.screenshot({path: path.join(output, 'doc-' + route.slice(1) + '.png'), fullPage: true, animations: 'disabled'});
       }
@@ -277,13 +356,16 @@ const server = http.createServer((request, response) => {
     result.operations.push({case: '501-explicitly-unavailable', passed: true});
     operations.state.mode = 'success';
     await page.goto(origin + '/stats', {waitUntil: 'networkidle'});
-    evidence = page.locator('section').filter({has: page.getByRole('heading', {name: '运行结果证据', exact: true})});
-    const statsText = await evidence.textContent();
-    assert.match(statsText, /unknown/); assert.match(statsText, /未知 \/ 未记录/);
-    assert.doesNotMatch(statsText, /unknown · 0 [sd]/);
-    result.operations.push({case: 'unknown-backup-certificate-coverage-not-zero', passed: true});
+    assert.equal(await page.getByRole('heading', {name: '运行结果证据', exact: true}).count(), 0);
+    assert.equal(await page.getByText('上游官方统计', {exact: true}).count(), 0);
+    assert.equal(await page.getByRole('columnheader', {name: '缓存命中率', exact: true}).count(), 2);
+    assert.equal(await page.getByRole('columnheader', {name: '输出 tok/s', exact: true}).count(), 2);
+    assert.equal(await page.getByRole('cell', {name: '94%', exact: true}).count(), 2);
+    assert.equal(await page.getByRole('cell', {name: '37.5', exact: true}).count(), 2);
+    assert.match(await page.locator('main').innerText(), /已删除密钥的历史用量仍计入总量/);
+    assert.equal(trace.some(item => item.path === '/api/stats/upstream' || item.path === '/api/stats/outcomes'), false);
+    result.operations.push({case: 'usage-page-current-keys-cache-output-no-diagnostics', passed: true});
     await page.getByRole('tab', {name: 'Qoder', exact: true}).click(); await page.waitForTimeout(250);
-    assert.match(await page.getByText('此聚合接口属于 Manager 台账', {exact: false}).textContent(), /不支持 Qoder\/Trae/);
     await page.goto(origin + '/logs', {waitUntil: 'networkidle'});
     const outcomeRequest = trace.findLast(item => item.path === '/api/logs/outcomes');
     assert.equal(outcomeRequest.platform, 'workbuddy'); assert.equal(outcomeRequest.queryPlatform, null); assert.equal(outcomeRequest.upstreamPlatform, 'qoder');
@@ -344,6 +426,12 @@ const server = http.createServer((request, response) => {
       const facts = await page.evaluate(() => ({width: innerWidth, scrollWidth: document.documentElement.scrollWidth, tables: document.querySelectorAll('details table').length, skipDisplay: getComputedStyle(document.querySelector('.skip-link')).display, nav: document.querySelectorAll('[role=navigation]').length}));
       result.responsive.push(facts);
       assert.equal(facts.scrollWidth, width, `Dashboard overflow at ${width}`);
+      const brandBounds = await page.locator('[data-slot=console-brand]').boundingBox();
+      const controlsBounds = await page.locator('.zh-console-controls').boundingBox();
+      assert.ok(brandBounds && brandBounds.x >= 0 && brandBounds.x + brandBounds.width <= width);
+      assert.ok(controlsBounds && controlsBounds.x >= 0 && controlsBounds.x + controlsBounds.width <= width);
+      assert.ok(brandBounds.y + brandBounds.height <= controlsBounds.y + 1 || brandBounds.x + brandBounds.width <= controlsBounds.x,
+        'Product brand must not overlap controls');
       await page.screenshot({path: path.join(output, `dashboard-${width}.png`), fullPage: true, animations: 'disabled'});
     }
     await page.keyboard.press('Tab');
@@ -396,6 +484,8 @@ const server = http.createServer((request, response) => {
     await page.mouse.move(10, 10); await page.waitForTimeout(500);
     result.theme = await page.evaluate(() => ({dark: document.documentElement.classList.contains('dark'), preference: localStorage.getItem('theme')}));
     assert.equal(result.theme.dark, true);
+    assert.equal(await page.locator('[data-slot=console-brand]').isVisible(), true);
+    assert.equal(await page.locator('.zh-console-brand-mark').evaluate(el => getComputedStyle(el).color), 'rgb(145, 173, 255)');
     await page.screenshot({path: path.join(output, 'dashboard-dark-1440.png'), fullPage: true});
     await page.setViewportSize({width: 390, height: 900}); await page.reload({waitUntil: 'networkidle'});
     await page.locator('[data-slot=dock-mobile-toggle]').click(); await page.waitForTimeout(800);

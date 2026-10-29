@@ -10,7 +10,7 @@
  *
  * 每条断言都在钉「返回值必须是 string」——这是渲染层的合同。
  */
-import {backendErrorText, envelopeText} from './err-envelope.ts';
+import {backendErrorText, envelopeText, channelCheckDetails} from './err-envelope.ts';
 
 let failed = 0;
 let passed = 0;
@@ -76,6 +76,22 @@ for (const [i, d] of hostile.entries()) {
   const r = backendErrorText(d);
   check(`hostile input #${i} returns a string`, typeof r === 'string' ? 'string' : typeof r, 'string');
 }
+
+const channelBody = {error: {code: 'channel_check_rejected', message: JSON.stringify({code: 11128,
+  msg: 'Illegal API invocation from an unapproved channel', requestId: 'provider-123'})}, request_id: 'gateway-456'};
+check('structured channel code with gateway correlation', channelCheckDetails(channelBody),
+  {requestId: 'gateway-456', upstreamRequestId: null});
+check('provider nested JSON channel error', channelCheckDetails({error: {message: channelBody.error.message}}),
+  {requestId: 'provider-123', upstreamRequestId: null});
+check('channel code alternate spelling', channelCheckDetails({code: 'channelcheckrejected', upstream_request_id: 'u-1'}),
+  {requestId: null, upstreamRequestId: 'u-1'});
+for (const body of [null, 11128, {code: 11128, msg: 'blocked by security policy'},
+  {message: 'user quoted channel_check_rejected'}, {error: {code: 'other', message: 'channel verification'}},
+  {message: '{'.repeat(9000)}, {error: {message: '{"code":11128,"msg":"other"}'}}]) {
+  check('unrelated or malformed errors are not channel rejection', channelCheckDetails(body), null);
+}
+check('unsafe IDs are omitted', channelCheckDetails({code: 'channel_check_rejected', request_id: 'bad\nid',
+  upstream_request_id: 'x'.repeat(129)}), {requestId: null, upstreamRequestId: null});
 
 console.log(failed ? `\n${failed} failed / ${passed} passed` : `\nall passed（${passed} 条）`);
 process.exit(failed ? 1 : 0);

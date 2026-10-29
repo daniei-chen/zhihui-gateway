@@ -46,7 +46,10 @@
     "staleBuildHint": "このタブは古いバージョンのページを開いており、現在のデプロイには対応するスクリプトやデータがありません。再読み込みすると新しいバージョンになります（未保存の入力は失われます）。",
     "reloadPage": "ページを再読み込み",
     "forbidden": "権限がありません：現在のアカウントではこの操作を実行できません",
-    "serverDetail": "サーバーエラー: {detail}"
+    "serverDetail": "サーバーエラー: {detail}",
+    "channelRejected": "上流が今回の呼び出しチャネルを拒否しました（11128）。提供元がサポートするクライアントを使うか、API チャネルの利用許可を提供元に確認してください。ゲートウェイは自動再試行せず、アカウント失効とも判定しません。未報告の使用量は照合待ちです。",
+    "requestId": "リクエスト ID: {id}",
+    "upstreamRequestId": "上流 ID: {id}"
   },
   "nav": {
     "groupOverview": "概要",
@@ -287,7 +290,7 @@
     "upstreamNote": "上流自身の統計です：上流への直接呼び出しを含み、上流プロセスの起動時からの累計で、上の期間フィルタとは無関係です",
     "upstreamUnavailable": "上流の統計を取得できません",
     "upstreamSuccess": "成功",
-    "cacheHitRate": "キャッシュ命中",
+    "cacheHitRate": "キャッシュヒット率",
     "dailyAgg": "日次集計",
     "noUsageData": "使用量データがありません",
     "byModel": "モデル別",
@@ -300,7 +303,9 @@
     "failedHint": "本日 {n} 件失敗（上のリクエスト数には含まれません）",
     "hourlyAgg": "時間別（本日分）",
     "tokensPerSec": "出力 tok/s",
-    "throughputHint": "{n} 件の成功リクエストの生成時間から推定（ログ保持期間内のみ）"
+    "throughputHint": "{n} 件の成功リクエストの生成時間から推定（ログ保持期間内のみ）",
+    "cacheHitHint": "ヒット Token ÷ 報告済みのヒット・ミス Token。データがない場合は —。",
+    "currentKeysHint": "現在保持しているキーのみ表示します。削除したキーの過去の使用量は合計に含まれます。"
   },
   "accounts": {
     "proxyLine": "送信経路",

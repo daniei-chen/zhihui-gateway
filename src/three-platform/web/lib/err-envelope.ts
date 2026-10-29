@@ -33,3 +33,47 @@ export function backendErrorText(data: unknown): string {
   const obj = data as {detail?: unknown; error?: unknown};
   return envelopeText(obj.detail) || envelopeText(obj.error);
 }
+
+export interface ChannelRejection {
+  requestId: string | null;
+  upstreamRequestId: string | null;
+}
+
+/** Recognize bounded, structured provider errors, not arbitrary quoted user text. */
+export function channelCheckDetails(input: unknown): ChannelRejection | null {
+  const safeId = (v: unknown): string | null =>
+    typeof v === 'string' && /^[\x21-\x7e]{1,128}$/.test(v) ? v : null;
+  let requestId: string | null = null;
+  let upstreamRequestId: string | null = null;
+  let found = false;
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || found) return;
+    if (typeof value === 'string') {
+      if (value.length > 8192 || !value.trimStart().startsWith('{')) return;
+      try { visit(JSON.parse(value), depth + 1); } catch { /* Keep unknown errors unchanged. */ }
+      return;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const obj = value as Record<string, unknown>;
+    requestId ??= safeId(obj.request_id) || safeId(obj.requestId);
+    upstreamRequestId ??= safeId(obj.upstream_request_id);
+    const code = typeof obj.code === 'string' || typeof obj.code === 'number' ? String(obj.code) : '';
+    if (code === 'channel_check_rejected' || code === 'channelcheckrejected') {
+      found = true;
+      return;
+    }
+    // 11128 also represents other rejections: require channel-specific wording.
+    if (code === '11128' || code === '11-128') {
+      const text = [obj.msg, obj.message,
+        ...(obj.displayTips && typeof obj.displayTips === 'object' ? Object.values(obj.displayTips) : [])]
+        .filter((v): v is string => typeof v === 'string').join(' ').slice(0, 8192);
+      if (/channel verification|unapproved channel|渠道校验|渠道校驗|通路驗證/i.test(text)) {
+        found = true;
+        return;
+      }
+    }
+    for (const key of ['detail', 'error', 'message']) visit(obj[key], depth + 1);
+  };
+  visit(input, 0);
+  return found ? {requestId, upstreamRequestId} : null;
+}

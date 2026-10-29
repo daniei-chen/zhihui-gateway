@@ -46,7 +46,10 @@
     "staleBuildHint": "이 탭은 이전 버전 페이지를 열고 있어 현재 배포에 해당 스크립트나 데이터가 없습니다. 새로고침하면 새 버전을 받습니다(저장하지 않은 입력은 사라집니다).",
     "reloadPage": "페이지 새로고침",
     "forbidden": "권한이 없습니다: 현재 계정으로는 이 작업을 수행할 수 없습니다",
-    "serverDetail": "서버 오류: {detail}"
+    "serverDetail": "서버 오류: {detail}",
+    "channelRejected": "공급자가 이번 호출 채널을 거부했습니다(11128). 공급자가 지원하는 클라이언트를 사용하거나 API 채널 권한을 공급자에게 확인하세요. 게이트웨이는 이 오류를 자동 재시도하거나 계정 무효로 판단하지 않습니다. 보고되지 않은 사용량은 확인 대기로 유지합니다.",
+    "requestId": "요청 ID: {id}",
+    "upstreamRequestId": "상위 요청 ID: {id}"
   },
   "nav": {
     "groupOverview": "개요",
@@ -287,7 +290,7 @@
     "upstreamNote": "업스트림 자체 통계입니다: 업스트림에 직접 보낸 호출을 포함하고, 업스트림 프로세스 시작 이후 누적이라 위의 기간 필터와 무관합니다",
     "upstreamUnavailable": "업스트림 통계를 가져올 수 없습니다",
     "upstreamSuccess": "성공",
-    "cacheHitRate": "캐시 적중",
+    "cacheHitRate": "캐시 적중률",
     "dailyAgg": "일별 집계",
     "noUsageData": "사용량 데이터가 없습니다",
     "byModel": "모델별",
@@ -300,7 +303,9 @@
     "failedHint": "오늘 {n}건 실패 (위 요청 수에 포함되지 않음)",
     "hourlyAgg": "시간별(오늘)",
     "tokensPerSec": "출력 tok/s",
-    "throughputHint": "성공한 요청 {n}건의 생성 시간으로 추정(로그 보존 기간만)"
+    "throughputHint": "성공한 요청 {n}건의 생성 시간으로 추정(로그 보존 기간만)",
+    "cacheHitHint": "적중 Token ÷ 보고된 적중 및 미적중 Token. 데이터가 없으면 —로 표시합니다.",
+    "currentKeysHint": "현재 보유한 키만 표시합니다. 삭제한 키의 과거 사용량은 합계에 포함됩니다."
   },
   "accounts": {
     "proxyLine": "송신 경로",

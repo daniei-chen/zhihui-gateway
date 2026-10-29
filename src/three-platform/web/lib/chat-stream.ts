@@ -16,6 +16,7 @@
  * 不重试。**一次调用恰好发一次请求**，`requests` 字段供测试断言。
  */
 import {createSseParser, type SseEvent} from './sse.ts';
+import {channelCheckDetails, type ChannelRejection} from './err-envelope.ts';
 
 /** 实测用量。`credit` 是上游计费口径，缺省即未知，**不能**填 0 冒充。 */
 export interface ChatUsage {
@@ -38,6 +39,7 @@ export interface ChatStreamResult {
   aborted: boolean;
   /** 错误帧或 HTTP 错误的说明；无错误为 null */
   error: string | null;
+  channelRejection: ChannelRejection | null;
   httpStatus: number;
   /** JSON 解析失败被丢弃的帧数（诊断用，不影响正文） */
   ignoredEvents: number;
@@ -98,10 +100,12 @@ function isAbortError(e: unknown): boolean {
 }
 
 /** 从非 2xx 响应里取出可展示的错误说明（后端可能返回 detail/error/message 或纯文本） */
-async function readErrorDetail(res: ResponseLike, fallback: string): Promise<string> {
+async function readErrorDetail(res: ResponseLike, fallback: string): Promise<{message: string; channel: ChannelRejection | null}> {
   let detail = fallback;
+  let channel: ChannelRejection | null = null;
   try {
     const data = (await res.json?.()) as Record<string, unknown> | undefined;
+    channel = channelCheckDetails(data);
     const pick = (v: unknown): string => (typeof v === 'string' ? v : '');
     const fromObj = (o: Record<string, unknown> | undefined): string => {
       if (!o) return '';
@@ -121,7 +125,7 @@ async function readErrorDetail(res: ResponseLike, fallback: string): Promise<str
       /* 响应体读不出来：保留状态码说明 */
     }
   }
-  return detail;
+  return {message: detail, channel};
 }
 
 /**
@@ -155,6 +159,7 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
     truncated: false,
     aborted: false,
     error: null,
+    channelRejection: null,
     httpStatus: 0,
     ignoredEvents: 0,
     requests: 0,
@@ -201,6 +206,7 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
     // 错误帧：OpenAI 风格 {"error": {...}}；有的网关用 {"error": "text"} 或 {"code","message"}
     const errField = obj?.error;
     if (errField) {
+      result.channelRejection ??= channelCheckDetails(obj);
       const e = errField as Record<string, unknown>;
       const msg =
         (typeof errField === 'string' ? errField : '') ||
@@ -212,6 +218,7 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
       return;
     }
     if (ev.event === 'error') {
+      result.channelRejection ??= channelCheckDetails(obj);
       result.error = result.error ?? (typeof obj?.message === 'string' ? obj.message : payload);
       return;
     }
@@ -271,7 +278,9 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
 
     result.httpStatus = res.status;
     if (!res.ok) {
-      result.error = await readErrorDetail(res, `HTTP ${res.status}`);
+      const detail = await readErrorDetail(res, `HTTP ${res.status}`);
+      result.error = detail.message;
+      result.channelRejection = detail.channel;
       return result;
     }
 

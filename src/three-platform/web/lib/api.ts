@@ -1,6 +1,6 @@
 import axios, {AxiosError} from 'axios';
 import {BASE_PATH} from './base-path';
-import {backendErrorText} from './err-envelope';
+import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
 import {t, tp} from './i18n';
 import {platformStore} from './platform-store';
 import type {Realm} from './realm-context';
@@ -99,6 +99,8 @@ export const http = axios.create({
  */
 export function errText(e: unknown): string {
   const ax = e as AxiosError;
+  const channel = channelCheckDetails(ax?.response?.data);
+  if (channel) return channelRejectionText(channel);
   const raw = backendErrorText(ax?.response?.data);
   if (raw) {
     if ((ax?.response?.status ?? 0) >= 500) return t('error.serverDetail', {detail: tp(raw)});
@@ -107,6 +109,14 @@ export function errText(e: unknown): string {
   if (ax?.response?.status === 403) return t('error.forbidden');
   const fallback = ax?.message || '';
   return fallback ? tp(fallback) : tp('请求失败');
+}
+
+export function channelRejectionText(detail: ChannelRejection): string {
+  const ids = [
+    detail.requestId ? t('error.requestId', {id: detail.requestId}) : '',
+    detail.upstreamRequestId ? t('error.upstreamRequestId', {id: detail.upstreamRequestId}) : '',
+  ].filter(Boolean);
+  return [t('error.channelRejected'), ...ids].join(' · ');
 }
 
 /**

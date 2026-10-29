@@ -16,6 +16,12 @@ def main():
     lock = json.loads((web / 'package-lock.json').read_bytes())
     assert version == identity['version'] == package['version'] == lock['version'] == lock['packages']['']['version']
     assert (ROOT / 'manager/.version').read_text().strip() == 'v' + version
+    changelogs = [(ROOT / name).read_bytes() for name in
+                  ['CHANGELOG.md', 'manager/CHANGELOG.md', 'manager/server/CHANGELOG.md']]
+    assert changelogs[0] == changelogs[1] == changelogs[2], 'product changelog copies differ'
+    notes = changelogs[0].decode('utf-8')
+    assert re.findall(r'^## \[([^\]]+)\]', notes, re.M) == [version], 'unexpected product release history'
+    assert len(re.findall(r'^- .+', notes, re.M)) >= 5, 'product release has no useful notes'
     assert identity['repository'] == 'daniei-chen/zhihui-gateway'
     assert "PRODUCT_VERSION = '" + version + "'" in (web / 'lib/product.ts').read_text()
     for locale in ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']:

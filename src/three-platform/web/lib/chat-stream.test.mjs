@@ -163,6 +163,20 @@ console.log('取消：');
 
 console.log('错误分支：');
 {
+  const body = {error: {code: 'channel_check_rejected', message: JSON.stringify({code: 11128,
+    msg: 'Illegal API invocation from an unapproved channel'})}, request_id: 'synthetic-channel-id'};
+  for (const mode of ['http', 'sse']) {
+    const {calls, fetchImpl} = makeStream(mode === 'http'
+      ? {status: 400, json: body} : {chunks: [sse(body), sse('[DONE]')]});
+    const r = await streamChat({...base, fetchImpl});
+    check(`channel ${mode}: structured explanation available`, r.channelRejection,
+      {requestId: 'synthetic-channel-id', upstreamRequestId: null});
+    check(`channel ${mode}: one request, no retry`, calls.requests, 1);
+    check(`channel ${mode}: missing credit stays unknown`, r.usage.credit, null);
+    check(`channel ${mode}: not a success`, typeof r.error, 'string');
+  }
+}
+{
   // 错误帧（OpenAI 风格）：要取出可展示的 message/code，且不打断已收到的正文
   const {calls, fetchImpl} = makeStream({
     chunks: [delta('前半'), sse({error: {message: 'upstream overloaded', code: 11102}})],

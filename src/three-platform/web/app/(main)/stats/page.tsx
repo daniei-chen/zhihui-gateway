@@ -1,8 +1,8 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useEffect, useState} from 'react';
 import dynamic from 'next/dynamic';
-import {Activity, TrendingUp, KeyRound, Cpu, Wrench, RotateCcw, Coins, AlertTriangle, Server} from 'lucide-react';
+import {Activity, TrendingUp, KeyRound, Cpu, Wrench, RotateCcw, Coins, AlertTriangle} from 'lucide-react';
 // K37：recharts 由 dynamic 组件单独拆包（页面文件里不 import），首屏 JS 不含图表代码。
 const TokenTrendChart = dynamic(
   () => import('@/components/stats/TokenTrendChart').then((m) => m.TokenTrendChart),
@@ -10,14 +10,12 @@ const TokenTrendChart = dynamic(
 );
 import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
 import {ChartDataTable} from '@/components/charts/ChartDataTable';
-import {OutcomeStatsPanel} from '@/components/operations/OutcomeStatsPanel';
 import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {statsApi, errText} from '@/lib/api';
 import type {
   StatsSummary,
-  UpstreamStats,
   UsageBreakdown,
   UsagePoint,
   UsageHourPoint,
@@ -29,6 +27,7 @@ import {
   type ChartPoint,
 } from '@/lib/usage-chart';
 import {fmtCompact, fmtNumber, fmtCredit} from '@/lib/format';
+import {formatCacheHitRate, formatOutputRate} from '@/lib/usage-metrics';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {StatCard} from '@/components/common/layout/StatCard';
 import {EmptyState} from '@/components/common/layout/EmptyState';
@@ -174,51 +173,16 @@ export default function StatsPage() {
     [realm, days],
   );
 
-  /**
-   * 上游自己那份统计（issue #59），**单独一个 hook**。改动前它也是单独拉的
-   * （在原代码里不进 `allSettled`），拆开是恢复那个结构，理由有两条：
-   *
-   *  · 它失败时**故意退化成 `{available: false}` 而不是抛错**，好让面板就地写清
-   *    原因、不弹提示（上游没起来、镜像太旧都会取不到，那是常态）。可这样一来它
-   *    就成了一次「成功的取数」——若和上面那组放在一起，五份全挂时它照样有值，
-   *    「一份都没取到」的判据就被顶掉了：页面不进整页错误态，反而照常渲染四张 0
-   *    卡片和「暂无数据」，正是本批要修的那句谎话。
-   *  · 它本来就不属于 `errors` 的语义范围——上面那条「部分数据加载失败」是给本页
-   *    四份数据用的，上游取不到不该算进去。
-   *
-   * 依赖用 `refreshDeps` 而不是 `deps`：时段 / 版本变了要跟着重取（改动前就是
-   * 这样），但**不清空**——它跟时段无关，清空只会让面板闪一下「上游统计暂不可用」。
-   */
-  const {values: upstreamValues, reload: reloadUpstream, refresh: refreshUpstream} = useAsyncAll(
-    {
-      upstream: async () => {
-        try {
-          return await statsApi.upstream();
-        } catch {
-          return {available: false} as UpstreamStats;
-        }
-      },
-    },
-    [],
-    [realm, days],
-  );
-
   const summary: StatsSummary | null = values.summary ?? null;
   const daily: UsagePoint[] = values.daily ?? EMPTY_POINTS;
   const byModel: UsageBreakdown[] = values.byModel ?? EMPTY_BREAKDOWN;
   const byKey: UsageBreakdown[] = values.byKey ?? EMPTY_BREAKDOWN;
-  const upstream: UpstreamStats | null = upstreamValues.upstream ?? null;
 
   const failedCount = Object.keys(errors).length;
 
-  /** 重试：两组一起重来，避免「点了重试、上游面板还是旧的」 */
-  const retry = useCallback(() => {
-    reload();
-    reloadUpstream();
-  }, [reload, reloadUpstream]);
+  const retry = reload;
 
-  // 用量随调用持续累计，心跳刷新让页面保持接近实时
-  useHeartbeat(() => Promise.all([refresh(), refreshUpstream()]), 60000);
+  useHeartbeat(refresh, 60000);
 
   const spec = chartSpecFor(d);
   // K37：图表在首屏之后才挂载（dynamic 拆包 + 空闲帧渲染），等待期用同高度占位。
@@ -345,7 +309,6 @@ export default function StatsPage() {
         ) : (
           <StatsSkeleton />
         )}
-        <OutcomeStatsPanel days={d} />
       </div>
     );
   }
@@ -461,112 +424,28 @@ export default function StatsPage() {
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <BreakdownPanel title={t('stats.byModel')} icon={Cpu} items={byModel} throughput />
-        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} />
+        <BreakdownPanel title={t('stats.byModel')} icon={Cpu} items={byModel} />
+        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} currentKeys />
       </section>
-
-      {/* 上游自己那份统计（issue #59）。**单独一段、口径写明**：它含直连上游的
-          调用、且自上游进程启动累计，与上面的时段选择器无关——混着看会得出
-          「今日请求包含了直连流量」这种错误结论。取不到时只写原因，不弹提示。 */}
-      <section className="rounded-[20px] bg-muted p-4">
-        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Server className="h-4 w-4" />
-            {t('stats.upstreamTitle')}
-          </div>
-          <div className="text-[11px] text-muted-foreground">{t('stats.upstreamNote')}</div>
-        </div>
-        {upstream && (!upstream.available || upstream.enabled === false) ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t('stats.upstreamUnavailable')}
-            {upstream.error ? `：${upstream.error}` : ''}
-            {upstream.message ? `（${upstream.message}）` : ''}
-          </p>
-        ) : upstream?.total ? (
-          <>
-            <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-xs">
-              <UpstreamMetric label={t('metric.requests')} value={fmtNumber(upstream.total.requests)} />
-              <UpstreamMetric label={t('stats.upstreamSuccess')} value={fmtNumber(upstream.total.success)} />
-              <UpstreamMetric
-                label={t('dashboard.failedRequests')}
-                value={fmtNumber(upstream.total.failed)}
-                tone={upstream.total.failed ? 'warning' : undefined}
-              />
-              <UpstreamMetric label="Token" value={fmtCompact(upstream.total.total_tokens)} />
-              <UpstreamMetric label={t('metric.paid')} value={fmtCredit(upstream.total.credit)} />
-              <UpstreamMetric
-                label={t('stats.cacheHitRate')}
-                value={fmtPercent(upstream.total.cache_hit_rate)}
-              />
-            </div>
-            {(upstream.models?.length ?? 0) > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-b border-border/60 hover:bg-transparent">
-                    <TableHead className="pl-0 text-[11px] text-muted-foreground">{t('metric.name')}</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">{t('metric.requestsShort')}</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">Token</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">{t('metric.paid')}</TableHead>
-                    <TableHead className="pr-0 text-[11px] text-muted-foreground">{t('stats.cacheHitRate')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {upstream.models?.map((m, i) => (
-                    <TableRow key={`${m.model}-${i}`} className="border-b border-border/40">
-                      <TableCell className="pl-0">
-                        <span className="max-w-[220px] truncate text-xs font-medium">{m.model || t('metric.unknown')}</span>
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtNumber(m.requests)}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtCompact(m.total_tokens)}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtCredit(m.credit)}</TableCell>
-                      <TableCell className="pr-0 text-xs tabular-nums">{fmtPercent(m.cache_hit_rate)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </>
-        ) : null}
-      </section>
-      <OutcomeStatsPanel days={d} />
     </div>
   );
-}
-
-/** 上游统计里的一个数字（标签 + 值）。失败数用琥珀色标出来。 */
-function UpstreamMetric({label, value, tone}: {label: string; value: string; tone?: 'warning'}) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`font-medium tabular-nums ${tone === 'warning' ? 'text-amber-600 dark:text-amber-400' : ''}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
-/** 上游给的是 0~1 的比例；拿不到就显示占位符，不显示 0%（那是「一次没命中」的意思）。 */
-function fmtPercent(v: number | undefined | null): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
-  return `${Math.round(v * 100)}%`;
 }
 
 function BreakdownPanel({
   title,
   icon: Icon,
   items,
-  throughput = false,
+  currentKeys = false,
 }: {
   title: string;
   icon: typeof Cpu;
   items: UsageBreakdown[];
-  /** 显示「输出 tok/s」列（只有按模型表需要，按密钥没有这项） */
-  throughput?: boolean;
+  currentKeys?: boolean;
 }) {
   const t = useT();
   const max = Math.max(1, ...items.map((i) => i.prompt_tokens + i.completion_tokens));
   return (
-    <div className="rounded-[20px] bg-muted p-4">
+    <div className="min-w-0 rounded-[20px] bg-muted p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <Icon className="h-4 w-4" />
         {title}
@@ -578,11 +457,12 @@ function BreakdownPanel({
               <TableHead className="pl-0 text-[11px] text-muted-foreground">{t('metric.name')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">{t('metric.requestsShort')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">Token</TableHead>
-              {throughput && (
-                <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground">
-                  {t('stats.tokensPerSec')}
-                </TableHead>
-              )}
+              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground" title={t('stats.cacheHitHint')}>
+                {t('stats.cacheHitRate')}
+              </TableHead>
+              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground">
+                {t('stats.tokensPerSec')}
+              </TableHead>
               <TableHead className="pr-0 text-[11px] text-muted-foreground">{t('metric.paid')}</TableHead>
             </TableRow>
           </TableHeader>
@@ -608,17 +488,12 @@ function BreakdownPanel({
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtNumber(it.requests)}</TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtCompact(tokens)}</TableCell>
-                  {throughput && (
-                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                      {typeof it.tokens_per_sec === 'number' ? (
-                        <span title={t('stats.throughputHint', {n: it.throughput_samples ?? 0})}>
-                          {it.tokens_per_sec.toFixed(1)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground/70">—</span>
-                      )}
-                    </TableCell>
-                  )}
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.cacheHitHint')}>
+                    {formatCacheHitRate(it)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.throughputHint', {n: it.throughput_samples ?? 0})}>
+                    {formatOutputRate(it.tokens_per_sec)}
+                  </TableCell>
                   <TableCell className="pr-0 text-xs tabular-nums">
                     {it.credit > 0 ? fmtCredit(it.credit) : <span className="text-muted-foreground/70">—</span>}
                   </TableCell>
@@ -635,6 +510,7 @@ function BreakdownPanel({
           className="flex flex-col items-center justify-center py-10 text-center"
         />
       )}
+      {currentKeys && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t('stats.currentKeysHint')}</p>}
     </div>
   );
 }
@@ -643,7 +519,7 @@ function BreakdownPanel({
  * 首屏骨架。
  *
  * 逐块对着真实版面：四张统计卡（同高 88/96px）、趋势图（同高 260px）、两张分解表、
- * 上游面板。尺寸必须对齐——骨架比真实内容矮的话，数据到位时整页会往下窜一下，
+ * 尺寸必须对齐——骨架比真实内容矮的话，数据到位时整页会往下窜一下，
  * 比没有骨架更难受。
  */
 function StatsSkeleton() {
@@ -690,17 +566,7 @@ function StatsSkeleton() {
         ))}
       </section>
 
-      <section className="rounded-[20px] bg-muted p-4">
-        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <SkeletonBar className="h-3.5 w-24" />
-          <SkeletonBar className="h-3 w-40" />
-        </div>
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          {Array.from({length: 5}, (_, i) => (
-            <SkeletonBar key={i} className="h-3 w-20" />
-          ))}
-        </div>
-      </section>
+
     </>
   );
 }

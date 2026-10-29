@@ -433,7 +433,10 @@
     "staleBuildHint": "你打开的标签页用的是旧版本页面，当前部署里已经找不到对应的脚本或数据。刷新一次即可拿到新版本；未保存的输入会丢失。",
     "reloadPage": "刷新页面",
     "forbidden": "权限不足：当前账号不能执行这个操作",
-    "serverDetail": "服务端错误：{detail}"
+    "serverDetail": "服务端错误：{detail}",
+    "channelRejected": "上游拒绝了本次调用渠道（11128）。请使用供应商支持的客户端，或联系供应商确认 API 渠道授权。网关不自动重试此错误，也不据此判定账号失效；未返回的用量仍待核对。",
+    "requestId": "请求编号：{id}",
+    "upstreamRequestId": "上游编号：{id}"
   },
   "expiry": {
     "expired": "已过期",
@@ -1293,7 +1296,7 @@
     "upstreamNote": "取自上游自己的统计：包含直连上游的调用，且自上游进程启动以来累计，与上面的时段筛选无关",
     "upstreamUnavailable": "取不到上游统计",
     "upstreamSuccess": "成功",
-    "cacheHitRate": "缓存命中",
+    "cacheHitRate": "缓存命中率",
     "dailyAgg": "按天聚合",
     "noUsageData": "暂无用量数据",
     "byModel": "按模型",
@@ -1306,7 +1309,9 @@
     "failedHint": "今日失败 {n} 次（不计入上方请求数）",
     "hourlyAgg": "按小时（当日汇总）",
     "tokensPerSec": "输出 tok/s",
-    "throughputHint": "按 {n} 条成功请求的生成耗时估算（只覆盖日志保留期）"
+    "throughputHint": "按 {n} 条成功请求的生成耗时估算（只覆盖日志保留期）",
+    "cacheHitHint": "命中 Token ÷ 已上报的命中与未命中 Token；未提供数据时显示 —。",
+    "currentKeysHint": "只列出当前保留的密钥；已删除密钥的历史用量仍计入总量。"
   },
   "tasks": {
     "title": "任务记录",
