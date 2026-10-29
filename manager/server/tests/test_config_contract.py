@@ -12,6 +12,23 @@ from server.configcontract import ConfigurationError, validate_environment
 
 
 class ConfigurationContractTest(unittest.TestCase):
+    def test_admission_byte_settings_are_accepted_on_fresh_import_and_reject_bad_units(self):
+        values={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'6291456',
+                'WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'65536'}
+        rows=validate_environment(values)['settings']
+        self.assertEqual(rows['WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES']['value'],6291456)
+        self.assertEqual(rows['WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES']['unit'],'bytes')
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/'not-created-by-import'
+            result=subprocess.run([sys.executable,'-c','from server import config'],
+                env={**os.environ,**values,'WB_DATA_DIR':str(target)},
+                capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertFalse(target.exists())
+        for value in ('0','-1','64MiB'):
+            with self.subTest(value=value),self.assertRaises(ConfigurationError):
+                validate_environment({'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':value})
+
     def test_documented_session_day_clamp_is_visible_without_rejecting_legacy_configuration(self):
         for raw in ('0','-1','-30'):
             row=validate_environment({'WB_SESSION_DAYS':raw})['settings']['WB_SESSION_DAYS']

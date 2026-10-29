@@ -240,7 +240,10 @@ def main():
             except Exception as exc:
                 result['offsite_error']=type(exc).__name__+': '+str(exc)
         status=BASE/'latest.json.tmp'; status.write_text(json.dumps(result,indent=2)); status.chmod(0o600)
-        os.replace(status,BASE/'latest.json'); print(json.dumps(result))
+        os.replace(status,BASE/'latest.json')
+        from backupstatus import publish_verified_status
+        publish_verified_status(result, os.environ.get('WB_BACKUP_STATUS_FILE', '/var/lib/zhihui-gateway/backup-status.json'))
+        print(json.dumps(result))
         if 'offsite_error' in result:raise SystemExit(1)
 
 if __name__=='__main__': main()

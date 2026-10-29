@@ -128,7 +128,10 @@ class GatewayPassthroughTest(unittest.TestCase):
         有人复核，静默放行会让这条约束慢慢失效。
         """
         # 例外：协议转换层（不是转发热路径）
-        allow = {'routers/anthropic.py', 'routers/responses.py', 'observability.py'}
+        allow = {'routers/anthropic.py', 'routers/responses.py', 'observability.py',
+                 # These three expose model capability metadata; they do not
+                 # process or rewrite generation payloads or SSE deltas.
+                 'qtgcore/models.py', 'qtgcore/service.py', 'qtgcore/routers/compat_fixes.py'}
         # Observation reads tool deltas for timing; it never mutates forwarded chunks.
         root = Path(__file__).resolve().parents[2] / 'server'
         hits = []

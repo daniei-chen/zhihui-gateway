@@ -23,6 +23,9 @@ from fastapi.responses import JSONResponse
 
 from .. import manager_api
 from ..service import all_accounts, build_aggregate
+# U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
+# 现在统一从 `_shared` 引入并**在此继续导出**。
+from ._shared import _rt
 
 router = APIRouter(prefix="/api", tags=["compat-fixes"])
 
@@ -34,10 +37,6 @@ _SERIES = (
     ("hunyuan", "腾讯混元"), ("claude", "Claude"), ("gpt", "GPT"),
     ("doubao", "豆包"), ("gemini", "Gemini"),
 )
-
-
-def _rt(request: Request):
-    return request.app.state.rt
 
 
 def _to_epoch(v: Any) -> int:

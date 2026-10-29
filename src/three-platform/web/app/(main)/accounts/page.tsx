@@ -181,7 +181,7 @@ export default function AccountsPage() {
    * 留着上一组的账号渲染，分组按钮已经写着新分组了、列表却还是旧分组的人——那正是
    * 这个 hook 要消灭的谎话（同 `tasks` 的 `realm`）。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} =
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} =
     useAsyncAll({pool: () => accountApi.list(groupId)}, [groupId]);
 
   /**
@@ -195,6 +195,8 @@ export default function AccountsPage() {
    * 原实现这里是 `if (upRes.status === 'fulfilled')` —— 没有 else，失败完全无声。
    */
   const poolStatus = useAsyncAll({upstream: () => upstreamApi.status(groupId)}, [groupId]);
+  const reloadPoolStatus = poolStatus.reload;
+  const refreshPoolStatus = poolStatus.refresh;
 
   /**
    * 分组清单**单独一个 hook**：它不随 `groupId` 变化（列的是所有分组）。
@@ -204,11 +206,12 @@ export default function AccountsPage() {
    * 打不开的分组里。同理它也单独承担自己的失败，不把账号列表拖成错误态。
    */
   const groupList = useAsyncAll({groups: () => upstreamsApi.list()}, []);
+  const reloadGroups = groupList.reload;
 
   /** 账号池；`undefined` = 还没取到（首屏加载中，或它自己失败了） */
   const accounts: Account[] | undefined = values.pool?.accounts;
   const upstream: UpstreamStatus | null = poolStatus.values.upstream ?? null;
-  const groups: UpstreamEndpoint[] = groupList.values.groups?.items || [];
+  const groups: UpstreamEndpoint[] = useMemo(() => groupList.values.groups?.items ?? [], [groupList.values.groups]);
   /**
    * 当前分组的元信息：manageable = 该分组配了本地账号目录（可加 / 移 / 删账号）。
    * 与账号池同一次响应，所以直接从它派生，不再单独存一份（少一处会不同步的状态）。
@@ -229,9 +232,9 @@ export default function AccountsPage() {
    * 移分组…），它们要能区分「写失败」与「写成功但列表没刷上」，后者绝不能报成前者。
    */
   const reloadAll = useCallback(async () => {
-    const [a, b, c] = await Promise.all([reload(), poolStatus.reload(), groupList.reload()]);
+    const [a, b, c] = await Promise.all([reload(), reloadPoolStatus(), reloadGroups()]);
     return a && b && c;
-  }, [reload, poolStatus.reload, groupList.reload]);
+  }, [reload, reloadPoolStatus, reloadGroups]);
 
   // 打开页面时自动拉一次实时积分：上游 /status 的 credits 可能滞后数小时，
   // 首次进入应展示真实余额。服务端有 TTL 缓存，重复进入不会频繁请求。
@@ -278,8 +281,8 @@ export default function AccountsPage() {
   // 心跳同时刷**上游状态**（poolStatus）：只刷账号池的话，页头那组「可用 / 冷却」
   // 会停在进页面那一刻；账号行内的冷却来自 pool 的合并结果，本来就会刷。
   const heartbeatReload = useCallback(
-    () => { void reload(); void poolStatus.reload(); },
-    [reload, poolStatus.reload]);
+    () => Promise.all([refresh(), refreshPoolStatus()]),
+    [refresh, refreshPoolStatus]);
   useHeartbeat(heartbeatReload, 30000);
 
   /** 刷新所有账号的实时积分（直接向腾讯查询，非上游缓存值） */
@@ -330,7 +333,7 @@ export default function AccountsPage() {
     } finally {
       setRefreshTokensBusy(false);
     }
-  }, [reloadAll, groupId]);
+  }, [reloadAll, groupId, t]);
 
   /** 批量签到：逐账号记录结果 */
   const checkinAll = useCallback(async () => {
@@ -375,7 +378,7 @@ export default function AccountsPage() {
     } finally {
       setCheckinAllBusy(false);
     }
-  }, [reloadAll, groupId]);
+  }, [reloadAll, groupId, t]);
 
   /**
    * 将本地 auths 文件与上游账号池状态按 uid 合并。

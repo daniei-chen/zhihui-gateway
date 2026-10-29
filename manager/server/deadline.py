@@ -41,6 +41,28 @@
   写入失败、连接重置和响应协议错误可能发生在上游已经接收请求之后，不自动重放。
 * `first_byte`：等待首包期间上游可能已经开始生成 —— 重试等于第二次扣费，**禁止**。
 * `streaming`：已开始生成，任何重放都会重复输出/重复计费，**禁止**。
+
+## U13（2026-10-28）：三条协议共用同一套预算对象
+
+改动前三条路径的覆盖程度并不一致（这就是 U13 的缺口）：
+
+| 预算 | OpenAI chat（`gateway._chat`） | Anthropic messages | Responses |
+|---|---|---|---|
+| 连接 | 5s（`connect=budgets.connect_s`） | 5s（硬编码 `connect=5`） | 5s（硬编码） |
+| 首包 | `first_byte_s` | **无**（只有 httpx read timeout） | **无** |
+| 流中空闲 | `stream_idle_s` | httpx read timeout | httpx read timeout |
+| 总时长 | `total_s` | **无上界** | **无上界** |
+| 客户端取消 | `CancelledError` 上抛 + `close_stream` 有界关闭 | 同（窗口硬编码 5s） | 同 |
+
+缺口集中在两个兼容层：它们只建了 `http_client(UPSTREAM_TIMEOUT, connect=5)`，
+于是「只要上游持续吐字节，流就能一直续命」，慢首包与慢流中段也无法区分。
+现在两个兼容层都从本模块取预算（`request_budgets` / `open_request` /
+`transport_timeouts` / `classify_budget_exceeded` / `close_timeout`），与
+`_chat` 用**同一个** `Budgets` 与 `Deadline` 对象类型、同一套归因函数。
+
+**错误码语义不变**：超时仍按各协议原有的形态返回（chat 502 +
+`X-Upstream-Blip`、messages 502 `api_error`、responses 502 `api_error`；
+已开流的走各自流中错误帧），不新增 504，也不改变任何既有 code 的取值。
 """
 from __future__ import annotations
 
@@ -141,6 +163,86 @@ class Budgets:
             total_s=_num('WB_TOTAL_TIMEOUT_S', base),
             client_cancel_s=_num('WB_CLIENT_CANCEL_S', 5.0),
         ).normalized()
+
+
+# ── U13：三条协议共用的预算入口与归因 ────────────────────────────────────
+#
+# 三个入口一律走下面这几个函数，不再各自 `http_client(UPSTREAM_TIMEOUT,
+# connect=5)` 或各自拼 `Budgets`。这样「哪条协议有哪几类预算」不再取决于
+# 谁写了哪个 router，而是由本模块一处决定（对照表见模块 docstring）。
+
+
+def request_budgets(upstream_timeout: float | None = None) -> Budgets:
+    """一次请求要用的预算对象（三条协议同一来源）。"""
+    return Budgets.from_config(upstream_timeout)
+
+
+def open_request(upstream_timeout: float | None = None, *,
+                 clock: Callable[[], float] = time.monotonic) -> 'Deadline':
+    """开一条请求时间轴；`clock` 可注入，便于测试不睡真实时间。"""
+    return Deadline(request_budgets(upstream_timeout), clock=clock)
+
+
+def transport_timeouts(budgets: Budgets) -> dict:
+    """httpx 客户端参数。
+
+    httpx 的 `Timeout(t, connect=c)` 里 `t` 是**单次操作**的超时，不是请求总时长；
+    总时长由上层 `await_total` / `iterate_with_budgets` 施加。两者不冲突：
+    前者是传输层的安全带（一次 read 卡住多久算死），后者是请求级上界
+    （整条请求最多活多久）。缺了后者，上游慢速吐字节就能无限续命。
+    """
+    b = budgets.normalized()
+    return {'timeout': b.total_s, 'connect': b.connect_s}
+
+
+@dataclass(frozen=True)
+class BudgetFailure:
+    """一类预算用尽后的**归类结果**：三条协议共用同一套归因。"""
+
+    kind: str
+    terminal_state: str
+    error_stage: str
+    message: str
+
+
+#: 预算种类 → (终态, 阶段)。
+#:
+#: `error_stage` 一律落在 `stream_read`（与改动前 `gateway._chat` 的既有取值
+#: 完全一致）—— 超时是**传输层事实**，不是协议错误，更不是上游业务拒绝。
+#: 具体是哪一类预算，由 `kind` 与 message 表达；`observability.set_stream_state`
+#: 据此把终态归成 `transport_error`。
+_BUDGET_STAGE = {
+    'connect': ('transport_error', 'stream_read'),
+    'send_request': ('transport_error', 'stream_read'),
+    'first_byte': ('transport_error', 'stream_read'),
+    'stream_idle': ('transport_error', 'stream_read'),
+    'total': ('transport_error', 'stream_read'),
+}
+
+
+def classify_budget_exceeded(exc: 'BudgetExceeded') -> BudgetFailure:
+    """把 `BudgetExceeded` 归一成 (kind, 终态, 阶段, 对外文案)。
+
+    对外文案**不含上游地址/拓扑**，只说明是哪一类预算——与既有
+    「上游响应超出时间预算：kind」的措辞一致，避免新增可被探测的信息。
+    """
+    kind = getattr(exc, 'kind', 'total')
+    terminal, stage = _BUDGET_STAGE.get(kind, ('transport_error', 'stream_read'))
+    detail = getattr(exc, 'detail', '') or ''
+    message = f'上游响应超出时间预算：{kind}'
+    if detail:
+        message = message + f'（{detail}）'
+    return BudgetFailure(kind=kind, terminal_state=terminal,
+                         error_stage=stage, message=message)
+
+
+def close_timeout(budgets: Budgets) -> float:
+    """收到客户端取消后关闭上下游的有界窗口（= `client_cancel_s`）。
+
+    改动前 `observability.close_stream` 里硬编码 5s；现在三条协议都把预算对象
+    里的同一个值传进去，取消关闭窗口与其余预算来自同一份配置。
+    """
+    return budgets.normalized().client_cancel_s
 
 
 @dataclass(frozen=True)
@@ -290,6 +392,20 @@ async def await_total(awaitable, deadline: Deadline):
         return await asyncio.wait_for(awaitable, deadline.remaining_total())
     except asyncio.TimeoutError as exc:
         raise BudgetExceeded('total', 'request exceeded its total deadline') from exc
+
+
+class ErrorBodyTooLarge(ValueError):
+    pass
+
+
+async def read_error_body(response, deadline: Deadline, maximum: int = 65536) -> bytes:
+    """An error response is not exempt from the request's time/space budget."""
+    result = bytearray()
+    async for chunk in iterate_with_budgets(response.aiter_bytes(), deadline):
+        if len(result) + len(chunk) > maximum:
+            raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB')
+        result.extend(chunk)
+    return bytes(result)
 
 
 async def iterate_with_budgets(iterator: AsyncIterator[bytes], deadline: Deadline, *,

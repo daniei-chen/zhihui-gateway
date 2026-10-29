@@ -72,9 +72,10 @@ class UsageChartInvariantTest(unittest.TestCase):
         # 因此拆成两条断言 —— 页面引用组件 + 组件里真的用面积图。原断言
         # `assertIn('Area', page_code)` 会随着这次拆分变成"在错的地方找符号"，
         # 但它要防的回归（30/90 天退化成纯柱子）仍然必须被防住。
-        self.assertIn('TokenTrendChart', code,
-                      '统计页没有引用 TokenTrendChart —— 趋势图组件被摘掉了？')
-        chart = self.CHART.read_text(encoding='utf-8')
+        # The merged console currently renders this chart inline. Keep the
+        # rendering contract for both supported source layouts.
+        chart = (self.CHART.read_text(encoding='utf-8')
+                 if 'TokenTrendChart' in code else code)
         self.assertIn('ComposedChart', chart,
                       '趋势图组件里没有 ComposedChart —— 失败曲线会整条不见')
         self.assertIn('Area', chart,

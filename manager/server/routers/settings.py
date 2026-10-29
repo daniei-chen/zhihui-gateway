@@ -1,6 +1,7 @@
 """上游配置、模型映射与管理端用户。"""
 from __future__ import annotations
 
+import json
 import os
 import secrets
 
@@ -206,28 +207,77 @@ def _public(cfg: dict) -> list[dict]:
     return [{'username': u['username'], 'role': u.get('role', 'viewer')} for u in cfg.get('users', [])]
 
 
+#: `/api/settings/panel` 对外暴露的设置键**白名单**（U19）。
+#:
+#: 为什么是白名单而不是"全表返回后再剔除敏感键"：黑名单的失效模式是「将来新增
+#: 一个凭据类键 → 静默泄露给任何登录用户」；白名单的失效模式是「新键不显示，
+#: 用户去它自己的页面看」——安全方向相反（与 wb2api.load_upstream_config 同一
+#: 口径）。被排除的敏感键（保留在此仅为审计对照，不参与运行）：
+#:   · `github_token`   —— GitHub 凭据（另有 admin-only 的掩码读端点）
+#:   · `pg_sync_config` —— 含数据库连接串（带密码）
+#:   · `update_proxy` / `proxy_pool` / `proxy_health` / `proxy_sticky`
+#:                      —— 代理地址与绑定表，userinfo 里带账号密码
+#:   · `security`       —— 安全策略（另有 /api/security/* 管理端点）
+_PANEL_SETTING_KEYS = frozenset({
+    # 模型别名映射（同一份数据已在 GET /api/settings/model-map 对 current_user 开放）
+    'model_map',
+    # 提示词兼容开关与脱敏规则（网关行为，非凭据）
+    'prompt_compat_enabled',
+    'prompt_defuse_rules',
+    # 全局出口代理的**总开关**（只是布尔；地址/凭据在别的键里，不在白名单）
+    'global_proxy_enabled',
+    # 调度与计划类（时间窗口、计划、快照，均非凭据）
+    'task_claim_schedule',
+    'daily_tasks_plan',
+    'token_refresh_plan',
+    'credits_snapshot',
+    # 离线升级包的元信息（文件名/大小/摘要/版本，不含包内容）
+    'update_package',
+})
+
+
+def _panel_value(raw: object) -> object:
+    """`settings.value` 是 JSON 文本；解析失败就回原文（不猜、不丢）。"""
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
 @router.get('/settings/panel')
 def settings_panel(user: dict = Depends(security.current_user)) -> dict:
-    """管理端设置面板（settings 表的单行配置）。
+    """管理端设置面板（`settings` 表，**key/value 形状**）。
 
-    给内部只读消费方（QTG 的 K26 读通道）用：它过去直接只读打开本库查这张表，
-    改成 HTTP 后由这里提供同一份数据。**只读**、不暴露敏感字段（表里本就只有
-    调度窗口与开关这类配置）。
+    U19（2026-10-28）修正：`settings` 是 `(key TEXT PRIMARY KEY, value TEXT)` 的
+    key/value 表，旧实现却用 `SELECT * FROM settings LIMIT 1` 取**一行**，于是
+    响应变成 `{'key': …, 'value': …}`：
 
-    返回空 dict = 尚未写入任何设置（与"读不到"区分：后者会 5xx）。
+      · **形状不对**：调用方拿到的是"某一行的两个列"，不是配置本身；
+      · 取到哪一行完全由扫描顺序决定 —— 可能正好是 `github_token`，于是
+        **任何登录用户（含 viewer）都能读到凭据明文**。
+
+    现在按 key 逐个取值，并且只发白名单 `_PANEL_SETTING_KEYS` 里的键；值按 JSON
+    解析（与 `db.get_setting` 同一口径），解析不了就回原文。
+
+    返回空 dict = 尚未写入任何设置（与"读不到"区分：后者会 5xx）——QTG 的读通道
+    依赖这个契约（`allow_empty_object`），不能改成 null 或抛错。
     """
     import sqlite3
     try:
         with db.transaction() as conn:
-            cur = conn.execute('SELECT * FROM settings LIMIT 1')
-            row = cur.fetchone()
-            if row is None:
-                return {}
-            cols = [c[0] for c in (cur.description or [])]
-            return dict(zip(cols, row))
+            rows = conn.execute('SELECT key, value FROM settings').fetchall()
     except sqlite3.Error as exc:
         # 结构异常/无表：明确失败，不返回空对象（否则调用方会把"读不到"当成"没配置"）
         raise HTTPException(status_code=503, detail=f'设置表不可读：{exc}') from exc
+    panel: dict = {}
+    for row in rows:
+        key = str(row[0])
+        if key not in _PANEL_SETTING_KEYS:
+            continue
+        panel[key] = _panel_value(row[1])
+    return panel
 
 
 @router.get('/users')

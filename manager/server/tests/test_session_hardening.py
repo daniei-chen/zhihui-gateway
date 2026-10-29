@@ -225,11 +225,11 @@ class SecureWarningTest(unittest.TestCase):
     """反代存在但 cookie 拿不到 Secure 时要告警 —— 这类「以为安全其实没有」很难自查。"""
 
     def _req(self, headers: dict, scheme: str = 'http'):
-        class R:
-            def __init__(self) -> None:
-                self.headers = headers
-                self.url = type('U', (), {'scheme': scheme})()
-        return R()
+        from starlette.requests import Request
+        return Request({'type': 'http', 'method': 'GET', 'path': '/',
+                        'scheme': scheme, 'server': ('127.0.0.1', 7864),
+                        'client': ('127.0.0.1', 1234),
+                        'headers': [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
 
     def test_warns_behind_proxy_without_proto(self) -> None:
         for h in ({'x-forwarded-for': '1.2.3.4'},

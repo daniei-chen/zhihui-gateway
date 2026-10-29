@@ -16,10 +16,6 @@ from . import config, tokensvc
 from .iputil import client_ip
 from .iputil import _is_trusted_proxy  # noqa: SLF001 —— 与 client_ip 同一份可信代理判据
 
-_fail: dict[str, list] = {}
-MAX_FAILS = 5
-LOCK_SECONDS = 600
-
 
 # ── 密码哈希 ─────────────────────────────────────────────
 def make_hash(pwd: str, iterations: int = 260000) -> str:
@@ -313,7 +309,8 @@ def _unsign(token: str, secret: str) -> dict | None:
         return None
 
 
-def issue_token(username: str, role: str, *, orig: int | None = None) -> str:
+def issue_token(username: str, role: str, *, orig: int | None = None,
+                expected_sv: int | None = None) -> str:
     """签发会话 cookie（登录与**续期**共用）。
 
     载荷里带 `sv`（session version）：该用户当前的会话版本号。改密码 / 改角色 /
@@ -332,6 +329,12 @@ def issue_token(username: str, role: str, *, orig: int | None = None) -> str:
     started = int(orig or now)
     cfg = load_users()
     sv = session_version(cfg, username)
+    if expected_sv is not None:
+        # Check and sign the same snapshot; a concurrent revocation must never
+        # promote an old cookie to the new session version.
+        exists = any(u.get('username') == username for u in cfg.get('users', []))
+        if not exists or sv != expected_sv:
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
     payload = json.dumps(
         {'username': username, 'role': role, 'sv': sv,
          'iat': now, 'orig': started,
@@ -428,11 +431,65 @@ def insecure_cookie_warning(request: Request) -> str:
 #   - 按 IP：防单机爆破（配合修正后的真实 IP 解析才有效）
 #   - 按用户名：防「换 IP 打同一账号」的分布式爆破
 # 注意：两个字典都设有容量上限，避免被大量不同 IP/用户名撑爆内存。
+#
+# 2026-10-27 F2（持久化）：计数改为「内存主存 + SQLite 镜像」的写穿透缓存——
+# 登录路径低频，内存语义逐字保留（既有测试直接 ._fail.clear() 仍有效），
+# record/clear 同步写 login_fails_ip/login_fails_user，进程启动后首次使用时
+# 回载窗口内计数。此前纯内存态下每次发布重启都会清零锁定计数，攻击者只要
+# 等一次重启就能重置爆破进度（fail2ban 虽持久但阈值更宽）。
 _fail: dict[str, list] = {}
 _user_fail: dict[str, list] = {}
 MAX_FAILS = 5
 LOCK_SECONDS = 600
 MAX_TRACKED = 5000
+_FAILS_LOADED = False
+
+
+def _load_fails_once() -> None:
+    """把窗口内的持久化计数回载进内存（每进程一次；失败静默回退纯内存）。"""
+    global _FAILS_LOADED
+    if _FAILS_LOADED:
+        return
+    _FAILS_LOADED = True
+    try:
+        from . import db
+        now = time.time()
+        for row in db.query('SELECT ip, fails, first FROM login_fails_ip WHERE first > ?',
+                            (now - LOCK_SECONDS,)):
+            _fail[str(row['ip'])] = [int(row['fails'] or 0), float(row['first'] or now)]
+        for row in db.query('SELECT username, fails, first FROM login_fails_user WHERE first > ?',
+                            (now - LOCK_SECONDS,)):
+            _user_fail[str(row['username'])] = [int(row['fails'] or 0), float(row['first'] or now)]
+    except Exception:  # noqa: BLE001  旁路：表未建/库不可读时与旧行为一致
+        pass
+
+
+def _mirror_fail(kind: str, key: str, cnt: int, first: float) -> None:
+    """把一次计数变更写进镜像表。任何失败都不影响登录路径。"""
+    try:
+        from . import db
+        now = time.time()
+        table, col = (('login_fails_ip', 'ip') if kind == 'ip'
+                      else ('login_fails_user', 'username'))
+        db.execute(
+            f'INSERT INTO {table}({col}, fails, first, updated) VALUES(?,?,?,?) '
+            f'ON CONFLICT({col}) DO UPDATE SET fails=excluded.fails, '
+            f'first=excluded.first, updated=excluded.updated',
+            (key, cnt, first, now))
+        # 顺手清掉窗口外与超限的陈旧行（时间界本身就限制了规模）
+        db.execute(f'DELETE FROM {table} WHERE first <= ?', (now - LOCK_SECONDS,))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _unmirror_fail(kind: str, key: str) -> None:
+    try:
+        from . import db
+        table, col = (('login_fails_ip', 'ip') if kind == 'ip'
+                      else ('login_fails_user', 'username'))
+        db.execute(f'DELETE FROM {table} WHERE {col} = ?', (key,))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _prune(store: dict[str, list]) -> None:
@@ -463,6 +520,7 @@ def _prune(store: dict[str, list]) -> None:
 
 
 def login_blocked(ip: str, username: str | None = None) -> bool:
+    _load_fails_once()
     now = time.time()
     cnt, first = _fail.get(ip, [0, 0.0])
     if cnt >= MAX_FAILS and (now - first) < LOCK_SECONDS:
@@ -478,18 +536,21 @@ def login_blocked(ip: str, username: str | None = None) -> bool:
 
 
 def record_fail(ip: str, username: str | None = None) -> None:
+    _load_fails_once()
     now = time.time()
-    cnt, first = _fail.get(ip, [0, now])
+    cnt, first = _fail.get(ip, [0, 0.0])
     if (now - first) >= LOCK_SECONDS:
         cnt, first = 0, now
     _fail[ip] = [cnt + 1, first]
+    _mirror_fail('ip', ip, cnt + 1, first)
 
     if username:
         key = username.lower()
-        ucnt, ufirst = _user_fail.get(key, [0, now])
+        ucnt, ufirst = _user_fail.get(key, [0, 0.0])
         if (now - ufirst) >= LOCK_SECONDS:
             ucnt, ufirst = 0, now
         _user_fail[key] = [ucnt + 1, ufirst]
+        _mirror_fail('user', key, ucnt + 1, ufirst)
 
     _prune(_fail)
     _prune(_user_fail)
@@ -497,8 +558,10 @@ def record_fail(ip: str, username: str | None = None) -> None:
 
 def clear_fail(ip: str, username: str | None = None) -> None:
     _fail.pop(ip, None)
+    _unmirror_fail('ip', ip)
     if username:
         _user_fail.pop(username.lower(), None)
+        _unmirror_fail('user', username.lower())
 
 
 # ── 会话吊销 ─────────────────────────────────────────────
@@ -665,6 +728,12 @@ def _current_user(request: Request) -> dict:
     覆辙」一节）。下游调用请用网关的 `/v1/*`（那套密钥走 `api_keys` 表、
     只授权模型调用，与后台权限无关）。
     """
+    # U19：**身份入口即同源校验入口**。
+    #
+    # 放在最前面（碰用户表/DB 之前）：跨站写请求在这里就被拒，也不泄露"这个会话
+    # 到底有没有效"。选这里的理由：`main._qtg_platform_route` 对 `__qtg` 兼容层
+    # 也是直接调本函数，一处即可同时覆盖管理面与兼容层的已认证请求。
+    check_same_origin(request)
     cfg = load_users()
     session_err: HTTPException | None = None
     if request.cookies.get(config.COOKIE_NAME):
@@ -728,6 +797,123 @@ def current_user(request: Request) -> dict:
                                 detail='只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）')
     request.state.audit_actor = user.get('username', 'anonymous')
     return user
+
+
+# ── U19（2026-10-28）：写端点的同源校验（CSRF）──────────────────────────
+#
+# 审计结论：管理面的写端点此前**没有任何** Origin/Referer 校验。管理面的会话是
+# 签名 Cookie（浏览器会自动携带），因此跨站页面可以让受害者的浏览器带着 Cookie
+# 打管理面写接口。`SameSite` 只是纵深防御（且老浏览器不认），不能替代来源校验。
+#
+# 实现上**复用 qtgcore 已有的判定**（`qtgcore.security.parse_origin` 的三元组
+# 归一 + `Auth.check_origin` 的全等比较规则），不另造一套解析器。
+UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
+
+#: 「浏览器发起的请求」的判据。现代浏览器对**每个**请求都会带其中之一；
+#: 非浏览器客户端（curl / CI / 内部脚本）一个都不带。
+_BROWSER_FETCH_HEADERS = ('sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest')
+
+#: 来自本机反代的请求，采信它给出的真实 scheme（nginx 终结 TLS）。
+_LOOPBACK_PEERS = frozenset({'127.0.0.1', '::1', '::ffff:127.0.0.1'})
+
+
+def _origin_triple(value: object):
+    """把 Origin/Referer 归一成 (scheme, host, port)；非法返回 None。
+
+    直接复用 `qtgcore.security.parse_origin`：它已经处理了 userinfo 形态
+    （`https://host@evil`）、`null`、缺省端口等边界，并且**不做子串匹配**。
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    from .qtgcore.security import parse_origin
+    return parse_origin(value)
+
+
+def expected_origin(request: Request):
+    """本站期望来源：Host + （本机反代时的）X-Forwarded-Proto。"""
+    host = (request.headers.get('host') or '').strip()
+    if not host:
+        return None
+    scheme = (request.url.scheme or 'http').lower()
+    peer = str((request.client.host if request.client else '') or '')
+    if peer in _LOOPBACK_PEERS:
+        forwarded = (request.headers.get('x-forwarded-proto') or '').split(',')[0].strip().lower()
+        if forwarded in ('http', 'https'):
+            scheme = forwarded
+    return _origin_triple(f'{scheme}://{host}')
+
+
+def _reject_csrf(reason: str) -> None:
+    """拒绝跨站写请求：403 + **机器可读的原因头** `X-Manager-Csrf-Reason`。
+
+    为什么原因放响应头而不是 `detail`：`test_web_i18n` 的
+    `test_backend_403_details_are_translatable` 要求后端每条 403 的 `detail`
+    **字面量**都在四套短语表（web/lib/i18n/locales/*.json）里有译文，并且**禁止**
+    f-string 拼出来的 detail（拼出来的查不了）。短语表不在本任务的改动范围内，
+    所以这里：`detail` 保持 FastAPI 默认值，稳定 code 走
+    `X-Manager-Csrf-Reason: csrf_origin_missing|csrf_origin_mismatch|
+    csrf_multiple_origin|csrf_host_missing|csrf_origin_malformed`。
+    i18n 那边补上短语后，可以把这个 code 再挪回 detail（届时同步改
+    test_settings_contract 的断言）。
+    """
+    raise HTTPException(status_code=403,
+                        headers={'X-Manager-Csrf-Reason': reason})
+
+
+def check_same_origin(request: Request) -> None:
+    """写请求的同源校验。规则与 `qtgcore.security.Auth.check_origin` 一致：
+
+      1. 只看**非安全方法**（POST/PUT/PATCH/DELETE）；GET/HEAD 不参与
+         （GET 必须无副作用，见 u19-notes 的端点矩阵）；
+      2. 只有**带浏览器会话 Cookie** 的请求才校验 —— 没有 Cookie 就没有 CSRF
+         语义（Bearer token 由脚本显式携带，跨站页面拿不到）；
+      3. 多个 Origin 头 → 拒绝（伪造迹象）；
+      4. 有 Origin/Referer → 拆成 (scheme, host, port) 与本站**全等**比较；
+         不做 `host in source` 子串判断（`testserver.evil.example`、拼在 query 里的
+         host、http↔https、80↔8080 都必须过不去）；
+      5. 缺 Origin/Referer 时：带 `Sec-Fetch-*` 的按浏览器处理并**拒绝** ——
+         浏览器对非安全方法一定会带 Origin/Referer，带了 Fetch 元数据却没有来源
+         只能是"被剥离或伪造"。
+
+    与 qtgcore 严格版的唯一差别在第 5 条的兜底方向：管理器还要服务**非浏览器
+    客户端**（运维脚本 / CI / QTG 的内部调用），它们一个 Fetch 头都不带，而浏览器
+    根本构造不出这种请求 —— 对它们按"无 CSRF 语义"放行。若改成一律拒绝，会打断
+    所有"带会话 Cookie 的脚本调用"，而安全上并没有多出任何东西。
+    """
+    if request.method.upper() not in UNSAFE_METHODS:
+        return
+    cookie_name = getattr(config, 'COOKIE_NAME', '') or ''
+    if not cookie_name or not request.cookies.get(cookie_name):
+        return
+    origins = [value for value in request.headers.getlist('origin') if value.strip()]
+    if len(origins) > 1:
+        _reject_csrf('csrf_multiple_origin')
+    origin = origins[0].strip() if origins else ''
+    referer = (request.headers.get('referer') or '').strip()
+    source = origin or referer
+    if not source:
+        if any(request.headers.get(name) for name in _BROWSER_FETCH_HEADERS):
+            _reject_csrf('csrf_origin_missing')
+        return
+    expected = expected_origin(request)
+    if expected is None:
+        _reject_csrf('csrf_host_missing')
+    got = _origin_triple(source)
+    if got is None:
+        _reject_csrf('csrf_origin_malformed')
+    if got == expected:
+        return
+    _reject_csrf('csrf_origin_mismatch')
+
+
+def require_same_origin(request: Request) -> None:
+    """FastAPI 依赖形式：显式声明「本端点写操作必须同源」。
+
+    同源校验的**主挂点**在 `_current_user`（身份入口，覆盖管理面全部已认证请求
+    以及 `__qtg` 兼容层）；这个依赖是给「不经过 `_current_user` 的写端点」留的
+    显式入口，同时也让"这条路由受同源保护"在路由签名上可读。
+    """
+    check_same_origin(request)
 
 
 def require_admin(user: dict = Depends(current_user)) -> dict:

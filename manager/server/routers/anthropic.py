@@ -37,6 +37,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import config, db, iputil, keysvc, upstreamsvc
+from .. import deadline as deadline_mod
 from ..routers.security import get_config as get_security_config
 # responses 只为复用推理凭据的编解码（`_encode_credential` / `_decode_credential`）：
 # Anthropic 的 `signature` 与 Responses 的 `encrypted_content` 语义完全相同——
@@ -59,7 +60,8 @@ _STOP_REASON = {
 
 
 def _err(message: str, status: int = 400, err_type: str = 'invalid_request_error',
-         hint: str | None = None) -> JSONResponse:
+         hint: str | None = None, *, code: object = None,
+         upstream_request_id: str | None = None) -> JSONResponse:
     """Anthropic 风格的错误体。
 
     与 OpenAI 的区别不只是字段名：Anthropic 把错误包在 `{"type":"error","error":{...}}`
@@ -72,7 +74,48 @@ def _err(message: str, status: int = 400, err_type: str = 'invalid_request_error
     err: dict = {'type': err_type, 'message': message}
     if hint:
         err['gateway_hint'] = hint
-    return JSONResponse({'type': 'error', 'error': err}, status_code=status)
+    if code is not None and isinstance(code, (str, int)):
+        err['code'] = str(code)[:128]
+    body = {'type': 'error', 'error': err}
+    state = observability.current.get()
+    if state:
+        body['request_id'] = state.request_id
+    if upstream_request_id:
+        body['upstream_request_id'] = upstream_request_id
+    return JSONResponse(body, status_code=status)
+
+
+def _upstream_error(data: object, status: int, headers: dict) -> JSONResponse:
+    """Keep upstream diagnostics while returning the Messages error contract.
+
+    Pre-stream HTTP failures are JSON with the original status. Failures after
+    HTTP 200 use SSE error events. https://platform.claude.com/docs/en/api/errors
+    """
+    details = data.get('error') if isinstance(data, dict) else None
+    error = details if isinstance(details, dict) else {}
+    message = error.get('message') or (details if isinstance(details, str) else None)
+    if not message:
+        message = data if isinstance(data, str) and data else f'上游 HTTP {status}'
+    request_id = (data.get('request_id') if isinstance(data, dict) else None)
+    request_id = request_id or headers.get('request-id') or headers.get('x-request-id')
+    if not isinstance(request_id, str) or len(request_id) > 128 or not request_id.isascii() or not request_id.isprintable():
+        request_id = None
+    state = observability.current.get()
+    if state:
+        state.error_stage = 'upstream'
+        state.terminal_state = 'upstream_error'
+    return _err(str(message)[:4096], status, str(error.get('type') or 'api_error')[:64],
+                hint=gateway._error_hint(data), code=error.get('code'),
+                upstream_request_id=request_id)
+
+
+def _error_diagnostic(response: JSONResponse, status: int) -> str:
+    diagnostic = json.loads(response.body)
+    # Identifiers and business code survive the bounded request-log message.
+    return json.dumps({'upstream_status': status,
+                       'upstream_request_id': diagnostic.get('upstream_request_id'),
+                       'code': diagnostic['error'].get('code'),
+                       'message': diagnostic['error']['message']}, ensure_ascii=False)
 
 
 def _as_int(value: object) -> int:
@@ -1028,23 +1071,35 @@ async def messages(request: Request):
             payload['stream_options'].setdefault('include_usage', True)
 
     # 上游按密钥解析（多上游 / 分组隔离）；绑定缺失或停用时明确报错，不回落。
-    try:
-        upstream = upstreamsvc.resolve_for_key(key)
-    except upstreamsvc.UpstreamUnavailable as exc:
-        gateway._record(key, ip, model, mapped or '', 503, 0, 0, 0, ua, str(exc), False)
-        # anthropic 的错误体没有 code 字段（只有 type），故第三参给 type
-        return _err(str(exc), 503, 'api_error')
+    upstream, upstream_error = gateway._upstream_for(
+        key, ip=ip, model=model, mapped=mapped or '', ua=ua)
+    if upstream_error is not None:
+        detail = json.loads(upstream_error.body).get('error') or {}
+        return _err(detail.get('message', '上游不可用'), upstream_error.status_code,
+                    'api_error', code=detail.get('code'))
+    gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
     budget_error = gateway._prepare_forward(key,payload)
     if budget_error:
         return budget_error
     started = time.time()
 
+    # U13（2026-10-28）：与 gateway `_chat` **共用同一套预算对象**（连接 / 首包 /
+    # 流中空闲 / 总时长 / 取消）。改动前这里只有
+    # `http_client(UPSTREAM_TIMEOUT, connect=5)`：连接有 5s 预算，其余全压在
+    # httpx 的 read timeout（每次 read 的间隔）上 —— 首包没有单独口径，
+    # **总时长完全没有上界**，上游只要持续吐字节，流就能一直续命。
+    budgets = deadline_mod.request_budgets(config.UPSTREAM_TIMEOUT)
+    request_deadline = deadline_mod.Deadline(budgets)
+    _timeouts = deadline_mod.transport_timeouts(budgets)
+
     if not stream:
         try:
-            async with config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=gateway._forwarding_identity(key,upstream)) as client:
-                resp = await client.post(url, json=payload,
-                                         headers=gateway._upstream_headers(upstream))
+            async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream)) as client:
+                resp = await deadline_mod.await_total(
+                    client.post(url, json=payload,
+                                headers=gateway._upstream_headers(upstream)),
+                    request_deadline)
             state=observability.current.get()
             if state:
                 state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
@@ -1052,46 +1107,80 @@ async def messages(request: Request):
             usage: dict = {}
             try:
                 data = resp.json()
-                usage = data.get('usage') or {}
+                usage = gateway._response_usage(data)
             except Exception:  # noqa: BLE001
                 data = None
+            if resp.status_code < 400:
+                try:
+                    if not gateway._valid_chat_response(data):
+                        raise ValueError('invalid upstream chat response')
+                    converted = JSONResponse(to_anthropic_response(data, model, thinking=want_thinking))
+                except Exception as exc:
+                    gateway._mark_invalid_response()
+                    gateway._record(key, ip, model, mapped or '', 502,
+                                    _as_int(usage.get('prompt_tokens')),
+                                    _as_int(usage.get('completion_tokens')), latency,
+                                    ua, str(exc), False, usage=usage)
+                    return _err('上游返回了无法解析的响应', 502, 'api_error', code='upstream_invalid_body')
             # 整份 usage 交过去（而不是只取 credit）：扣费与提示词缓存三段
             # 都在这一份里，分开取就会出现「某条协议缓存永远是空的」（issue #69）。
+            error_response = (_upstream_error(data if data is not None else resp.text,
+                              resp.status_code, resp.headers) if resp.status_code >= 400 else None)
             gateway._record(
                 key, ip, model, mapped or '', resp.status_code,
                 _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
-                latency, ua, None if resp.status_code < 400 else str(data)[:500], False,
+                latency, ua, _error_diagnostic(error_response, resp.status_code)
+                if error_response is not None else None, False,
                 usage=usage,
             )
-            if resp.status_code >= 400:
-                msg = ''
-                if isinstance(data, dict):
-                    err_obj = data.get('error')
-                    msg = str(err_obj.get('message') if isinstance(err_obj, dict) else err_obj) or str(data)[:300]
-                else:
-                    msg = resp.text[:300]
-                return _err(msg, resp.status_code, 'api_error',
-                            hint=gateway._error_hint(data))
-            return JSONResponse(to_anthropic_response(
-                data if isinstance(data, dict) else {}, model, thinking=want_thinking))
+            if error_response is not None:
+                return error_response
+            return converted
+        except deadline_mod.BudgetExceeded as exc:
+            # U13：时间预算用尽 → 与「上游不可用」同一个状态码（502 api_error），
+            # 不新增 504，保持 Messages 侧错误码语义不变；文案指明是哪一类预算。
+            failure = deadline_mod.classify_budget_exceeded(exc)
+            latency = int((time.time() - started) * 1000)
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+                            failure.message, False)
+            return _err(failure.message, 502, 'api_error')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False)
             return _err(f'上游不可用：{exc}', 502, 'api_error')
 
     # ── 流式 ────────────────────────────────────────────────
-    client = config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=gateway._forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
+    resp = None
     try:
         req = client.build_request('POST', url, json=payload,
                                    headers=gateway._upstream_headers(upstream))
-        resp = await client.send(req, stream=True)
+        # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
+        resp = await deadline_mod.await_headers(client.send(req, stream=True),
+                                                request_deadline)
+    except (asyncio.CancelledError, GeneratorExit) as exc:
+        gateway._mark_pre_stream_failure(exc)
+        await gateway._close_pending_response(resp, client, budgets)
+        gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+                        int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+        raise
+    except deadline_mod.BudgetExceeded as exc:
+        await gateway._close_pending_response(resp, client, budgets)
+        failure = deadline_mod.classify_budget_exceeded(exc)
+        latency = int((time.time() - started) * 1000)
+        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+                        failure.message, True)
+        return _err(failure.message, 502, 'api_error')
     except Exception as exc:  # noqa: BLE001
-        await client.aclose()
+        await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
         gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True)
         return _err(f'上游不可用：{exc}', 502, 'api_error')
 
     status_code = resp.status_code
+    # U13：流中错误帧要带上游请求 ID。开流之后状态码已定，ID 是客户端唯一还能
+    # 拿去对上游工单的线索；取不到就是 None，不编造。
+    upstream_request_id = gateway._upstream_request_id(resp)
 
     # A-001 修复（2026-10-27 审计 S1）：上游拒绝时不能把它塞进 200 的 SSE 流。
     # 此前 status_code 算出来却从未使用，返回的是硬编码 200 + 流式 —— 外部
@@ -1101,18 +1190,34 @@ async def messages(request: Request):
     if status_code >= 400:
         text = ''
         try:
-            raw = await resp.aread()
-            text = raw.decode('utf-8', 'replace')[:500]
+            captured = await deadline_mod.read_error_body(resp, request_deadline)
+            text = captured.decode('utf-8', 'replace')
+        except (asyncio.CancelledError, GeneratorExit) as exc:
+            gateway._mark_pre_stream_failure(exc)
+            gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+                            int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+            raise
+        except (deadline_mod.BudgetExceeded, deadline_mod.ErrorBodyTooLarge) as exc:
+            gateway._mark_pre_stream_failure(exc)
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+                            int((time.time() - started) * 1000), ua, str(exc), True)
+            code = 'upstream_timeout' if isinstance(exc, deadline_mod.BudgetExceeded) else 'upstream_invalid_body'
+            return _err(str(exc), 502, 'api_error', code=code)
         except Exception:  # noqa: BLE001  读不到错误体不影响回错
             text = f'上游 HTTP {status_code}'
         finally:
-            try:
-                await resp.aclose()
-            finally:
-                await client.aclose()
+            await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', status_code, 0, 0, latency, ua, text, True)
-        return _err(f'上游返回 {status_code}：{text}', status_code, 'api_error')
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            data = text
+        error_response = _upstream_error(data, status_code, resp.headers)
+        usage = gateway._response_usage(data)
+        gateway._record(key, ip, model, mapped or '', status_code,
+                        _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
+                        latency, ua, _error_diagnostic(error_response, status_code), True, usage=usage)
+        return error_response
 
     async def gen():
         translator=_StreamTranslator(model, thinking=want_thinking)
@@ -1125,11 +1230,18 @@ async def messages(request: Request):
         state=observability.current.get()
         if state:
             state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
-        try:
-            async for chunk in resp.aiter_bytes():
-                if state and state.first_byte_ms is None:
-                    state.first_byte_ms=int((time.time()-started)*1000)
 
+        def _mark_first_byte() -> None:
+            if state and state.first_byte_ms is None:
+                state.first_byte_ms=int((time.time()-started)*1000)
+
+        try:
+            # U13：首包 / 流中空闲 / 总时长三类预算在这里逐块施加（与 gateway 的
+            # 转发热路径同一实现）。客户端取消（CancelledError）原样上抛，由外层
+            # close_stream 在 client_cancel_s 内有界关闭上游 —— 不在这里吞掉取消。
+            async for chunk in deadline_mod.iterate_with_budgets(
+                    resp.aiter_bytes(), request_deadline,
+                    on_first_chunk=_mark_first_byte):
                 if resp.status_code >= 400:
                     captured.extend(chunk[:max(0,min(2000,MAX_SSE_BUFFER)-len(captured))])
                     error_text=bytes(captured).decode('utf-8','replace')[:500] or f'上游 HTTP {resp.status_code}'
@@ -1160,6 +1272,13 @@ async def messages(request: Request):
         except (asyncio.CancelledError,GeneratorExit):
             cancelled=True
             raise
+        except deadline_mod.BudgetExceeded as exc:
+            # U13：预算用尽与传输异常走**同一个**终止分支（不重放已开始的生成）。
+            failure = deadline_mod.classify_budget_exceeded(exc)
+            error_text = failure.message
+            audit.error_stage = failure.error_stage
+            logger.warning('stream budget exceeded request_id=%s kind=%s',
+                           state.request_id if state else None, failure.kind)
         except Exception as exc:
             error_text=f'上游流传输或协议异常：{type(exc).__name__}'
             audit.error_stage='stream_read'
@@ -1168,7 +1287,20 @@ async def messages(request: Request):
             try:
                 if not cancelled:
                     if error_text:
-                        yield _event('error', {'type':'error','error':{'type':'api_error','message':error_text,'gateway_hint':audit.error_hint}})
+                        # U13：流中错误事件与流前 JSON 错误**同一套契约** ——
+                        # 保留上游业务 code、gateway_hint 与上下游两个 ID。
+                        # 既有字段（type/message）不变；code 与 ID 只在能确定时出现。
+                        _error = {'type': 'api_error', 'message': error_text}
+                        if audit.error_hint:
+                            _error['gateway_hint'] = audit.error_hint
+                        if audit.error_code:
+                            _error['code'] = audit.error_code
+                        _payload = {'type': 'error', 'error': _error}
+                        if state:
+                            _payload['request_id'] = state.request_id
+                        if upstream_request_id:
+                            _payload['upstream_request_id'] = upstream_request_id
+                        yield _event('error', _payload)
                         for event in translator.finish(None,force=True):
                             yield event
                     else:
@@ -1184,7 +1316,9 @@ async def messages(request: Request):
             finally:
                 observability.set_stream_state(audit,error_text,cancelled)
                 try:
-                    await observability.close_stream(resp,client)
+                    # U13：取消关闭窗口 = budgets.client_cancel_s（三条协议同一口径）。
+                    await observability.close_stream(
+                        resp,client,timeout=deadline_mod.close_timeout(budgets))
                 finally:
                     usage=audit.usage
                     gateway._record(key,ip,model,mapped or '',resp.status_code,
@@ -1192,7 +1326,7 @@ async def messages(request: Request):
                         int((time.time()-started)*1000),ua,error_text,True,
                         usage=usage,first_token=first_token_ms)
 
-    return observability.ManagedStreamingResponse(gen(),cleanup=lambda:observability.close_stream(resp,client), status_code=200, media_type='text/event-stream')
+    return observability.ManagedStreamingResponse(gen(),cleanup=lambda:observability.close_stream(resp,client,timeout=deadline_mod.close_timeout(budgets)), status_code=200, media_type='text/event-stream')
 
 
 @router.post('/v1/messages/count_tokens')

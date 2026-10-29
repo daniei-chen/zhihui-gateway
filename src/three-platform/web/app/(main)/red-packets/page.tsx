@@ -67,7 +67,7 @@ export default function RedPacketsPage() {
    * 渲染出「暂无红包」——而事实是**没取到**。用户据此会以为红包发完了/被清了。
    * 失败只弹一个几秒后消失的 toast，切回来时页面上看不出任何异常。
    */
-  const {values, isInitialLoading, isInitialFailed, isRefreshing, reload} =
+  const {values, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} =
     useAsyncAll({list: () => redPacketApi.list()}, []);
 
   /** 红包列表；`undefined` = 还没取到（首屏加载中，或它自己失败了） */
@@ -88,7 +88,7 @@ export default function RedPacketsPage() {
   /** 模型白名单（逗号或换行分隔）。**token 红包必填、积分红包不显示**。 */
   const [models, setModels] = useState('');
 
-  useHeartbeat(reload, 30000);
+  useHeartbeat(refresh, 30000);
 
   async function submit() {
     const amount = Number(total);

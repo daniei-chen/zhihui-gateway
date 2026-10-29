@@ -181,15 +181,36 @@ def pid_alive(pid: int, ticks: str = '') -> bool | None:
 # ── 表初始化（迁移 v8 复用同一份 DDL）─────────────────────────────────
 
 
-def initialize(conn: sqlite3.Connection | None = None) -> None:
-    """幂等建表。迁移步骤与模块自用都走这里，避免两份 DDL 漂移。"""
+#: U27（2026-10-28）：`initialize()` 的**进程级一次性标志**（仅无 conn 路径）。
+#:
+#: 问题：`claim()` / `renew()` / `snapshot()` / `release()` 每个入口开头都调
+#: `initialize()`，而它每次要跑 4 条 DDL，每条都是一次独立提交。`HEARTBEAT_SEC`
+#: 默认 10 秒 → 光心跳就每 10 秒重跑一遍建表语句；`BEGIN IMMEDIATE` 里做这件事
+#: 还会把写锁多占一次。
+#:
+#: 键是 `(pid, DB 路径)`：换库（测试）与 fork（子进程有自己的连接）都必须重建。
+#: **带 conn 的路径（`migrations` 的迁移步骤）永远执行 DDL** —— 那是迁移入口，
+#: 语义上就该无条件建表，不能被本标志短路。
+_SCHEMA_STATE: dict = {'key': None}
+
+
+def initialize(conn: sqlite3.Connection | None = None) -> bool:
+    """幂等建表。迁移步骤与模块自用都走这里，避免两份 DDL 漂移。
+
+    返回**本次是否真的执行了 DDL**（U27）。无 conn 时每进程（每库）只跑一次。
+    """
     if conn is not None:
         for statement in DDL:
             conn.execute(statement)
-        return
-    from . import db
+        return True
+    from . import config, db
+    key = (os.getpid(), str(config.DB_PATH))
+    if _SCHEMA_STATE['key'] == key:
+        return False
     for statement in DDL:
         db.execute(statement)
+    _SCHEMA_STATE['key'] = key
+    return True
 
 
 def _now(now: int | None) -> int:

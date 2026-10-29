@@ -45,7 +45,8 @@
     "staleBuildTitle": "페이지 리소스가 업데이트되었습니다",
     "staleBuildHint": "이 탭은 이전 버전 페이지를 열고 있어 현재 배포에 해당 스크립트나 데이터가 없습니다. 새로고침하면 새 버전을 받습니다(저장하지 않은 입력은 사라집니다).",
     "reloadPage": "페이지 새로고침",
-    "forbidden": "권한이 없습니다: 현재 계정으로는 이 작업을 수행할 수 없습니다"
+    "forbidden": "권한이 없습니다: 현재 계정으로는 이 작업을 수행할 수 없습니다",
+    "serverDetail": "서버 오류: {detail}"
   },
   "nav": {
     "groupOverview": "개요",
@@ -814,7 +815,8 @@
     "notLoaded": "불러오지 못했습니다",
     "reasonPlatformNotAllowed": "플랫폼 접근 권한 없음",
     "reasonInvalidPlatform": "알 수 없는 플랫폼",
-    "reasonInvalidKeyPolicy": "잘못된 키 플랫폼 정책"
+    "reasonInvalidKeyPolicy": "잘못된 키 플랫폼 정책",
+    "lockoutDesc": "{action} 후 규칙이 잘못되면 추론 API 통신이 중단될 수 있습니다. 콘솔은 계속 접속할 수 있으므로 여기서 규칙을 복원할 수 있습니다."
   },
   "models": {
     "title": "모델",
@@ -1815,7 +1817,8 @@
     "分钟": "분",
     "请求上限（旧版上游）": "요청 한도(구버전 업스트림)",
     "需要管理员或密钥管理权限": "관리자 또는 키 관리 권한이 필요합니다",
-    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "읽기 전용 서비스 토큰은 기존 데이터 읽기만 허용됩니다(쓰기 불가, 자격 증명/사용자 영역 접근 불가)."
+    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "읽기 전용 서비스 토큰은 기존 데이터 읽기만 허용됩니다(쓰기 불가, 자격 증명/사용자 영역 접근 불가).",
+    "仅允许本机调用": "로컬 호출만 허용됩니다"
   },
   "redPacket": {
     "title": "빨간 봉투",
@@ -1910,5 +1913,75 @@
     "autoCopyFailed": "자동 복사 실패",
     "autoCopyFailedDetail": "이전 화면으로 돌아가 직접 복사해 주세요 — 평문은 한 번만 표시됩니다",
     "alreadyWithKey": "이미 받았습니다 — 이것이 내 몫입니다"
+  },
+  "a11y": {
+    "chartData": "차트 데이터 표 보기",
+    "period": "기간"
+  },
+  "operations": {
+    "refresh": "Refresh evidence",
+    "loading": "Loading recorded evidence…",
+    "forbidden": "Access denied. Previously loaded evidence is hidden; retry after authorization is restored.",
+    "unavailable": "This evidence endpoint is not available. No result is inferred.",
+    "stale": "Refresh failed. Any retained evidence is an older snapshot, not a current result.",
+    "unknown": "Unknown / not recorded",
+    "noExecutionId": "No gateway execution ID was recorded. A client request ID cannot be used as a substitute.",
+    "attemptTitle": "Request outcome & provider attempts",
+    "executionId": "Gateway execution ID",
+    "selectionBoundary": "Recorded events explain what happened, not why this account was chosen. Candidate/weight/cooldown snapshots are not provided.",
+    "terminal": "Terminal state",
+    "errorCode": "Stable error code",
+    "recordedAttempts": "Recorded attempts",
+    "noAttempts": "No attempt evidence is recorded. This does not prove that no upstream work occurred.",
+    "account": "Selected account",
+    "model": "Resolved model",
+    "billing": "Billing evidence",
+    "phaseSequence": "Recorded phases",
+    "billingBoundary": "Unknown billing is not zero cost. The last recorded phase is not a proven failure cause. No per-attempt charge is derived.",
+    "outcomesTitle": "Gateway outcome ledger",
+    "outcomesScope": "Manager ledger · actual platform {platform} · last 7 days · all realms; separate from the request-log realm filter. This does not merge QTG control-plane logs.",
+    "filter": "Filter",
+    "codeUnavailable": "Error-code column is unavailable; classification is unknown.",
+    "noOutcomes": "No matching recorded outcomes. Missing evidence is not proof of zero requests.",
+    "statsTitle": "Operational outcome evidence",
+    "statsUnsupported": "This aggregate endpoint belongs to the Manager ledger and has no Qoder/Trae aggregate filter. Open the outcome ledger on Logs for recorded actual-platform evidence; no other-platform totals are substituted here.",
+    "statsScope": "Manager ledger · {realm} · all recorded traffic classes. Counts are not equivalent to billable inference requests.",
+    "coverage": "Error classification coverage",
+    "noClassifiedErrors": "No classified error codes in this window. Review classification coverage before drawing conclusions.",
+    "backup": "Verified backup evidence",
+    "certificate": "Certificate expiry evidence",
+    "boundary": "Evidence limitations",
+    "configurationTitle": "Effective runtime configuration",
+    "configurationScope": "Manager process (service-wide), independent of the platform selector. Read-only and administrator-only.",
+    "adminOnly": "An administrator session is required. No configuration request is sent for viewers.",
+    "startupSnapshot": "Startup configuration snapshot",
+    "setting": "Setting",
+    "effective": "Effective snapshot value",
+    "source": "Source",
+    "driftTitle": "Configuration source comparison",
+    "driftScope": "Schema default / source default / service declaration / running process. Overrides are not automatically faults. Sensitive values are never displayed.",
+    "declaredUnavailable": "Service declaration unavailable; declaration/process parity cannot be established.",
+    "filterSetting": "Filter setting name or flag",
+    "schema": "Schema default",
+    "sourceDefault": "Source default",
+    "declared": "Declared",
+    "process": "Process",
+    "flags": "Drift flags",
+    "timeline": "Recorded event timeline",
+    "elapsed": "Since first event",
+    "clientRequestId": "Client request ID (not execution ID)"
+  },
+  "product": {
+    "name": "즈후이 게이트웨이",
+    "repository": "즈후이 소스",
+    "version": "제품 버전",
+    "origin": "소스 및 업데이트 원본",
+    "sourceCommit": "소스 커밋",
+    "unrecorded": "기록 없음",
+    "baseline": "Manager 구성 요소 기준",
+    "releases": "릴리스 보기",
+    "providerBoundary": "이 저장소는 제품 소스, 버전 및 업그레이드를 관리합니다. 모델 공급자 호출 주소는 별도로 관리됩니다.",
+    "controlledTitle": "모든 단계의 근거를 남기는 통제된 업그레이드.",
+    "controlledDetail": "즈후이 저장소의 고정 버전을 가져와 해시, 서명, 테스트를 검증한 다음 신뢰된 게시 도구로 전환합니다. 기존 웹 덮어쓰기 설치는 비활성화됩니다. 코드 롤백으로 업무 원장을 되돌리지 않습니다."
   }
 }

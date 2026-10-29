@@ -182,6 +182,63 @@ class FailuresCountedTest(unittest.TestCase):
         self.assertEqual(self._summary(realm='global')['failures']['today_5xx'], 0)
 
 
+class ClientClosedIsNotAGatewayFailureTest(unittest.TestCase):
+    """499 = 客户端主动断开，不是网关失败。
+
+    现场（2026-10-28 实测）：近 7 天 `status >= 400` 共 390 条，其中 **129 条是 499**，
+    全部是流式请求（平均 34.5 秒、最长 279 秒）—— 客户端取消/超时断开。
+    把它们算进「失败」会让总览页失败数虚高近 50%（390 vs 真实 261），
+    真正该看的 5xx 反而被稀释。
+    """
+
+    # 复用同一套临时库夹具，但**不继承测试方法**（否则父类用例会被重复执行）
+    setUp = FailuresCountedTest.setUp
+    tearDown = FailuresCountedTest.tearDown
+    _summary = FailuresCountedTest._summary
+    _daily = FailuresCountedTest._daily
+
+    def test_499_excluded_from_daily_failed(self) -> None:
+        now = int(time.time())
+        _insert_log(now, self.kid, 499)
+        _insert_log(now, self.kid, 502)
+        days = self._daily()
+        today = [r for r in days if r['failed']]
+        self.assertEqual(sum(r['failed'] for r in days), 1, days)
+
+    def test_499_excluded_from_summary_4xx(self) -> None:
+        now = int(time.time())
+        _insert_log(now, self.kid, 499)
+        _insert_log(now, self.kid, 403)
+        out = self._summary()['failures']
+        self.assertEqual(out['today_4xx'], 1, out)
+
+    def test_499_counted_separately(self) -> None:
+        now = int(time.time())
+        _insert_log(now, self.kid, 499)
+        _insert_log(now, self.kid, 499)
+        out = self._summary()['failures']
+        self.assertEqual(out['today_client_closed'], 2, out)
+        self.assertEqual(out['today_4xx'], 0, out)
+        self.assertEqual(out['today_5xx'], 0, out)
+
+    def test_hourly_failed_excludes_499(self) -> None:
+        now = int(time.time())
+        _insert_log(now, self.kid, 499)
+        _insert_log(now, self.kid, 503)
+        buckets = stats._hourly_failures(time.strftime('%Y-%m-%d'))
+        self.assertEqual(sum(buckets.values()), 1, buckets)
+
+    def test_real_failures_still_counted(self) -> None:
+        """反向保护：别把 4xx/5xx 一起漏掉。"""
+        now = int(time.time())
+        for status in (400, 403, 429, 500, 502, 503):
+            _insert_log(now, self.kid, status)
+        out = self._summary()['failures']
+        self.assertEqual(out['today_4xx'], 3, out)
+        self.assertEqual(out['today_5xx'], 3, out)
+        self.assertEqual(sum(r['failed'] for r in self._daily()), 6)
+
+
 class FailureCountNeverBreaksSummaryTest(unittest.TestCase):
     """失败数是旁路统计，算不出来也不能让总览接口挂掉。"""
 

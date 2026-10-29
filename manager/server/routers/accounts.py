@@ -507,15 +507,27 @@ async def list_accounts(upstream_id: int | None = Query(None),
         },
         'auth_dir': str(base_dir or ''),
         'manageable': base_dir is not None,
+        # U22：池健康的**采样时间 / 新鲜度 / 证据来源**。
+        # `pool_available` 只说明"这次采样成没成"；要判断"池现在到底怎么样"，
+        # 必须同时看这里的 freshness —— `stale` 意味着上面的 pool 相关字段来自
+        # 更早的一次采样（或者根本没有），不能当成当前可用性。
+        'pool_health': wb2api.pool_health(status),
     }
 
 
 @router.get('/status')
 async def upstream_status(upstream_id: int | None = Query(None),
                           user: dict = Depends(security.current_user)) -> dict:
+    """上游 /status（含 `health`：采样时间 / 新鲜度 / 证据来源，U22）。
+
+    池数字来自**本次**实时采样；采样失败时 `connected=false` 且旧数字不会被
+    当当前值返回（`health.freshness` 说明是 stale 还是 unknown）。
+    """
     group = _group(upstream_id)
-    return await wb2api.get_status(base_url=group['base_url'],
-                                   api_key=upstreamsvc.forward_api_key(group))
+    status = await wb2api.get_status(base_url=group['base_url'],
+                                     api_key=upstreamsvc.forward_api_key(group))
+    status['health'] = wb2api.pool_health(status)
+    return status
 
 
 def _strip_cn_prefix(m: dict) -> dict:

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "generated_at": "2026-10-28T12:26:59+0800",
+  "generator": "deploy/zh-test-gate-strict --freeze",
+  "note": "skipped 集合与 min_passed 是发布门禁的冻结判据；改动必须人工复核。",
+  "min_passed": 3393,
+  "expected_collected": 3407,
+  "skipped": [
+    "server.tests.test_k36_security_headers.CspContentTest::test_qtg_csp",
+    "server.tests.test_k36_security_headers.CspContentTest::test_src_three_platform_csp",
+    "server.tests.test_k36_security_headers.CspReportOnlyEdgeTest::test_edge_uses_report_only_so_app_csp_is_authoritative",
+    "server.tests.test_k36_security_headers.HeaderPresenceTest::test_qtg_declares_all_required_headers",
+    "server.tests.test_k36_security_headers.HeaderPresenceTest::test_src_three_platform_declares_all_required_headers",
+    "server.tests.test_k36_security_headers.HeaderUniformityTest::test_qtg_static_paths_get_headers_but_csp_is_page_only",
+    "server.tests.test_key_import.ClientPathDetectionTests::test_detect_remembers_and_cache_is_reused",
+    "server.tests.test_key_import.ClientPathDetectionTests::test_scan_respects_depth",
+    "server.tests.test_pgsync.RealPgTest::test_export_then_import"
+  ]
+}

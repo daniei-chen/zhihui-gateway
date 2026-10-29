@@ -45,7 +45,8 @@
     "staleBuildTitle": "ページのリソースが更新されました",
     "staleBuildHint": "このタブは古いバージョンのページを開いており、現在のデプロイには対応するスクリプトやデータがありません。再読み込みすると新しいバージョンになります（未保存の入力は失われます）。",
     "reloadPage": "ページを再読み込み",
-    "forbidden": "権限がありません：現在のアカウントではこの操作を実行できません"
+    "forbidden": "権限がありません：現在のアカウントではこの操作を実行できません",
+    "serverDetail": "サーバーエラー: {detail}"
   },
   "nav": {
     "groupOverview": "概要",
@@ -814,7 +815,8 @@
     "notLoaded": "取得できませんでした",
     "reasonPlatformNotAllowed": "プラットフォームへのアクセスが許可されていません",
     "reasonInvalidPlatform": "不明なプラットフォーム",
-    "reasonInvalidKeyPolicy": "キーのプラットフォーム設定が無効です"
+    "reasonInvalidKeyPolicy": "キーのプラットフォーム設定が無効です",
+    "lockoutDesc": "{action}後、ルールが不適切な場合は推論 API の通信が中断されます。コンソールには引き続きアクセスでき、ここでルールを復元できます。"
   },
   "models": {
     "title": "モデル",
@@ -1815,7 +1817,8 @@
     "分钟": "分",
     "请求上限（旧版上游）": "リクエスト上限（旧版上流）",
     "需要管理员或密钥管理权限": "管理者またはキー管理権限が必要です",
-    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "読み取り専用サービストークンは既存データの読み取りのみ許可されます（書き込み不可・認証情報/ユーザー面は不可）。"
+    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "読み取り専用サービストークンは既存データの読み取りのみ許可されます（書き込み不可・認証情報/ユーザー面は不可）。",
+    "仅允许本机调用": "ローカルからの呼び出しのみ許可されています"
   },
   "redPacket": {
     "title": "紅包（レッドパケット）",
@@ -1910,5 +1913,75 @@
     "autoCopyFailed": "自動コピーに失敗しました",
     "autoCopyFailedDetail": "前の画面に戻って手動でコピーしてください（平文は一度しか表示されません）",
     "alreadyWithKey": "すでに受け取り済みです（これがあなたの分です）"
+  },
+  "a11y": {
+    "chartData": "グラフのデータ表を表示",
+    "period": "期間"
+  },
+  "operations": {
+    "refresh": "Refresh evidence",
+    "loading": "Loading recorded evidence…",
+    "forbidden": "Access denied. Previously loaded evidence is hidden; retry after authorization is restored.",
+    "unavailable": "This evidence endpoint is not available. No result is inferred.",
+    "stale": "Refresh failed. Any retained evidence is an older snapshot, not a current result.",
+    "unknown": "Unknown / not recorded",
+    "noExecutionId": "No gateway execution ID was recorded. A client request ID cannot be used as a substitute.",
+    "attemptTitle": "Request outcome & provider attempts",
+    "executionId": "Gateway execution ID",
+    "selectionBoundary": "Recorded events explain what happened, not why this account was chosen. Candidate/weight/cooldown snapshots are not provided.",
+    "terminal": "Terminal state",
+    "errorCode": "Stable error code",
+    "recordedAttempts": "Recorded attempts",
+    "noAttempts": "No attempt evidence is recorded. This does not prove that no upstream work occurred.",
+    "account": "Selected account",
+    "model": "Resolved model",
+    "billing": "Billing evidence",
+    "phaseSequence": "Recorded phases",
+    "billingBoundary": "Unknown billing is not zero cost. The last recorded phase is not a proven failure cause. No per-attempt charge is derived.",
+    "outcomesTitle": "Gateway outcome ledger",
+    "outcomesScope": "Manager ledger · actual platform {platform} · last 7 days · all realms; separate from the request-log realm filter. This does not merge QTG control-plane logs.",
+    "filter": "Filter",
+    "codeUnavailable": "Error-code column is unavailable; classification is unknown.",
+    "noOutcomes": "No matching recorded outcomes. Missing evidence is not proof of zero requests.",
+    "statsTitle": "Operational outcome evidence",
+    "statsUnsupported": "This aggregate endpoint belongs to the Manager ledger and has no Qoder/Trae aggregate filter. Open the outcome ledger on Logs for recorded actual-platform evidence; no other-platform totals are substituted here.",
+    "statsScope": "Manager ledger · {realm} · all recorded traffic classes. Counts are not equivalent to billable inference requests.",
+    "coverage": "Error classification coverage",
+    "noClassifiedErrors": "No classified error codes in this window. Review classification coverage before drawing conclusions.",
+    "backup": "Verified backup evidence",
+    "certificate": "Certificate expiry evidence",
+    "boundary": "Evidence limitations",
+    "configurationTitle": "Effective runtime configuration",
+    "configurationScope": "Manager process (service-wide), independent of the platform selector. Read-only and administrator-only.",
+    "adminOnly": "An administrator session is required. No configuration request is sent for viewers.",
+    "startupSnapshot": "Startup configuration snapshot",
+    "setting": "Setting",
+    "effective": "Effective snapshot value",
+    "source": "Source",
+    "driftTitle": "Configuration source comparison",
+    "driftScope": "Schema default / source default / service declaration / running process. Overrides are not automatically faults. Sensitive values are never displayed.",
+    "declaredUnavailable": "Service declaration unavailable; declaration/process parity cannot be established.",
+    "filterSetting": "Filter setting name or flag",
+    "schema": "Schema default",
+    "sourceDefault": "Source default",
+    "declared": "Declared",
+    "process": "Process",
+    "flags": "Drift flags",
+    "timeline": "Recorded event timeline",
+    "elapsed": "Since first event",
+    "clientRequestId": "Client request ID (not execution ID)"
+  },
+  "product": {
+    "name": "智匯ゲートウェイ",
+    "repository": "智匯ソース",
+    "version": "製品バージョン",
+    "origin": "ソースと更新元",
+    "sourceCommit": "ソースコミット",
+    "unrecorded": "未記録",
+    "baseline": "Manager コンポーネント基準",
+    "releases": "リリースを見る",
+    "providerBoundary": "このリポジトリは製品のソース、バージョン、更新を管理します。モデル提供元の接続先は別に管理されます。",
+    "controlledTitle": "検証記録を残す、管理された更新。",
+    "controlledDetail": "智匯リポジトリの固定バージョンを取得し、ハッシュ、署名、テストを検証した後、信頼された公開ツールで切り替えます。従来の Web 上書きインストールは無効です。コードのロールバックで業務台帳は戻しません。"
   }
 }

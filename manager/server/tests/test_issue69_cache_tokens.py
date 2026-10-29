@@ -267,7 +267,8 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
     只要那个表达式引自 `usage`，这次调用就必须带 `usage=` 关键字。gateway 里是
     先 `pt = int(usage.get('prompt_tokens') or 0)` 再传 `pt`，所以从 usage 赋值出来
     的局部名也算数（否则那两处会被漏掉 —— 第一版就是 6 而不是 8）。
-    错误/拒绝路径（403/429/400/502）本来就没有 usage，不受影响。
+    错误/拒绝路径没有 usage 时不受影响；上游非法成功体与流式建连拒绝若
+    已报告 usage，也必须保留其缓存/费用证据。
     """
 
     MODULES = ('server/routers/gateway.py', 'server/routers/responses.py',
@@ -278,8 +279,10 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[2]
         checked: list[str] = []
+        counts: dict[str, int] = {}
         offenders: list[str] = []
         for rel in self.MODULES:
+            counts[rel] = 0
             tree = ast.parse((root / rel).read_text(encoding='utf-8'))
             # 从 usage 里取出来的局部变量（如 gateway 的 pt / ct）
             derived = {
@@ -300,12 +303,17 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
                 if 'usage' not in tokens and tokens not in derived:
                     continue
                 checked.append(f'{rel}:{node.lineno}')
+                counts[rel] += 1
                 if 'usage' not in {k.arg for k in node.keywords}:
                     offenders.append(f'{rel}:{node.lineno}')
-        # 成功路径一共 8 处（四个模块 × 流式/非流式）。数量对不上说明扫描的判据
-        # 过期了（有人改了调用形态），这时必须回来改守卫，而不是让它空转通过。
-        self.assertEqual(len(checked), 8,
-                         f'扫到的成功路径不是 8 处，守卫可能已空转：{checked}')
+        # Eight success sites plus invalid-200 and pre-stream-error sites for
+        # each public protocol. Keep exact per-module counts to prevent vacuity.
+        self.assertEqual(counts, {
+            'server/routers/gateway.py': 4,
+            'server/routers/responses.py': 4,
+            'server/routers/anthropic.py': 4,
+            'server/routers/playground.py': 2,
+        }, f'usage-bearing call sites changed; review the guard: {checked}')
         self.assertEqual(offenders, [],
                          '这些调用点读了 usage 却没把 usage 交出去，'
                          '对应协议的缓存三段会永远是空的：' + ', '.join(offenders))

@@ -1,6 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {ConfigurationEvidence} from '@/components/operations/ConfigurationEvidence';
 import {
   Settings as SettingsIcon,
   RefreshCw,
@@ -2188,6 +2189,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
         {/* ═══ 系统更新 ═══ */}
         <TabsContent value="system" className="mt-4 space-y-4">
+          <ConfigurationEvidence />
           <UpdatePanel />
         </TabsContent>
 
@@ -2206,7 +2208,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
           <div className="rounded-[20px] bg-muted p-5 text-xs leading-6 text-muted-foreground">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
               <SettingsIcon className="h-4 w-4" />
-              WorkBuddy Manager
+              {t('product.name')}
             </div>
             <p>
               {t('settings.aboutDesc')}

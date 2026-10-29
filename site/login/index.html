@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
+<meta name="theme-color" content="#fbfcff" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="description" content="智汇网关登录入口 —— Qoder / Trae / WorkBuddy 三平台统一网关。" />
+<title>登录 · 智汇网关</title>
+<style>
+:root{--ink:#1d2538;--muted:#7f8ba3;--blue:#6480f2;--border:#e4eaf8;--violet:#9d8bf5;--navy:#1e263c;--ease:cubic-bezier(.2,.8,.2,1)}
+*,*:before,*:after{box-sizing:border-box}
+html{scroll-behavior:smooth}body{margin:0;min-height:100vh;min-height:100svh;background:#fcfdff;color:var(--ink);font-family:Inter,"SF Pro Display","Noto Sans SC","PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #9eb3ff;outline-offset:3px}
+.screen{min-height:100vh;min-height:100svh;position:relative;isolation:isolate;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:70px 28px 62px;background:radial-gradient(ellipse 43% 40% at -6% 31%,rgba(199,216,255,.25),transparent 90%),radial-gradient(ellipse 33% 42% at 102% 68%,rgba(184,180,252,.22),transparent 90%),radial-gradient(ellipse 39% 38% at 50% 75%,rgba(224,234,255,.28),transparent 100%),#fdfdff}
+.orb{position:absolute;z-index:-3;pointer-events:none;border-radius:50%;filter:blur(5px)}.orb.left{width:570px;height:570px;left:-400px;top:9%;background:radial-gradient(circle at 60% 48%,rgba(178,201,255,.13),transparent 75%)}.orb.right{width:590px;height:590px;right:-350px;bottom:-12%;background:radial-gradient(circle at 35% 45%,rgba(171,174,255,.18),transparent 68%)}
+.orbit-drawing{position:absolute;z-index:-2;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}.orbit-drawing path{stroke-width:1.18;fill:none;vector-effect:non-scaling-stroke;stroke:#cbd9fa;opacity:.61}.orbit-drawing .pale{stroke:#e2ebfd;opacity:.52}.orbit-drawing .white{stroke:#fff;opacity:.87;stroke-width:2.3}.orbit-point{fill:url(#orbitDot);filter:drop-shadow(0 2px 6px rgba(95,125,244,.17))}
+.top-link{position:absolute;top:36px;right:max(42px,calc((100vw - 1380px)/2));font-size:12px;letter-spacing:.02em;color:#8993aa;display:flex;align-items:center;gap:9px;transition:color .25s}.top-link:hover{color:#516ff0}.top-link svg{width:14px;height:14px}
+.login-content{width:min(100%,532px);margin:0 auto;display:flex;flex-direction:column;align-items:center;transform:translateY(-5px);position:relative;z-index:2}
+.brand{display:flex;align-items:center;flex-direction:column;text-align:center;margin-bottom:35px;animation:introUp .85s var(--ease) both}
+.brand-mark{width:72px;height:72px;margin-bottom:11px;display:block;overflow:visible;filter:drop-shadow(0 10px 15px rgba(112,139,255,.17));animation:markFloat 7s ease-in-out infinite}
+.brand h1{margin:0;color:#1b2540;font-size:27px;line-height:1.4;letter-spacing:-.7px;font-weight:740}.brand p{margin:7px 0 0;color:#8995ae;font-size:14px;letter-spacing:.04px}
+.auth-card{width:100%;padding:34px 37px 37px;border:1px solid rgba(220,230,253,.76);border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(255,255,255,.85));box-shadow:0 24px 65px rgba(82,105,180,.095),0 2px 12px rgba(99,120,200,.035),inset 0 1px 0 rgba(255,255,255,.95);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);animation:introUp 1.04s var(--ease) .10s both;position:relative;overflow:hidden;transition:box-shadow .36s,border-color .36s,transform .5s var(--ease)}.auth-card:hover{box-shadow:0 30px 75px rgba(82,105,180,.115),0 2px 15px rgba(99,120,200,.04);border-color:rgba(198,214,252,.9)}
+.auth-card:before{content:"";position:absolute;top:0;left:14%;right:14%;height:1px;background:linear-gradient(90deg,transparent,rgba(182,199,255,.75),transparent)}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:33px}.card-title-wrap{display:flex;gap:12px;align-items:center}.card-icon{width:38px;height:38px;border-radius:13px;display:grid;place-items:center;color:#5c7df5;background:linear-gradient(145deg,#edf2ff,#f9faff);border:1px solid #e7edff;flex:none}.card-icon svg{width:22px;height:22px}
+.card-head h2{margin:0;font-size:17px;letter-spacing:-.2px;font-weight:710}.card-head p{color:#8b97b0;font-size:12px;margin:5px 0 0}.safe-badge{border-radius:50px;background:#eaf8f4;color:#389e88;padding:9px 12px;font-size:11px;font-weight:650;display:flex;align-items:center;gap:6px;white-space:nowrap}.safe-badge svg{width:13px;height:13px}
+.form-group{margin:0 0 20px;position:relative}.form-group label{display:block;color:#73819d;font-size:12px;font-weight:650;margin:0 0 10px}.control{position:relative}.control svg.field-icon{position:absolute;left:18px;top:50%;transform:translateY(-50%);width:19px;height:19px;fill:none;stroke:#8697b9;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;transition:stroke .22s}.control input{display:block;width:100%;height:53px;padding:0 49px;background:linear-gradient(180deg,#f4f7ff,#f8faff);border:1px solid #dce4f5;border-radius:13px;font-size:14px;font-weight:500;color:#1e2841;box-shadow:inset 0 1px 2px rgba(31,53,89,.025);transition:background .24s,border-color .24s,box-shadow .24s;outline:0}.control input::placeholder{color:#a5aec1;font-weight:400}.control input:focus{background:#fff;border-color:#9baffc;box-shadow:0 0 0 4px rgba(109,139,250,.105)}.control:focus-within .field-icon{stroke:#6580ed}.eye-toggle{position:absolute;right:9px;top:50%;transform:translateY(-50%);display:grid;place-items:center;border:0;background:transparent;color:#8c9bb9;width:35px;height:35px;border-radius:9px;transition:color .2s,background .2s}.eye-toggle:hover{color:#546de3;background:#edf2ff}.eye-toggle svg{width:18px;height:18px;stroke:currentColor;stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}.caps{height:0;overflow:hidden;opacity:0;transition:opacity .2s;color:#a37840;font-size:11px}.caps.on{height:auto;opacity:1;margin-top:8px}
+.submit{margin-top:2px;width:100%;height:53px;display:flex;align-items:center;justify-content:center;gap:10px;border:0;border-radius:13px;background:linear-gradient(100deg,#252e46,#1a2032);box-shadow:0 9px 17px rgba(34,44,72,.13);color:#fff;font-size:14px;font-weight:680;letter-spacing:.04em;transition:transform .25s var(--ease),box-shadow .25s,background .25s}.submit svg{height:17px;width:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.submit:hover{transform:translateY(-2px);box-shadow:0 15px 30px rgba(34,44,72,.18);background:linear-gradient(100deg,#313c58,#1c2946)}.submit:active{transform:translateY(0)}.submit:disabled{cursor:default;opacity:.7;transform:none}.submit .spinner{display:none;width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;animation:spin .75s linear infinite}.submit.loading .spinner{display:block}.submit.loading svg{display:none}
+.status{min-height:0;margin:0;font-size:12px;line-height:1.65;overflow:hidden;max-height:0;color:#6c7890;transition:max-height .3s,margin .3s}.status.show{max-height:130px;margin-top:13px}.status.error{color:#bc5b61}.status.info{color:#5b6ea3}
+.under-card{width:100%;text-align:center;margin-top:29px;font-size:11px;line-height:1.9;color:#8994aa;animation:introUp 1.05s var(--ease) .18s both}.under-card span{color:#acb5c7}
+@keyframes markFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}@keyframes introUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:650px){.screen{padding:82px 20px 50px;align-items:center}.brand{margin-bottom:28px}.brand-mark{width:67px;height:67px}.brand h1{font-size:25px}.brand p{font-size:11px}.auth-card{padding:29px 22px 28px;border-radius:23px}.card-head{margin-bottom:30px}.card-head h2{font-size:16px}.card-head p{font-size:11px}.safe-badge{font-size:10px;padding:8px 9px}.top-link{right:24px;top:24px}.orbit-drawing{transform:scale(1.15);transform-origin:center center}.control input{height:52px}.login-content{transform:none}}
+@media(max-width:380px){.screen{padding-inline:14px}.auth-card{padding:25px 17px}.safe-badge{padding:7px}.card-title-wrap{gap:8px}.card-icon{width:34px;height:34px}.brand p{letter-spacing:0}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+</style>
+
+<style id="soft-motion-31">
+/* ZHIHUI login 3.1 — a quiet, event-responsive motion layer; original layout and SVG logo preserved. */
+:root{--quiet-blue:#6684f6;--motion-slow:cubic-bezier(.25,.7,.2,1)}
+.screen::before{content:"";position:absolute;z-index:-3;pointer-events:none;inset:-20%;background:radial-gradient(ellipse 29% 25% at 49% 58%,rgba(156,181,251,.09),transparent 78%),radial-gradient(ellipse 23% 30% at 91% 41%,rgba(178,169,247,.085),transparent 78%);animation:atmosphere 19s ease-in-out infinite alternate}
+.orb.left{animation:orbBreath 17s ease-in-out infinite alternate;transform-origin:center}
+.orb.right{animation:orbBreath 21s ease-in-out infinite alternate-reverse;transform-origin:center}
+.orbit-drawing{animation:sceneDrift 26s ease-in-out infinite alternate;will-change:transform}
+.orbit-drawing .orbit-traveler{fill:#849cf5;opacity:.39;filter:drop-shadow(0 0 4px rgba(95,120,250,.28));transition:opacity .5s ease}
+.screen.is-focused .orbit-traveler{opacity:.68}
+.orbit-drawing .orbit-point{animation:nodeBreathe 6s ease-in-out infinite alternate;transform-box:fill-box;transform-origin:center}
+.orbit-drawing .orbit-point:nth-of-type(2){animation-delay:1.1s}.orbit-drawing .orbit-point:nth-of-type(3){animation-delay:2.5s}
+.brand{position:relative}
+.brand::before{content:"";position:absolute;z-index:-1;top:-34px;left:50%;width:152px;height:152px;transform:translateX(-50%);background:radial-gradient(circle,rgba(143,164,255,.14),transparent 65%);border-radius:50%;animation:brandHalo 10s ease-in-out infinite;pointer-events:none}
+.brand-mark{transition:filter .35s ease;transform-origin:50% 50%}
+.screen.is-focused .brand-mark{filter:drop-shadow(0 10px 16px rgba(95,127,255,.25))}
+.auth-card{--card-x:50%;--card-y:0%}
+.auth-card::after{content:"";position:absolute;z-index:0;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(ellipse 260px 210px at var(--card-x) var(--card-y),rgba(143,164,245,.085),transparent 77%);opacity:0;transition:opacity .55s ease}
+.auth-card:hover::after,.auth-card:focus-within::after{opacity:1}
+.auth-card > *{position:relative;z-index:1}
+.card-icon svg{transition:transform .35s var(--motion-slow)}
+.auth-card:hover .card-icon svg{transform:translateY(-1px) rotate(-3deg)}
+.form-group label{transition:color .28s ease}
+.form-group:focus-within label{color:#5e73d7}
+.control{isolation:isolate}
+.control::after{content:"";height:2px;position:absolute;z-index:2;bottom:1px;left:22px;right:22px;background:linear-gradient(90deg,transparent,#7d9cf8 25%,#b29df7 78%,transparent);border-radius:3px;transform:scaleX(0);opacity:0;transform-origin:center;transition:transform .37s var(--motion-slow),opacity .3s;pointer-events:none}
+.control:focus-within::after{transform:scaleX(1);opacity:.65}
+.control input.invalid{border-color:#dc9ba4;box-shadow:0 0 0 4px rgba(204,84,107,.07)}
+.eye-toggle svg{transition:transform .25s var(--motion-slow)}
+.eye-toggle:active svg{transform:scale(.9)}
+.submit{position:relative;isolation:isolate;overflow:hidden}
+.submit::after{content:"";position:absolute;z-index:-1;top:-20%;bottom:-20%;left:-55%;width:34%;transform:translateX(0) skewX(-19deg);background:linear-gradient(90deg,transparent,rgba(213,225,255,.13),transparent);pointer-events:none;transition:transform .72s var(--motion-slow)}
+.submit:hover::after{transform:translateX(505%) skewX(-19deg)}
+.submit svg{transition:transform .25s var(--motion-slow)}
+.submit:hover:not(:disabled) svg{transform:translateX(2px)}
+.top-link svg{transition:transform .26s var(--motion-slow)}
+.top-link:hover svg{transform:translate(2px,-2px)}
+.safe-badge{transition:background .3s ease}
+@keyframes atmosphere{0%{transform:translate3d(-1%,0,0);opacity:.55}100%{transform:translate3d(1%,.6%,0);opacity:1}}
+@keyframes sceneDrift{0%{transform:translate3d(-4px,2px,0)}100%{transform:translate3d(5px,-3px,0)}}
+@keyframes orbBreath{0%{opacity:.55;transform:scale(.96)}100%{opacity:1;transform:scale(1.05)}}
+@keyframes nodeBreathe{0%,100%{opacity:.67;transform:scale(.85)}50%{opacity:1;transform:scale(1.12)}}
+@keyframes brandHalo{0%,100%{opacity:.38;transform:translateX(-50%) scale(.94)}50%{opacity:.85;transform:translateX(-50%) scale(1.08)}}
+/* Touch devices avoid continuous layout-affecting parallax. */
+@media (hover:none){.auth-card::after{opacity:0!important}.screen::before{animation-duration:25s}.orbit-drawing{animation:none}}
+@media(max-width:650px){.brand::before{width:128px;height:128px;top:-29px}.orbit-drawing .orbit-traveler:nth-of-type(2){display:none}.screen::before{opacity:.65}}
+@media(prefers-reduced-motion:reduce){.screen::before,.orb.left,.orb.right,.orbit-drawing,.brand::before,.orbit-drawing .orbit-point{animation:none!important}.orbit-drawing .orbit-traveler{display:none}.auth-card::after,.control::after,.submit::after{transition:none!important}.auth-card{transition:none!important}}
+</style>
+<!-- zhihui-brand-icons:20261029 -->
+<link rel="icon" href="/favicon/zhihui-z-20261029/favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+<link rel="icon" href="/favicon/zhihui-z-20261029/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/favicon/zhihui-z-20261029/favicon-16x16.png" type="image/png" sizes="16x16">
+<link rel="icon" href="/favicon/zhihui-z-20261029/favicon.svg" type="image/svg+xml" sizes="any">
+<link rel="apple-touch-icon" href="/favicon/zhihui-z-20261029/apple-touch-icon.png" sizes="180x180">
+<link rel="manifest" href="/favicon/zhihui-z-20261029/site.webmanifest">
+</head>
+<body>
+<div class="screen">
+  <div class="orb left" aria-hidden="true"></div><div class="orb right" aria-hidden="true"></div>
+  <svg class="orbit-drawing" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs><linearGradient id="orbitDot" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#8fd7fb"/><stop offset="1" stop-color="#a793f7"/></linearGradient></defs>
+    <path d="M-260 65 C145 -48 424 173 516 334 C607 491 633 625 728 713"/>
+    <path d="M-148 581 C131 432 366 523 569 686 C667 764 743 800 880 826" class="pale" />
+    <path d="M1246 -250 C1167 -3 1195 193 1325 342 C1454 489 1591 510 1844 493"/>
+    <path d="M1140 1140 C1280 783 1500 686 1800 683" class="pale" />
+    <path d="M-290 116 C-30 40 164 48 257 188 C374 361 257 612 -8 669" class="white"/>
+    <circle class="orbit-point" cx="402" cy="225" r="7"/>
+    <circle class="orbit-point" cx="360" cy="567" r="6.5"/>
+    <circle class="orbit-point" cx="1236" cy="255" r="8"/>
+    <!-- Extremely faint traveling dots turn the decorative arcs into a continuous, quiet flow. -->
+    <circle class="orbit-traveler" r="3.2" aria-hidden="true"><animateMotion dur="22s" repeatCount="indefinite" path="M-260 65 C145 -48 424 173 516 334 C607 491 633 625 728 713" /></circle>
+    <circle class="orbit-traveler" r="2.8" aria-hidden="true"><animateMotion dur="27s" repeatCount="indefinite" begin="-9s" path="M1246 -250 C1167 -3 1195 193 1325 342 C1454 489 1591 510 1844 493" /></circle>
+  </svg>
+  <a class="top-link" href="/" aria-label="返回智汇官网首页">返回官网 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+  <main class="login-content">
+    <header class="brand">
+      <!-- Identical Z geometry and gradient to the delivered ZHIHUI_logo.svg -->
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-label="ZHIHUI 智汇网关标识" role="img">
+        <defs><linearGradient id="brandZGradient" gradientUnits="userSpaceOnUse" x1="6" y1="5" x2="34" y2="35"><stop offset="0" stop-color="#7391FA"/><stop offset="1" stop-color="#4D6CEB"/></linearGradient></defs>
+        <path d="M8.5 10.5H31.5L8.5 29.5H31.5" fill="none" stroke="url(#brandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"/>
+      </svg>
+      <h1>智汇网关</h1>
+      <p>Qoder · Trae · WorkBuddy 三平台统一网关</p>
+    </header>
+    <section class="auth-card" aria-labelledby="card-heading">
+      <div class="card-head">
+        <div class="card-title-wrap">
+          <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3 9 5.5-9 5.5-9-5.5 9-5.5Z"/><path d="m3 12 9 5.5 9-5.5M3 16 12 21l9-5"/></svg></div>
+          <div><h2 id="card-heading">管理员登录</h2><p>进入智汇网关控制台</p></div>
+        </div>
+        <div class="safe-badge"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5v7c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5l-8-3Zm-1 13.2-3.2-3.1 1.4-1.5 1.8 1.9 4.4-4.5 1.4 1.5L11 15.2Z"/></svg>授权访问</div>
+      </div>
+      <form id="loginForm" novalidate>
+        <div class="form-group"><label for="username">用户名</label><div class="control"><svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.6 20a7.6 7.6 0 0 1 14.8 0"/></svg><input id="username" type="text" name="username" placeholder="请输入用户名" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="64" required/></div></div>
+        <div class="form-group"><label for="password">密码</label><div class="control"><svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><input id="password" type="password" name="password" placeholder="请输入登录密码" autocomplete="current-password" maxlength="200" required/><button class="eye-toggle" id="togglePassword" type="button" aria-label="显示密码" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2.7"/><path id="hideSlash" d="M4 4 20 20"/></svg></button></div><div class="caps" id="capsWarning">已开启大写锁定，请检查输入。</div></div>
+        <button type="submit" class="submit" id="submitBtn"><span class="spinner" aria-hidden="true"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h10M10 8l4 4-4 4M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/></svg><span id="submitLabel">登录</span></button>
+        <p id="formStatus" class="status" aria-live="polite" role="status"></p>
+        <noscript><p class="status show error">需要启用 JavaScript 才能登录智汇网关。</p></noscript>
+      </form>
+    </section>
+    <div class="under-card">仅限已获授权的用户访问，所有登录尝试与管理操作均由服务端校验并记录审计日志。</div>
+  </main>
+</div>
+<script>
+(()=>{
+  'use strict';
+  var API_LOGIN='/api/login', API_ME='/api/me', HOME='/dashboard';
+
+  var form=document.getElementById('loginForm');
+  var username=document.getElementById('username');
+  var password=document.getElementById('password');
+  var eye=document.getElementById('togglePassword');
+  var slash=document.getElementById('hideSlash');
+  var warning=document.getElementById('capsWarning');
+  var btn=document.getElementById('submitBtn');
+  var label=document.getElementById('submitLabel');
+  var status=document.getElementById('formStatus');
+  var screen=document.querySelector('.screen');
+  var card=document.querySelector('.auth-card');
+  var motionQuery=window.matchMedia('(prefers-reduced-motion: reduce)');
+  var pointersFine=window.matchMedia('(hover: hover) and (pointer: fine)');
+  var busy=false;
+
+  var setStatus=(text,kind)=>{status.textContent=text||'';status.className=kind?'status show '+kind:'status';};
+  var clearStatus=()=>{status.textContent='';status.className='status';};
+  var readJson=async(res)=>{try{return await res.json();}catch(e){return null;}};
+  var detailOf=(data,fallback)=>(data&&typeof data.detail==='string'&&data.detail)?data.detail:fallback;
+
+  /* ── 装饰动画：尊重系统动效偏好，后台标签页暂停 ── */
+  var orbit=document.querySelector('.orbit-drawing');
+  var updateAnimation=()=>{
+    if(!orbit)return;
+    if(motionQuery.matches||document.hidden){orbit.pauseAnimations&&orbit.pauseAnimations();}
+    else{orbit.unpauseAnimations&&orbit.unpauseAnimations();}
+  };
+  motionQuery.addEventListener&&motionQuery.addEventListener('change',updateAnimation);
+  document.addEventListener('visibilitychange',updateAnimation);
+  updateAnimation();
+
+  /* ── 卡片跟随指针的柔光 ── */
+  var hoverFrame=0;
+  card.addEventListener('pointermove',event=>{
+    if(!pointersFine.matches||motionQuery.matches)return;
+    if(hoverFrame)return;
+    var x=event.clientX,y=event.clientY;
+    hoverFrame=requestAnimationFrame(()=>{
+      var box=card.getBoundingClientRect();
+      card.style.setProperty('--card-x',((x-box.left)/box.width*100).toFixed(1)+'%');
+      card.style.setProperty('--card-y',((y-box.top)/box.height*100).toFixed(1)+'%');
+      hoverFrame=0;
+    });
+  },{passive:true});
+
+  form.addEventListener('focusin',()=>screen.classList.add('is-focused'));
+  form.addEventListener('focusout',()=>requestAnimationFrame(()=>{
+    if(!form.contains(document.activeElement))screen.classList.remove('is-focused');
+  }));
+
+  [username,password].forEach(field=>field.addEventListener('input',()=>{
+    field.classList.remove('invalid');
+    if(status.classList.contains('error'))clearStatus();
+  }));
+
+  eye.addEventListener('click',()=>{
+    var show=password.type==='password';
+    password.type=show?'text':'password';
+    eye.setAttribute('aria-label',show?'隐藏密码':'显示密码');
+    eye.setAttribute('aria-pressed',String(show));
+    slash.style.display=show?'none':'';
+    password.focus({preventScroll:true});
+  });
+
+  password.addEventListener('keyup',ev=>{warning.classList.toggle('on',!!(ev.getModifierState&&ev.getModifierState('CapsLock')));});
+  password.addEventListener('blur',()=>warning.classList.remove('on'));
+
+  var setBusy=(on)=>{
+    busy=on;
+    btn.classList.toggle('loading',on);
+    btn.disabled=on;
+    label.textContent=on?'登录中…':'登录';
+    if(on)form.setAttribute('aria-busy','true');else form.removeAttribute('aria-busy');
+  };
+
+  /* 已登录会话直接进控制台（401 则安静留在本页）。
+     会话过期的提示与探测相互独立：提示先出现，若其实仍已登录则跳转本身会覆盖它。 */
+  var isExpired=()=>{
+    try{return new URLSearchParams(window.location.search).get('expired')==='1';}
+    catch(e){return false;}
+  };
+  if(isExpired())setStatus('登录状态已过期，请重新登录。','info');
+  fetch(API_ME,{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}})
+    .then(res=>{if(res.ok)window.location.replace(HOME);})
+    .catch(()=>{});
+
+  form.addEventListener('submit',async ev=>{
+    ev.preventDefault();
+    if(busy)return;
+    var name=username.value.trim();
+    var pwd=password.value;
+    if(!name){username.classList.add('invalid');setStatus('请输入用户名。','error');username.focus();return;}
+    if(!pwd){password.classList.add('invalid');setStatus('请输入密码。','error');password.focus();return;}
+
+    setBusy(true);
+    clearStatus();
+    var succeeded=false;
+    try{
+      var res=await fetch(API_LOGIN,{
+        method:'POST',
+        credentials:'same-origin',
+        cache:'no-store',
+        headers:{'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({username:name,password:pwd})
+      });
+      var data=await readJson(res);
+      if(res.ok&&data&&data.ok===true){
+        succeeded=true;
+        label.textContent='进入中…';
+        setStatus('登录成功，正在进入控制台…','info');
+        window.location.replace(HOME);
+        return;
+      }
+      if(res.status===401){
+        setStatus(detailOf(data,'用户名或密码错误，请重试。'),'error');
+        password.value='';
+        password.classList.add('invalid');
+        password.focus();
+      }else if(res.status===429){
+        setStatus(detailOf(data,'登录尝试过于频繁，请稍后再试。'),'error');
+      }else if(res.status===400){
+        setStatus(detailOf(data,'请求格式错误，请刷新页面后重试。'),'error');
+      }else if(res.status>=500){
+        setStatus('服务暂时不可用，请稍后再试。','error');
+      }else{
+        setStatus(detailOf(data,'登录失败，请稍后再试。'),'error');
+      }
+    }catch(err){
+      setStatus('无法连接服务器，请检查网络后重试。','error');
+    }finally{
+      if(!succeeded)setBusy(false);
+    }
+  });
+})();
+</script>
+</body>
+</html>

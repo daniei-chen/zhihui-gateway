@@ -1,0 +1,42 @@
+"""Read-only coherence checks for product version, origin, icons and public docs."""
+from pathlib import Path
+import json
+import re
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main():
+    version = (ROOT / 'VERSION').read_text(encoding='ascii').strip()
+    identity = json.loads((ROOT / 'manager/server/product-release.json').read_bytes())
+    web = ROOT / 'src/three-platform/web'
+    package = json.loads((web / 'package.json').read_bytes())
+    lock = json.loads((web / 'package-lock.json').read_bytes())
+    assert version == identity['version'] == package['version'] == lock['version'] == lock['packages']['']['version']
+    assert (ROOT / 'manager/.version').read_text().strip() == 'v' + version
+    assert identity['repository'] == 'daniei-chen/zhihui-gateway'
+    assert "PRODUCT_VERSION = '" + version + "'" in (web / 'lib/product.ts').read_text()
+    for locale in ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']:
+        copy = json.loads((web / 'lib/i18n/locales' / (locale + '.json')).read_bytes())
+        assert set(copy['product']) == {
+            'name', 'repository', 'version', 'origin', 'sourceCommit', 'unrecorded',
+            'baseline', 'releases', 'providerBoundary', 'controlledTitle', 'controlledDetail',
+        }, locale
+    for page in ['site/home/index.html', 'site/login/index.html']:
+        text = (ROOT / page).read_text(encoding='utf-8')
+        assert '/favicon/zhihui-z-20261029/favicon.svg' in text, page
+    readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+    targets = re.findall(r'(?:src|href)="([^"#]+)"', readme)
+    targets += re.findall(r'\]\(([^)#]+)\)', readme)
+    for target in targets:
+        if not target.startswith(('https://', 'http://', '#')):
+            resolved = (ROOT / target.split('#')[0]).resolve()
+            assert resolved.is_relative_to(ROOT) and resolved.exists(), target
+    assert not list((ROOT / 'manager/server').rglob('*.db'))
+    print(json.dumps({'version': version, 'repository': identity['repository'], 'coherent': True}))
+
+
+if __name__ == '__main__':
+    main()

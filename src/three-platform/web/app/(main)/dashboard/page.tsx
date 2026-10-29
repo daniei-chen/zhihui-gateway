@@ -16,6 +16,7 @@ const FlowChart = dynamic(
   {ssr: false},
 );
 import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
+import {ChartDataTable} from '@/components/charts/ChartDataTable';
 import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
@@ -214,7 +215,7 @@ export default function DashboardPage() {
    *
    * 加载态 / 失败态 / 是否正在刷新也由它给出，本页不再自己维护这几个 useState。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     pool: () => loadPoolSnapshot(),
     summary: () => statsApi.summary(realm),
     daily: () => statsApi.daily(14, realm),
@@ -277,10 +278,7 @@ export default function DashboardPage() {
   // 账号健康度与用量会持续变化，用心跳刷新避免展示陈旧数据。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——
   // 否则骨架会每 30 秒闪一次，用户以为页面在抽风。
-  useHeartbeat(() => {
-    reload();
-    flowState.reload();
-  }, 30000);
+  useHeartbeat(() => Promise.all([refresh(), flowState.refresh()]), 30000);
 
   /** 有字段没刷新成功。此时至少还有一份数据在，用顶部提示如实说明，不清空内容 */
   const partialFailed = Object.keys(errors).length > 0;
@@ -613,6 +611,11 @@ export default function DashboardPage() {
               <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('dashboard.noCallData')}</div>
             )}
           </div>
+          {chartData.length > 0 && <ChartDataTable
+            title={t('metric.requests')}
+            columns={[t('a11y.period'), t('metric.requests'), t('dashboard.failedRequests')]}
+            rows={chartData.map((point) => [point.day, point.requests, point.failed])}
+          />}
         </div>
 
         <div className="rounded-[20px] bg-muted p-4">
@@ -717,6 +720,11 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+            {hasFlow && <ChartDataTable
+              title={t('dashboard.creditsFlowTitle')}
+              columns={[t('a11y.period'), t('dashboard.income'), t('dashboard.expense')]}
+              rows={flow.daily.map((point) => [point.day, point.income, point.expense])}
+            />}
           </>
         )}
       </section>

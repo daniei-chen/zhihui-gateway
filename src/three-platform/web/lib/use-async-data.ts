@@ -30,10 +30,12 @@ export interface AsyncAllState<T> {
    * 「建好了但列表没刷上」，后者绝不能报成前者（用户会以为没建成功、再点一次，
    * 于是建出重复密钥）。
    *
-   * 不需要这个信息的调用方照旧忽略返回值即可（`onRetry={reload}`、
-   * `useHeartbeat(reload, …)` 都不受影响）。
+   * 不需要这个信息的调用方照旧忽略返回值即可（`onRetry={reload}`）。
+   * 定时刷新使用 `refresh`，避免反复废弃仍在进行的慢请求。
    */
   reload: () => Promise<boolean>;
+  /** Background refresh joins an existing request instead of superseding it. */
+  refresh: () => Promise<boolean>;
 }
 
 /**
@@ -73,6 +75,7 @@ export function useAsyncAll<T extends Record<string, unknown>>(
    * 每次发起自增，回来时对不上就整包丢弃。
    */
   const seq = useRef(0);
+  const active = useRef<{sequence: number; promise: Promise<boolean>} | null>(null);
 
   /**
    * fetchers 每次渲染都是新对象（调用方写的是内联箭头函数），不能进依赖数组；
@@ -81,7 +84,8 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   const ref = useRef(fetchers);
   ref.current = fetchers;
 
-  const run = useCallback((mode: FetchMode): Promise<boolean> => {
+  const run = useCallback((mode: FetchMode, background = false): Promise<boolean> => {
+    if (background && active.current?.sequence === seq.current) return active.current.promise;
     const mine = ++seq.current;
     if (mode === 'initial') {
       // deps 变了 = 换了一个数据上下文。旧数据**必须**清掉：留着比空着更糟
@@ -93,7 +97,8 @@ export function useAsyncAll<T extends Record<string, unknown>>(
 
     const keys = Object.keys(ref.current) as (keyof T)[];
     // 逐项独立成败：一份数据挂了不该拖垮其余几份（原写法用的就是 allSettled）。
-    return Promise.allSettled(keys.map((k) => ref.current[k]())).then((settled) => {
+    const currentFetchers = ref.current;
+    const promise = Promise.allSettled(keys.map((k) => Promise.resolve().then(currentFetchers[k]))).then((settled) => {
       // 过期响应：整包丢弃。这里**返回 true 而不是 false**——这一次的成败已经
       // 不作数了（更新的那次请求才是权威），而返回 false 会让调用方凭空报一次
       // 失败（「建好了但刷新失败」这种提示会误弹）。宁可不说，也不要误报。
@@ -111,7 +116,11 @@ export function useAsyncAll<T extends Record<string, unknown>>(
       setPending(false);
       // 只要还有字段没取到就算「没全部成功」。调用方据此决定要不要提示用户。
       return Object.keys(fresh.errors).length === 0;
+    }).finally(() => {
+      if (active.current?.sequence === mine) active.current = null;
     });
+    active.current = {sequence: mine, promise};
+    return promise;
   }, []);
 
   // deps 是调用方写的数组字面量，每帧都是新引用，直接当依赖会让首屏请求每帧重发；
@@ -130,6 +139,13 @@ export function useAsyncAll<T extends Record<string, unknown>>(
    */
   const prints = useRef<DepPrints>({context: null, query: refreshKey});
 
+  useEffect(() => () => {
+    // Invalidate unmounted scopes, including React Strict Mode's effect replay.
+    seq.current += 1;
+    active.current = null;
+    prints.current.context = null;
+  }, []);
+
   useEffect(() => {
     const next: DepPrints = {context: depsKey, query: refreshKey};
     const mode = depMode(prints.current, next);
@@ -140,11 +156,13 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   }, [depsKey, refreshKey, run]);
 
   const reload = useCallback(() => run('refresh'), [run]);
+  const refresh = useCallback(() => run('refresh', true), [run]);
 
   return {
     values,
     errors,
     ...asyncFlags(values, errors, pending),
     reload,
+    refresh,
   };
 }

@@ -1,15 +1,17 @@
 import type {Metadata} from 'next';
-import {Inter} from 'next/font/google';
+import localFont from 'next/font/local';
 import {Toaster} from '@/components/ui/sonner';
 import {ThemeProvider} from '@/components/common/layout/ThemeProvider';
 import {AuthProvider} from '@/lib/auth-context';
 import {I18nProvider} from '@/lib/i18n/provider';
 import {withBasePath} from '@/lib/base-path';
 import './globals.css';
+import './brand.css';
 
-const inter = Inter({
+const inter = localFont({
+  src: './fonts/inter-latin.woff2',
   variable: '--font-inter',
-  subsets: ['latin'],
+  weight: '100 900',
   display: 'swap',
 });
 
@@ -63,14 +65,15 @@ export const metadata: Metadata = {
   // ——实测子路径部署下产物里仍是 `href="/favicon/..."`，会被请求到域名根（通常是
   // 另一个站点）而 404，表现为「站点图标不见了、PWA 清单取不到」。根路径部署时
   // withBasePath 原样返回，行为不变。
-  manifest: withBasePath('/favicon/site.webmanifest'),
+  manifest: withBasePath('/favicon/zhihui-z-20261029/site.webmanifest'),
   icons: {
     icon: [
-      {url: withBasePath('/favicon/favicon-32x32.png'), sizes: '32x32', type: 'image/png'},
-      {url: withBasePath('/favicon/favicon-16x16.png'), sizes: '16x16', type: 'image/png'},
+      {url: withBasePath('/favicon/zhihui-z-20261029/favicon-32x32.png'), sizes: '32x32', type: 'image/png'},
+      {url: withBasePath('/favicon/zhihui-z-20261029/favicon-16x16.png'), sizes: '16x16', type: 'image/png'},
+      {url: withBasePath('/favicon/zhihui-z-20261029/favicon.svg'), sizes: 'any', type: 'image/svg+xml'},
     ],
-    shortcut: withBasePath('/favicon/favicon.ico'),
-    apple: withBasePath('/favicon/apple-touch-icon.png'),
+    shortcut: withBasePath('/favicon/zhihui-z-20261029/favicon.ico'),
+    apple: withBasePath('/favicon/zhihui-z-20261029/apple-touch-icon.png'),
   },
 };
 

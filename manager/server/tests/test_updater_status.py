@@ -124,7 +124,8 @@ class RemoteCheckOnlyManager(unittest.TestCase):
         self.assertEqual(out['manager']['latest'], 'v9.9.9')
         self.assertNotIn('upstream', out, '不应再有独立的上游版本结果')
         self.assertTrue(calls)
-        self.assertTrue(all('workbuddy-manager' in url for url in calls),
+        expected = f'https://api.github.com/repos/{updater.MANAGER_REPO}/releases/latest'
+        self.assertTrue(all(url == expected for url in calls),
                         f'版本检测请求了非管理端仓库：{calls}')
 
 

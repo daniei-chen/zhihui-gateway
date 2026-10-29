@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import asyncio
 import os
 import sys
 from urllib.parse import urlsplit
@@ -14,7 +13,7 @@ from contextvars import ContextVar
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
 from .. import observability
@@ -50,6 +49,8 @@ def _threeway_upstream(name: str) -> dict | None:
             api_key = fh.read().strip()
     except OSError:
         api_key = ''
+    if not api_key:
+        return None
     return {
         'id': None, 'name': name, 'base_url': base, 'api_key': api_key,
         'note': '', 'enabled': 1, 'is_default': False,
@@ -58,7 +59,9 @@ def _threeway_upstream(name: str) -> dict | None:
 
 
 def _oai_error(message: str, status: int = 400, err_type: str = 'invalid_request_error',
-               code: str | None = None, hint: str | None = None) -> JSONResponse:
+               code: str | None = None, hint: str | None = None, *,
+               request_id: str | None = None,
+               upstream_request_id: str | None = None) -> JSONResponse:
     """OpenAI 形状的错误体。
 
     `hint` 对应上游 2026-09-16 新增的 `error.gateway_hint`：与 message **并列**的
@@ -68,11 +71,20 @@ def _oai_error(message: str, status: int = 400, err_type: str = 'invalid_request
 
     为空时**不写这个字段**：与上游「不编造 hint」的口径一致，也避免客户端拿到
     一个空值还要自己判断。
+
+    U13（2026-10-28）：错误契约要求保留**上下游两个 ID**。它们放在 `error`
+    之外（与 Anthropic 侧 `_err` 的形状一致），未提供时不写字段、不编造。
+    `error` 对象本身的形状不变 —— 既有客户端与断言依赖它。
     """
     err: dict = {'message': message, 'type': err_type, 'code': code}
     if hint:
         err['gateway_hint'] = hint
-    return JSONResponse({'error': err}, status_code=status)
+    body: dict = {'error': err}
+    if request_id:
+        body['request_id'] = request_id
+    if upstream_request_id:
+        body['upstream_request_id'] = upstream_request_id
+    return JSONResponse(body, status_code=status)
 
 
 def _oai_error_with_blip(message: str, status: int = 502, exc=None,
@@ -112,6 +124,151 @@ def _oai_error_with_blip_body(message: str, status: int = 502, exc=None,
     resp.headers['Retry-After'] = '5'
     resp.headers['X-Upstream-Blip'] = '1'
     return resp
+
+
+# ── 上游「明确拒绝且未处理」的有界重试（2026-10-28）────────────────────────
+#
+# 现场（2026-10-28 取证）：上游把**内容拒绝**伪装成 `11102 模型不存在`，而且是
+# 1–2 分钟的短窗口 —— 单日 421 次、涉及 31/32 个账号，同一分钟同一模型既有 200
+# 也有被拒，同一账号同时出现在成功侧与被拒侧。所以它既不是账号缺模型，
+# 也不是映射没生效（失败请求的 `mapped_model` 都是 `cn:deepseek-v4.1-flash`）。
+#
+# 这类响应意味着请求**没有被上游处理**：没有生成、没有 usage、没有计费 ——
+# 与 `budget._REJECTED_MARKERS` 是同一判据。因此**重放是安全的**，
+# 不会重复生成、也不会重复计费。
+#
+# 客户端（deepseek-harness 等）默认重试 8 次且间隔更长；在网关内补一次短重试
+# 就能把窗口挡在客户端之外，同时省掉客户端那 8 次重试的等待。
+#
+# 可调：设置项 `upstream_rejection_retry`（settings 表，不用发版）
+#   0 或 1 → 关闭重试；N → 最多 N 次尝试（含首次）。默认 2（1 次重试）。
+_REJECTION_RETRY_CODES = (400, 502, 503)
+_REJECTION_RETRY_DEFAULT = 2
+_REJECTION_RETRY_MAX = 4          # 再高就是把上游抖动放大成重试风暴
+_REJECTION_RETRY_DELAY_S = 0.8
+_REJECTION_LIMIT_TTL_S = 60.0     # 设置项缓存：转发热路径上不能每条请求查一次库（U27）
+_rejection_limit_cache: tuple = (0.0, -1)
+
+
+def _rejection_retry_limit() -> int:
+    """本次请求允许的上游尝试次数（含首次）。读不到设置就用默认值，绝不影响转发。"""
+    global _rejection_limit_cache
+    now = time.monotonic()
+    cached_at, cached = _rejection_limit_cache
+    if cached >= 0 and (now - cached_at) < _REJECTION_LIMIT_TTL_S:
+        return cached
+    limit = _REJECTION_RETRY_DEFAULT
+    try:
+        value = db.get_setting('upstream_rejection_retry')
+    except Exception:  # noqa: BLE001  设置读不到不是转发失败的理由
+        value = None
+    if value is not None and not isinstance(value, bool):
+        try:
+            limit = max(0, min(int(value), _REJECTION_RETRY_MAX))
+        except (TypeError, ValueError):
+            limit = _REJECTION_RETRY_DEFAULT
+    _rejection_limit_cache = (now, limit)
+    return limit
+
+
+def _is_not_processed_rejection(status: int, body_text: str) -> bool:
+    """上游**明确拒绝且没有处理**这个请求 —— 可以安全重放。"""
+    if status not in _REJECTION_RETRY_CODES:
+        return False
+    text = body_text or ''
+    if not text:
+        return False
+    try:
+        data = json.loads(text)
+    except RecursionError:
+        return False
+    except (ValueError, TypeError):
+        # Legacy plain-text model lookup failures have one bounded grammar.
+        import re
+        return bool(re.fullmatch(r'model \[[^\]\r\n]{1,128}\] service info not found', text.strip()))
+    if not isinstance(data, dict):
+        return False
+
+    def has_processing_evidence(value, depth=0):
+        if depth > 32:
+            return True
+        if isinstance(value, dict):
+            if any(name in value for name in (
+                    'usage', 'choices', 'output', 'completion', 'partial_output',
+                    'credit', 'cost', 'prompt_tokens', 'completion_tokens', 'total_tokens',
+                    'attempts', 'retry_count')):
+                return True
+            if value.get('processed') or value.get('generated'):
+                return True
+            return any(has_processing_evidence(v, depth + 1) for v in value.values())
+        if isinstance(value, list):
+            return any(has_processing_evidence(v, depth + 1) for v in value)
+        if isinstance(value, str) and value.lstrip().startswith(('{', '[')):
+            try:
+                return has_processing_evidence(json.loads(value), depth + 1)
+            except (ValueError, RecursionError):
+                return True
+        return False
+
+    if has_processing_evidence(data):
+        return False
+    error = data.get('error') if isinstance(data.get('error'), dict) else data
+    code = error.get('code')
+    return str(code) in ('11102', 'no_healthy_account', 'model_not_found')
+
+
+def _response_usage(data):
+    return data['usage'] if isinstance(data, dict) and isinstance(data.get('usage'), dict) else {}
+
+
+def _valid_chat_response(data):
+    return (isinstance(data, dict) and not data.get('error')
+            and isinstance(data.get('choices'), list) and bool(data['choices'])
+            and all(isinstance(c, dict) and isinstance(c.get('message'), dict)
+                    and bool(c['message'])
+                    for c in data['choices']))
+
+
+def _mark_invalid_response():
+    state = observability.current.get()
+    if state:
+        state.terminal_state, state.error_stage = 'protocol_incomplete', 'protocol'
+    observability.mark_error('upstream_invalid_body', observability.ERROR_SOURCE_UPSTREAM)
+
+
+def _mark_pre_stream_failure(exc):
+    from .. import deadline
+    state = observability.current.get()
+    if state is None:
+        return
+    if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+        state.terminal_state, state.error_stage = 'client_cancelled', 'client'
+    elif isinstance(exc, deadline.ErrorBodyTooLarge):
+        _mark_invalid_response()
+    else:
+        state.terminal_state, state.error_stage = 'transport_error', 'stream_read'
+
+
+async def _close_pending_response(response, client, budgets):
+    import anyio
+    from .. import deadline
+    try:
+        with anyio.move_on_after(deadline.close_timeout(budgets), shield=True):
+            try:
+                if response is not None:
+                    await response.aclose()
+            finally:
+                await client.aclose()
+    except Exception:
+        logger.exception('pre-stream cleanup failed')
+
+
+def _response_text(resp) -> str:
+    """安全取响应体文本：非流式响应才有 `.text`，取不到就当空串（不猜）。"""
+    try:
+        return resp.text or ''
+    except Exception:  # noqa: BLE001
+        return ''
 
 
 def _bearer(request: Request) -> str:
@@ -454,6 +611,25 @@ def _log_ip(ip: str, path: str, blocked: bool, ua: str | None,
     db.add_ip_access_log(ip, path, blocked, ua, reason)
 
 
+def _upstream_request_id(resp: object) -> str | None:
+    """上游请求 ID：把「客户端看到的错误」和「上游工单」对上号（U13）。
+
+    这个值会进错误体与 SSE 错误帧，所以只接受 **ASCII 可打印且 <=128** 的串；
+    放开就等于允许上游往我们的响应体里注入内容。取不到就是 None，不编造。
+    """
+    headers = getattr(resp, 'headers', None) or {}
+    try:
+        value = headers.get('request-id') or headers.get('x-request-id')
+    except (AttributeError, TypeError):
+        return None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > 128 or not value.isascii() or not value.isprintable():
+        return None
+    return value
+
+
 def _error_hint(data: object) -> str | None:
     """从上游错误体里取 `error.gateway_hint`（取不到返回 None）。
 
@@ -592,6 +768,72 @@ def _image_part_to_openai(part: dict) -> dict | None:
     return None
 
 
+# ── 上游提示词指纹风控对冲（2026-10-27 判别实验实锤）─────────────────
+# 上游对特定系统提示词特征串按内容拒绝，且伪装成 11102「模型不存在」：
+# 同模型同密钥下，裸请求 / 普通 2KB 提示词 / 400KB 大体积全部 200，
+# 唯独携带该特征句的请求 503。对冲方式：转发前对特征句做**同义改写**
+# （语义不变、字符序列改变），规则可经 settings.prompt_defuse_rules 扩展
+# （元素为 [pattern, replacement] 二元组列表；命中即整串替换）。
+_DEFAULT_DEFUSE_RULES = (
+    ('Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root',
+     'Tokens beginning with @ refer to file paths cited by the user. Relative paths are resolved against the workspace root'),
+)
+
+
+def defuse_prompt_fingerprint(body: object, *, platform: str = 'workbuddy') -> int:
+    """Apply the WorkBuddy system-prompt compatibility rule only.
+
+    User text, assistant replies, tool results and non-text blocks are immutable.
+    Set the boolean setting prompt_compat_enabled=false to disable this adapter.
+
+    注意：这里**故意不缓存**设置项。2026-10-28 试过加 60 秒缓存以减少热路径查库，
+    但 `test_prompt_integrity.test_boolean_switch_disables_adapter` 要求
+    「关掉开关立即生效」，缓存会让关停延迟最多 60 秒 —— 一个安全开关不该有这个延迟。
+    两次 `get_setting` 是本地 SQLite 点查（微秒级），不值得用正确性去换。
+    """
+    if platform != 'workbuddy' or not isinstance(body, dict):
+        return 0
+    msgs = body.get('messages')
+    if not isinstance(msgs, list):
+        return 0
+    rules = _DEFAULT_DEFUSE_RULES
+    try:
+        if db.get_setting('prompt_compat_enabled') is False:
+            return 0
+        extra = db.get_setting('prompt_defuse_rules') or []
+        if isinstance(extra, list):
+            pairs = tuple((r[0], r[1]) for r in extra[:64]
+                          if isinstance(r, (list, tuple)) and len(r) == 2
+                          and isinstance(r[0], str) and isinstance(r[1], str)
+                          and 0 < len(r[0]) <= 4096 and len(r[1]) <= 8192)
+            if pairs:
+                rules = pairs + _DEFAULT_DEFUSE_RULES
+    except Exception:  # noqa: BLE001  规则表坏了不影响默认规则
+        pass
+    changed = 0
+
+    def _fix_text(text: str) -> str:
+        nonlocal changed
+        for pat, rep in rules:
+            if pat in text:
+                text = text.replace(pat, rep)
+                changed += 1
+        return text
+
+    for msg in msgs:
+        if not isinstance(msg, dict) or msg.get('role') not in ('system', 'developer'):
+            continue
+        content = msg.get('content')
+        if isinstance(content, str):
+            msg['content'] = _fix_text(content)
+        elif isinstance(content, list):
+            for part in content:
+                if (isinstance(part, dict) and part.get('type') in ('text', 'input_text')
+                        and isinstance(part.get('text'), str)):
+                    part['text'] = _fix_text(part['text'])
+    return changed
+
+
 def normalize_chat_images(body: object) -> int:
     """就地归一 chat 请求里的图片 part，返回改写的数量。
 
@@ -637,39 +879,48 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         terminal = 'rejected' if 400 <= status < 500 else 'upstream_error' if status >= 500 else 'completed'
     if state:
         state.terminal_state = terminal
+    # U01（2026-10-28）：先把「要记的事实」算成纯数据。它不依赖事务，所以事务
+    # 失败时可以直接落 spool；重放写的是同一组列（见 db.add_request_log 的列元组）。
+    model_clean = db._clean(model, 128)
+    realm = db.realm_of_model(db._clean(mapped, 128) or model_clean)
+    facts = {
+        'ts': int(time.time()), 'key_id': key['id'] if key else None,
+        'ip': db._clean(ip, 64), 'model': model_clean,
+        'mapped_model': db._clean(mapped, 128), 'status': status,
+        'prompt_tokens': max(0, pt), 'completion_tokens': max(0, ct),
+        'latency_ms': latency, 'first_token_ms': first_token,
+        'ua': db._clean(ua, 512), 'error': db._clean(error, 500),
+        'stream': 1 if stream else 0, 'credit': credit, 'realm': realm,
+        'cache_hit_tokens': cache_hit, 'cache_miss_tokens': cache_miss,
+        'cache_write_tokens': cache_write,
+        'effort': db._clean(effort, 16) if effort else None,
+        'channel': client_channel(ua),
+        'session_key': db._clean(session_key, 64) if session_key else None,
+        'request_id': state.request_id if state else None,
+        'endpoint': state.endpoint if state else None,
+        'method': state.method if state else None,
+        'protocol': state.protocol if state else None,
+        'http_status': http_status, 'terminal_state': terminal,
+        'error_stage': state.error_stage if state else None,
+        'release_id': observability.RELEASE_ID,
+        'account': state.account if state else None,
+        'usage_source': 'upstream' if usage else 'unknown' if stream else 'not_reported',
+        'usage_complete': 1 if isinstance(usage, dict) and 'prompt_tokens' in usage and 'completion_tokens' in usage else 0,
+        'first_byte_ms': state.first_byte_ms if state else None,
+        # K27：实际路由到的平台/上游。NULL = 本请求没有记录到路由结果
+        # （例如鉴权阶段就被拒），**不是** workbuddy —— 对账时单独归类。
+        'actual_platform': getattr(state, 'actual_platform', None) if state else None,
+        'upstream_ref': getattr(state, 'upstream_ref', None) if state else None,
+        # RV01：调用方的关联 ID（X-Request-ID，已校验）。与 request_id
+        # （服务端执行 ID）是两个字段：这里记的只是「调用方说自己是
+        # 谁」，不参与主键，也不能用来反推执行归属。
+        'client_request_id': state.client_request_id if state else None,
+    }
     try:
-        model_clean = db._clean(model, 128)
-        realm = db.realm_of_model(db._clean(mapped, 128) or model_clean)
         with db.transaction():
             if state and db.query_one('SELECT id FROM request_logs WHERE request_id=?', (state.request_id,)):
                 return
-            db.add_request_log(
-                ts=int(time.time()),key_id=key['id'] if key else None,ip=db._clean(ip,64),
-                model=model_clean,mapped_model=db._clean(mapped,128),status=status,
-                prompt_tokens=max(0,pt),completion_tokens=max(0,ct),latency_ms=latency,
-                first_token_ms=first_token,ua=db._clean(ua,512),error=db._clean(error,500),
-                stream=1 if stream else 0,credit=credit,realm=realm,
-                cache_hit_tokens=cache_hit,cache_miss_tokens=cache_miss,cache_write_tokens=cache_write,
-                effort=db._clean(effort, 16) if effort else None,
-                channel=client_channel(ua),
-                session_key=db._clean(session_key, 64) if session_key else None,
-                request_id=state.request_id if state else None,endpoint=state.endpoint if state else None,
-                method=state.method if state else None,protocol=state.protocol if state else None,
-                http_status=http_status,terminal_state=terminal,error_stage=state.error_stage if state else None,
-                release_id=observability.RELEASE_ID,
-                account=state.account if state else None,
-                usage_source='upstream' if usage else 'unknown' if stream else 'not_reported',
-                usage_complete=1 if isinstance(usage,dict) and 'prompt_tokens' in usage and 'completion_tokens' in usage else 0,
-                first_byte_ms=state.first_byte_ms if state else None,
-                # K27：实际路由到的平台/上游。NULL = 本请求没有记录到路由结果
-                # （例如鉴权阶段就被拒），**不是** workbuddy —— 对账时单独归类。
-                actual_platform=getattr(state,'actual_platform',None) if state else None,
-                upstream_ref=getattr(state,'upstream_ref',None) if state else None,
-                # RV01：调用方的关联 ID（X-Request-ID，已校验）。与 request_id
-                # （服务端执行 ID）是两个字段：这里记的只是「调用方说自己是
-                # 谁」，不参与主键，也不能用来反推执行归属。
-                client_request_id=state.client_request_id if state else None,
-            )
+            db.add_request_log(**facts)
             from .. import budget
             budget.settle(usage,pt,ct,credit)
             from .. import ledger
@@ -682,13 +933,24 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                 total=max(0,pt)+max(0,ct)
                 keysvc.touch(key,ip,total,credit)
                 if total or credit:
-                    db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0))
+                    db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0),ts=facts['ts'])
         if state:
             state.recorded=True
     except Exception:
-        from .. import operational
+        from .. import operational, ledgerreplay
         operational.ledger_write_healthy=False
-        logger.exception('请求账本事务失败 request_id=%s',state.request_id if state else None)
+        # U01：事实先落 spool，由后台按 request_id 幂等重放。spool 也写不进
+        # （同盘写满/无权限）时置降级标志：就绪判定失败 + 新请求背压，停止放大。
+        entry = ledgerreplay.build_entry(
+            facts,
+            config_hash=getattr(state,'config_hash',None) if state else None,
+            budget={'reserved': bool(getattr(state,'budget_reserved',False)),
+                    'fence': getattr(state,'budget_fence',None)},
+            release_id=observability.RELEASE_ID)
+        if ledgerreplay.spill(entry) is None:
+            operational.ledger_spool_failed=True
+        logger.exception('请求账本事务失败 request_id=%s（已落回执等待重放）',
+                         state.request_id if state else None)
 
 
 def _global_ip_blocked(ip: str) -> bool:
@@ -751,6 +1013,9 @@ def _authorize(request: Request, model: str | None,
     # 全局入站 IP 规则
     if _global_ip_blocked(ip):
         _log_ip(ip, path, True, ua, 'ip_blocked')
+        # U21：稳定错误码。这里刻意复用下面 `_oai_error` 里那个 code 字符串 ——
+        # 客户端看到的码与库里记的码必须是同一个，否则统计与排障各说一套。
+        observability.mark_error('ip_blocked')
         _record(key, ip, model or '', mapped or '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
         return None, ip, _oai_error(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
 
@@ -768,6 +1033,9 @@ def _authorize(request: Request, model: str | None,
         # 状态码由 keysvc 决定，不再一律 403：一批客户端（DeepSeek Harness 等）
         # 把 401/403 统一显示成「API 密钥无效」，一律 403 会把「密钥版本不匹配」
         # 这种配置问题说成密钥坏了，用户便反复重建密钥（issue #18）。
+        # U21：keysvc 的拒绝原因本身就是一个稳定码（invalid_api_key /
+        # key_disabled / quota_exhausted / model_not_allowed …），直接沿用。
+        observability.mark_error(getattr(reason, 'code', None))
         _record(key, ip, model or '', mapped or '',
                 getattr(reason, 'status', 403), 0, 0, 0, ua, reason, False)
         _log_ip(ip, path, True, ua, _key_reject_code(reason, is_model_list))
@@ -779,11 +1047,13 @@ def _authorize(request: Request, model: str | None,
         )
 
     if not is_model_list and not observability.admit_key(key):
+        observability.mark_error('key_concurrency_exceeded')
         _record(key,ip,model or '',mapped or '',429,0,0,0,ua,'密钥并发容量已满',False)
         return None,ip,_oai_error('密钥并发容量已满，请等待当前请求结束',429,'rate_limit_error','key_concurrency_exceeded')
     limited, count = _rate_limited(key)
     if limited:
         msg = f'请求过于频繁（{RATE_WINDOW}s 内超过 {RATE_MAX_PER_MIN} 次）'
+        observability.mark_error('rate_limit_exceeded')
         _record(key, ip, model or '', mapped or '', 429, 0, 0, 0, ua, msg, False)
         _log_ip(ip, path, True, ua, 'rate_limited')
         return None, ip, _oai_error(msg, 429, 'rate_limit_error', 'rate_limit_exceeded')
@@ -906,9 +1176,14 @@ def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
         _tw = _threeway_upstream(_fp)
         if _tw is not None:
             return _tw, None
+        observability.mark_error('upstream_unavailable')
+        message = f'{_fp} upstream is unavailable; refusing cross-platform fallback'
+        _record(key, ip, model, mapped, 503, 0, 0, 0, ua, message, False)
+        return None, _oai_error(message, 503, 'api_error', 'upstream_unavailable')
     try:
         return upstreamsvc.resolve_for_key(key), None
     except upstreamsvc.UpstreamUnavailable as exc:
+        observability.mark_error('upstream_unavailable')
         _record(key, ip, model, mapped, 503, 0, 0, 0, ua, str(exc), False)
         # 这里不加 _upstream_hint：本函数讲的是「密钥绑定的上游不可用」，作用域里
         # 也没有那个上游对象 —— 报出默认上游的地址只会把人带偏（异常文本已经说清
@@ -1009,6 +1284,7 @@ def key_usage(request: Request):
     # 全局入站 IP 规则：与其他 /v1 入口同口径（见 _global_ip_blocked 的说明）。
     if _global_ip_blocked(ip):
         _log_ip(ip, path, True, ua, 'ip_blocked')
+        observability.mark_error('ip_blocked')
         _record(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
         return _oai_error(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
 
@@ -1533,8 +1809,11 @@ def _listing_compat_models(payload: object) -> object:
 # prompt_cache_key（wb2a-<uid8>-<会话>）随账号变化 → 上游前缀缓存全 miss。
 # 方案：把客户端 x-session-id（会话内稳定）注入 body 的 conversation_id，令
 # 「同会话 → 同账号 → 稳定缓存键」生效。客户端已带会话键时不覆盖。
-# 维护：由 /opt/workbuddy-manager/local-patches/apply_patches.sh 在服务启动时
-# 自动重施（管理端更新会覆盖 server/，靠它恢复）。
+# 维护：这段逻辑**已经收编在源码里**，不再有任何启动期补丁去改写 server/。
+# `/opt/workbuddy-manager/local-patches/apply_patches.sh` 现在只是
+# `deploy/source_preflight.py` 的入口（每次启动按 Ed25519 清单复核发布树），
+# 日志 `managed source preflight passed: N files; ... startup patches disabled`。
+# 2026-10-28 之前这里写的是「启动时自动重施」，已过时。
 _SESSION_HEADERS = ('x-session-id', 'x-conversation-id', 'conversation-id')
 
 
@@ -1608,7 +1887,23 @@ def _prepare_forward(key,body):
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128),
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128))
     try:
+        # U05（2026-10-28）：`budget.prepare` 会在 token 配额不足时**收缩**输出
+        # 上限（`body[field] = min(output, remaining - estimated_input)`），但那条
+        # 路径不产生任何客户端可见信号 —— 客户端以为额度是 max_tokens，实际拿到
+        # 更小的值，表现为「回答莫名被截断」。这里只**读**收缩前后的值（budget.py
+        # 一行不改），把契约挂到 request state，由 observability 的中间件统一写进
+        # 响应头。三条协议都经过本函数，所以只此一处就够。
+        limit_field = 'max_tokens'
+        limit_before = None
+        if isinstance(body, dict):
+            if 'max_completion_tokens' in body:
+                limit_field = 'max_completion_tokens'
+            limit_before = body.get(limit_field)
         budget.prepare(key,body)
+        if isinstance(body, dict):
+            observability.record_max_tokens_contract(
+                observability.current.get(), limit_field, limit_before,
+                body.get(limit_field))
         state=observability.current.get()
         if state:
             import hashlib
@@ -1626,6 +1921,9 @@ def _prepare_forward(key,body):
             ledger.forwarding(state,'prepared')
         budget.forwarded()
     except budget.BudgetRejected as exc:
+        # U21：预算拒绝的原因本身就是稳定码（budget_pending / insufficient_quota /
+        # credit_quota_exhausted / ledger_backpressure …），直接沿用。
+        observability.mark_error(getattr(exc, 'code', None))
         return _oai_error(str(exc),429,'insufficient_quota',exc.code)
     return None
 
@@ -1666,7 +1964,6 @@ async def _chat(request: Request, upstream_path: str):
     # 图片 part 归一（issue #134）：input_image / image_url 字符串 / Anthropic
     # source 形态改写成上游认的标准形态；认不出的原样保留。
     normalize_chat_images(body)
-
     # 思考强度（reasoning_effort）：仅用于日志展示，不改写请求体。
     effort = None
     if isinstance(body, dict):
@@ -1689,6 +1986,15 @@ async def _chat(request: Request, upstream_path: str):
     # K27：路由此刻已确定 —— 先把实际平台/上游记进上下文，这样即使后面被预算
     # 拒绝（没有发出请求），归因也是准的。
     _stamp_route(upstream, requested_model or '', mapped or '')
+    from .. import metering
+    actual_platform = metering.route_attribution(
+        entry_platform=forced_platform.get(), requested_model=requested_model,
+        resolved_model=mapped or requested_model, upstream=upstream)['actual_platform']
+    _defused = defuse_prompt_fingerprint(body, platform=actual_platform)
+    if _defused:
+        logger.info('system prompt compatibility applied: count=%d request_id=%s platform=%s',
+                    _defused, observability.current.get().request_id
+                    if observability.current.get() else None, actual_platform)
     url = f'{upstream["base_url"]}{upstream_path}'
     budget_error = _prepare_forward(key,body)
     if budget_error:
@@ -1697,8 +2003,10 @@ async def _chat(request: Request, upstream_path: str):
     # K21：五类时间预算（连接 / 首包 / 流中空闲 / 总时长 / 客户端取消）。
     # 默认值不改变线上行为（见 deadline.Budgets.from_config 的说明）。
     from .. import deadline as deadline_mod
-    budgets = deadline_mod.Budgets.from_config(config.UPSTREAM_TIMEOUT)
+    # U13：三条协议共用同一套预算对象（对照表见 deadline 模块 docstring）。
+    budgets = deadline_mod.request_budgets(config.UPSTREAM_TIMEOUT)
     request_deadline = deadline_mod.Deadline(budgets)
+    _timeouts = deadline_mod.transport_timeouts(budgets)
 
     if not stream:
         try:
@@ -1709,10 +2017,24 @@ async def _chat(request: Request, upstream_path: str):
             attempt = 1
             while True:
                 try:
-                    async with config.http_client(budgets.total_s, connect=budgets.connect_s, identity=_forwarding_identity(key,upstream)) as client:
+                    async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream)) as client:
                         resp = await deadline_mod.await_total(
                             client.post(url, json=body, headers=_upstream_headers(upstream)),
                             request_deadline)
+                    # 2026-10-28：上游「明确拒绝且未处理」的有界重试。
+                    # 判据见 _is_not_processed_rejection()：这类响应没有生成、
+                    # 没有 usage、没有计费，重放安全。
+                    # 先按状态码短路：2xx 连 `.text` 都不碰（热路径）。
+                    rejection_limit = _rejection_retry_limit()
+                    if (attempt < rejection_limit
+                            and resp.status_code in _REJECTION_RETRY_CODES
+                            and _is_not_processed_rejection(resp.status_code,
+                                                            _response_text(resp))):
+                        attempt += 1
+                        logger.warning('上游明确拒绝且未处理 status=%s，重试 attempt=%s/%s',
+                                       resp.status_code, attempt, rejection_limit)
+                        await deadline_mod.await_total(asyncio.sleep(_REJECTION_RETRY_DELAY_S), request_deadline)
+                        continue
                     break
                 except (asyncio.CancelledError, GeneratorExit):
                     raise
@@ -1726,7 +2048,7 @@ async def _chat(request: Request, upstream_path: str):
                     attempt = decision.next_attempt
                     logger.warning('连接或连接池获取失败，重试 attempt=%s/%s error=%s',
                                    attempt, policy.max_attempts, type(exc).__name__)
-                    await asyncio.sleep(decision.delay_s)
+                    await deadline_mod.await_total(asyncio.sleep(decision.delay_s), request_deadline)
             state=observability.current.get()
             if state:
                 state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
@@ -1734,16 +2056,37 @@ async def _chat(request: Request, upstream_path: str):
             usage = {}
             try:
                 data = resp.json()
-                usage = data.get('usage') or {}
+                usage = _response_usage(data)
             except Exception:
                 data = None
-            pt = int(usage.get('prompt_tokens') or 0)
-            ct = int(usage.get('completion_tokens') or 0)
+            pt = observability.usage_int(usage.get('prompt_tokens'))
+            ct = observability.usage_int(usage.get('completion_tokens'))
+            if resp.status_code < 400:
+                try:
+                    if not _valid_chat_response(data):
+                        raise ValueError('invalid upstream chat response')
+                    converted = JSONResponse(data, status_code=resp.status_code)
+                except Exception as exc:
+                    _mark_invalid_response()
+                    _record(key, ip, requested_model or '', mapped or '', 502, pt, ct,
+                            latency, ua, str(exc), False, usage=usage,
+                            effort=effort, session_key=session_key)
+                    return _oai_error('上游返回了无法解析的响应', 502, 'api_error', 'upstream_invalid_body')
             error = None if resp.status_code < 400 else (str(data)[:500] if data is not None else resp.text[:500])
+            if error:
+                # U21：上游业务码优先（`error.code`，如 11102 / no_healthy_account）。
+                # 取不到就留空，让 outcome 侧按终态/阶段/状态码做网关分类 —— 不猜。
+                upstream_code = None
+                if isinstance(data, dict) and isinstance(data.get('error'), dict):
+                    upstream_code = data['error'].get('code')
+                if upstream_code is not None:
+                    observability.mark_error(upstream_code, observability.ERROR_SOURCE_UPSTREAM)
             _record(
                 key, ip, requested_model or '', mapped or '', resp.status_code, pt, ct,
                 latency, ua, error, False, usage=usage, effort=effort, session_key=session_key,
             )
+            if resp.status_code < 400:
+                return converted
             if data is not None:
                 return JSONResponse(data, status_code=resp.status_code)
             return JSONResponse({'error': {'message': resp.text[:1000], 'type': 'api_error'}}, status_code=resp.status_code)
@@ -1753,19 +2096,68 @@ async def _chat(request: Request, upstream_path: str):
             return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
 
     # 流式转发
-    client = config.http_client(budgets.total_s, connect=budgets.connect_s, identity=_forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream))
+    rejection_limit = _rejection_retry_limit()
+    attempt = 1
+    resp = None
+    handed_off = False
     try:
-        req = client.build_request('POST', url, json=body, headers=_upstream_headers(upstream))
-        resp = await deadline_mod.await_headers(
-            client.send(req, stream=True), request_deadline)
-    except Exception as exc:  # noqa: BLE001
-        await client.aclose()
-        latency = int((time.time() - started) * 1000)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), True, effort=effort, session_key=session_key)
+        while True:
+            req = client.build_request('POST', url, json=body, headers=_upstream_headers(upstream))
+            resp = await deadline_mod.await_headers(
+                client.send(req, stream=True), request_deadline)
+            if resp.status_code < 400:
+                handed_off = True
+                break
+            early = await deadline_mod.read_error_body(resp, request_deadline)
+            text = early.decode('utf-8', 'replace')
+            if attempt < rejection_limit and _is_not_processed_rejection(resp.status_code, text):
+                # Each attempt owns its client facade; transport pooling is shared.
+                await _close_pending_response(resp, client, budgets)
+                resp = None
+                attempt += 1
+                await deadline_mod.await_total(asyncio.sleep(_REJECTION_RETRY_DELAY_S), request_deadline)
+                client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'],
+                                            identity=_forwarding_identity(key, upstream))
+                continue
+            try:
+                data = json.loads(early)
+            except (ValueError, TypeError):
+                data = None
+            usage = _response_usage(data)
+            if isinstance(data, dict) and isinstance(data.get('error'), dict):
+                observability.mark_error(data['error'].get('code'), observability.ERROR_SOURCE_UPSTREAM)
+            state = observability.current.get()
+            if state:
+                state.account = resp.headers.get('x-wb-account-uid')
+            _record(key, ip, requested_model or '', mapped or '', resp.status_code,
+                    observability.usage_int(usage.get('prompt_tokens')),
+                    observability.usage_int(usage.get('completion_tokens')),
+                    int((time.time() - started) * 1000), ua, text[:500], True,
+                    usage=usage, effort=effort, session_key=session_key)
+            return Response(early, status_code=resp.status_code,
+                            media_type=resp.headers.get('content-type', 'application/json'))
+    except (asyncio.CancelledError, GeneratorExit) as exc:
+        _mark_pre_stream_failure(exc)
+        _record(key, ip, requested_model or '', mapped or '', 499, 0, 0,
+                int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
+                effort=effort, session_key=session_key)
+        raise
+    except Exception as exc:
+        _mark_pre_stream_failure(exc)
+        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+                int((time.time() - started) * 1000), ua, str(exc), True,
+                effort=effort, session_key=session_key)
         return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
+    finally:
+        if not handed_off:
+            await _close_pending_response(resp, client, budgets)
 
     status_code = resp.status_code
     content_type = resp.headers.get('content-type', 'text/event-stream')
+    # U13：流中错误帧要带上游请求 ID（流开始后状态码已定，ID 是客户端唯一
+    # 还能拿来对工单的线索）。取不到就是 None，不编造。
+    upstream_request_id = _upstream_request_id(resp)
 
     async def generator():
         audit = observability.StreamAudit()
@@ -1803,6 +2195,9 @@ async def _chat(request: Request, upstream_path: str):
                 if not audit.completed and not error_text:
                     error_text='上游流提前结束：未收到可信终止事件'
                 if error_text and not audit.error:
+                    observability.set_stream_error_detail(
+                        code=audit.error_code, hint=audit.error_hint,
+                        upstream_request_id=upstream_request_id)
                     yield observability.sse_error(error_text)
         except (asyncio.CancelledError,GeneratorExit):
             cancelled=True
@@ -1820,19 +2215,24 @@ async def _chat(request: Request, upstream_path: str):
                 audit.error_stage='stream_read'
                 logger.warning('stream failed request_id=%s error=%s',state.request_id if state else None,type(exc).__name__)
             # No replay after partial output; expose a terminal error event.
+            observability.set_stream_error_detail(
+                code=audit.error_code, hint=audit.error_hint,
+                upstream_request_id=upstream_request_id)
             yield observability.sse_error(error_text)
         finally:
             cancelled=cancelled or isinstance(sys.exc_info()[1],(asyncio.CancelledError,GeneratorExit))
             observability.set_stream_state(audit,error_text,cancelled)
             try:
-                await observability.close_stream(resp,client)
+                # U13：取消关闭窗口 = budgets.client_cancel_s（三条协议同一口径）。
+                await observability.close_stream(
+                    resp,client,timeout=deadline_mod.close_timeout(budgets))
             finally:
                 usage=audit.usage
                 _record(key,ip,requested_model or '',mapped or '',status_code,
                         observability.usage_int(usage.get('prompt_tokens')),observability.usage_int(usage.get('completion_tokens')),
                         int((time.time()-started)*1000),ua,error_text,True,usage=usage,first_token=first_token_ms, effort=effort, session_key=session_key)
 
-    return observability.ManagedStreamingResponse(generator(),cleanup=lambda:observability.close_stream(resp,client), status_code=status_code, media_type=content_type)
+    return observability.ManagedStreamingResponse(generator(),cleanup=lambda:observability.close_stream(resp,client,timeout=deadline_mod.close_timeout(budgets)), status_code=status_code, media_type=content_type)
 
 
 @router.post('/v1/chat/completions')

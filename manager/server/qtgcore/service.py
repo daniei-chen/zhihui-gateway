@@ -314,8 +314,24 @@ class Aggregate:
         self.errors: List[str] = []
 
 
-async def build_aggregate(rt: Any, *, force: bool = False) -> Aggregate:
-    """并行拉取两平台的核心数据；单点失败只记录不抛出。"""
+def _aggregate_cache_key(scope: Any = None) -> str:
+    """聚合缓存的 key（U17）。
+
+    `aggregate` 一次就含三个平台的权威数据，所以作用域固定为
+    `platform=all / realm=all / authority=mixed`；但 **config_generation 必须进
+    key** —— 上游 config.json 或模型映射一变，旧条目就不该再命中（此前 key 是
+    字面量 `"aggregate"`，配置改了还会命中旧值，表现为"改了不生效"）。
+    """
+    from ..services.scope import scoped_key
+    return scoped_key('aggregate', scope)
+
+
+async def build_aggregate(rt: Any, *, force: bool = False,
+                          scope: Any = None) -> Aggregate:
+    """并行拉取两平台的核心数据；单点失败只记录不抛出。
+
+    `scope`（U17）：调用方传入的作用域；缺省 = 全平台/全版本的聚合作用域。
+    """
     ttl = rt.settings.cache_overview_sec
 
     async def _build() -> Aggregate:
@@ -408,7 +424,8 @@ async def build_aggregate(rt: Any, *, force: bool = False) -> Aggregate:
         return agg
 
     try:
-        return await cache.get_or_set("aggregate", ttl, _build, force=force)
+        return await cache.get_or_set(_aggregate_cache_key(scope), ttl, _build,
+                                      force=force)
     except UpstreamError:
         raise
     except Exception as exc:  # noqa: BLE001

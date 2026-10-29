@@ -124,7 +124,7 @@ export function TaskRunnerPanel() {
               {t('tasks.runFullConfirmTitle')}
             </DialogTitle>
             <DialogDescription className="pt-2 text-[13px] leading-relaxed">
-              {/* 译文里用 ** 标重点（项目约定），由 RichText 渲染成 <b> —— 
+              {/* 译文里用 ** 标重点（项目约定），由 RichText 渲染成 <b> ——
                   直接输出会把星号原样显示出来。 */}
               <RichText text={t('tasks.runFullConfirmBody')} />
             </DialogDescription>

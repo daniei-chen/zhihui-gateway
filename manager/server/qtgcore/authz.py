@@ -445,11 +445,15 @@ RULES: Tuple[Rule, ...] = PUBLIC_RULES + (
 
 
 def platform_of(request: Request) -> str:
-    """推断请求所属平台；推断不出返回「三平台」。"""
-    state = getattr(request, "state", None)
-    header = str(getattr(state, "qtg_platform", "") or "").strip().lower()
-    if not header:
-        header = (request.headers.get("x-qtg-platform") or request.headers.get("x-platform") or "").strip().lower()
+    """推断请求所属平台；推断不出返回「三平台」。
+
+    2026-10-27 R4 收敛：state/请求头的读取统一走 identity.platform_of——
+    qtgcore 内从此只有那一处读 `x-qtg-platform`（中间件已把 query 入口
+    归一化进 state）。query/path 兜底保留：那是「URL 自身携带平台」的
+    独立语义，不属于请求头兼容层。
+    """
+    from .identity import platform_of as _identity_platform_of
+    header = _identity_platform_of(request)
     if header in ("qoder", "trae", "workbuddy"):
         return header
     query = (request.query_params.get("platform") or "").strip().lower()

@@ -1,6 +1,6 @@
 {
   "brand": {
-    "name": "智匯網關",
+    "name": "智惠網關",
     "tagline": "Qoder · Trae · WorkBuddy 三平台統一網關"
   },
   "language": {
@@ -45,7 +45,8 @@
     "staleBuildTitle": "頁面資源已更新",
     "staleBuildHint": "你開啟的分頁使用舊版頁面，目前部署已找不到對應的腳本或資料。重新整理一次即可取得新版本；未儲存的輸入會遺失。",
     "reloadPage": "重新整理頁面",
-    "forbidden": "權限不足：目前帳號無法執行這個操作"
+    "forbidden": "權限不足：目前帳號無法執行這個操作",
+    "serverDetail": "伺服器錯誤：{detail}"
   },
   "nav": {
     "groupOverview": "總覽",
@@ -99,7 +100,7 @@
     "community": "LINUX DO 社群",
     "communityTitle": "本專案在 LINUX DO 社群發布與交流",
     "help": "說明",
-    "about": "關於智匯網關",
+    "about": "關於智惠網關",
     "aboutDesc": "WorkBuddy Manager 是為 workbuddy2api 打造的帳號池管理與 OpenAI 相容反向代理閘道，支援多帳號掃碼納管、自動簽到、金鑰派發、IP 管控與用量統計。",
     "versionFallback": "（未取得執行版本）",
     "logout": "登出",
@@ -814,7 +815,8 @@
     "notLoaded": "未取得",
     "reasonPlatformNotAllowed": "平台未授權",
     "reasonInvalidPlatform": "未知平台",
-    "reasonInvalidKeyPolicy": "金鑰平台策略無效"
+    "reasonInvalidKeyPolicy": "金鑰平台策略無效",
+    "lockoutDesc": "{action}會影響推理 API 的存取；規則設定錯誤時服務會中斷。控制台仍可存取，可在此恢復規則。"
   },
   "models": {
     "title": "模型中心",
@@ -1815,7 +1817,8 @@
     "分钟": "分鐘",
     "请求上限（旧版上游）": "請求上限（舊版上游）",
     "需要管理员或密钥管理权限": "需要管理員或金鑰管理權限",
-    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "唯讀服務權杖僅允許讀取既有資料（不得寫入、不得讀取憑證／使用者面）"
+    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "唯讀服務權杖僅允許讀取既有資料（不得寫入、不得讀取憑證／使用者面）",
+    "仅允许本机调用": "僅允許本機呼叫"
   },
   "redPacket": {
     "title": "紅包",
@@ -1910,5 +1913,75 @@
     "autoCopyFailed": "自動複製失敗",
     "autoCopyFailedDetail": "請回到上一步手動複製 —— 明文只顯示這一次",
     "alreadyWithKey": "你已經領過了，這是你的那份"
+  },
+  "a11y": {
+    "chartData": "查看圖表資料表",
+    "period": "時間"
+  },
+  "operations": {
+    "refresh": "刷新证据",
+    "loading": "正在读取已记录证据…",
+    "forbidden": "没有读取权限。已隐藏此前证据；恢复授权后可重试。",
+    "unavailable": "此证据接口当前不可用，不据此推断结果。",
+    "stale": "刷新失败。若仍显示旧数据，它只是此前快照，不代表当前状态。",
+    "unknown": "未知 / 未记录",
+    "noExecutionId": "未记录网关执行 ID，不能拿调用方的 Request ID 代替查询。",
+    "attemptTitle": "请求终态与上游尝试",
+    "executionId": "网关执行 ID",
+    "selectionBoundary": "事件能解释“发生了什么”，不能解释“为何选这个账号”；上游未提供候选集、权重、冷却等选路快照。",
+    "terminal": "请求终态",
+    "errorCode": "稳定错误码",
+    "recordedAttempts": "已记录尝试",
+    "noAttempts": "没有已落库的尝试证据，不等于上游没有执行。",
+    "account": "选中账号",
+    "model": "实际模型",
+    "billing": "计费证据",
+    "phaseSequence": "已记录阶段",
+    "billingBoundary": "计费未知不是零费用；最后阶段不是已证实的失败原因，不推算每次尝试的费用。",
+    "outcomesTitle": "网关终态证据台账",
+    "outcomesScope": "Manager 台账 · 实际平台 {platform} · 近 7 天 · 全部版本，与上方请求日志的版本筛选独立；不合并 QTG 控制面日志。",
+    "filter": "筛选",
+    "codeUnavailable": "错误码字段不可用，分类覆盖情况未知。",
+    "noOutcomes": "没有符合条件的已记录终态；证据缺失不等于请求为零。",
+    "statsTitle": "运行结果证据",
+    "statsUnsupported": "此聚合接口属于 Manager 台账，不支持 Qoder/Trae 聚合筛选。可到日志页查看已记录的实际平台终态，不在这里用其他平台数字代替。",
+    "statsScope": "Manager 台账 · {realm} · 全部已记录流量分类，不能等同于计费推理请求数。",
+    "coverage": "错误分类覆盖率",
+    "noClassifiedErrors": "此时间窗没有已分类错误码，请结合分类覆盖率判断，不等同于零失败。",
+    "backup": "已校验备份证据",
+    "certificate": "证书有效期证据",
+    "boundary": "证据与解释边界",
+    "configurationTitle": "实际运行配置",
+    "configurationScope": "Manager 进程级配置，不随顶部平台切换。仅管理员可读，不在此修改。",
+    "adminOnly": "需要管理员会话，访客不会发送配置读取请求。",
+    "startupSnapshot": "启动时配置快照",
+    "setting": "配置项",
+    "effective": "快照生效值",
+    "source": "来源",
+    "driftTitle": "配置四源对照",
+    "driftScope": "模型默认 / 源码默认 / 服务声明 / 进程实际值。覆盖默认不自动判为故障；敏感值不显示。",
+    "declaredUnavailable": "无法读取服务声明，不能确认声明与进程一致。",
+    "filterSetting": "筛选配置名称或漂移标记",
+    "schema": "模型默认",
+    "sourceDefault": "源码默认",
+    "declared": "服务声明",
+    "process": "进程实际",
+    "flags": "漂移标记",
+    "timeline": "已记录事件时间线",
+    "elapsed": "相对首事件",
+    "clientRequestId": "调用方 Request ID（非执行 ID）"
+  },
+  "product": {
+    "name": "智匯網關",
+    "repository": "智匯原始碼",
+    "version": "智匯產品版本",
+    "origin": "原始碼與升級來源",
+    "sourceCommit": "原始碼提交",
+    "unrecorded": "未記錄",
+    "baseline": "Manager 元件基線",
+    "releases": "查看發佈版本",
+    "providerBoundary": "儲存庫負責智匯的原始碼、版本與升級；模型供應商的呼叫位址獨立管理。",
+    "controlledTitle": "受控升級，保留每一步的依據。",
+    "controlledDetail": "從智匯儲存庫取得固定版本，通過雜湊、簽章與測試門檻後，由可信發佈器切換。此部署不開放舊式網頁覆蓋安裝，回復程式碼不回復業務帳本。"
   }
 }

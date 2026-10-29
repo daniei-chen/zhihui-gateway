@@ -1,0 +1,290 @@
+{
+  "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_MIN_BODY_RESERVATION_BYTES": {
+    "sensitive": false
+  },
+  "WB2API_BASE": {
+    "sensitive": false
+  },
+  "WB2API_CONTAINER": {
+    "sensitive": false
+  },
+  "WB2API_KEY": {
+    "sensitive": true
+  },
+  "WB2API_LOG_FILE": {
+    "sensitive": false
+  },
+  "WB2API_MODE": {
+    "sensitive": false
+  },
+  "WB2API_START_SCRIPT": {
+    "sensitive": false
+  },
+  "WB2API_STOP_SCRIPT": {
+    "sensitive": false
+  },
+  "WB_ADMIN_PASSWORD": {
+    "sensitive": true
+  },
+  "WB_BACKGROUND_JOBS": {
+    "sensitive": false
+  },
+  "WB_ALLOW_UNVERIFIED_PACKAGE": {
+    "sensitive": false
+  },
+  "WB_API_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_APP_VERSION": {
+    "sensitive": false
+  },
+  "WB_AUDIT_ALL_ACCESS": {
+    "sensitive": false
+  },
+  "WB_AUTH_DIR": {
+    "sensitive": false
+  },
+  "WB_AUTH_LOG_PER_MIN": {
+    "sensitive": false
+  },
+  "WB_BACKUP_STATUS_FILE": {
+    "sensitive": false
+  },
+  "WB_BASE_PATH": {
+    "sensitive": false
+  },
+  "WB_CCSWITCH_DIR": {
+    "sensitive": false
+  },
+  "WB_CCSWITCH_EXE": {
+    "sensitive": false
+  },
+  "WB_CHECKIN_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_CLIENT_CANCEL_S": {
+    "sensitive": false
+  },
+  "WB_CLIENT_PATHS_FILE": {
+    "sensitive": false
+  },
+  "WB_CLIENT_SCAN_ROOTS": {
+    "sensitive": false
+  },
+  "WB_CONNECT_TIMEOUT_S": {
+    "sensitive": false
+  },
+  "WB_CORS_ORIGINS": {
+    "sensitive": false
+  },
+  "WB_CREDITS_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_DATA_DIR": {
+    "sensitive": false
+  },
+  "WB_DB": {
+    "sensitive": false
+  },
+  "WB_DEFAULT_ACCOUNT_PROXY": {
+    "sensitive": false
+  },
+  "WB_DRAIN_TIMEOUT_SEC": {
+    "sensitive": false
+  },
+  "WB_ENABLE_DOCS": {
+    "sensitive": false
+  },
+  "WB_FIRST_BYTE_TIMEOUT_S": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_LARGE_MAX_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_MAX_BODY_CEILING_MB": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_MAX_BODY_MB": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_MAX_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_GATEWAY_RATE_PER_MIN": {
+    "sensitive": false
+  },
+  "WB_GITHUB_MIRROR": {
+    "sensitive": false
+  },
+  "WB_GITHUB_TOKEN": {
+    "sensitive": true
+  },
+  "WB_GRACEFUL_SHUTDOWN_S": {
+    "sensitive": false
+  },
+  "WB_HTTP_MAX_POOLS": {
+    "sensitive": false
+  },
+  "WB_HTTP_POOL_CONNECTIONS": {
+    "sensitive": false
+  },
+  "WB_HTTP_POOL_KEEPALIVE": {
+    "sensitive": false
+  },
+  "WB_HTTP_PROXY": {
+    "sensitive": false
+  },
+  "WB_INSTALL_DIR": {
+    "sensitive": false
+  },
+  "WB_LEDGER_BACKPRESSURE": {
+    "sensitive": false
+  },
+  "WB_LEDGER_RECOVER_STREAK": {
+    "sensitive": false
+  },
+  "WB_LEDGER_REPLAY_BATCH": {
+    "sensitive": false
+  },
+  "WB_LEDGER_REPLAY_INTERVAL_SEC": {
+    "sensitive": false
+  },
+  "WB_LEDGER_SPOOL_DIR": {
+    "sensitive": false
+  },
+  "WB_KEY_BUDGET_PENDING": {
+    "sensitive": false
+  },
+  "WB_KEY_BUDGET_PENDING_QUOTA": {
+    "sensitive": false
+  },
+  "WB_BUDGET_REVIEW_DEADLINE_DAYS": {
+    "sensitive": false
+  },
+  "WB_BUDGET_RECONCILE_INTERVAL_SEC": {
+    "sensitive": false
+  },
+  "WB_BUDGET_RECONCILE_MIN_AGE_SEC": {
+    "sensitive": false
+  },
+  "WB_KEY_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_KEY_CONCURRENCY_QUOTA": {
+    "sensitive": false
+  },
+  "WB_LOG_LEVEL": {
+    "sensitive": false
+  },
+  "WB_LOCAL_IMPORT": {
+    "sensitive": false
+  },
+  "WB_MANAGER_HOST": {
+    "sensitive": false
+  },
+  "WB_MANAGER_PORT": {
+    "sensitive": false
+  },
+  "WB_MANAGER_REPO": {
+    "sensitive": false
+  },
+  "WB_METRICS_TOKEN": {
+    "sensitive": true
+  },
+  "WB_METRICS_TOKEN_FILE": {
+    "sensitive": true
+  },
+  "WB_NOTIFY_CONFIG": {
+    "sensitive": false
+  },
+  "WB_PROXY_PROBE_URL": {
+    "sensitive": false
+  },
+  "WB_QTG_ADAPTER_BASE": {
+    "sensitive": false
+  },
+  "WB_QTG_ADAPTER_TIMEOUT_S": {
+    "sensitive": false
+  },
+  "WB_QTG_IDENTITY_SECRET_FILE": {
+    "sensitive": true
+  },
+  "WB_QTG_INTERNAL_TOKEN_FILE": {
+    "sensitive": true
+  },
+  "WB_REFRESH_CONCURRENCY": {
+    "sensitive": false
+  },
+  "WB_RUN_MODE": {
+    "sensitive": false
+  },
+  "WB_SAFE_RETRY_MAX": {
+    "sensitive": false
+  },
+  "WB_SECURE_COOKIE": {
+    "sensitive": false
+  },
+  "WB_SERVICE_NAME": {
+    "sensitive": false
+  },
+  "WB_SESSION_DAYS": {
+    "sensitive": false
+  },
+  "WB_SESSION_IDLE_HOURS": {
+    "sensitive": false
+  },
+  "WB_STATIC_DIR": {
+    "sensitive": false
+  },
+  "WB_STREAM_IDLE_TIMEOUT_S": {
+    "sensitive": false
+  },
+  "WB_TENCENT_TIMEOUT": {
+    "sensitive": false
+  },
+  "WB_TOTAL_TIMEOUT_S": {
+    "sensitive": false
+  },
+  "WB_TRUSTED_PROXY_CIDRS": {
+    "sensitive": false
+  },
+  "WB_TRUSTED_PROXY_HOPS": {
+    "sensitive": false
+  },
+  "WB_TRUST_PROXY": {
+    "sensitive": false
+  },
+  "WB_UPDATE_PACKAGE": {
+    "sensitive": false
+  },
+  "WB_UPDATE_PACKAGE_SHA256": {
+    "sensitive": false
+  },
+  "WB_UPDATE_PROXY": {
+    "sensitive": false
+  },
+  "WB_UPDATE_STATUS": {
+    "sensitive": false
+  },
+  "WB_UPSTREAM_CONFIG": {
+    "sensitive": false
+  },
+  "WB_UPSTREAM_DIR": {
+    "sensitive": false
+  },
+  "WB_UPSTREAM_TIMEOUT": {
+    "sensitive": false
+  },
+  "WB_USERS_FILE": {
+    "sensitive": false
+  },
+  "WB_ZCODE_DIR": {
+    "sensitive": false
+  },
+  "WB_ZCODE_EXE": {
+    "sensitive": false
+  }
+}

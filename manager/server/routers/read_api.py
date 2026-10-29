@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .. import db, security
 
@@ -75,14 +75,34 @@ ENDPOINTS = {
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
+def _with_scope(request: Request, response: Response, payload: dict,
+                *, authority: str = 'local_db') -> dict:
+    """U17：给只读响应挂作用域元数据（body + 响应头）。
+
+    这些端点全部读**本端 DB**（`source_authority=local_db`）、不分平台/版本
+    （`platform=all` / `realm=all`）。客户端显式带 `X-QTG-Platform` 时**不会被
+    采纳** —— 元数据里 `platform_honored=false` 且 `degraded` 说明原因，
+    而不是让它以为拿到的是该平台的数据。
+    """
+    from ..services import scope as scope_service
+    try:
+        current = scope_service.for_request(request, authority=authority)
+    except scope_service.ScopeConflict as exc:
+        # 非法平台 / 非法 realm 显式 400（稳定 code），不静默退化成"全量"。
+        raise HTTPException(status_code=400, detail=f'{exc.code}: {exc}') from exc
+    scope_service.apply_headers(response, current)
+    return scope_service.attach(payload, current)  # type: ignore[return-value]
+
+
 @router.get('/version')
-def read_api_version(user: dict = Depends(security.current_user)) -> dict:
+def read_api_version(request: Request, response: Response,
+                     user: dict = Depends(security.current_user)) -> dict:
     """返回读取契约版本与口径声明。
 
     口径声明刻意放在这里（而不是散落在各端点文档）：QTG 必须用同一套口径做归一化，
     否则统计页会出现「同一指标两处不同数」这种最难排查的问题。
     """
-    return {
+    return _with_scope(request, response, {
         'version': READ_API_VERSION,
         'capabilities': dict(CAPABILITIES),
         'endpoints': {k: list(v) for k, v in ENDPOINTS.items()},
@@ -94,17 +114,21 @@ def read_api_version(user: dict = Depends(security.current_user)) -> dict:
         # 分页：offset/limit；limit 上限由各端点自定，stats 族的 days 上限 3650
         'pagination': {'style': 'offset_limit', 'max_days': 3650},
         'min_qtg_version': '0.9',
-    }
+    })
 
 
 @router.get('/health')
-def read_api_health(user: dict = Depends(security.current_user)) -> dict:
+def read_api_health(request: Request, response: Response,
+                    user: dict = Depends(security.current_user)) -> dict:
     """轻量健康探针：QTG 用它判断 Manager 是否可读，而不是拿业务请求试错。"""
-    return {'ok': True, 'version': READ_API_VERSION, 'ts': int(time.time())}
+    return _with_scope(request, response,
+                       {'ok': True, 'version': READ_API_VERSION,
+                        'ts': int(time.time())})
 
 
 @router.get('/usage-matrix')
-def usage_matrix(since: str, user: dict = Depends(security.current_user)) -> dict:
+def usage_matrix(since: str, request: Request, response: Response,
+                 user: dict = Depends(security.current_user)) -> dict:
     """按天 × 模型的用量原始行（QTG `usage()` 的读通道，v2）。
 
     **为什么给"原始行"而不是聚合结果**：QTG 现有的 sqlite 读法就是逐行取
@@ -142,7 +166,7 @@ def usage_matrix(since: str, user: dict = Depends(security.current_user)) -> dic
         " GROUP BY day",
         (f'{since} 00:00:00',),
     )
-    return {
+    return _with_scope(request, response, {
         'version': READ_API_VERSION,
         'since': since,
         'rows': [
@@ -159,11 +183,12 @@ def usage_matrix(since: str, user: dict = Depends(security.current_user)) -> dic
         ],
         'failures': {str(r['day']): int(r['n'] or 0)
                      for r in failure_rows if r['day']},
-    }
+    })
 
 
 @router.get('/usage-totals')
-def usage_totals(user: dict = Depends(security.current_user)) -> dict:
+def usage_totals(request: Request, response: Response,
+                 user: dict = Depends(security.current_user)) -> dict:
     """全表用量拆分（QTG `usage_analytics()` 的读通道，v2）。
 
     与 QTG 现有 sqlite 读法同口径：`usage_daily` **全表**（不分时段、不分 realm），
@@ -178,10 +203,10 @@ def usage_totals(user: dict = Depends(security.current_user)) -> dict:
         '       SUM(credit) AS credits '
         'FROM usage_daily'
     )
-    return {
+    return _with_scope(request, response, {
         'version': READ_API_VERSION,
         'requests': row['requests'] if row is not None else None,
         'prompt_tokens': row['prompt_tokens'] if row is not None else None,
         'completion_tokens': row['completion_tokens'] if row is not None else None,
         'credits': row['credits'] if row is not None else None,
-    }
+    })

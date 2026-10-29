@@ -20,17 +20,11 @@
   * 信任锚：`/opt/workbuddy-manager/release-trust-ed25519.pem`（与后端**同一把**公钥，
     同一套 `deploy/sign-release-ed25519.py` 签）。
 
-## 为什么「没有 manifest 就跳过」而不是一律拒绝
+## 失败语义
 
-部署顺序是「先装本脚本与 ExecStartPre，再发布带签名的产物」。如果无 manifest 即拒绝，
-那在半装状态下 Manager 根本起不来（连 API 一起挂）。所以语义定成：
-
-  * **没有** `manifest.sha256` → 旧安装或未启用门禁：打印 WARN，**放行**；
-  * **有** manifest → 必须签名有效 + 逐文件哈希一致，任何不符**拒绝启动**。
-
-最后一条是这条门禁的全部价值：`manifest 存在` 就是产物在声明「我受门禁保护」，
-此后任何改动都必须重新签名。攻击者若删掉 manifest 来绕过，则 nginx 服务的仍是
-被改过的文件，但 `manifest 缺失` 会在启动日志里留 WARN——运维侧可见。
+当前已完成签名通道迁移。缺失清单、签名或额外未登记文件都必须拒绝启动，
+不能通过删除清单退回旧安装的放行路径。历史 BUILD_INFO.json 是唯一非执行元数据
+例外；它不充当可信构建身份，期望 buildId 由受保护的 web/current.json 固定。
 
 ## 用法
 
@@ -38,7 +32,7 @@
     python deploy/web_preflight.py --root DIR      # 对任意目录演练（发布流程可先用它预检）
     python deploy/web_preflight.py --quiet         # 只在出错时输出
 
-退出码：0 通过/跳过，2 信任锚缺失，3 签名失败，4 manifest 格式或哈希不符。
+退出码：0 通过，2 信任锚缺失，3 签名失败，4 manifest 格式或哈希不符。
 """
 from __future__ import annotations
 
@@ -110,10 +104,15 @@ def parse_manifest(text: str) -> list[tuple[str, int, str]]:
 def check_entries(root: Path, entries: list[tuple[str, int, str]]) -> int:
     resolved_root = root.resolve()
     checked = 0
+    listed: set[str] = set()
     for digest, size, relative in entries:
         parts = PurePosixPath(relative)
-        if parts.is_absolute() or '..' in parts.parts or '\\' in relative:
+        if (parts.is_absolute() or '..' in parts.parts or '\\' in relative
+                or not parts.parts or parts.as_posix() != relative or size < 0):
             fail(4, 'manifest 里的路径不安全：%r' % relative)
+        if relative in listed or relative in {MANIFEST_NAME, SIGNATURE_NAME}:
+            fail(4, 'manifest 包含重复路径或自身：%r' % relative)
+        listed.add(relative)
         path = root / relative
         # 软链必须拒绝：release-web-v2.sh 的旧版本静态兼容软链**不进 manifest**
         # （make_manifest 用 `find -type f`），所以这里遇到软链就是异常。
@@ -129,6 +128,18 @@ def check_entries(root: Path, entries: list[tuple[str, int, str]]) -> int:
         if sha256_file(path) != digest:
             fail(4, '产物文件哈希不符：%s（内容被替换）' % relative)
         checked += 1
+    actual = set()
+    for path in root.rglob('*'):
+        if path.is_symlink():
+            fail(4, '产物目录含软链：%s' % path.relative_to(root))
+        if path.is_file():
+            actual.add(path.relative_to(root).as_posix())
+    # Legacy build metadata is not executable and predates the signed manifest.
+    actual.difference_update({MANIFEST_NAME, SIGNATURE_NAME, 'BUILD_INFO.json'})
+    expected = listed - {'BUILD_INFO.json'}
+    if actual != expected:
+        fail(4, '产物闭包不符：extra=%r missing=%r' %
+             (sorted(actual - expected), sorted(expected - actual)))
     return checked
 
 
@@ -165,11 +176,8 @@ def check_build_id(root: Path) -> str:
 
 def check(root: Path, quiet: bool = False) -> int:
     manifest = root / MANIFEST_NAME
-    if not manifest.is_file():
-        if not quiet:
-            print('WARN: 前端产物没有 %s（未启用前端门禁，或为旧安装）：%s'
-                  % (MANIFEST_NAME, root))
-        return 0
+    if manifest.is_symlink() or not manifest.is_file():
+        fail(4, '前端产物缺少安全清单：%s' % manifest)
     verify_signature(manifest, root / SIGNATURE_NAME)
     entries = parse_manifest(manifest.read_text(encoding='utf-8'))
     checked = check_entries(root, entries)

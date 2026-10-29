@@ -22,7 +22,7 @@ from pathlib import Path
 
 import logging
 
-from .. import config, db
+from .. import config, db, product
 from .errtext import err_text
 
 logger = logging.getLogger(__name__)
@@ -269,6 +269,9 @@ def read_status() -> dict:
             else:
                 cleaned.append(redact_credentials(str(item)))
         status['logs'] = cleaned
+    # Runtime log/status files must not override the release-owned update policy.
+    status['version'] = current_version()
+    status['product'] = product.metadata(config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file())
     return status
 
 
@@ -708,7 +711,7 @@ VERSION_CACHE_TTL = 6 * 3600          # 6 小时
 # 用 5 分钟换来界面及时恢复。
 _ASSETS_PENDING_TTL = 5 * 60
 # 管理端仓库（owner/name），用于查询最新 Release
-MANAGER_REPO = os.environ.get('WB_MANAGER_REPO') or 'daniei-chen/zhihui-gateway'
+MANAGER_REPO = product.REPOSITORY
 
 
 def github_token() -> str:
@@ -929,7 +932,7 @@ def _read_cache() -> dict:
         return {}
     try:
         data = json.loads(_VERSION_CACHE_FILE.read_text(encoding='utf-8'))
-        return data if isinstance(data, dict) else {}
+        return data if isinstance(data, dict) and data.get('repository') == MANAGER_REPO else {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -937,6 +940,7 @@ def _read_cache() -> dict:
 def _write_cache(data: dict) -> None:
     try:
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        data = {**data, 'repository': MANAGER_REPO}
         _VERSION_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
     except Exception:  # noqa: BLE001
         pass

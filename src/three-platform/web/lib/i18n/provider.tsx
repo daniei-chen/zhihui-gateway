@@ -13,11 +13,15 @@
  * 加载完成后本组件触发一次重渲染换成目标语言。`dictEpoch` 就是那个触发器
  * （字典注册在模块级 Map 里，React 看不到它变化）。
  */
-import {createContext, useCallback, useContext, useEffect, useMemo, useState} from 'react';
+import {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 
 import {DEFAULT_LOCALE, LOCALES, STORAGE_KEY, detectLocale, type Locale} from './config';
 import {setActiveLocale, tp, translator, type TParams} from './index';
 import {ensureLocaleDict, isLocaleLoaded} from './load';
+import {useHydrated} from '../use-hydrated';
+
+const sourceTranslator = translator(DEFAULT_LOCALE);
+const sourcePhrase = (source: string) => source;
 
 export type TFn = (key: string, params?: TParams) => string;
 
@@ -36,11 +40,14 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
   const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
   /** 语言包加载完成的代次：仅用于触发重渲染，不是业务状态 */
   const [dictEpoch, setDictEpoch] = useState(0);
+  const selectionRef = useRef({version: 0});
 
   useEffect(() => {
     let alive = true;
+    const selection = selectionRef.current;
+    const request = ++selection.version;
     const applyLocale = (next: Locale) => {
-      if (!alive) return;
+      if (!alive || request !== selection.version) return;
       setLocaleState(next);
       setDictEpoch((v) => v + 1);
     };
@@ -51,6 +58,7 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
       if (target !== DEFAULT_LOCALE) applyLocale(target);
       return () => {
         alive = false;
+        selection.version++;
       };
     }
     void ensureLocaleDict(target).then((ok) => {
@@ -59,6 +67,7 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
     });
     return () => {
       alive = false;
+      selection.version++;
     };
   }, []);
 
@@ -71,6 +80,9 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
   }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {
+    // A late startup dictionary must not overwrite an explicit user selection.
+    const selection = selectionRef.current;
+    const request = ++selection.version;
     // 先切界面语言：字典没到之前 `translate` 会回退到源语言，
     // 用户看到的是「还没翻译完」而不是「点了没反应」。
     setLocaleState(next);
@@ -81,12 +93,13 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
     }
     if (!isLocaleLoaded(next)) {
       void ensureLocaleDict(next).then((ok) => {
-        if (ok) setDictEpoch((v) => v + 1);
+        if (ok && request === selection.version) setDictEpoch((v) => v + 1);
       });
     }
   }, []);
 
   // dictEpoch 参与依赖：字典加载完成后 t 的引用要变，消费方才会重渲染
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Async dictionary registration changes outside React.
   const t = useMemo(() => translator(locale), [locale, dictEpoch]);
 
   const value = useMemo<I18nContextValue>(
@@ -99,8 +112,9 @@ export function I18nProvider({children}: {children: React.ReactNode}) {
 
 export function useI18n(): I18nContextValue {
   const value = useContext(I18nContext);
+  const hydrated = useHydrated();
   if (!value) throw new Error('useI18n 必须在 I18nProvider 内使用');
-  return value;
+  return hydrated ? value : {...value, locale: DEFAULT_LOCALE, t: sourceTranslator, tp: sourcePhrase};
 }
 
 /** 只要翻译函数时的简写。 */

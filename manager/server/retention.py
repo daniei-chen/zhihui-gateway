@@ -164,6 +164,17 @@ DATASETS: tuple[Dataset, ...] = (
               '保留期满后也只能归档，不能 DELETE。'),
     ),
     Dataset(
+        name='attempt_billing_facts', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
+        retention_days=None, time_column='ts', watermark='rowid',
+        reconcile=('request_id/attempt 唯一；billing_fact ∈ {reported,unknown,not_applicable}，'
+                   'billing_source ∈ {provider_receipt,absent}；与 usage_events 的请求级事实分开核对'),
+        evidence=('ledger.derive_attempt_billing() / record_attempt_billing()；'
+                  'ledger.py 的 no_update/no_delete 触发器'),
+        note=('「这次 attempt 有没有计费证据」的不可变记录（U04）。多 attempt 绝不归属到'
+              '单次计费；per-attempt 计费在缺少池侧回执前不做，报告里 per_attempt_billing '
+              '恒为 not_derived。'),
+    ),
+    Dataset(
         name='adjustment_events', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
         retention_days=None, time_column='ts', watermark='rowid',
         reconcile='每个 request_id 最多一条（UNIQUE）；与 budget_adjustments 双写一致',

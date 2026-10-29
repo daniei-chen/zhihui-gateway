@@ -150,7 +150,7 @@ export default function SecurityPage() {
    */
   // 审计日志接口要求管理员：只读账号不请求它，否则每次进页面都会多一条
   // 「部分数据加载失败」——而它本来就不该给 viewer 看。
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     config: () => securityApi.config(),
     rules: () => securityApi.rules(),
     logs: () => securityApi.logs(200),
@@ -176,7 +176,7 @@ export default function SecurityPage() {
   // IP 规则与访问日志会随流量变化，心跳刷新保持同步。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 60 秒闪一次。
-  useHeartbeat(reload, 60000);
+  useHeartbeat(refresh, 60000);
 
   /** 有字段没刷新成功。此时至少还有一份数据在，用常驻提示如实说明，不清空内容 */
   const partialFailed = Object.keys(errors).length > 0;
@@ -280,6 +280,9 @@ export default function SecurityPage() {
             {t('security.policy')}
           </div>
           <div className="space-y-4">
+            <p className="text-[11px] text-muted-foreground">
+              {t('security.lockoutDesc', {action: t('common.save')})}
+            </p>
             {shownConfig === null ? (
               /* config 单独没取到：如实说「未取到」。**不能**渲染一个处于「关闭」
                  状态的开关——那会把「不知道」说成「关着」，而这一页的开关正是

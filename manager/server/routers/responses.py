@@ -45,6 +45,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import config, keysvc, upstreamsvc
+from .. import deadline as deadline_mod
 from . import gateway
 
 logger = logging.getLogger('workbuddy.responses')
@@ -272,16 +273,40 @@ def _event(name: str, payload: dict) -> bytes:
     return f'event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'.encode()
 
 
+def _upstream_error_code(data: object) -> str | None:
+    """取上游错误体里的业务 code（U13：错误契约要求保留它）。
+
+    客户端靠 code 分支（该重试 / 该改配置 / 该换模型），只给文案就只能靠猜。
+    上游没给就是 None —— `_oai_error` 会写 `code: null`（与改动前一致）。
+    """
+    if not isinstance(data, dict):
+        return None
+    err = data.get('error')
+    if isinstance(err, dict):
+        code = err.get('code')
+        if isinstance(code, (str, int)) and not isinstance(code, bool):
+            return str(code)[:128]
+        return None
+    return None
+
+
 def _failed(message: str, status: int, err_type: str = 'api_error',
-            code: str | None = None, hint: str | None = None) -> JSONResponse:
+            code: str | None = None, hint: str | None = None,
+            upstream_request_id: str | None = None) -> JSONResponse:
     """错误回非流式 JSON（带状态码），而不是 SSE 错误帧。
 
     流一旦以 200 开始，状态码就固定了——错误只能裹在事件里，客户端会把它当作
     「流正常结束」。所以错误一律在**开流之前**用真实状态码回掉。
 
     `hint` 透传上游的 `error.gateway_hint`（并列的可执行建议；为空时不写字段）。
+    U13：同时带上**上下游两个 ID**（`request_id` 取当前 request state，
+    `upstream_request_id` 由调用方从上游响应头取）——没有就不写，不编造。
     """
-    return gateway._oai_error(message, status, err_type, code, hint)
+    state = observability.current.get()
+    return gateway._oai_error(
+        message, status, err_type, code, hint,
+        request_id=state.request_id if state is not None else None,
+        upstream_request_id=upstream_request_id)
 
 
 def _upstream_error_text(data: object, resp: object = None,
@@ -497,6 +522,83 @@ def _convert_tool_choice(choice: object, bridge: _ToolBridge | None = None) -> o
             mapped = bridge.outbound_name(name, choice.get('namespace')) if bridge else str(name)
             return {'type': 'function', 'function': {'name': mapped}}
     return None
+
+
+# ── U13（2026-10-28）：structured output 映射矩阵 ──────────────────────────
+#
+# 改动前 `text.format` 被**静默丢弃**：客户端要 JSON，拿到的却是自由文本，
+# 而且没有任何信号说明原因（连 400 都没有）。现在的矩阵：
+#
+# | `text.format` | 转发给上游的形态 | 行为 |
+# |---|---|---|
+# | 缺失 / `{type:'text'}` | 不加 `response_format` | 纯文本（与改动前一致） |
+# | `{type:'json_object'}` | `response_format:{type:'json_object'}` | 透传 |
+# | `{type:'json_schema',name,schema,strict?,description?}` | `response_format:{type:'json_schema',json_schema:{...}}` | 透传 |
+# | 其它 type（如 `grammar`）/ 结构非法 | —— | **转发前 400** + 稳定 code |
+#
+# 上游是 OpenAI **Chat Completions** 兼容实现，`response_format` 正是它那一侧
+# 表达 structured output 的标准字段。即便某个上游不消费它，也不会变成硬失败
+# （上游对 body 是 `json.Unmarshal` 到 map、非严格模式，未知键忽略）——
+# 与「静默丢弃」的区别在于：我们如实表达了客户端的意图，而不是假装没看见。
+#
+# 稳定 code（客户端可据此分支，不依赖文案）：
+#   · `unsupported_text_format` —— type 不在支持集合内
+#   · `invalid_text_format`     —— text/format 结构非法，或 json_schema 缺字段
+class StructuredOutputError(ValueError):
+    """`text.format` 无法映射到上游形态（转发前拒绝，不静默降级为纯文本）。"""
+
+    def __init__(self, message: str, code: str = 'invalid_text_format'):
+        super().__init__(message)
+        self.code = code
+
+
+_TEXT_FORMAT_TYPES = ('text', 'json_object', 'json_schema')
+
+
+def text_format_to_response_format(body: dict) -> dict | None:
+    """把 Responses 的 `text.format` 映射成 Chat 的 `response_format`。
+
+    返回 None = 「客户端没要求结构化输出」，此时**不加**任何字段（不加
+    `{'type':'text'}`：上游对多余字段更敏感，没必要多此一举）。
+    无法映射时抛 `StructuredOutputError`，由 `_handle` 转成 400 —— 绝不静默丢弃。
+    """
+    if not isinstance(body, dict):
+        return None
+    text = body.get('text')
+    if text is None:
+        return None
+    if not isinstance(text, dict):
+        raise StructuredOutputError('text 必须是对象')
+    fmt = text.get('format')
+    if fmt is None:
+        return None
+    if not isinstance(fmt, dict):
+        raise StructuredOutputError('text.format 必须是对象')
+    kind = fmt.get('type')
+    if kind is None or kind == 'text':
+        return None
+    if not isinstance(kind, str):
+        raise StructuredOutputError('text.format.type 必须是字符串')
+    if kind == 'json_object':
+        return {'type': 'json_object'}
+    if kind == 'json_schema':
+        name = fmt.get('name')
+        schema = fmt.get('schema')
+        if not isinstance(name, str) or not name.strip():
+            raise StructuredOutputError('json_schema 缺少 name（上游要求具名 schema）')
+        if not isinstance(schema, dict) or not schema:
+            raise StructuredOutputError('json_schema 缺少非空 schema 对象')
+        inner: dict = {'name': name.strip()[:64], 'schema': schema}
+        description = fmt.get('description')
+        if isinstance(description, str) and description.strip():
+            inner['description'] = description.strip()[:1024]
+        strict = fmt.get('strict')
+        if isinstance(strict, bool):
+            inner['strict'] = strict
+        return {'type': 'json_schema', 'json_schema': inner}
+    raise StructuredOutputError(
+        '不支持的 text.format.type：' + str(kind)[:32] + '（仅支持 '
+        + ' / '.join(_TEXT_FORMAT_TYPES) + '）', 'unsupported_text_format')
 
 
 def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
@@ -831,6 +933,12 @@ def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
     # 「客户端已带则原值保留」，并有测试钉住。
     if isinstance(body.get('prompt_cache_key'), str) and body['prompt_cache_key']:
         out['prompt_cache_key'] = body['prompt_cache_key']
+
+    # U13：structured output（`text.format` → `response_format`）。映射不了时抛
+    # `StructuredOutputError`，由 `_handle` 在**转发前**回 400 + 稳定 code。
+    response_format = text_format_to_response_format(body)
+    if response_format is not None:
+        out['response_format'] = response_format
 
     # 只透传**上游认识**的字段。`store` / `include` 这些 OpenAI 专有、上游不消费；
     # `reasoning` 也不整个透传——上游不认识这个对象，它的档位已按上面转成
@@ -1609,6 +1717,11 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         bridge = _ToolBridge(body.get('tools'), body.get('input'))
         custom_tool_names = bridge.custom_names
         payload = to_chat_request(body, custom_tool_names, bridge)
+    except StructuredOutputError as exc:
+        # U13：`text.format` 映射不了 → **转发前** 400 + 稳定 code，
+        # 绝不静默降级成纯文本（客户端会拿到一段它无法解析的自由文本）。
+        gateway._record(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
+        return _failed(str(exc), 400, 'invalid_request_error', exc.code)
     except Exception as exc:  # noqa: BLE001
         gateway._record(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
         return _failed(f'请求转换失败：{exc}', 400)
@@ -1626,22 +1739,34 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
 
     resp_id = 'resp_' + uuid.uuid4().hex[:24]
     # 上游按密钥解析（多上游 / 分组隔离）；绑定缺失或停用时明确报错，不回落。
-    try:
-        upstream = upstreamsvc.resolve_for_key(key)
-    except upstreamsvc.UpstreamUnavailable as exc:
-        gateway._record(key, ip, model, mapped or '', 503, 0, 0, 0, ua, str(exc), False)
-        return _failed(str(exc), 503, 'api_error', 'upstream_unavailable')
+    upstream, upstream_error = gateway._upstream_for(
+        key, ip=ip, model=model, mapped=mapped or '', ua=ua)
+    if upstream_error is not None:
+        detail = json.loads(upstream_error.body).get('error') or {}
+        return _failed(detail.get('message', '上游不可用'), upstream_error.status_code,
+                       'api_error', detail.get('code'))
+    gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
     budget_error = gateway._prepare_forward(key,payload)
     if budget_error:
         return budget_error
     started = time.time()
 
+    # U13（2026-10-28）：与 gateway `_chat` **共用同一套预算对象**（连接 / 首包 /
+    # 流中空闲 / 总时长 / 取消）。改动前这里只有
+    # `http_client(UPSTREAM_TIMEOUT, connect=5)`：连接有 5s 预算，其余全压在
+    # httpx 的 read timeout 上 —— 首包没有单独口径，**总时长完全没有上界**。
+    budgets = deadline_mod.request_budgets(config.UPSTREAM_TIMEOUT)
+    request_deadline = deadline_mod.Deadline(budgets)
+    _timeouts = deadline_mod.transport_timeouts(budgets)
+
     if not stream:
         try:
-            async with config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=gateway._forwarding_identity(key,upstream)) as client:
-                resp = await client.post(url, json=payload,
-                                         headers=gateway._upstream_headers(upstream))
+            async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream)) as client:
+                resp = await deadline_mod.await_total(
+                    client.post(url, json=payload,
+                                headers=gateway._upstream_headers(upstream)),
+                    request_deadline)
             state=observability.current.get()
             if state:
                 state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
@@ -1649,9 +1774,24 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             usage: dict = {}
             try:
                 data = resp.json()
-                usage = data.get('usage') or {}
+                usage = gateway._response_usage(data)
             except Exception:  # noqa: BLE001
                 data = None
+            if resp.status_code < 400:
+                try:
+                    if not gateway._valid_chat_response(data):
+                        raise ValueError('invalid upstream chat response')
+                    converted = JSONResponse(to_responses_object(data, model, resp_id, custom_tool_names, bridge))
+                except Exception as exc:
+                    gateway._mark_invalid_response()
+                    gateway._record(key, ip, model, mapped or '', 502,
+                                    _as_int(usage.get('prompt_tokens')),
+                                    _as_int(usage.get('completion_tokens')), latency,
+                                    ua, str(exc), False, usage=usage)
+                    code = ('invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError)
+                            else 'invalid_custom_tool_arguments' if isinstance(exc, CustomToolArgumentsError)
+                            else 'upstream_invalid_body')
+                    return _failed('上游返回了无法解析的响应：' + str(exc), 502, 'api_error', code)
             # 整份 usage 交过去（而不是只取 credit）：扣费与提示词缓存三段
             # 都在这一份里，分开取就会出现「某条协议缓存永远是空的」（issue #69）。
             gateway._record(
@@ -1661,40 +1801,54 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                 usage=usage,
             )
             if resp.status_code >= 400:
+                # U13：上游业务 code + 上下游 ID 一并保留（状态码原样）。
                 return _failed(_upstream_error_text(data, resp), resp.status_code,
-                               hint=gateway._error_hint(data))
-            if not isinstance(data, dict):
-                # 200 但响应体不是 JSON：不能当作「成功但空回答」返回——那正是
-                # 最难排查的一种表现（客户端不重试、不报错）。原样把上游的响应
-                # 内容作为错误暴露出来，让问题可见。
-                return _failed('上游返回了无法解析的响应：' + resp.text[:300],
-                               502, 'api_error', 'upstream_invalid_body')
-            return JSONResponse(
-                # bridge 必须一起传：它负责把展开后的 Chat 名还原成客户端原名
-                # （命名空间子工具 / 重名改名）。漏传时非流式路径会把
-                # `read_file_2` 这类内部名原样发给客户端，而**同一个请求只要带上
-                # stream 就会还原**——同一个请求换个标志就得到两套工具名，
-                # 客户端按名字回传下一轮时会匹配不上。
-                to_responses_object(data, model, resp_id, custom_tool_names, bridge)
-            )
+                               code=_upstream_error_code(data),
+                               hint=gateway._error_hint(data),
+                               upstream_request_id=gateway._upstream_request_id(resp))
+            return converted
         except (CustomToolArgumentsError, ToolSearchArgumentsError) as exc:
             return _failed(
                 str(exc), 502, 'api_error',
                 'invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError)
                 else 'invalid_custom_tool_arguments')
+        except deadline_mod.BudgetExceeded as exc:
+            # U13：时间预算用尽 → 仍是 502 api_error（不新增 504，不改既有语义），
+            # 文案指明是哪一类预算。
+            failure = deadline_mod.classify_budget_exceeded(exc)
+            latency = int((time.time() - started) * 1000)
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+                            failure.message, False)
+            return _failed(failure.message, 502, 'api_error', 'upstream_timeout')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False)
             return _failed(f'上游不可用：{exc}', 502)
 
     # ── 流式 ──
-    client = config.http_client(config.UPSTREAM_TIMEOUT, connect=5, identity=gateway._forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
+    resp = None
     try:
         req = client.build_request('POST', url, json=payload,
                                    headers=gateway._upstream_headers(upstream))
-        resp = await client.send(req, stream=True)
+        # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
+        resp = await deadline_mod.await_headers(client.send(req, stream=True),
+                                                request_deadline)
+    except (asyncio.CancelledError, GeneratorExit) as exc:
+        gateway._mark_pre_stream_failure(exc)
+        await gateway._close_pending_response(resp, client, budgets)
+        gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+                        int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+        raise
+    except deadline_mod.BudgetExceeded as exc:
+        await gateway._close_pending_response(resp, client, budgets)
+        failure = deadline_mod.classify_budget_exceeded(exc)
+        latency = int((time.time() - started) * 1000)
+        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+                        failure.message, True)
+        return _failed(failure.message, 502, 'api_error', 'upstream_timeout')
     except Exception as exc:  # noqa: BLE001
-        await client.aclose()
+        await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
         gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True)
         return _failed(f'上游不可用：{exc}', 502)
@@ -1707,23 +1861,41 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         try:
             # send(..., stream=True) returns an HTTPX Response, which does not
             # implement the async context-manager protocol. Read it directly.
-            raw = await resp.aread()
+            raw = await deadline_mod.read_error_body(resp, request_deadline)
+        except (asyncio.CancelledError, GeneratorExit) as exc:
+            gateway._mark_pre_stream_failure(exc)
+            gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+                            int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+            raise
+        except (deadline_mod.BudgetExceeded, deadline_mod.ErrorBodyTooLarge) as exc:
+            gateway._mark_pre_stream_failure(exc)
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+                            int((time.time() - started) * 1000), ua, str(exc), True)
+            code = 'upstream_timeout' if isinstance(exc, deadline_mod.BudgetExceeded) else 'upstream_invalid_body'
+            return _failed(str(exc), 502, 'api_error', code)
         except Exception:  # noqa: BLE001
             raw = b''
         finally:
-            await resp.aclose()
-            await client.aclose()
+            await gateway._close_pending_response(resp, client, budgets)
         text = raw.decode('utf-8', errors='replace')[:500]
         parsed = None
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(raw)
         except ValueError:
             pass
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', resp.status_code, 0, 0, latency,
-                        ua, text, True)
+        usage = gateway._response_usage(parsed)
+        gateway._record(key, ip, model, mapped or '', resp.status_code,
+                        _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
+                        latency, ua, text, True, usage=usage)
         return _failed(_upstream_error_text(parsed, None, fallback=text),
-                       resp.status_code, hint=gateway._error_hint(parsed))
+                       resp.status_code, code=_upstream_error_code(parsed),
+                       hint=gateway._error_hint(parsed),
+                       upstream_request_id=gateway._upstream_request_id(resp))
+
+    # U13：流中失败的帧要带上游请求 ID。开流之后状态码已定，ID 是客户端唯一
+    # 还能拿去对上游工单的线索；取不到就是 None，不编造。
+    upstream_request_id = gateway._upstream_request_id(resp)
 
     async def gen():
         translator = _StreamTranslator(
@@ -1737,11 +1909,18 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         state=observability.current.get()
         if state:
             state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
-        try:
-            async for chunk in resp.aiter_bytes():
-                if state and state.first_byte_ms is None:
-                    state.first_byte_ms=int((time.time()-started)*1000)
 
+        def _mark_first_byte() -> None:
+            if state and state.first_byte_ms is None:
+                state.first_byte_ms=int((time.time()-started)*1000)
+
+        try:
+            # U13：首包 / 流中空闲 / 总时长三类预算在这里逐块施加（与 gateway 的
+            # 转发热路径同一实现）。客户端取消（CancelledError）原样上抛，由外层
+            # close_stream 在 client_cancel_s 内有界关闭上游。
+            async for chunk in deadline_mod.iterate_with_budgets(
+                    resp.aiter_bytes(), request_deadline,
+                    on_first_chunk=_mark_first_byte):
                 for obj in audit.feed(chunk):
                     if isinstance(obj.get('error'),dict):
                         error_text=audit.error
@@ -1767,6 +1946,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         except (asyncio.CancelledError,GeneratorExit):
             cancelled=True
             raise
+        except deadline_mod.BudgetExceeded as exc:
+            # U13：预算用尽与传输异常走**同一个**终止分支（不重放已开始的生成）。
+            failure = deadline_mod.classify_budget_exceeded(exc)
+            error_text = failure.message
+            audit.error_stage = failure.error_stage
+            logger.warning('stream budget exceeded request_id=%s kind=%s',
+                           state.request_id if state else None, failure.kind)
         except Exception as exc:
             error_text=f'上游流传输或协议异常：{type(exc).__name__}'
             audit.error_stage='stream_read'
@@ -1775,10 +1961,23 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             try:
                 if not cancelled:
                     if error_text:
-                        yield _event('response.failed', {'type':'response.failed','response':{
-                    'id':resp_id,'object':'response','created_at':translator.created_at,'status':'failed',
-                    'model':model,'output':translator.items,
-                    'error':{'code':audit.error_code or 'stream_incomplete','message':error_text,'gateway_hint':audit.error_hint}}})
+                        # U13：流中失败的契约与流前 JSON 错误对齐 —— 保留上游
+                        # 业务 code、gateway_hint、上下游两个 ID。既有字段
+                        # （type/response.*）不变，新增字段只在能确定时出现。
+                        _error = {'code': audit.error_code or 'stream_incomplete',
+                                  'message': error_text}
+                        if audit.error_hint:
+                            _error['gateway_hint'] = audit.error_hint
+                        _payload = {'type': 'response.failed', 'response': {
+                            'id': resp_id, 'object': 'response',
+                            'created_at': translator.created_at, 'status': 'failed',
+                            'model': model, 'output': translator.items,
+                            'error': _error}}
+                        if state:
+                            _payload['request_id'] = state.request_id
+                        if upstream_request_id:
+                            _payload['upstream_request_id'] = upstream_request_id
+                        yield _event('response.failed', _payload)
                     else:
                         for event in translator.finish(translator.pending_finish,force=True):
                             yield event
@@ -1792,7 +1991,9 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             finally:
                 observability.set_stream_state(audit,error_text,cancelled)
                 try:
-                    await observability.close_stream(resp,client)
+                    # U13：取消关闭窗口 = budgets.client_cancel_s（三条协议同一口径）。
+                    await observability.close_stream(
+                        resp,client,timeout=deadline_mod.close_timeout(budgets))
                 finally:
                     usage=audit.usage
                     gateway._record(key,ip,model,mapped or '',resp.status_code,
@@ -1800,7 +2001,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                         int((time.time()-started)*1000),ua,error_text,True,
                         usage=usage,first_token=first_token_ms)
 
-    return observability.ManagedStreamingResponse(gen(),cleanup=lambda:observability.close_stream(resp,client), status_code=200, media_type='text/event-stream')
+    return observability.ManagedStreamingResponse(gen(),cleanup=lambda:observability.close_stream(resp,client,timeout=deadline_mod.close_timeout(budgets)), status_code=200, media_type='text/event-stream')
 
 
 @router.post('/v1/responses')

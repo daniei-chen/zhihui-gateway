@@ -114,7 +114,7 @@ def main():
             return Charged
         with patch.object(FakeProvider,'_make_handler',charged_factory):exp.prepare()
         report['synthetic_usage_credit']=.125
-        exp.env['ZH_INSTANCE_HEARTBEAT_SEC']='10' 
+        exp.env['ZH_INSTANCE_HEARTBEAT_SEC']='10'
         old_view=r4.InstanceView(exp,source=old,env={**exp.env,'WB_APP_VERSION':'lab-v7'},root=exp.root/'old-a',label='old-a')
         b_view=r4.InstanceView(exp,source=repo,env={**exp.env,'WB_APP_VERSION':'lab-v9'},root=exp.root/'new-b',label='new-b')
         low_kdf=lambda text:text.replace("security.make_hash('r3l2-synthetic-password')","security.make_hash('r3l2-synthetic-password', iterations=1000)")

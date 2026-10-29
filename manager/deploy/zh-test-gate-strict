@@ -1,0 +1,198 @@
+#!/opt/workbuddy-manager/venv/bin/python
+"""严格发布门禁（U08，2026-10-28）。
+
+## 为什么需要它
+旧门禁 `zh-test-gate` 的判据是「相对 testgate-baseline.txt 零**新增**失败」，
+而那份基线固化了 306 项「环境性失败」（docker 套接字、前端源码树、Windows 脚本、
+仓库根文件类）。后果：完整源码 + 正确隔离下其实已经 3110 passed / 0 failed，
+但生产门禁仍在为一批**不该存在的失败**背书，且基线可以被人为刷新来放行。
+
+本门禁的判据只有一条：**在隔离环境里零失败**，外加三条防「假绿」的护栏：
+  1. 收集到的用例数不得低于冻结下限（防少跑/空收集/被 --ignore 掉）；
+  2. skipped 集合必须与冻结清单**完全一致**（新增跳过等于掩盖失败）；
+  3. 运行器自身的基础设施错误（exit != 0/1、没有失败清单、junit 缺失）直接阻断。
+
+它不读、也不承认任何历史失败基线。
+
+## 隔离
+调用 `deploy/isolated_runner.py`（`dev/run_isolated_tests.py` 的发布树副本）：
+私有 loopback HTTP 上游、临时 HOME/DB/账号目录，不连生产、不需要真实上游凭据。
+
+## 用法
+    deploy/zh-test-gate-strict [release-dir] [--freeze] [--] [额外 pytest 参数...]
+
+`--freeze` 只用于**人工确认后**重建冻结清单：先跑一遍，人工核对 skipped 名单与
+通过数，再 `--freeze` 覆盖 `deploy/testgate-frozen.json`。
+
+退出码：0 通过；6 有失败/错误；7 收集不足或跳过集合漂移；8 运行器基础设施错误。
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+FREEZE_NAME = 'testgate-frozen.json'
+RUNNER_NAME = 'isolated_runner.py'
+
+
+def fail(code: int, message: str) -> 'NoReturn':  # noqa: F821
+    sys.stderr.write('GATE BLOCKED: %s\n' % message)
+    raise SystemExit(code)
+
+
+def parse_args(argv: list[str]) -> tuple[Path, bool, list[str], list[str]]:
+    release = Path.cwd()
+    freeze = False
+    extra: list[str] = []
+    paths = ['server/tests']
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == '--freeze':
+            freeze = True
+        elif item.startswith('--paths='):
+            # 只用于门禁自检（少跑会因低于冻结下限被拦），发布流程不要用它。
+            paths = [part for part in item.split('=', 1)[1].split(',') if part]
+        elif item == '--':
+            extra = argv[index + 1:]
+            break
+        elif item.startswith('-'):
+            extra = argv[index:]
+            break
+        else:
+            release = Path(item)
+        index += 1
+    return release.resolve(), freeze, extra, paths
+
+
+def run_suite(release: Path, paths: list[str], extra: list[str]) -> tuple[int, Path, str]:
+    runner = release / 'deploy' / RUNNER_NAME
+    if not runner.is_file():
+        fail(8, '隔离运行器缺失：%s' % runner)
+    handle = tempfile.NamedTemporaryFile(prefix='zh-gate-', suffix='.xml', delete=False)
+    handle.close()
+    junit = Path(handle.name)
+    command = [sys.executable, str(runner), *paths, '-q', '-p', 'no:cacheprovider',
+               '--timeout=60', '--timeout-method=thread', '--junitxml=%s' % junit]
+    command.extend(extra)
+    env = dict(os.environ)
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
+    started = time.time()
+    proc = subprocess.run(command, cwd=str(release), capture_output=True, text=True, env=env)
+    elapsed = time.time() - started
+    tail = '\n'.join((proc.stdout or '').splitlines()[-12:])
+    sys.stdout.write(tail + '\n')
+    sys.stdout.write('gate: suite finished in %.1fs exit=%d\n' % (elapsed, proc.returncode))
+    return proc.returncode, junit, (proc.stdout or '') + (proc.stderr or '')
+
+
+def parse_junit(junit: Path) -> dict:
+    if not junit.is_file():
+        fail(8, 'junit 报告缺失：%s' % junit)
+    try:
+        root = ET.parse(junit).getroot()
+    except ET.ParseError as exc:
+        fail(8, 'junit 报告无法解析：%s' % exc)
+    passed = 0
+    failed: list[str] = []
+    skipped: list[str] = []
+    for case in root.iter('testcase'):
+        ident = '%s::%s' % (case.get('classname', ''), case.get('name', ''))
+        if case.find('failure') is not None or case.find('error') is not None:
+            failed.append(ident)
+        elif case.find('skipped') is not None:
+            skipped.append(ident)
+        else:
+            passed += 1
+    return {'passed': passed, 'failed': sorted(set(failed)), 'skipped': sorted(set(skipped)),
+            'collected': passed + len(set(failed)) + len(set(skipped))}
+
+
+def load_freeze(path: Path) -> dict:
+    if not path.is_file():
+        fail(7, '冻结清单缺失：%s（人工核对后执行 --freeze 生成）' % path)
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict) or data.get('schema') != 1:
+        fail(7, '冻结清单格式不支持：%s' % path)
+    return data
+
+
+def write_freeze(path: Path, stats: dict) -> None:
+    payload = {
+        'schema': 1,
+        'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        'generator': 'deploy/zh-test-gate-strict --freeze',
+        'note': 'skipped 集合与 min_passed 是发布门禁的冻结判据；改动必须人工复核。',
+        'min_passed': max(1, stats['passed'] - 5),
+        'expected_collected': stats['collected'],
+        'skipped': stats['skipped'],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print('freeze written: %s (passed=%d collected=%d skipped=%d)'
+          % (path, stats['passed'], stats['collected'], len(stats['skipped'])))
+
+
+def main(argv: list[str]) -> int:
+    release, freeze_mode, extra, paths = parse_args(argv)
+    if not (release / 'server' / 'tests').is_dir():
+        fail(8, 'release 目录里没有 server/tests：%s' % release)
+    print('== strict test gate on %s ==' % release)
+    rc, junit, output = run_suite(release, paths, extra)
+    try:
+        stats = parse_junit(junit)
+    finally:
+        try:
+            junit.unlink()
+        except OSError:
+            pass
+    freeze_path = release / 'deploy' / FREEZE_NAME
+    if freeze_mode:
+        # 冻结后继续走同一套校验：冻结与放行用同一份运行结果，避免"冻结时一套、
+        # 放行时另一套"的口径漂移。
+        write_freeze(freeze_path, stats)
+    # 1) 失败一律阻断，不看任何历史基线
+    if stats['failed']:
+        print('== FAILED (%d) ==' % len(stats['failed']))
+        for item in stats['failed'][:30]:
+            print('  ' + item)
+        fail(6, '%d 个用例失败/错误' % len(stats['failed']))
+    if rc not in (0, 1):
+        fail(8, '隔离运行器退出码 %d（基础设施错误，不是用例失败）' % rc)
+    if rc != 0:
+        fail(8, '运行器非零退出但没有失败清单（日志不完整，禁止放行）')
+    frozen = load_freeze(freeze_path)
+    # 2) 少跑/空收集阻断
+    minimum = int(frozen.get('min_passed') or 0)
+    if stats['passed'] < minimum:
+        fail(7, '通过数 %d 低于冻结下限 %d（少跑/空收集）' % (stats['passed'], minimum))
+    expected = int(frozen.get('expected_collected') or 0)
+    if expected and stats['collected'] < expected:
+        fail(7, '收集数 %d 低于冻结值 %d' % (stats['collected'], expected))
+    # 3) 跳过集合必须与冻结清单一致
+    current = set(stats['skipped'])
+    known = set(frozen.get('skipped') or [])
+    added = sorted(current - known)
+    removed = sorted(known - current)
+    if added:
+        print('== NEW SKIPS ==')
+        for item in added[:20]:
+            print('  ' + item)
+        fail(7, '出现 %d 个未冻结的跳过用例（新增跳过会掩盖失败）' % len(added))
+    if removed:
+        print('== SKIPS NO LONGER APPLY (%d) ==' % len(removed))
+        for item in removed[:10]:
+            print('  ' + item)
+        fail(7, '冻结的跳过用例已不存在，需人工复核后 --freeze')
+    print('== strict gate PASS: passed=%d skipped=%d failed=0 (frozen min=%d) =='
+          % (stats['passed'], len(current), minimum))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main(sys.argv[1:]))

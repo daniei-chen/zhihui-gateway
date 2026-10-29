@@ -236,7 +236,9 @@ class UpstreamRoutingTest(_TempDbMixin, unittest.TestCase):
         status_code = 200
 
         def json(self):
-            return {'id': 'x', 'choices': [], 'usage': {}}
+            return {'id': 'x', 'choices': [
+                {'index': 0, 'message': {'role': 'assistant', 'content': 'fixture'},
+                 'finish_reason': 'stop'}], 'usage': {}}
 
     def _fake_client(self, sent: list):
         resp = self._Resp()

@@ -45,7 +45,8 @@
     "staleBuildTitle": "This page was updated",
     "staleBuildHint": "Your tab is running an older version of the page and its scripts or data are no longer in the current deployment. Reloading gets the new version; unsaved input will be lost.",
     "reloadPage": "Reload page",
-    "forbidden": "Permission denied — your account is not allowed to do this"
+    "forbidden": "Permission denied — your account is not allowed to do this",
+    "serverDetail": "Server error: {detail}"
   },
   "nav": {
     "groupOverview": "Overview",
@@ -841,7 +842,8 @@
     "notLoaded": "Not loaded",
     "reasonPlatformNotAllowed": "Platform not allowed",
     "reasonInvalidPlatform": "Unknown platform",
-    "reasonInvalidKeyPolicy": "Invalid key platform policy"
+    "reasonInvalidKeyPolicy": "Invalid key platform policy",
+    "lockoutDesc": "After {action}, incorrect rules may interrupt inference API traffic. The console remains accessible so you can restore the rules here."
   },
   "models": {
     "title": "Models",
@@ -1842,7 +1844,8 @@
     "分钟": "min",
     "请求上限（旧版上游）": "Request limit (legacy upstream)",
     "需要管理员或密钥管理权限": "Administrator or key management permission is required",
-    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "A read-only service token may only read existing data (no writes, and no access to credential or user surfaces)."
+    "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "A read-only service token may only read existing data (no writes, and no access to credential or user surfaces).",
+    "仅允许本机调用": "Only local calls are allowed"
   },
   "redPacket": {
     "title": "Red packets",
@@ -1937,5 +1940,75 @@
     "autoCopyFailed": "Auto-copy failed",
     "autoCopyFailedDetail": "Go back and copy it manually — the key is shown only once",
     "alreadyWithKey": "You've already claimed — here's yours"
+  },
+  "a11y": {
+    "chartData": "View chart data table",
+    "period": "Period"
+  },
+  "operations": {
+    "refresh": "Refresh evidence",
+    "loading": "Loading recorded evidence…",
+    "forbidden": "Access denied. Previously loaded evidence is hidden; retry after authorization is restored.",
+    "unavailable": "This evidence endpoint is not available. No result is inferred.",
+    "stale": "Refresh failed. Any retained evidence is an older snapshot, not a current result.",
+    "unknown": "Unknown / not recorded",
+    "noExecutionId": "No gateway execution ID was recorded. A client request ID cannot be used as a substitute.",
+    "attemptTitle": "Request outcome & provider attempts",
+    "executionId": "Gateway execution ID",
+    "selectionBoundary": "Recorded events explain what happened, not why this account was chosen. Candidate/weight/cooldown snapshots are not provided.",
+    "terminal": "Terminal state",
+    "errorCode": "Stable error code",
+    "recordedAttempts": "Recorded attempts",
+    "noAttempts": "No attempt evidence is recorded. This does not prove that no upstream work occurred.",
+    "account": "Selected account",
+    "model": "Resolved model",
+    "billing": "Billing evidence",
+    "phaseSequence": "Recorded phases",
+    "billingBoundary": "Unknown billing is not zero cost. The last recorded phase is not a proven failure cause. No per-attempt charge is derived.",
+    "outcomesTitle": "Gateway outcome ledger",
+    "outcomesScope": "Manager ledger · actual platform {platform} · last 7 days · all realms; separate from the request-log realm filter. This does not merge QTG control-plane logs.",
+    "filter": "Filter",
+    "codeUnavailable": "Error-code column is unavailable; classification is unknown.",
+    "noOutcomes": "No matching recorded outcomes. Missing evidence is not proof of zero requests.",
+    "statsTitle": "Operational outcome evidence",
+    "statsUnsupported": "This aggregate endpoint belongs to the Manager ledger and has no Qoder/Trae aggregate filter. Open the outcome ledger on Logs for recorded actual-platform evidence; no other-platform totals are substituted here.",
+    "statsScope": "Manager ledger · {realm} · all recorded traffic classes. Counts are not equivalent to billable inference requests.",
+    "coverage": "Error classification coverage",
+    "noClassifiedErrors": "No classified error codes in this window. Review classification coverage before drawing conclusions.",
+    "backup": "Verified backup evidence",
+    "certificate": "Certificate expiry evidence",
+    "boundary": "Evidence limitations",
+    "configurationTitle": "Effective runtime configuration",
+    "configurationScope": "Manager process (service-wide), independent of the platform selector. Read-only and administrator-only.",
+    "adminOnly": "An administrator session is required. No configuration request is sent for viewers.",
+    "startupSnapshot": "Startup configuration snapshot",
+    "setting": "Setting",
+    "effective": "Effective snapshot value",
+    "source": "Source",
+    "driftTitle": "Configuration source comparison",
+    "driftScope": "Schema default / source default / service declaration / running process. Overrides are not automatically faults. Sensitive values are never displayed.",
+    "declaredUnavailable": "Service declaration unavailable; declaration/process parity cannot be established.",
+    "filterSetting": "Filter setting name or flag",
+    "schema": "Schema default",
+    "sourceDefault": "Source default",
+    "declared": "Declared",
+    "process": "Process",
+    "flags": "Drift flags",
+    "timeline": "Recorded event timeline",
+    "elapsed": "Since first event",
+    "clientRequestId": "Client request ID (not execution ID)"
+  },
+  "product": {
+    "name": "ZHIHUI Gateway",
+    "repository": "ZHIHUI source",
+    "version": "Product version",
+    "origin": "Source and update origin",
+    "sourceCommit": "Source commit",
+    "unrecorded": "Not recorded",
+    "baseline": "Manager component baseline",
+    "releases": "View releases",
+    "providerBoundary": "This repository owns product source, versions and upgrades. Model-provider endpoints are managed separately.",
+    "controlledTitle": "Controlled upgrades. Evidence at every step.",
+    "controlledDetail": "Acquire an immutable version from the ZHIHUI repository, verify hashes, signatures and test gates, then switch with the trusted publisher. Legacy web overwrite installation is disabled here. Code rollback never restores an older business ledger."
   }
 }

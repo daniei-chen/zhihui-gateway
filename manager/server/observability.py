@@ -46,7 +46,7 @@ import uuid
 import anyio
 import threading
 import asyncio
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from dataclasses import dataclass
 
 # 调用方可以自带 X-Request-ID（K47：edge → Manager → 引擎全链路关联），但它
@@ -87,6 +87,63 @@ def client_request_id_from_headers(headers: dict) -> str | None:
     return text if _CALLER_REQUEST_ID.fullmatch(text) else None
 
 
+# ── U05：输出上限被预算收缩时的响应头 ────────────────────────────────────
+#
+# 为什么用响应头而不是 `usage` 扩展字段：
+#   1. 三条协议（chat / messages / responses）的 usage 结构各不相同，加字段要改
+#      三套 schema，还要各自处理流式末帧；响应头一套就够。
+#   2. 收缩发生在 `budget.prepare`（转发**之前**），所以流式响应在开流那一刻
+#      就已经能带上头；写进 usage 则只有流末事件才拿得到。
+#   3. 未登记的响应头对客户端是**透明**的：DSH / OpenAI SDK / Anthropic SDK
+#      都只读自己认识的字段，多出来的头不会报错（HTTP 层没有严格模式）。
+#
+# 只在**真的收缩**（effective < requested）时出现；未收缩时零标记，
+# 因此「有没有这个头」本身就是信号，不需要再带一个布尔位。
+MAX_TOKENS_REQUESTED_HEADER = b'x-manager-max-tokens-requested'
+MAX_TOKENS_EFFECTIVE_HEADER = b'x-manager-max-tokens-effective'
+MAX_TOKENS_REASON_HEADER = b'x-manager-max-tokens-shrink-reason'
+#: 收缩原因：目前只有一种（token 配额不足，见 budget.prepare）。
+MAX_TOKENS_REASON_BUDGET = b'budget_quota'
+#: 本中间件独占的响应头（下游路由自带的同名头先剥后加）。
+MAX_TOKENS_HEADERS = (MAX_TOKENS_REQUESTED_HEADER, MAX_TOKENS_EFFECTIVE_HEADER,
+                      MAX_TOKENS_REASON_HEADER)
+
+
+def _limit_int(value: object) -> int | None:
+    """只接受**正整数**（bool 是 int 的子类，必须排除）。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+def record_max_tokens_contract(state, field: object, requested: object,
+                               effective: object) -> None:
+    """记录「本次输出上限是否被 budget.prepare 收缩」（U05）。
+
+    只**读**收缩前后的值，不改 budget.py，也不影响硬预算：配额不足时
+    `budget.prepare` 仍然照旧抛 `BudgetRejected`（429），这里只在**成功预留**
+    之后补一个客户端可见的说明。
+    """
+    if state is None:
+        return
+    want, got = _limit_int(requested), _limit_int(effective)
+    if want is None or got is None:
+        return
+    state.max_tokens_field = str(field)[:32]
+    state.max_tokens_requested = want
+    state.max_tokens_effective = got
+
+
+def _max_tokens_headers(state) -> list[tuple[bytes, bytes]]:
+    want = _limit_int(getattr(state, 'max_tokens_requested', None))
+    got = _limit_int(getattr(state, 'max_tokens_effective', None))
+    if want is None or got is None or got >= want:
+        return []
+    return [(MAX_TOKENS_REQUESTED_HEADER, str(want).encode()),
+            (MAX_TOKENS_EFFECTIVE_HEADER, str(got).encode()),
+            (MAX_TOKENS_REASON_HEADER, MAX_TOKENS_REASON_BUDGET)]
+
+
 def _response_headers(state: "RequestAudit") -> list[tuple[bytes, bytes]]:
     """本中间件负责的响应头（先剥后加，见 `RequestAuditMiddleware.send_audited`）。"""
     out = [(b'x-request-id', state.request_id.encode()),
@@ -95,6 +152,8 @@ def _response_headers(state: "RequestAudit") -> list[tuple[bytes, bytes]]:
     # 不能拿执行 ID 冒充，也不能回显未校验的原值。
     if state.client_request_id:
         out.append((CLIENT_REQUEST_ID_RESPONSE_HEADER, state.client_request_id.encode()))
+    # U05：仅在输出上限被预算收缩时追加（未收缩时零标记）。
+    out.extend(_max_tokens_headers(state))
     return out
 
 
@@ -139,13 +198,254 @@ class RequestAudit:
     #: 调用方关联 ID（`X-Request-ID`，校验过）；None = 未提供或不合法。
     #: **不参与任何主键**，只是相关性提示；见模块 docstring。
     client_request_id: str | None = None
+    # ── U05（2026-10-28）：输出上限契约 ────────────────────────────────
+    # `budget.prepare()` 在 token 配额不足时会把 `body[output_field]` 收缩成
+    # `remaining - estimated_input`，但**不产生任何客户端可见信号**。这三个字段
+    # 只用来把「客户端要了多少 / 实际发了多少」带到响应头，budget.py 一行不改。
+    #: 客户端在转发体里给出的输出上限（`budget.prepare` **之前**的值）。
+    max_tokens_requested: int | None = None
+    #: `budget.prepare` **之后**真正发给上游的值。
+    max_tokens_effective: int | None = None
+    #: 承载该上限的字段名（`max_tokens` / `max_completion_tokens`）。
+    max_tokens_field: str | None = None
+    # ── U21（2026-10-28）：稳定错误码 ────────────────────────────────────
+    #: 稳定错误码（上游业务码或网关内部分类码）；None = 尚未标注。
+    #: 只允许 `[A-Za-z0-9._:-]{1,64}` —— 这个字符集从结构上排除了 URL（含 `/`）、
+    #: 空白、中文文案与 `Bearer xxx` 之类凭据片段进入这一列。
+    error_code: str | None = None
+    #: 码的来源：`upstream`（上游业务码）/ `gateway`（网关分类）/ `client`（取消）。
+    error_source: str | None = None
 
 current: contextvars.ContextVar[RequestAudit | None] = contextvars.ContextVar("wb_request_audit", default=None)
 _key_slots={}
 _key_lock=threading.RLock()
 _outcome_writes=0
 
+#: F3（2026-10-27）：中间件实例引用，供 /metrics 读取实时准入水位。
+#: 单进程单实例是本部署的既定契约（限流/并发闸均在进程内存），
+#: 这里只登记首个实例，行为与契约一致。
+_middleware_ref = None
+
+
+# ── U21（2026-10-28）：稳定 error_code ──────────────────────────────────────
+#
+# 问题：`request_outcomes` 只有 `terminal_state` + `error_stage` 两个宽泛枚举，
+# 「429 到底是限流、密钥并发还是预算拒绝」「502 是上游拒绝还是我们连不上」都
+# 分不出来，发布后想回答「哪类错误变多了」只能去翻文案。
+#
+# 稳定码的来源顺序（与审计口径一致）：
+#   1. **上游业务码优先**：上游错误体里的 `error.code`（如 `11102`、
+#      `no_healthy_account`）—— 那是唯一能区分「上游说不行」与「我们说不行」的
+#      事实，直接沿用，不重新发明一套；
+#   2. **网关内部分类**：鉴权 / 预算 / 容量 / 协议 / 传输 / 取消，由
+#      `terminal_state` + `error_stage` + `http_status` 确定性推导；
+#   3. 都拿不到 → `gateway.unknown`（不猜成成功，也不留空冒充"没出错"）。
+#
+# 落 `request_outcomes.error_code` / `error_source`；`request_logs.error` 仍然
+# 保存**已脱敏**的原消息（本项不改它的语义）。两列都不允许承载提示词、凭据或
+# URL —— 靠下面的字符集白名单在写入前就挡住，而不是靠调用方自觉。
+ERROR_CODE_NONE = 'none'
+ERROR_CODE_UNKNOWN = 'gateway.unknown'
+ERROR_SOURCE_UPSTREAM = 'upstream'
+ERROR_SOURCE_GATEWAY = 'gateway'
+ERROR_SOURCE_CLIENT = 'client'
+ERROR_SOURCE_NONE = 'none'
+
+#: 稳定码的字符集（也是长度上限）。写库前必须通过它。
+_ERROR_CODE_RE = re.compile(r'[A-Za-z0-9._:-]{1,64}\Z')
+
+#: U21：`request_outcomes` 需要补的列（幂等补，见 `ensure_outcome_schema`）。
+_OUTCOME_EXTRA_COLUMNS = (('error_code', 'TEXT'), ('error_source', 'TEXT'))
+#: 每个连接只探测一次 schema；`conn` 用连接对象身份做键（测试会换连接）。
+_OUTCOME_SCHEMA: dict = {'conn': None, 'ready': False}
+
+
+def sanitize_error_code(value) -> str | None:
+    """把候选码收成 `[A-Za-z0-9._:-]{1,64}`；不合法一律 None（不截断成半截码）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text if _ERROR_CODE_RE.match(text) else None
+
+
+def mark_error(code, source: str = ERROR_SOURCE_GATEWAY) -> str | None:
+    """在当前请求上标注稳定错误码；返回最终生效的码。
+
+    上游业务码优先：已经标了 `upstream` 来源的码不会被后来的网关分类覆盖
+    （网关只知道"哪一步失败"，不知道上游为什么拒绝）。
+    """
+    state = current.get()
+    if state is None:
+        return None
+    clean = sanitize_error_code(code)
+    if clean is None:
+        return None
+    if (getattr(state, 'error_code', None)
+            and getattr(state, 'error_source', None) == ERROR_SOURCE_UPSTREAM):
+        return state.error_code
+    state.error_code = clean
+    state.error_source = source
+    return clean
+
+
+def _gateway_code(terminal, stage, status) -> tuple[str, str]:
+    """由 (终态, 阶段, 状态码) 确定性地推出网关侧分类码。"""
+    if terminal == 'client_cancelled' or status == 499:
+        return 'client.cancelled', ERROR_SOURCE_CLIENT
+    if terminal == 'completed' or (terminal is None and 200 <= status < 400):
+        return ERROR_CODE_NONE, ERROR_SOURCE_NONE
+    if terminal == 'rejected':
+        if status in (401, 403):
+            return 'gateway.auth.denied', ERROR_SOURCE_GATEWAY
+        if status == 429:
+            return 'gateway.rate_limited', ERROR_SOURCE_GATEWAY
+        if status == 503:
+            return 'gateway.capacity.rejected', ERROR_SOURCE_GATEWAY
+        if status == 413:
+            return 'gateway.request.too_large', ERROR_SOURCE_GATEWAY
+        if stage == 'request_body':
+            return 'gateway.request.body_error', ERROR_SOURCE_GATEWAY
+        return 'gateway.request.invalid', ERROR_SOURCE_GATEWAY
+    if terminal == 'protocol_incomplete':
+        return 'gateway.protocol.incomplete', ERROR_SOURCE_GATEWAY
+    if terminal == 'transport_error':
+        return 'gateway.transport.error', ERROR_SOURCE_GATEWAY
+    if terminal == 'upstream_error':
+        return 'gateway.upstream.error', ERROR_SOURCE_GATEWAY
+    if terminal == 'application_error':
+        return 'gateway.application.error', ERROR_SOURCE_GATEWAY
+    if terminal == 'interrupted':
+        return 'gateway.interrupted', ERROR_SOURCE_GATEWAY
+    if status >= 500:
+        return 'gateway.application.error', ERROR_SOURCE_GATEWAY
+    if status >= 400:
+        return 'gateway.request.invalid', ERROR_SOURCE_GATEWAY
+    if status:
+        return ERROR_CODE_NONE, ERROR_SOURCE_NONE
+    return ERROR_CODE_UNKNOWN, ERROR_SOURCE_GATEWAY
+
+
+def classify_error(state=None, *, terminal_state=None, error_stage=None,
+                   http_status: int = 0) -> tuple[str, str]:
+    """返回 `(error_code, error_source)`：上游业务码优先，其次网关内部分类。
+
+    成功一律是 `none` —— 即使请求中途标注过错误码（例如一次上游抖动后被重试
+    成功），成功的结果不该带上错误码。
+    """
+    state = state if state is not None else current.get()
+    terminal = terminal_state if terminal_state is not None else getattr(
+        state, 'terminal_state', None)
+    stage = error_stage if error_stage is not None else getattr(state, 'error_stage', None)
+    status = int(http_status or (getattr(state, 'http_status', 0) or 0))
+    if terminal == 'completed' or (terminal is None and 200 <= status < 400):
+        return ERROR_CODE_NONE, ERROR_SOURCE_NONE
+    code = getattr(state, 'error_code', None) if state is not None else None
+    if code:
+        return code, (getattr(state, 'error_source', None) or ERROR_SOURCE_GATEWAY)
+    return _gateway_code(terminal, stage, status)
+
+
+#: U21：探针端点（每分钟都在打，不能算进真实流量的失败率）。
+PROBE_ENDPOINTS = ('/healthz', '/api/healthz', '/readyz', '/api/readyz', '/metrics')
+
+#: U21：与 `traffic_class()` **同一口径**的 SQL 表达式（列名必须是 `endpoint`）。
+#: 两份实现必然漂移，所以统计与检索都用这一条；Python 侧只在单行展示时用
+#: `traffic_class()`，两者由测试锁定一致。
+def traffic_class_sql(column: str = 'endpoint') -> str:
+    """返回分类表达式；`column` 要带表别名（联表查询里 `endpoint` 会歧义）。"""
+    return (
+        f"CASE WHEN {column} IN ('/healthz','/api/healthz','/readyz','/api/readyz','/metrics') "
+        f"OR {column} LIKE '/metrics%' THEN 'probe' "
+        f"WHEN {column} LIKE '/api/%' THEN 'admin' "
+        f"WHEN {column} LIKE '/v1/%' OR {column} LIKE '/v2/%' THEN 'inference' "
+        f"ELSE 'other' END")
+
+
+def traffic_class(endpoint, method=None) -> str:
+    """把一条轨迹归到 `inference` / `admin` / `probe` / `other`（U21）。
+
+    为什么需要它：`/healthz`、`/api/readyz` 这类探针每分钟都在打，`/api/*` 是
+    管理动作，只有 `/v1|/v2` 才是真实推理流量。三者混在一起算"失败率"时，一次
+    面板刷新或一轮探针就能把失败率抬起来，而真实流量其实全好；反过来，
+    「真实/探针/测试混在一起」也正是台账 U21 要关的那条。
+    """
+    path = str(endpoint or '')
+    if path in PROBE_ENDPOINTS or path.startswith('/metrics'):
+        return 'probe'
+    if path.startswith('/api/'):
+        return 'admin'
+    if path.startswith('/v1/') or path.startswith('/v2/'):
+        return 'inference'
+    return 'other'
+
+
+def ensure_outcome_schema() -> bool:
+    """幂等补列 `request_outcomes.error_code` / `error_source`（U21）。
+
+    迁移安全性（为什么可以在运行期做、为什么不需要版本步骤）：
+
+    * SQLite 的 `ALTER TABLE ... ADD COLUMN` **只改 schema 元数据、不重写表**，
+      在 20 万行的 `request_outcomes` 上是 O(1)（毫秒级），不阻塞读写；
+    * 两列都可空 → 历史行保持 NULL，语义是「未分类/历史」，**不猜、不回填**
+      （回填会给出看似精确的错因，实际是从终态反推的猜测）；
+    * 幂等：先 `PRAGMA table_info` 探测；并发启动（蓝绿部署两个进程同时起）
+      撞出 `duplicate column name` 时吞掉并重新探测；
+    * `schemaver` 的守卫只禁止**删除**表/列，新增列属 expand-safe，
+      不需要 `CODE_SCHEMA_VERSION` 递增；`migrations.BASELINE_COLUMNS` 不列它，
+      所以旧库/新库都能通过 baseline 校验。
+    """
+    from . import db
+    try:
+        conn = db.connect()
+    except Exception:  # noqa: BLE001 - 拿不到连接就不写这两列
+        log.exception('request_outcomes schema ensure skipped (no connection)')
+        return False
+    if _OUTCOME_SCHEMA['conn'] is conn:
+        return bool(_OUTCOME_SCHEMA['ready'])
+    try:
+        columns = {str(row[1]) for row in conn.execute('PRAGMA table_info(request_outcomes)')}
+    except Exception:  # noqa: BLE001
+        log.exception('request_outcomes schema probe failed')
+        return False
+    if not columns:
+        return False                      # 表还没建出来：本轮不写这两列
+    for name, declaration in _OUTCOME_EXTRA_COLUMNS:
+        if name in columns:
+            continue
+        try:
+            with db.transaction() as tx:
+                tx.execute(f'ALTER TABLE request_outcomes ADD COLUMN {name} {declaration}')
+        except Exception:  # noqa: BLE001 - 并发撞车/只读库：下面重新探测定论
+            log.exception('request_outcomes add column failed name=%s', name)
+    try:
+        columns = {str(row[1]) for row in conn.execute('PRAGMA table_info(request_outcomes)')}
+    except Exception:  # noqa: BLE001
+        return False
+    ready = all(name in columns for name, _ in _OUTCOME_EXTRA_COLUMNS)
+    _OUTCOME_SCHEMA.update(conn=conn, ready=ready)
+    return ready
+
+
+def admission_snapshot() -> dict | None:
+    """当前全局/大请求准入占用（in-flight）；未启动时返回 None。"""
+    inst = _middleware_ref
+    if inst is None:
+        return None
+    return {'active': int(getattr(inst, 'active', 0)),
+            'large': int(getattr(inst, 'large', 0)),
+            'maximum': int(getattr(inst, 'maximum', 0)),
+            'large_maximum': int(getattr(inst, 'large_maximum', 0)),
+            'inflight_body_bytes': int(getattr(inst, 'inflight_body_bytes', 0)),
+            'maximum_body_bytes': int(getattr(inst, 'maximum_body_bytes', 0)),
+            'capacity_rejections': int(getattr(inst, 'capacity_rejections', 0)),
+            'key_slots': len(_key_slots)}
+
 class CapacityError(Exception): pass
+class BodyLimitError(Exception): pass
 
 def admit_key(key):
     state=current.get()
@@ -175,8 +475,75 @@ def usage_int(value):
     except (ValueError,TypeError,OverflowError):
         return 0
 
-def sse_error(message):
-    return ('data: '+json.dumps({'error':{'type':'api_error','code':'stream_incomplete','message':message}},ensure_ascii=False)+'\n\ndata: [DONE]\n\n').encode()
+#: U13：流中错误要携带的上游细节（业务 code / hint / 上游请求 ID）。
+#:
+#: 用 contextvar 而不是给 `sse_error` 加必填参数，是因为 `gateway.py` 的转发
+#: 热路径被 `test_gateway_passthrough` 按**行文本**钉死：
+#: `yield observability.sse_error(error_text)` 必须逐字出现且只有那几处。
+#: 在调用点追加实参会改变该行文本，等于绕过那条断言；把细节放进上下文既
+#: 保住了断言，又让三条协议的错误帧字段对齐。
+_stream_error_detail: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    'wb_stream_error_detail', default=None)
+
+
+def set_stream_error_detail(*, code: object = None, hint: object = None,
+                            upstream_request_id: object = None) -> None:
+    _stream_error_detail.set({'code': code, 'hint': hint,
+                              'upstream_request_id': upstream_request_id})
+
+
+def _bounded(value: object, limit: int, *, ascii_only: bool = False) -> str | None:
+    """把上游给的值收成「可安全写进响应体」的短字符串；不可用就 None。
+
+    只放行**可打印**字符串（控制字符一律丢弃：它们会进 SSE 帧与错误体，
+    放开就等于允许上游往我们的输出里注入结构）。`ascii_only=True` 用于
+    不透明 ID（上游请求 ID 只可能来自 HTTP 头，没有非 ASCII 的正当理由）。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)[:limit]
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        if not text.isprintable():
+            return None
+        if ascii_only and not text.isascii():
+            return None
+        return text[:limit]
+    return None
+
+
+def sse_error(message, *, code: object = None, hint: object = None,
+              upstream_request_id: object = None):
+    """OpenAI 形状的流中错误帧（`error` 事件 + 终止 `[DONE]`）。
+
+    U13 契约：流前 JSON 错误与流中 SSE 错误必须表达同一件事——
+    保留上游业务 `code`、`gateway_hint`、以及上下游两个 ID。
+
+    * `code` 缺省仍是 `stream_incomplete`（既有语义，不改）；
+      上游给了业务 code（例如 `no_healthy_account`）就换成它，
+      这样客户端不必只凭文案判断该重试还是该改配置。
+    * `request_id` 是本管理端的执行 ID；`upstream_request_id` 是上游的
+      （来自上游响应头），两者都只在能确定时出现，不编造。
+    """
+    detail = _stream_error_detail.get() or {}
+    state = current.get()
+    err = {'type': 'api_error',
+           'code': _bounded(code, 64) or _bounded(detail.get('code'), 64)
+                   or 'stream_incomplete',
+           'message': message}
+    hint_text = _bounded(hint, 300) or _bounded(detail.get('hint'), 300)
+    if hint_text:
+        err['gateway_hint'] = hint_text
+    payload: dict = {'error': err}
+    if state is not None:
+        payload['request_id'] = state.request_id
+    upstream_id = (_bounded(upstream_request_id, 128, ascii_only=True)
+                   or _bounded(detail.get('upstream_request_id'), 128, ascii_only=True))
+    if upstream_id:
+        payload['upstream_request_id'] = upstream_id
+    return ('data: ' + json.dumps(payload, ensure_ascii=False)
+            + '\n\ndata: [DONE]\n\n').encode()
 
 class StreamAudit:
     """Incremental UTF-8/SSE parser. Bounds an unfinished event, preserves raw transport."""
@@ -273,6 +640,12 @@ def set_stream_state(observer, error=None, cancelled=False):
     state = current.get()
     if state is None:
         return
+    # U21：上游在 SSE 错误体里给了业务码（`error.code`，如 11102 /
+    # no_healthy_account）就沿用 —— 那是唯一能区分「上游说不行」与「我们说不行」
+    # 的事实。成功收尾时 classify_error 仍然会把它归成 none，不会给成功请求
+    # 挂上错误码。
+    if getattr(observer, 'error_code', None):
+        mark_error(observer.error_code, ERROR_SOURCE_UPSTREAM)
     if cancelled:
         state.terminal_state, state.error_stage = "client_cancelled", "client"
     elif error and not observer.error:
@@ -288,10 +661,12 @@ def set_stream_state(observer, error=None, cancelled=False):
     else:
         state.terminal_state, state.error_stage = "protocol_incomplete", "protocol"
 
-async def close_stream(response, client):
+async def close_stream(response, client, *, timeout: float = 5.0):
     # Starlette uses level cancellation; shield cleanup and keep it bounded.
+    # U13：窗口长度由 `deadline.Budgets.client_cancel_s` 传入（三条协议同一口径）；
+    # 默认 5s 保持既有行为完全不变。
     try:
-        with anyio.move_on_after(5, shield=True):
+        with anyio.move_on_after(float(timeout), shield=True):
             try:
                 await response.aclose()
             finally:
@@ -350,8 +725,24 @@ class RequestAuditMiddleware:
         # One worker: bounded admission before body allocation, no unbounded queue.
         # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
         self.active=0; self.large=0
+        self.inflight_body_bytes = 0
+        # U21：启动时幂等补 request_outcomes.error_code / error_source。
+        # 放在这里是因为中间件在 app 启动时构造一次，而 main.py 不在本轮可改范围。
+        try:
+            ensure_outcome_schema()
+        except Exception:  # noqa: BLE001 - 补列失败只降级，不影响接请求
+            log.exception('outcome schema ensure failed at startup')
+        self.capacity_rejections = 0
         self.maximum = _env_int('WB_GATEWAY_MAX_CONCURRENCY', 8)
         self.large_maximum = _env_int('WB_GATEWAY_LARGE_MAX_CONCURRENCY', 2)
+        # Raw request-body reservations remain held through response completion.
+        # Allow headroom for JSON/Unicode/adapter copies when sizing this budget.
+        self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
+        self.minimum_body_bytes = min(self.maximum_body_bytes,
+            _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
+        global _middleware_ref
+        if _middleware_ref is None:
+            _middleware_ref = self
         print('[admission] 全局并发上限 maximum=%d large_maximum=%d（源码直读 env）'
               % (self.maximum, self.large_maximum), file=sys.stderr, flush=True)
 
@@ -365,7 +756,7 @@ class RequestAuditMiddleware:
             path = path[len(config.BASE_PATH):] or '/'
         protocol = ("anthropic" if "/messages" in path else
                     "responses" if path.endswith("/responses") else
-                    "openai" if "/chat/completions" in path else "http")
+                    "openai" if "/chat/completions" in path or path.endswith('/playground/chat') else "http")
         headers = dict(scope.get('headers', []))
         # RV01：执行 ID 一律服务端生成；调用方只能提供关联 ID。
         state = RequestAudit(new_request_id(), path[:256], scope.get("method", ""),
@@ -376,17 +767,41 @@ class RequestAuditMiddleware:
         scope_state = scope.setdefault("state", {})
         scope_state["request_id"] = state.request_id
         scope_state["client_request_id"] = state.client_request_id
-        tracked = path.startswith(("/v1/", "/v2/", "/api/")) or path in ("/responses", "/messages")
+        tracked = path.startswith(("/v1/", "/v2/", "/api/", "/qoder/v1/", "/trae/v1/")) or path in ("/responses", "/messages")
         inference=state.protocol!='http' and state.method=='POST'
-        admitted=False; large=False; received=0
-        try: declared=int(headers.get(b'content-length',b'0'))
+        admitted=False; large=False; received=0; reserved=0
+        reading_body=False
+        per_request_limit=None
+        if inference:
+            from .routers import gateway
+            per_request_limit=gateway.max_body_bytes()
+        try: declared=max(0,int(headers.get(b'content-length',b'0')))
         except ValueError: declared=0
+        initial_reservation = max(declared, self.minimum_body_bytes)
+        def capacity_rejected():
+            if state.error_stage != 'admission':
+                self.capacity_rejections += 1
+            state.terminal_state,state.error_stage='rejected','admission'
         async def receive_audited():
-            nonlocal received,large
-            message=await receive(); received+=len(message.get('body',b''))
-            if inference and received>1024*1024 and not large:
-                if self.large>=self.large_maximum: raise CapacityError('large context capacity exceeded')
-                self.large+=1; large=True
+            nonlocal received,large,reserved
+            message=await receive()
+            received+=len(message.get('body',b''))
+            if inference:
+                if received > per_request_limit:
+                    raise BodyLimitError()
+                needed = max(reserved, received)
+                extra = needed - reserved
+                needs_large = received > 1024*1024 and not large
+                # No await between checking and reserving: atomic within this
+                # ASGI worker, including chunked or understated-length requests.
+                if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+                        or needs_large and self.large >= self.large_maximum):
+                    capacity_rejected()
+                    raise CapacityError('aggregate request-body capacity exceeded')
+                self.inflight_body_bytes += extra
+                reserved = needed
+                if needs_large:
+                    self.large+=1; large=True
             return message
         async def send_audited(message):
             if message["type"] == "http.response.start":
@@ -397,21 +812,78 @@ class RequestAuditMiddleware:
                 out_headers = [(k, v) for k, v in message.get("headers", [])
                                if k.lower() not in (b"x-request-id",
                                                     CLIENT_REQUEST_ID_RESPONSE_HEADER,
-                                                    b"x-workbuddy-release")]
+                                                    b"x-workbuddy-release",
+                                                    *MAX_TOKENS_HEADERS)]
                 out_headers.extend(_response_headers(state))
                 message["headers"] = out_headers
             await send(message)
+        async def reject_capacity():
+            capacity_rejected()
+            await reject_response(JSONResponse({'error':{'message':'网关处理容量已满，请稍后重试','type':'server_error','code':'gateway_capacity_exceeded'}},
+                                               status_code=503, headers={'Retry-After':'1'}))
+        async def reject_response(response):
+            if protocol == 'anthropic':
+                payload=json.loads(response.body)
+                error=payload.get('error') or {}
+                if error.get('type')=='server_error':
+                    error['type']='api_error'
+                response=JSONResponse({'type':'error','error':error,'request_id':state.request_id},
+                    status_code=response.status_code,
+                    headers={key:value for key,value in response.headers.items()
+                             if key not in ('content-length','content-type')})
+            await response(scope,receive,send_audited)
         try:
-            if inference and (self.active>=self.maximum or declared>1024*1024 and self.large>=self.large_maximum):
-                state.terminal_state,state.error_stage='rejected','admission'
-                body=json.dumps({'error':{'message':'网关处理容量已满，请稍后重试','type':'server_error','code':'gateway_capacity_exceeded'}},ensure_ascii=False).encode()
-                await send_audited({'type':'http.response.start','status':503,'headers':[(b'content-type',b'application/json'),(b'retry-after',b'1')]})
-                await send_audited({'type':'http.response.body','body':body})
+            if inference and declared > per_request_limit:
+                state.terminal_state,state.error_stage='rejected','validation'
+                await reject_response(gateway._payload_too_large(per_request_limit))
+            elif inference and (self.active>=self.maximum or declared>1024*1024 and self.large>=self.large_maximum
+                              or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+                await reject_capacity()
             else:
                 if inference:
                     self.active+=1; admitted=True
+                    reserved = initial_reservation
+                    self.inflight_body_bytes += reserved
                     if declared>1024*1024: self.large+=1; large=True
-                await self.app(scope, receive_audited, send_audited)
+                    # Validate and reserve the JSON body before entering FastAPI.
+                    # Otherwise its body parser can turn a receive-side capacity
+                    # exception into HTTP 500 before this wrapper can reject it.
+                    reading_body=True
+                    chunks=[]
+                    body_deadline=time.monotonic()+30
+                    while True:
+                        message=await asyncio.wait_for(receive_audited(),max(0.001,body_deadline-time.monotonic()))
+                        if message['type']=='http.disconnect':
+                            state.http_status=499
+                            state.terminal_state,state.error_stage='client_cancelled','request_body'
+                            return
+                        chunks.append(message)
+                        if not message.get('more_body',False):
+                            break
+                    reading_body=False
+                    cursor=0
+                    async def replay_body():
+                        nonlocal cursor
+                        if cursor < len(chunks):
+                            message=chunks[cursor]
+                            cursor+=1
+                            return message
+                        return await receive()
+                    await self.app(scope,replay_body,send_audited)
+                else:
+                    await self.app(scope,receive_audited,send_audited)
+        except BodyLimitError:
+            state.terminal_state,state.error_stage='rejected','validation'
+            await reject_response(gateway._payload_too_large(per_request_limit))
+        except TimeoutError:
+            if not reading_body:
+                raise
+            state.terminal_state,state.error_stage='rejected','request_body'
+            await reject_response(gateway._oai_error('请求体读取超过 30 秒',408,'invalid_request_error','body_read_timeout'))
+        except CapacityError:
+            if state.http_status:
+                raise
+            await reject_capacity()
         except BaseException:
             if state.terminal_state is None:
                 state.terminal_state, state.error_stage = "interrupted", "application"
@@ -423,13 +895,28 @@ class RequestAuditMiddleware:
                     status = state.http_status or 500
                     terminal = state.terminal_state or ("rejected" if 400 <= status < 500 else
                                "application_error" if status >= 500 else "completed")
-                    db.execute(
-                        "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
-                        "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
-                         state.method, state.protocol, status, terminal, state.error_stage,
-                         int((time.monotonic()-state.started)*1000), RELEASE_ID))
+                    # U21：稳定错误码。上游业务码（stream 路径在 set_stream_state、
+                    # 非流式在 gateway 里标好）优先，其次按终态/阶段/状态码推导。
+                    error_code, error_source = classify_error(
+                        state, terminal_state=terminal, http_status=status)
+                    if ensure_outcome_schema():
+                        db.execute(
+                            "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
+                            "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id, "
+                            "error_code, error_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
+                             state.method, state.protocol, status, terminal, state.error_stage,
+                             int((time.monotonic()-state.started)*1000), RELEASE_ID,
+                             error_code, error_source))
+                    else:
+                        # 补列失败（只读库/并发竞态）：仍然落轨迹，只是没有稳定码。
+                        db.execute(
+                            "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
+                            "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                            (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
+                             state.method, state.protocol, status, terminal, state.error_stage,
+                             int((time.monotonic()-state.started)*1000), RELEASE_ID))
                     if path.startswith('/api/'):
                         # B-003 修复（2026-10-27 审计 S1）：原条件是
                         #   method not in ('GET','HEAD','OPTIONS') or status >= 400
@@ -473,7 +960,9 @@ class RequestAuditMiddleware:
                 except Exception:
                     log.exception("budget finalization failed request_id=%s",state.request_id)
                 release_key(state)
-                if admitted: self.active-=1
+                if admitted:
+                    self.active-=1
+                    self.inflight_body_bytes -= reserved
                 if large: self.large-=1
                 current.reset(token)
 

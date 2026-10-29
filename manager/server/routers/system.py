@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
@@ -19,6 +21,163 @@ from ..iputil import client_ip
 from ..services import changelog, updater, wb2api
 
 router = APIRouter(prefix='/api/system', tags=['system'])
+
+#: U16：systemd 单元文件所在目录。测试可替换（不碰真实 /etc）。
+SYSTEMD_UNIT_DIR = Path('/etc/systemd/system')
+#: 服务名兜底（`WB_SERVICE_NAME` 已登记在 schema，未设置时用它）。
+DEFAULT_SERVICE = 'workbuddy-web.service'
+
+
+def _service_name() -> str:
+    raw = (os.environ.get('WB_SERVICE_NAME') or '').strip() or DEFAULT_SERVICE
+    return raw if raw.endswith('.service') else raw + '.service'
+
+
+def _parse_environment(text: str) -> dict:
+    """解析 unit/drop-in 的 `Environment=`（同一文件内后写的覆盖前者）。"""
+    out: dict = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith('Environment='):
+            continue
+        for item in line[len('Environment='):].strip().split():
+            if '=' not in item:
+                continue
+            key, value = item.split('=', 1)
+            out[key.strip()] = value.strip().strip('"').strip("'")
+    return out
+
+
+def read_unit_environment(service: str | None = None,
+                          unit_dir: Path | None = None) -> dict:
+    """只读采集 unit + drop-in 的 `Environment=`（systemd 合并语义）。
+
+    **不修改任何 systemd 文件**，只读；读不到（容器内没有 systemd、权限不足）时
+    如实返回 `available=false` + 原因，而不是假装「没有覆盖」。
+    """
+    directory = Path(unit_dir) if unit_dir else SYSTEMD_UNIT_DIR
+    name = service or _service_name()
+    base = directory / name
+    files: list[dict] = []
+    errors: list[str] = []
+    candidates = [base] if base.is_file() else []
+    dropin = directory / (name + '.d')
+    if dropin.is_dir():
+        try:
+            candidates += sorted(dropin.glob('*.conf'))
+        except OSError as exc:                       # pragma: no cover - 目录竞态
+            errors.append('%s: %s' % (dropin, exc))
+    for path in candidates:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append('%s: %s' % (path, exc))
+            continue
+        files.append({'path': str(path), 'environment': _parse_environment(text)})
+    declared: dict = {}
+    owners: dict = {}
+    for entry in files:
+        declared.update(entry['environment'])
+        for key, value in entry['environment'].items():
+            owners.setdefault(key, []).append({'file': Path(entry['path']).name,
+                                               'value': value})
+    duplicates = {key: value for key, value in owners.items() if len(value) > 1}
+    return {
+        'available': bool(files),
+        'service': name,
+        'unit_dir': str(directory),
+        'files': [{'path': e['path'], 'keys': sorted(e['environment'])} for e in files],
+        'declared': declared,
+        'duplicates': duplicates,
+        'errors': errors,
+        'reason': None if files else 'unit 文件不存在或不可读（容器内通常没有 systemd）',
+    }
+
+
+def _release_id() -> str:
+    try:
+        return (config.ROOT / '.version').read_text(encoding='utf-8').strip() or 'unknown'
+    except OSError:
+        return 'unknown'
+
+
+@router.get('/config')
+def configuration_drift(request: Request, refresh: bool = False,
+                        user: dict = Depends(security.require_admin)) -> dict:
+    """U16：**配置四源对照 + 漂移标记**（只读，仅管理员）。
+
+    四个来源（缺一个就看不出漂移在哪）：
+
+    1. `schema_default`：`server/config-schema.json` 声明的默认值 —— 唯一配置模型；
+    2. `source_default`：源码里 `_env*('NAME', <默认>)` 的第二参数（AST 扫描，
+       跨模块），即"未设置时真正生效的值"；
+    3. `declared`：systemd unit + drop-in 的 `Environment=`（后加载覆盖前者）；
+    4. `process`：本进程实际拿到的环境。
+
+    3 与 4 必须分开看：改了 drop-in 却没重启，`declared != process` —— 这正是最容易
+    被误读成"配置已生效"的漂移。`risk` 为 `high` 的项是真缺陷（未登记变量、改了
+    没重启、敏感值明文进 unit 等）；`override`（覆盖 schema 默认）是正常运维动作，
+    只记录不告警。
+
+    敏感字段（schema `sensitive: true`）只返回"是否设置 + 指纹 + 长度"；未登记变量
+    的值一律不返回（模型不知道它是否敏感）。`?refresh=true` 重新扫描源码默认值。
+    """
+    from ..configcontract import (compare_sources, cross_checks, load_schema,
+                                  parse_source_defaults)
+
+    schema = load_schema()
+    specs = schema['settings']
+    source_defaults = parse_source_defaults(config.ROOT / 'server', refresh=bool(refresh))
+    unit = read_unit_environment()
+    comparison = compare_sources(specs, source_defaults=source_defaults,
+                                 process_env=dict(os.environ),
+                                 declared_env=unit['declared'],
+                                 unit_duplicates=unit['duplicates'],
+                                 allowed=dict(getattr(config, 'SCHEMA_DRIFT_ALLOWED', {})))
+    checks = cross_checks(specs, dict(os.environ))
+    summary = comparison['summary']
+    summary['cross_checks_ok'] = all(item['ok'] for item in checks)
+    summary['unit_files_read'] = len(unit['files'])
+    summary['unit_readable'] = unit['available']
+    snapshot = getattr(request.app.state, 'configuration_snapshot', None)
+    return {
+        'ok': True,
+        'release': _release_id(),
+        'generated_at': int(time.time()),
+        'sources': {
+            'schema': {'authority': '配置模型与默认值的唯一权威',
+                       'path': 'server/config-schema.json',
+                       'schema': schema['schema'],
+                       'settings': len(specs)},
+            'source_default': {'note': '源码默认值必须等于 schema 默认值（例外见 allowed）',
+                               'scanned': 'server/**/*.py（不含 tests）',
+                               'modules_with_defaults': len(source_defaults)},
+            'declared': {'note': 'unit + drop-in 的 Environment=，只应写与 schema 默认不同的项',
+                         'service': unit['service'], 'files': unit['files'],
+                         'available': unit['available'], 'reason': unit['reason'],
+                         'errors': unit['errors']},
+            'process': {'note': '本进程启动时拿到的环境（/proc/self/environ）',
+                        'wb_keys': sum(1 for k in os.environ if k.startswith(('WB_', 'WB2API_')))},
+        },
+        'summary': summary,
+        'settings': comparison['rows'],
+        'duplicate_keys': comparison['duplicate_keys'],
+        'cross_checks': checks,
+        'policy': {
+            'order': ['config-schema.json', 'server/config.py 源码默认值',
+                      'unit/drop-in 覆盖（仅差异）', '进程实际值'],
+            'allowed_differences': dict(getattr(config, 'SCHEMA_DRIFT_ALLOWED', {})),
+            'rules': [
+                'schema 未登记的 WB_* 会让服务启动失败（validate_environment）',
+                '源码默认值必须等于 schema 默认值（表达式型按文本比较）',
+                '同一个键只允许出现在一个 unit 文件里',
+                '敏感值不得以明文写进 unit/drop-in',
+            ],
+        },
+        'startup_snapshot_present': snapshot is not None,
+        'related': {'configuration': '/api/system/configuration',
+                    'note': '那边是启动时 validate_environment() 的快照，这里是四源对照'},
+    }
 
 
 @router.get('/configuration')
@@ -244,9 +403,13 @@ async def versions(user: dict = Depends(security.current_user)) -> dict:
 
     return {
         'manager': updater.current_version(),
+        'product': updater.product.metadata(
+            config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file()),
         'upstream_connected': upstream_ok,
         'upstream_accounts': upstream_total,
-        'upstream_dir': str(updater._upstream_dir()),
+        # 部署绝对路径只对管理员展示（2026-10-27 审计 P2-13：viewer 无需知晓）。
+        'upstream_dir': (str(updater._upstream_dir())
+                         if str(user.get('role') or '') == 'admin' else None),
     }
 
 

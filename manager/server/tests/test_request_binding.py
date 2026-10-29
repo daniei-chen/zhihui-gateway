@@ -164,6 +164,9 @@ class PostParamLocationAuditTest(unittest.TestCase):
 
     # 允许使用 query 参数的 POST 端点（前端必须相应发 query）
     ALLOWED_QUERY_POSTS = {
+        # Merged control-plane APIs deliberately expose these optional query filters.
+        '/api/v1/cache/invalidate': {'prefix'},
+        '/__qtg/api/accounts/refresh-credits': {'force'},
         '/api/accounts/refresh-credits': {'force', 'upstream_id'},
         '/api/auth/start': {'realm', 'region', 'upstream_id'},
         # 账号分组（多账号池）：下列写端点都接受 `?upstream_id=` 指定作用于哪个

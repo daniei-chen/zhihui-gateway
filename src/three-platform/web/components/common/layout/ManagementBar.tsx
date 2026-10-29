@@ -85,11 +85,6 @@ type StoredDockPosition = DockPosition & {
 
 type DockPositions = Partial<Record<DockViewport, StoredDockPosition>>;
 
-const SystemTheme = {
-  LIGHT: 'light',
-  DARK: 'dark',
-} as const;
-
 export function ManagementBar() {
   const themeUtils = useThemeUtils();
   const {me, isAdmin, logout} = useAuth();
@@ -124,6 +119,7 @@ export function ManagementBar() {
   const dockPressTimerRef = useRef<number | null>(null);
   const pressStartRef = useRef({x: 0, y: 0});
   const pressCleanupRef = useRef<(() => void) | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const isDraggingRef = useRef(false);
   const dragMovedRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
@@ -153,7 +149,9 @@ export function ManagementBar() {
       },
     };
 
-    window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(nextPositions));
+    try { window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(nextPositions)); } catch {
+      // The current position still works when persistent storage is denied.
+    }
   }, [readDockPositions]);
 
   const getDockRect = useCallback(() => {
@@ -254,7 +252,7 @@ export function ManagementBar() {
     dockModeRef.current = mode;
     setDockMode(mode);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DOCK_MODE_STORAGE_KEY, mode);
+      try { window.localStorage.setItem(DOCK_MODE_STORAGE_KEY, mode); } catch {}
     }
     syncDockPosition();
   }, [syncDockPosition]);
@@ -262,7 +260,8 @@ export function ManagementBar() {
   useEffect(() => {
     setMounted(true);
     if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(DOCK_MODE_STORAGE_KEY) === 'pinned' ? 'pinned' : 'floating';
+    let stored: DockMode = 'floating';
+    try { if (window.localStorage.getItem(DOCK_MODE_STORAGE_KEY) === 'pinned') stored = 'pinned'; } catch {}
     dockModeRef.current = stored;
     setDockMode(stored);
   }, []);
@@ -306,8 +305,12 @@ export function ManagementBar() {
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return;
     const KEY = 'workbuddy-manager:update-notified';
-    if (window.sessionStorage.getItem(KEY) === '1') return;
-    window.sessionStorage.setItem(KEY, '1');
+    try {
+      if (window.sessionStorage.getItem(KEY) === '1') return;
+      window.sessionStorage.setItem(KEY, '1');
+    } catch {
+      // Version notification is optional; a blocked store must not crash the shell.
+    }
 
     (async () => {
       try {
@@ -326,7 +329,8 @@ export function ManagementBar() {
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return;
 
-    const dismissed = window.localStorage.getItem(DOCK_TIP_STORAGE_KEY) === 'true';
+    let dismissed = false;
+    try { dismissed = window.localStorage.getItem(DOCK_TIP_STORAGE_KEY) === 'true'; } catch {}
     if (!dismissed) {
       setShowDockTip(true);
     }
@@ -368,15 +372,15 @@ export function ManagementBar() {
     };
   }, []);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
   };
 
   const handleDismissDockTip = useCallback(() => {
     setShowDockTip(false);
     setDockTipStep(0);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DOCK_TIP_STORAGE_KEY, 'true');
+      try { window.localStorage.setItem(DOCK_TIP_STORAGE_KEY, 'true'); } catch {}
     }
   }, []);
 
@@ -442,6 +446,7 @@ export function ManagementBar() {
     isDraggingRef.current = true;
     dragMovedRef.current = false;
     const pressStart = pressStartRef.current;
+    let lastPosition = dockPosition;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const dx = moveEvent.clientX - pressStart.x;
@@ -455,12 +460,13 @@ export function ManagementBar() {
         x: moveEvent.clientX - dragOffsetRef.current.x,
         y: moveEvent.clientY - dragOffsetRef.current.y,
       });
-
+      lastPosition = nextPosition;
       setDockPosition(nextPosition);
     };
 
     const handlePointerUp = (upEvent: PointerEvent) => {
-      const nextPosition = clampDockPosition({
+      // Native drag/touch cancellation can report (0, 0); retain the last real point.
+      const nextPosition = upEvent.type === 'pointercancel' ? lastPosition : clampDockPosition({
         x: upEvent.clientX - dragOffsetRef.current.x,
         y: upEvent.clientY - dragOffsetRef.current.y,
       });
@@ -475,11 +481,17 @@ export function ManagementBar() {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
+      dragCleanupRef.current = null;
     };
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
+    dragCleanupRef.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
   }, [clampDockPosition, dockPosition, getViewport, writeDockPosition]);
 
   const handleDockPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -493,6 +505,7 @@ export function ManagementBar() {
     clearDockPressTimer();
     // 上一轮按下如果还在等长按，先撤掉它的 window 监听。
     pressCleanupRef.current?.();
+    dragCleanupRef.current?.();
     pressCleanupRef.current = null;
 
     function cleanupPressListeners() {
@@ -530,6 +543,7 @@ export function ManagementBar() {
     // 卸载时别把等待中的长按 timer 留到下一次挂载后再触发。
     clearDockPressTimer();
     pressCleanupRef.current?.();
+    dragCleanupRef.current?.();
   }, [clearDockPressTimer]);
 
   const handleDockPointerEnd = useCallback(() => {
@@ -750,7 +764,7 @@ export function ManagementBar() {
                                 notify.ok(t('profile.revoked'));
                                 // 服务端已失效所有会话（含本机），必须回登录页
                                 setProfileOpen(false);
-                                logout();
+                                await logout();
                               } catch (e) {
                                 notify.err(errText(e));
                               }
@@ -800,13 +814,15 @@ export function ManagementBar() {
                             <div className="flex flex-wrap items-center gap-2">
                               <button
                                 type="button"
+                                data-slot="theme-toggle"
+                                aria-label={themeUtils.getAction()}
                                 onClick={themeUtils.toggle}
                                 className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-2 transition-colors hover:bg-muted/80"
                               >
                                 <div className="flex items-center gap-2">
                                   {themeUtils.getIcon('size-3.5 text-foreground/60')}
                                   <span className="text-xs font-medium text-foreground">
-                                    {themeUtils.getSystemTheme() === SystemTheme.LIGHT ? t('theme.light') : t('theme.dark')}
+                                    {themeUtils.getAction()}
                                   </span>
                                 </div>
                               </button>
@@ -857,14 +873,14 @@ export function ManagementBar() {
                         </div>
                       </Link>
                       <Link
-                        href="https://github.com/Sliverkiss/workbuddy2api"
+                        href="https://github.com/daniei-chen/zhihui-gateway"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-2 transition-colors hover:bg-muted/80"
                       >
                         <div className="flex items-center gap-2">
                           <FolderGit2 className="size-3.5 text-foreground/60" />
-                          <span className="text-xs font-medium text-foreground">workbuddy2api</span>
+                          <span className="text-xs font-medium text-foreground">{t('product.repository')}</span>
                         </div>
                       </Link>
                       <Link
@@ -922,10 +938,13 @@ export function ManagementBar() {
       <div
         ref={dockRef}
         data-slot="dock-root"
+        role="navigation"
+        aria-label={t('nav.groupOverview')}
         className="fixed z-40 select-none touch-none"
         onPointerDown={handleDockPointerDown}
         onPointerUp={handleDockPointerEnd}
         onPointerCancel={handleDockPointerEnd}
+        onDragStart={(event) => { if (isDraggingRef.current) event.preventDefault(); }}
         onClickCapture={handleDockClickCapture}
         style={
           dockPosition ?

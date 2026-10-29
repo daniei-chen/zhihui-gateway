@@ -492,7 +492,7 @@ class DbOpenFailureMessageTest(unittest.TestCase):
         直接抛 OperationalError 的话，用户看到的还是那句无信息量的原文。
         """
         from server import db
-        with mock.patch.object(db.sqlite3, 'connect',
+        with mock.patch.object(db, '_conn', None), mock.patch.object(db.sqlite3, 'connect',
                                side_effect=sqlite3.OperationalError('unable to open database file')):
             with self.assertRaises(RuntimeError) as ctx:
                 db.connect()

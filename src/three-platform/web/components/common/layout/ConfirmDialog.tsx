@@ -57,12 +57,14 @@ export function ConfirmDialog({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
+        if (!next) setError(null);
         onOpenChange?.(next);
       }}
     >
@@ -73,6 +75,7 @@ export function ConfirmDialog({
           {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
         </AlertDialogHeader>
         {content && <div className="px-6">{content}</div>}
+        {error && <p role="alert" className="px-6 text-sm text-destructive">{error}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>{t('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction
@@ -83,6 +86,7 @@ export function ConfirmDialog({
             onClick={async (e) => {
               e.preventDefault();
               setBusy(true);
+              setError(null);
               try {
                 await onConfirm();
                 setOpen(false);
@@ -91,6 +95,7 @@ export function ConfirmDialog({
                 // 界面毫无反应 —— 用户以为没点上，反复点。这里当场说清原因并
                 // 保持弹窗打开，让人能改完重试。
                 notify.err(errText(err));
+                setError(errText(err));
               } finally {
                 setBusy(false);
               }

@@ -506,20 +506,141 @@ def _auth_headers(api_key: str | None = None) -> dict:
     return {'Authorization': f'Bearer {key}'} if key else {}
 
 
+# ── U22（2026-10-28）：健康采样的「采样时间 + 新鲜度 + 证据来源」────────────
+#
+# 审计要求：健康状态必须带采样时间与证据来源，且**不以"曾经成功"代表"当前可用"**。
+# 上游 /status 是唯一权威来源，本端**不缓存判定结果** —— 这里只记录"最近一次采样
+# 发生在何时、从哪来、结果如何"，供接口把三要素如实带出去。
+#: 超过这个秒数，上一次采样不再算"最近已知"，旧数字不得再被当作当前状态展示。
+HEALTH_STALE_SEC = 120
+#: 每个上游实例（base_url）最近一次采样：{'ts','ok','http_status','error'}
+_health_samples: dict[str, dict] = {}
+#: 每个上游实例最近一次**成功**采样（"上次成功是什么时候"只能看这个）
+_health_success: dict[str, dict] = {}
+
+
+def record_health_sample(base_url: str, *, ok: bool, http_status: int | None = None,
+                         error: str | None = None, now: int | None = None) -> dict:
+    """记录一次 /status 采样（进程内；只用于如实报告新鲜度，不参与任何判定）。"""
+    sample = {'ts': int(now if now is not None else time.time()), 'ok': bool(ok),
+              'http_status': http_status, 'error': error}
+    _health_samples[str(base_url)] = sample
+    if ok:
+        _health_success[str(base_url)] = sample
+    return sample
+
+
+def last_health_sample(base_url: str) -> dict | None:
+    return _health_samples.get(str(base_url))
+
+
+def last_successful_sample(base_url: str) -> dict | None:
+    """最近一次**成功**采样。失败采样不能拿来当"最近已知"。"""
+    return _health_success.get(str(base_url))
+
+
+def reset_health_samples() -> None:
+    """清空采样记录（**仅供测试**）。"""
+    _health_samples.clear()
+    _health_success.clear()
+
+
+def pool_health(status: dict | None = None, *, stale_after: int | None = None) -> dict:
+    """健康块的**三要素**：采样时间 + 新鲜度 + 证据来源。
+
+    `freshness` 语义（刻意不用"最近一次成功"这种含糊说法）：
+
+      · `fresh`   —— 本次采样成功，返回的数字就是此刻的；
+      · `stale`   —— 本次采样失败，只有更早的采样。旧数字**不作为当前值返回**：
+                    仍在窗口内时 `last_known` 只给出它自己的时间与 `is_current:false`
+                    （不含任何池数字）；超出窗口则 `last_known=None` —— 两分钟前的
+                    池状态不能当成"最近已知"。
+      · `unknown` —— 从来没有成功采样过（**不是 0**，也不是"健康"）。
+
+    传入的 `status` 若自带 `health`（`get_status` 会写），原样返回；否则按
+    "没有证据"处理 —— 缺失证据一律 unknown，绝不用旧值或 0 冒充。
+    """
+    block = dict((status or {}).get('health') or {})
+    if not block:
+        return {'sampled_at': None, 'age_s': None, 'freshness': 'unknown',
+                'stale_after_s': int(stale_after if stale_after is not None
+                                     else HEALTH_STALE_SEC),
+                'evidence': {'source': 'absent', 'sampled_at': None},
+                'last_known': None}
+    if stale_after is not None:
+        block['stale_after_s'] = int(stale_after)
+    return block
+
+
+def _fresh_health(base: str, *, http_status: int | None, now: int) -> dict:
+    return {
+        'sampled_at': now, 'age_s': 0, 'freshness': 'fresh',
+        'stale_after_s': HEALTH_STALE_SEC,
+        'evidence': {'source': 'upstream:/status', 'base_url': base,
+                     'http_status': http_status, 'sampled_at': now},
+        'last_known': None,
+    }
+
+
+def _failed_health(base: str, message: str, *, http_status: int | None,
+                   now: int) -> dict:
+    """采样失败时的健康块：`connected=False` 不变，旧数字**不复用**。
+
+    只看**最近一次成功**采样（失败采样不能当"最近已知"），且必须在
+    `record_health_sample(ok=False)` **之前**调用 —— 否则会把刚记下的失败当成历史。
+    """
+    sample = last_successful_sample(base)
+    if sample is None:
+        return {'sampled_at': None, 'age_s': None, 'freshness': 'unknown',
+                'stale_after_s': HEALTH_STALE_SEC,
+                'evidence': {'source': 'upstream:/status', 'base_url': base,
+                             'http_status': http_status, 'error': message,
+                             'sampled_at': None},
+                'last_known': None}
+    sampled_at = int(sample['ts'])
+    age = max(0, now - sampled_at)
+    return {
+        'sampled_at': sampled_at, 'age_s': age, 'freshness': 'stale',
+        'stale_after_s': HEALTH_STALE_SEC,
+        'evidence': {'source': 'upstream:/status', 'base_url': base,
+                     'http_status': http_status, 'error': message,
+                     'sampled_at': sampled_at},
+        # 只给"上一次采样是什么时候"，不给当时的池数字；超窗口连这条也去掉
+        'last_known': ({'sampled_at': sampled_at, 'age_s': age,
+                        'is_current': False} if age <= HEALTH_STALE_SEC else None),
+    }
+
+
 async def get_status(*, base_url: str | None = None, api_key: str | None = None) -> dict:
-    """上游 /status。base_url / api_key 非空时查**指定分组**的实例（多分组）。"""
+    """上游 /status。base_url / api_key 非空时查**指定分组**的实例（多分组）。
+
+    U22：返回值额外带 `health`（采样时间 / 新鲜度 / 证据来源）。**判定不缓存** ——
+    每次调用都是实时采样；`health` 只是把"这次采样成没成、什么时候采的、从哪采的"
+    如实说出来，失败时绝不把上一次的数字当当前值。
+    """
     # 连接超时短一些：上游未运行时快速失败，避免拖慢管理端页面
     base = (base_url or config.WB2API_BASE).rstrip('/')
+    now = int(time.time())
     try:
         async with config.http_client(10, connect=3) as client:
             resp = await client.get(f'{base}/status', headers=_auth_headers(api_key))
         if resp.status_code >= 400:
-            return {'connected': False, 'error': f'上游返回 {resp.status_code}'}
+            message = f'上游返回 {resp.status_code}'
+            # 先算健康块（基于**上一次成功**），再记本次失败 —— 顺序不能反
+            health = _failed_health(base, message, http_status=resp.status_code, now=now)
+            record_health_sample(base, ok=False, http_status=resp.status_code,
+                                 error=message, now=now)
+            return {'connected': False, 'error': message, 'health': health}
         data = resp.json()
         data['connected'] = True
+        record_health_sample(base, ok=True, http_status=resp.status_code, now=now)
+        data['health'] = _fresh_health(base, http_status=resp.status_code, now=now)
         return data
     except Exception as exc:  # noqa: BLE001
-        return {'connected': False, 'error': _err_text(exc)}
+        message = _err_text(exc)
+        health = _failed_health(base, message, http_status=None, now=now)
+        record_health_sample(base, ok=False, error=message, now=now)
+        return {'connected': False, 'error': message, 'health': health}
 
 
 def _admin_route_missing(resp: object) -> bool:

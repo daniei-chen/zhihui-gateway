@@ -14,7 +14,11 @@
 
 ## 用法
   --dry-run   只报告差异（默认）
-  --apply     把 used_credit_units / used_credit 重算为明细聚合（先自动备份）
+  --apply     【已停用】原实现把 used_credit_units 覆盖成「request_logs 明细总和」，
+              而该表按 90 天保留期裁剪，覆盖写入等于把已消耗的历史配额返还给
+              用户（审计 U03，P0，2026-10-28）。现在 --apply 直接拒绝并返回 2。
+              漂移修复请用 POST /api/stats/credit-reconcile/adjust：基线为不可变
+              的 usage_events，只上调不下调，带 actor/reason 审计。
 """
 import argparse
 import json
@@ -36,7 +40,16 @@ def main():
     ap.add_argument('--apply', action='store_true')
     ap.add_argument('--backup-dir', default='/opt/backups')
     a = ap.parse_args()
-
+    # U03（2026-10-28，审计 P0）：--apply 在任何分支前就拒绝，避免"无差异时
+    # 恰好放行"这种口径。本脚本的「应有值」取自可被 90 天裁剪的 request_logs
+    # 明细总和，覆盖 used_credit_units 等于返还已消耗配额，且库越老返还越多。
+    if a.apply:
+        print('[已停用] --apply 不再执行覆盖式修复，本次未打开读写连接、未写入任何数据。')
+        print('  原因：本脚本的「应有值」取自可被 90 天保留期裁剪的 request_logs')
+        print('        明细总和，覆盖 used_credit_units 会返还已消耗配额（审计 U03，P0）。')
+        print('  替代：POST /api/stats/credit-reconcile/adjust')
+        print('        基线为不可变 usage_events，只上调不下调，需 actor 与 reason 审计。')
+        return 2
     conn = sqlite3.connect(f'file:{a.db}?mode=ro', uri=True)
     conn.row_factory = sqlite3.Row
 
@@ -59,6 +72,8 @@ def main():
         if status != 'OK':
             plan.append((r['id'], r['name'], cur, want, gap))
     print('%-4s %-14s %-14.4f %-+14.4f' % ('', '合计差额', total_gap, total_gap))
+    print('注意：上面「应有(明细)」是 request_logs 明细总和，受 90 天保留期裁剪影响，'
+          '不是权威基线；仅用于观察，不能作为覆盖执法值的依据。')
 
     # 已删除密钥占用的量（无 api_keys 行，仅报告）
     orphan = q(conn, '''
@@ -90,37 +105,6 @@ def main():
     if not a.apply:
         print('\n（dry-run，未写入。加 --apply 执行）')
         return 0
-
-    # 备份 + 写入
-    ts = time.strftime('%Y%m%d-%H%M%S')
-    bak = os.path.join(a.backup_dir, 'api_keys-before-c001-%s.json' % ts)
-    os.makedirs(a.backup_dir, exist_ok=True)
-    conn = sqlite3.connect(a.db)
-    conn.row_factory = sqlite3.Row
-    snap = [dict(r) for r in conn.execute('SELECT * FROM api_keys ORDER BY id')]
-    with open(bak, 'w', encoding='utf-8') as fh:
-        json.dump(snap, fh, ensure_ascii=False, indent=1)
-    os.chmod(bak, 0o600)
-    print('\n已备份 api_keys -> %s（%d 行）' % (bak, len(snap)))
-
-    applied = 0
-    for kid, name, cur, want, gap in plan:
-        units = int(round(want * SCALE))
-        conn.execute('UPDATE api_keys SET used_credit_units=?, used_credit=? WHERE id=?',
-                     (units, want, kid))
-        applied += 1
-    conn.commit()
-
-    # 复核
-    rows = conn.execute('''
-        SELECT k.id, k.used_credit_units,
-               COALESCE((SELECT SUM(r.credit) FROM request_logs r
-                         WHERE r.key_id = k.id AND r.credit IS NOT NULL), 0) AS d
-        FROM api_keys k ORDER BY k.id''').fetchall()
-    bad = [r['id'] for r in rows if abs((r['used_credit_units'] or 0) / SCALE - float(r['d'] or 0)) >= 0.005]
-    conn.close()
-    print('已更新 %d 行；复核不一致的 key: %s' % (applied, bad or '无'))
-    return 0 if not bad else 1
 
 
 if __name__ == '__main__':

@@ -106,7 +106,11 @@ def _host_script() -> Path | None:
     """
     from . import updater  # 复用既有的上游目录推断，避免两处口径不一
     p = updater._upstream_dir() / 'scripts' / 'task_runner.py'
-    return p if p.is_file() else None
+    try:
+        return p if p.is_file() else None
+    except OSError:
+        # An inaccessible host mount must not disable the existing image fallback.
+        return None
 
 
 def _extract_dir() -> Path:
@@ -279,8 +283,17 @@ def available() -> tuple[bool, str]:
     **这是阻塞调用**（可能 fork `docker inspect` / `docker cp`）。在事件循环里
     调用请改用 `available_async()`，否则一次 docker 卡顿会冻住整个服务。
     """
-    script = _script_path()
-    if not script.is_file():
+    try:
+        script = _script_path()
+        script_present = script.is_file()
+        auth_present = config.AUTH_DIR.is_dir() if script_present else False
+    except OSError as exc:
+        return False, (
+            f'无法访问上游任务脚本或账号目录（{type(exc).__name__}）。'
+            '请检查 WB_UPSTREAM_DIR、WB_AUTH_DIR 与提取缓存目录的读取/目录遍历权限；'
+            '权限恢复后可重试，不会因此执行任务。'
+        )
+    if not script_present:
         return False, (
             f'未找到上游任务脚本（{script}）。'
             '该功能调用的是上游 workbuddy2api 自带的 scripts/task_runner.py。\n'
@@ -291,7 +304,7 @@ def available() -> tuple[bool, str]:
             '  · 源码部署：请确认上游目录（WB_UPSTREAM_DIR）已挂载且版本较新，'
             '可到「设置 → 系统更新」更新上游。'
         )
-    if not config.AUTH_DIR.is_dir():
+    if not auth_present:
         return False, (
             f'账号目录不存在（{config.AUTH_DIR}），无法确定对哪些账号执行。'
             '请检查 WB_AUTH_DIR 配置。'

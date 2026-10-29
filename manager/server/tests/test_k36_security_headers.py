@@ -77,7 +77,7 @@ def _csp_literal(source: str) -> str:
     """从源码里把拼接出来的 CSP 字符串还原成一行。"""
     marker = "'Content-Security-Policy'"
     start = source.index(marker)
-    end = source.index(')', source.index('"', source.index('"', start) + 1) 
+    end = source.index(')', source.index('"', source.index('"', start) + 1)
                                     if False else start)
     # 直接从 marker 往后抓所有 "..." 字面量，直到遇到 return
     tail = source[start:source.index('return response', start)]

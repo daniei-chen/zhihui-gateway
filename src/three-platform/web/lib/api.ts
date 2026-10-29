@@ -100,7 +100,10 @@ export const http = axios.create({
 export function errText(e: unknown): string {
   const ax = e as AxiosError;
   const raw = backendErrorText(ax?.response?.data);
-  if (raw) return tp(raw);
+  if (raw) {
+    if ((ax?.response?.status ?? 0) >= 500) return t('error.serverDetail', {detail: tp(raw)});
+    return tp(raw);
+  }
   if (ax?.response?.status === 403) return t('error.forbidden');
   const fallback = ax?.message || '';
   return fallback ? tp(fallback) : tp('请求失败');
@@ -122,23 +125,12 @@ export function errText(e: unknown): string {
 http.interceptors.request.use((config) => {
   const platform = platformStore.explicit();
   if (platform) {
-    // H-001/B2（2026-10-27 审计）：平台同时写进请求头与 URL 查询参数。
-    //
-    // 请求头是既有契约（后端 header 优先，零风险）；查询参数让平台显式出现在
-    // URL 里 —— 访问日志、缓存键、请求回放都能据此区分「这是哪个平台的读」，
-    // 而头在代理/客户端库/CORS 预检里都可能被丢掉或改写。
-    //
-    // 两者都发是过渡期最稳的组合：任一入口失效，另一条仍然正确。
-    // 后端已实测两者等效（`?platform=qoder` 与 header qoder 返回完全相同的数据）。
-    //
-    // 给所有请求都加是安全的：后端 `_qtg_should_route()` 只看 path，query 不参与
-    // 转发匹配，所以对 `/api/login`、`/api/me` 这类不在白名单里的端点没有任何影响。
     (config.headers as Record<string, string>)['X-QTG-Platform'] = platform;
-    const cur = config.params;
-    if (cur === undefined || cur === null || typeof cur === 'object') {
-      const merged: Record<string, unknown> = { ...(cur as Record<string, unknown> | undefined) };
-      if (merged.platform === undefined) merged.platform = platform;
-      config.params = merged;
+    if (config.params instanceof URLSearchParams) {
+      if (!config.params.has('platform')) config.params.set('platform', platform);
+    } else if (config.params == null || typeof config.params === 'object') {
+      config.params = {...config.params};
+      if (config.params.platform === undefined) config.params.platform = platform;
     }
   }
   return config;
@@ -151,8 +143,13 @@ http.interceptors.response.use(
       // 会话失效：清掉缓存的登录态，避免仍显示管理员入口。
       // `hadSession` 决定要不要说「会话已过期」：首次访问本来就没有会话，
       // 那是「请登录」而不是「过期了」（用户会以为面板坏了）。
-      const hadSession = !!window.sessionStorage.getItem('wb-me');
-      window.sessionStorage.removeItem('wb-me');
+      let hadSession = false;
+      try {
+        hadSession = !!window.sessionStorage.getItem('wb-me');
+        window.sessionStorage.removeItem('wb-me');
+      } catch {
+        // Storage restrictions must not prevent handling an expired session.
+      }
       const path = window.location.pathname;
       // **公开页不跳登录页**：红包抽奖页就是给没账号的人看的（同事朋友收到链接
       // 直接打开），而它自己也会加载 /api/me（根 layout 的 AuthProvider 一挂载

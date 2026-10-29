@@ -511,13 +511,13 @@ class TasksPageHonestyTest(unittest.TestCase):
         """
         code = _code(_TASKS)
         self.assertRegex(
-            code, r'useHeartbeat\(\s*upstream\.reload\s*,',
+            code, r'useHeartbeat\(\s*upstream\.refresh\s*,',
             '上游原始日志面板没有自己的心跳：拆开之后它不再随主数据刷新，会停在'
             '进页面那一刻的内容上，而界面上看不出任何异常',
         )
         self.assertRegex(
-            code, r'useHeartbeat\(\s*reload\s*,',
-            '正片数据没有走 reload 心跳（应传 reload 而不是首屏那次取数）',
+            code, r'useHeartbeat\(\s*refresh\s*,',
+            '正片数据没有走可合并 refresh 心跳（显式 reload 留给写入后的刷新）',
         )
 
     def test_failed_panel_does_not_render_the_empty_copy(self) -> None:

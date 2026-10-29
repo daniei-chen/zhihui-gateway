@@ -6,6 +6,22 @@
     "WB2API_"
   ],
   "settings": {
+    "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["server/observability.py:RequestAuditMiddleware"],
+      "default": 67108864,
+      "minimum": 1,
+      "unit": "bytes"
+    },
+    "WB_GATEWAY_MIN_BODY_RESERVATION_BYTES": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["server/observability.py:RequestAuditMiddleware"],
+      "default": 65536,
+      "minimum": 1,
+      "unit": "bytes"
+    },
     "WB2API_BASE": {
       "type": "string",
       "sensitive": false,
@@ -21,7 +37,7 @@
       "consumers": [
         "manager/server/config.py:55"
       ],
-      "default": "workbuddy2api"
+      "default": "zhihui-workbuddy"
     },
     "WB2API_KEY": {
       "type": "string",
@@ -76,6 +92,17 @@
       "sensitive": true,
       "consumers": [
         "manager/server/security.py:206"
+      ]
+    },
+    "WB_BACKGROUND_JOBS": {
+      "type": "boolean",
+      "sensitive": false,
+      "default": true,
+      "description": "Run background schedulers/collectors (primary instance only; zero-downtime helper sets 0)",
+      "consumers": [
+        "manager/server/config.py",
+        "manager/server/main.py",
+        "manager/server/operational.py"
       ]
     },
     "WB_ALLOW_UNVERIFIED_PACKAGE": {
@@ -142,7 +169,7 @@
       "consumers": [
         "manager/server/config.py:74"
       ],
-      "default": "/root/backups/workbuddy-daily/latest.json"
+      "default": "/var/lib/zhihui-gateway/backup-status.json"
     },
     "WB_BASE_PATH": {
       "type": "string",
@@ -293,7 +320,7 @@
       "consumers": [
         "local-overrides/server/observability.py (admit_key)"
       ],
-      "default": 0,
+      "default": 2,
       "minimum": 0,
       "unit": "concurrent_or_pending"
     },
@@ -324,7 +351,7 @@
       "consumers": [
         "local-overrides/server/observability.py (admit_key)"
       ],
-      "default": 0,
+      "default": 8,
       "minimum": 0,
       "unit": "concurrent_or_pending"
     },
@@ -415,6 +442,54 @@
         "manager/server/services/updater.py:611"
       ]
     },
+    "WB_LEDGER_BACKPRESSURE": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:backpressure_limit",
+        "server/budget.py:prepare"
+      ],
+      "default": 500,
+      "minimum": 1,
+      "unit": "receipts"
+    },
+    "WB_LEDGER_RECOVER_STREAK": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/operational.py:replay_ledger_receipts"
+      ],
+      "default": 3,
+      "minimum": 1,
+      "unit": "consecutive_passes"
+    },
+    "WB_LEDGER_REPLAY_BATCH": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:replay_batch"
+      ],
+      "default": 50,
+      "minimum": 1,
+      "unit": "receipts_per_pass"
+    },
+    "WB_LEDGER_REPLAY_INTERVAL_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/operational.py:monitor"
+      ],
+      "default": 30,
+      "minimum": 1,
+      "unit": "seconds"
+    },
+    "WB_LEDGER_SPOOL_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:spool_dir"
+      ]
+    },
     "WB_KEY_BUDGET_PENDING": {
       "type": "integer",
       "sensitive": false,
@@ -435,13 +510,43 @@
       "minimum": 0,
       "unit": "concurrent_or_pending"
     },
+    "WB_BUDGET_REVIEW_DEADLINE_DAYS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (review_deadline_days)"
+      ],
+      "default": 7,
+      "minimum": 1,
+      "unit": "days"
+    },
+    "WB_BUDGET_RECONCILE_INTERVAL_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/operational.py (monitor)"
+      ],
+      "default": 900,
+      "minimum": 1,
+      "unit": "seconds"
+    },
+    "WB_BUDGET_RECONCILE_MIN_AGE_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/operational.py (reconcile_zero_reservation_unknowns)"
+      ],
+      "default": 7200,
+      "minimum": 1,
+      "unit": "seconds"
+    },
     "WB_KEY_CONCURRENCY": {
       "type": "integer",
       "sensitive": false,
       "consumers": [
         "local-overrides/server/observability.py (admit_key)"
       ],
-      "default": 0,
+      "default": 4,
       "minimum": 0,
       "unit": "concurrent_or_pending"
     },
@@ -454,6 +559,14 @@
       "default": 1,
       "minimum": 0,
       "unit": "concurrent_or_pending"
+    },
+    "WB_LOG_LEVEL": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "server/main.py:_configure_app_logging"
+      ],
+      "default": "INFO"
     },
     "WB_LOCAL_IMPORT": {
       "type": "boolean",
@@ -491,7 +604,8 @@
       "sensitive": false,
       "consumers": [
         "manager/server/services/updater.py:711"
-      ]
+      ],
+      "default": "daniei-chen/zhihui-gateway"
     },
     "WB_METRICS_TOKEN": {
       "type": "string",
@@ -586,7 +700,8 @@
         "systemd",
         "host",
         "native"
-      ]
+      ],
+      "default": "auto"
     },
     "WB_SAFE_RETRY_MAX": {
       "type": "integer",
@@ -620,7 +735,8 @@
       "sensitive": false,
       "consumers": [
         "manager/server/services/updater.py:616"
-      ]
+      ],
+      "default": "workbuddy-web"
     },
     "WB_SESSION_DAYS": {
       "type": "integer",

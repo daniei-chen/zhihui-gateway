@@ -152,13 +152,19 @@ class GitAttributesTest(unittest.TestCase):
     def test_rule_is_not_vacuous(self) -> None:
         """反证：确认这条规则真的会作用于我们的脚本路径（而不是没匹配上）。"""
         import subprocess
-
-        r = subprocess.run(
-            ['git', 'check-attr', 'eol', '--', 'deploy/windows-native/start-workbuddy2api.cmd'],
-            cwd=str(_ROOT), capture_output=True, text=True, timeout=60,
-        )
-        if r.returncode != 0:
-            self.skipTest('本环境没有 git，跳过（CI 上会跑）')
+        import shutil
+        import tempfile
+        if shutil.which('git') is None:
+            self.skipTest('git is not installed')
+        # Release archives intentionally omit .git. Test the actual attributes
+        # in a temporary repository instead of silently skipping archive builds.
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / '.gitattributes').write_bytes((_ROOT / '.gitattributes').read_bytes())
+            subprocess.run(['git', 'init', '-q', name], check=True, capture_output=True, timeout=60)
+            r = subprocess.run(
+                ['git', 'check-attr', 'eol', '--', 'deploy/windows-native/start-workbuddy2api.cmd'],
+                cwd=name, capture_output=True, text=True, timeout=60, check=True)
         self.assertIn('eol: crlf', r.stdout, f'git 没把该文件判成 crlf：{r.stdout!r}')
 
 

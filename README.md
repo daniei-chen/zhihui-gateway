@@ -1,225 +1,128 @@
 <div align="center">
 
-<img src="docs/images/readme-white-hero.svg" alt="智汇 ZHIHUI：三平台汇聚，一站式 AI 网关" width="100%" />
+<a href="https://zhihui.kaogong.art/"><img src="brand/zhihui-z.svg" width="68" height="68" alt="智汇蓝色 Z 标识" /></a>
+
+<p><sub>Z H I H U I　 /　 SELF-HOSTED AI GATEWAY　 /　 0.0.2</sub></p>
+
+# 多源汇入，一核择路。
+
+**把复杂留给网关，把清晰还给你。**
+
+WorkBuddy · Qoder · Trae<br />
+三种来源，一套控制语言。路由、凭证、用量与调用记录，在同一个地方看清。
+
+<a href="https://zhihui.kaogong.art/">走进智汇 ↗</a>　 /　 <a href="#从这里开始">从这里开始</a>　 /　 <a href="docs/PRODUCT-RELEASE.md">版本与升级</a>　 /　 <a href="CHANGELOG.md">更新日志</a>
 
 <br />
 
-# 智汇 · ZHIHUI Gateway
+<a href="https://zhihui.kaogong.art/"><img src="docs/images/zhihui-home.png" width="100%" alt="智汇真实首页：多源汇入，一核择路；浅色留白、蓝色 Z 与统一平台入口" /></a>
 
-**多源汇入，一核管理。让每一次 AI 调用，都有迹可循。**
+<sub>不是另一张概念稿。这就是网站首页的源码渲染；<a href="site/home/index.html">页面源码</a>也在这个仓库。</sub>
 
-自托管的 AI 网关与统一控制台。<br />
-集中管理 **WorkBuddy · Qoder · Trae** 平台账号池、访问凭证、模型目录、用量账本与调用日志。
-
-<br />
-
-<a href="https://zhihui.kaogong.art/">官方网站</a>　·　<a href="#快速开始">快速开始</a>　·　<a href="#三平台路由">平台路由</a>　·　<a href="manager/deploy/README.md">部署文档</a>　·　<a href="CHANGELOG.md">更新日志</a>
-
-<br />
-
-<img src="https://img.shields.io/badge/Python-3.11%2B-3B72A8?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+" />
-<img src="https://img.shields.io/badge/FastAPI-Backend-2A9D8F?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
-<img src="https://img.shields.io/badge/Next.js-15-222222?style=flat-square&logo=nextdotjs&logoColor=white" alt="Next.js 15" />
-<img src="https://img.shields.io/badge/React-19-2482C7?style=flat-square&logo=react&logoColor=white" alt="React 19" />
-<img src="https://img.shields.io/badge/Tailwind-v4-547EEC?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4" />
-<img src="https://img.shields.io/badge/License-MIT-858CA0?style=flat-square" alt="MIT License" />
-
-<br /><br />
-
-</div>
-
-> [!NOTE]
-> 本项目面向自托管与已获授权的使用场景，并非公开售卖 API 的商业服务。不同上游的模型、协议能力与账号状态取决于实际版本、授权和服务可用性；代码中的设计机制不等于任一生产环境已经全部验证。
-
-<br />
-
-## 设计理念
-
-<div align="center">
-
-### 能转发请求，只是开始。能解释结果，才是可靠。
-
-一次调用从身份校验、账号选择到流式响应与用量结算，每一步都有可能遇到未知状态。智汇希望把这些复杂性留在网关内部，把**清晰的控制、可核对的记录与可追踪的行为**交给使用者。
-
-</div>
-
-<table>
-<tr>
-<td width="25%" align="center"><b>01 · 路由</b><br/><sub>平台分离<br/>路径明确</sub></td>
-<td width="25%" align="center"><b>02 · 权限</b><br/><sub>Key / IP / 模型<br/>独立约束</sub></td>
-<td width="25%" align="center"><b>03 · 账本</b><br/><sub>预留 / 结算<br/>未知不归零</sub></td>
-<td width="25%" align="center"><b>04 · 发布</b><br/><sub>签名 / 哈希<br/>兼容回退</sub></td>
-</tr>
-</table>
-
-<br />
-
-## 控制台一览
-
-**一个控制面，管理不同平台的日常工作。** 仓库已有账号池、模型目录、访问 Key、用量统计、调用日志、任务记录、安全管控与系统设置等页面。
-
-<div align="center">
-<img src="docs/images/shot-dashboard.png" alt="智汇网关真实运行控制台截图" width="100%" />
-<sub>真实运行界面截图（仓库原有素材）；敏感的账号昵称、UID 与来源 IP 已模糊。</sub>
 </div>
 
 <br />
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<img src="docs/images/shot-accounts.png" alt="真实账号池管理界面" width="100%" />
-<br/><b>账号池</b><br/><sub>分组、状态、有效期、积分信息与账号维护。</sub>
-</td>
-<td width="50%" valign="top">
-<img src="docs/images/shot-logs.png" alt="真实请求日志界面" width="100%" />
-<br/><b>调用日志</b><br/><sub>请求状态、用量、首字延迟、缓存与错误线索。</sub>
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center">
-<img src="docs/images/shot-models.png" alt="真实模型目录管理界面" width="100%" />
-<br/><b>模型目录</b><br/><sub>模型系列、上下文、来源及实际可获取的模型信息。</sub>
-</td>
-</tr>
-</table>
+## 01 / 少一点界面，多一点把握
 
-> 以上四张均沿用原版 README 的真实产品截图，并非新设计稿或虚构运行数据。界面会随实际版本和部署环境变化。
+首页负责讲清楚智汇，登录页负责安静地进入，控制台负责把事情做好。
+三者共享同一枚 Z、同一组留白与圆角、同一种克制的蓝。
 
-<br />
+控制台不是删功能后的“极简版”。它保留平台切换、账号池、模型目录、访问 Key、
+用量、日志、任务与设置，也保留浮动 Dock、悬停放大、拖动位置记忆与明暗主题。
+**简单的是表达，不是能力。**
 
-<a id="三平台路由"></a>
-## 三平台路由
+<img src="docs/images/zhihui-console.png" width="100%" alt="智汇新版控制台，保留浮动 Dock 与多平台管理；截图数据为隔离合成夹具" />
 
-<img src="docs/images/readme-white-routing.svg" alt="白底极简三平台路由图：WorkBuddy、Qoder、Trae 使用不同入口前缀" width="100%" />
+<sub>新版代码的真实浏览器渲染，使用合成数据；不是生产账号、实时指标或供应商可用性证明。</sub>
 
-统一的管理界面不意味着三个平台共用同一个引擎。项目根据数据面 URL 前缀分派请求，并保留平台之间的作用域边界：
+| 看见 | 管住 | 核对 | 演进 |
+| --- | --- | --- | --- |
+| 平台、模型与运行状态 | 身份、Key、模型与 IP 边界 | 调用记录、用量与未知项 | 固定源码、受控发布与回退 |
 
-| 来源 | 数据面入口 | 对应引擎 |
-| :--- | :--- | :--- |
-| **WorkBuddy** | `/v1/*` | `workbuddy2api` |
-| **Qoder** | `/qoder/v1/*` | `qoder2` |
-| **Trae** | `/trae/v1/*` | `aiwork-server` |
-
-控制面也支持平台维度的数据视图与相关路由适配；**切换控制台的平台，不代表已经改变下游调用 URL**。
-
-详见 [三平台路由设计](design/qtg/route-table.json) 与 [平台相关服务代码](manager/server/qtgcore/)。
-
-<br />
-
-## 可核对的计量账本
-
-<img src="docs/images/readme-white-ledger.svg" alt="白底计量账本流程图：请求预留、实际结算、unknown 待核对、审计调整" width="100%" />
-
-上游可能已经处理了请求，却没有返回完整的用量信息。
-
-**“不知道用了多少”不等于“没有消耗”。** 智汇在代码层面使用预留与结算逻辑；当缺少可靠的 `usage` 时保留 `unknown` 状态，等待后续核对，而不是直接把这笔支出归零。
-
-| 状态 | 处理原则 |
-| :--- | :--- |
-| 已取得可靠用量 | 按实际返回数据结算 |
-| 调用发生但用量缺失 | 保留待核对的不确定状态 |
-| 额度调整或补偿 | 通过有记录的调整路径处理 |
-
-涉及代码：[预算预留](manager/server/budget.py) · [账本事件](manager/server/ledger.py) · [预留归属](manager/server/budgetowner.py)。
-
-<br />
-
-## 安全与发布保障
-
-<img src="docs/images/readme-white-guard.svg" alt="白底访问控制与发布保障图：Key、IP、模型、发布完整性" width="100%" />
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<b>访问控制</b><br/><br/>
-• 下游 API Key、独立额度与有效期<br/>
-• IP 白名单、黑名单及 CIDR 规则<br/>
-• 按密钥约束平台与模型<br/>
-• 管理员 / 查看者权限区分
-</td>
-<td width="50%" valign="top">
-<b>发布与数据保护</b><br/><br/>
-• Ed25519 签名与逐文件哈希机制<br/>
-• 扩容优先的数据库迁移策略<br/>
-• 旧版本兼容性与回退相关检查<br/>
-• 管理行为、计量与任务审计
-</td>
-</tr>
-</table>
-
-**凭证边界要分清：** 管理面会话与管理 API Token 用于管理接口；下游 API Key 用于模型代理调用。服务端写操作有额外的管理员会话限制，不能把只读管理 Token 当作写入凭证。
-
-进一步阅读：[管理 Token 说明](docs/api-tokens.md) · [安全审查](docs/SECURITY-AUDIT.md) · [发布与签名](docs/release-signing.md)。
-
-> [!IMPORTANT]
-> 仓库中有完整性校验与兼容性相关机制，但是否在某个生产部署中启用、是否通过特定故障场景验证，仍应以该部署的实际证据为准。
-
-<br />
-
-## 系统架构
-
-### 清晰的控制面，与可扩展的平台适配
+## 02 / 统一入口，不混淆来源
 
 ```text
-             下游客户端 / 开发工具
-                       │
-           对应平台前缀及授权 Key
-                       ▼
-       ┌─────────────────────────────┐
-       │ ZHIHUI · Manager / Gateway  │
-       │ Key 校验 · IP/模型限制       │
-       │ API 路由 · 统计与用量账本    │
-       │ FastAPI · SQLite            │
-       └──────────────┬──────────────┘
-                      │
-           ┌──────────┼──────────┐
-           ▼          ▼          ▼
-      WorkBuddy      Qoder      Trae
-      workbuddy2api  qoder2     aiwork-server
+                         你的客户端
+                             │
+                     授权 Key · 平台前缀
+                             ▼
+                  ┌──────────────────────┐
+                  │   智汇 ZHIHUI        │
+                  │   路由 / 权限 / 账本  │
+                  └──────────┬───────────┘
+                     ┌───────┼───────┐
+                     ▼       ▼       ▼
+                 WorkBuddy  Qoder   Trae
 ```
 
-| 组成 | 技术与职责 | 源码 |
-| :--- | :--- | :--- |
-| **Web 控制台** | Next.js 15、React 19、Tailwind CSS 4；静态导出 | [`src/three-platform/web/`](src/three-platform/web/) |
-| **Manager** | FastAPI、身份认证、管理接口、账本与代理 | [`manager/server/`](manager/server/) |
-| **平台适配层** | 三平台适配、路由与控制面兼容 | [`manager/server/qtgcore/`](manager/server/qtgcore/) |
-| **运行与部署** | 安装、更新、签名、回退与运维配置 | [`manager/deploy/`](manager/deploy/) · [`ops/`](ops/) |
-| **工程验证** | 单元测试、契约测试与隔离测试工具 | [`manager/server/tests/`](manager/server/tests/) · [`tests/`](tests/) |
+| 平台 | 模型调用入口 | 引擎 |
+| --- | --- | --- |
+| WorkBuddy | `/v1/*` | workbuddy2api |
+| Qoder | `/qoder/v1/*` | qoder2 |
+| Trae | `/trae/v1/*` | aiwork-server |
 
-前端构建产物由 FastAPI 托管，开发模式可独立启动 Next.js。Manager 与 QTG 的控制面收敛仍有历史兼容事项；不要仅凭相同 API 路径推断数据来源相同，详见 [统一控制面盘点](design/H08-U0-control-plane.md)。
+切换控制台的平台视图，不会替你改写客户端的 Base URL。
+协议、模型和账号能力以对应引擎的实际版本与授权为准。
 
-<br />
+**也分清两种“上游”：** 模型服务的上游是平台引擎；智汇软件的源码与升级上游，
+固定为 [这个仓库](https://github.com/daniei-chen/zhihui-gateway)。它们不是同一个设置。
 
-<a id="快速开始"></a>
-## 快速开始
+## 03 / 不把未知写成零
 
-<sub>下面是本地开发和最小管理服务启动方式，不代表完整三平台生产部署。完整流程请参阅 <a href="manager/deploy/README.md">部署指南</a>。</sub>
+一次请求失败，不代表上游没有处理；没有返回 `usage`，也不代表没有消耗。
 
-**01 · 获取代码**
+```text
+请求进入 → 额度预留 → 平台调用 → 可靠用量 → 结算
+                           └→ 用量缺失 → unknown / 待核对
+```
+
+智汇保留未知状态及有记录的调整路径，不为让数字好看而把缺失用量归零。
+上游渠道校验拒绝、网络错误、网关错误应分别识别，不自动把一次渠道拒绝等同于账号失效。
+
+相关实现：[预算预留](manager/server/budget.py) · [账本事件](manager/server/ledger.py) · [回执重放](manager/server/ledgerreplay.py)。
+
+## 04 / 一份仓库，一条产品版本线
+
+**本版：`0.0.2`。** 源码、首页、登录页、控制台与品牌素材都在这里；产品版本来自
+[`VERSION`](VERSION)，组件身份见 [`product-release.json`](manager/server/product-release.json)。
+继承的 Manager 审计版本只作基线保存，不再冒充智汇产品版本。
+
+```text
+固定仓库提交 → 构建 → 隔离测试 → 哈希 / 签名 / 测试回执 → 可信发布器 → 运行核验
+```
+
+受控安装不会执行 `git pull && restart`，也不会把任意 `main` 提交直接覆盖到运行目录。
+源码获取与版本检测只从本仓库出发；网页旧式覆盖更新在受控部署上保持关闭。
+**回退的是代码，不是用户刚刚产生的账本、授权与撤销记录。**
+
+具体合同见 [版本、来源与安全升级](docs/PRODUCT-RELEASE.md)，已做与待做见 [0.0.2 审计边界](docs/AUDIT-0.0.2.md)。
+
+## 从这里开始
+
+这是**本地开发的最小控制面**，不是一条命令装好完整三平台生产环境。
+建议 Python 3.12、Node.js 22+；前端使用 Next.js 16、React 19 与 Tailwind CSS 4。
 
 ```bash
 git clone https://github.com/daniei-chen/zhihui-gateway.git
 cd zhihui-gateway
 ```
 
-**02 · 启动管理服务**
-
-需要 Python 3.11+。以下命令适用于 Linux / macOS 的本地开发环境：
+启动后端（Linux x86_64、Python 3.12，本地 loopback；哈希锁定的依赖不覆盖 macOS / Windows）：
 
 ```bash
 cd manager
-python -m venv venv
-venv/bin/pip install -r server/requirements.txt
+python3.12 -m venv venv
+venv/bin/pip install --require-hashes -r server/requirements.hashes.txt
 
-WB_ADMIN_PASSWORD='change-to-your-own-strong-password' \
-WB_DATA_DIR=./data \
+WB_DATA_DIR=./data WB_BACKGROUND_JOBS=0 \
 venv/bin/python -m uvicorn server.main:app --host 127.0.0.1 --port 7864
 ```
 
-**03 · 启动 Web 前端**
+首次管理员随机密码仅在启动日志输出；本地确认身份后及时修改，勿将日志公开。
+三个平台的完整能力仍需分别配置已授权的引擎和账号；此步骤不会自动获得模型授权。
 
-另开终端，从仓库根目录进入前端：
+另开终端启动前端：
 
 ```bash
 cd src/three-platform/web
@@ -227,88 +130,38 @@ npm ci
 npm run dev
 ```
 
-开发前端默认访问 `http://localhost:3000`，后端反向代理配置见 [`next.config.ts`](src/three-platform/web/next.config.ts)。完整三平台功能仍需要相应上游引擎、账号与授权配置，不能只靠启动管理进程获得。
-
-**04 · 隔离环境测试**
-
-```bash
-cd manager
-python -B -X utf8 ../tests/zhihui_harness/run_tests.py --target manager-assets --keep
-```
-
-> [!CAUTION]
-> 不要直接在生产服务器上运行示例部署、测试、计量对账、更新或回滚命令。项目测试应遵循已有隔离运行器要求，不建议直接执行无隔离的全量 `pytest`。
-
-<br />
-
-## 工程资料
-
-| 想了解什么 | 对应资料 |
-| :--- | :--- |
-| 完整安装、上游镜像、更新方式 | [部署指南](manager/deploy/README.md) |
-| 核心模块与开发变更 | [Manager 源码](manager/server/) |
-| 密钥边界、管理 API Token | [Token 文档](docs/api-tokens.md) |
-| 账号独立出口线路 | [代理线路说明](docs/account-proxy-routes.md) |
-| 代码安全与风险 | [安全审查](docs/SECURITY-AUDIT.md) |
-| 发布签名与校验 | [签名文档](docs/release-signing.md) |
-| 设计与架构决策 | [Design 目录](design/) |
-| 更新历史 | [CHANGELOG](CHANGELOG.md) |
+访问 `http://localhost:3000`。静态导出使用 `npm run build:export`；
+生产反代、身份桥与固定引擎的配置需要单独审查，不要把本地开发当作生产安装器。
 
 <details>
-<summary><b>项目目录速览</b></summary>
+<summary><b>打开仓库地图</b> — 想看设计、代码，还是部署边界？</summary>
 
-```text
-zhihui-gateway/
-├── manager/
-│   ├── server/                # FastAPI / 账本 / 路由 / 鉴权
-│   └── deploy/                # 安装 / 更新 / 发布
-├── src/three-platform/web/    # Next.js 控制台
-├── docs/                      # 专题说明、真实截图
-├── design/                    # 决策与架构设计
-├── ops/                       # 运维与安全配置
-├── tests/                     # 隔离测试与浏览器测试
-├── tools/                     # 审计、计量等辅助工具
-└── CHANGELOG.md
-```
+| 位置 | 内容 |
+| --- | --- |
+| [`site/`](site/) | 与真实网站一致的首页、登录页和 favicon |
+| [`brand/`](brand/) | 共用的蓝色 Z 矢量标识 |
+| [`src/three-platform/web/`](src/three-platform/web/) | 新版控制台源码与浏览器夹具 |
+| [`manager/server/`](manager/server/) | FastAPI、权限、代理、账本和平台适配 |
+| [`manager/deploy/`](manager/deploy/) | 继承组件的部署/验签代码；不等于已安装的生产信任锚 |
+| [`tools/repository_source.py`](tools/repository_source.py) | 固定仓库、固定提交的只取源码工具 |
+| [`docs/PRODUCT-RELEASE.md`](docs/PRODUCT-RELEASE.md) | 产品版本、升级来源、发布与回退合同 |
+| [`design/`](design/) · [`ops/`](ops/) | 架构设计、运维配置与历史边界记录 |
 
 </details>
 
-<br />
+## 有边界，才值得信任
 
-## 已知边界
-
-README 应当同样解释系统**不能保证什么**，而不是只展示功能：
-
-- **发布门禁**：签名与哈希机制防范受保护产物被意外或未授权修改，但不能防范拥有足够权限者重新签名。
-- **备份位置**：部分历史备份路径与生产系统同机，不能因此宣称已实现真正异地灾备。
-- **数据归因**：首字延迟与实际调用账号等部分字段依赖上游日志源和部署条件，缺失时不能补造。
-- **真实流量覆盖**：历史记录中 WorkBuddy 真实流量更充分，Qoder / Trae 的实际协议覆盖仍需根据环境验证。
-- **控制面演进**：Manager / QTG 同名接口可能涉及不同数据来源，统一控制面仍需谨慎推进。
-
-这些边界可能随版本变化，请结合实际代码、测试证据和部署情况判断。
-
-<br />
+- 面向自托管与已获授权的使用，不是公开售卖模型权限的承诺，不绕过供应商官方渠道校验。
+- 管理会话、管理 API Token 与下游模型 Key 是不同凭证，权限不可互换。
+- 不上传生产账号、数据库、密钥、会话、原始审计证据或私有截图；公开仓库不代替私有备份。
+- `0.0.2` 不等于“审计全部完成”。未验证的真实推理、离机灾备、特权边界和长期 SLO 仍需独立证据。
+- 前端为经过验证的重建源码；不会把新的 Git 提交伪装成复现了历史原始提交。
 
 ## 致谢与许可
 
-智汇的 WorkBuddy 账号池与兼容代理基础来自 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT）。本项目在其基础上建设管理控制面、账本和可观测界面；上游版权归原作者，随发布包提供时应保留对应许可证与版权声明。
+智汇在既有组件上持续演进。感谢 WorkBuddy Manager contributors、workbuddy2api、
+Qoder / Trae 相关项目及 [linux-do/cdk](https://github.com/linux-do/cdk) 的界面基础。
+产品源码采用 [MIT](LICENSE)，组件版权与第三方声明见 [Manager LICENSE](manager/LICENSE)。
+模型与账号授权仍遵循各自服务条款；此仓库不授予供应商服务的使用权。
 
-其他参考项目：[workbuddy-sdk](https://github.com/sanguine886/workbuddy-sdk) · [cdk](https://github.com/linux-do/cdk) · [Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager)。
-
-本仓库许可证见 [LICENSE](LICENSE)。
-
----
-
-<div align="center">
-
-### ZHIHUI / 智汇
-
-**简单的入口，清晰的边界，可信的记录。**
-
-<sub>Self-hosted AI Gateway · Routing / Metering / Access / Observability</sub>
-
-<br /><br />
-
-<a href="https://zhihui.kaogong.art/">Website</a>　·　<a href="manager/deploy/README.md">Documentation</a>　·　<a href="CHANGELOG.md">Changelog</a>　·　<a href="LICENSE">License</a>
-
-</div>
+<div align="center"><br /><sub>智汇 ZHIHUI　 /　 少一点喧闹，多一点可控。</sub></div>

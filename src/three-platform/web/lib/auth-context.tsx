@@ -3,6 +3,7 @@
 import {createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {authApi} from '@/lib/api';
 import {BASE_PATH} from '@/lib/base-path';
+import {useHydrated} from '@/lib/use-hydrated';
 import type {Me, Role} from '@/lib/types';
 
 const ME_CACHE_KEY = 'wb-me';
@@ -42,7 +43,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({children}: {children: ReactNode}) {
   const [me, setMe] = useState<Me | null>(null);
-  // 有缓存时直接视为已就绪，页面无需为登录校验停留
+  // Cached display identity is not proof of an authenticated server session.
   const [loading, setLoading] = useState(true);
   const hydrated = useRef(false);
 
@@ -73,11 +74,8 @@ export function AuthProvider({children}: {children: ReactNode}) {
   }, []);
 
   const logout = useCallback(async () => {
-    try {
-      await authApi.logout();
-    } catch {
-      /* 忽略登出异常 */
-    }
+    const result = await authApi.logout();
+    if (!result.ok) throw new Error('Logout was not confirmed by the server.');
     setMe(null);
     writeCachedMe(null);
     // 裸跳转不走 next/router，basePath 不会自动生效，必须显式拼上
@@ -91,7 +89,6 @@ export function AuthProvider({children}: {children: ReactNode}) {
     const cached = readCachedMe();
     if (cached) {
       setMe(cached);
-      setLoading(false);
     }
     refresh();
   }, [refresh]);
@@ -107,6 +104,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
+  const hydrated = useHydrated();
   if (!ctx) throw new Error('useAuth 必须在 AuthProvider 内使用');
-  return ctx;
+  return hydrated ? ctx : {...ctx, me: null, loading: true, isAdmin: false, role: null};
 }

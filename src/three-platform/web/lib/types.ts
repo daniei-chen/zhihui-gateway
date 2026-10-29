@@ -619,6 +619,9 @@ export interface CreatedApiToken extends ApiToken {
 }
 
 export interface RequestLog {
+  /** Gateway execution ID; never substitute the caller-supplied request ID. */
+  request_id?: string | null;
+  client_request_id?: string | null;
   id: number;
   ts: number;
   key_id: number | null;
@@ -1008,7 +1011,24 @@ export interface UpdateLogLine {
   text: string;
 }
 
+export interface ProductRelease {
+  name: string;
+  version: string;
+  repository: string;
+  repository_url: string;
+  branch: string;
+  releases_url: string;
+  source_commit: string | null;
+  manager_baseline: string;
+  release_channel: string;
+  managed: boolean;
+  web_update_enabled: boolean;
+  update_policy: string;
+  provider_endpoints_changed: boolean;
+}
+
 export interface UpdateStatus {
+  product?: ProductRelease;
   available: boolean;
   /** 是否运行在容器里（决定能力边界，见 can_update_upstream） */
   in_container?: boolean;
@@ -1135,10 +1155,11 @@ export interface UpdatePackageMeta {
 }
 
 export interface Versions {
+  product?: ProductRelease;
   manager: string;
   upstream_connected: boolean;
   upstream_accounts: number | null;
-  upstream_dir: string;
+  upstream_dir: string | null;
 }
 
 /**

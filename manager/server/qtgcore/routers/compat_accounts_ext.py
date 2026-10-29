@@ -19,19 +19,11 @@ from fastapi.responses import JSONResponse
 
 from ..errors import BadRequest
 from ..service import all_accounts, build_aggregate
+# U28：`_rt` / `_no` 原先在本文件里各有一份拷贝（与其它 compat 路由逐字节相同）。
+# 现在统一从 `_shared` 引入并**在此继续导出**，`compat_accounts_ext._rt` 仍可用。
+from ._shared import _no, _rt
 
 router = APIRouter(prefix="/api", tags=["compat-accounts-ext"])
-
-
-def _rt(request: Request):
-    return request.app.state.rt
-
-
-def _no(what: str, why: str = "") -> JSONResponse:
-    detail = f"本部署不支持{what}"
-    if why:
-        detail += f"：{why}"
-    return JSONResponse(status_code=409, content={"detail": detail})
 
 
 async def _body(request: Request) -> Dict[str, Any]:

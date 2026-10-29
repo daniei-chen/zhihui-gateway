@@ -3,13 +3,15 @@
 import {useEffect, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {motion} from 'motion/react';
-import {Bot, Loader2, LogIn} from 'lucide-react';
+import {Loader2, LogIn} from 'lucide-react';
 import {errText} from '@/lib/api';
 import {useAuth} from '@/lib/auth-context';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
 import {useT} from '@/lib/i18n/provider';
+import {withBasePath} from '@/lib/base-path';
+import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
 
 export default function LoginPage() {
   const {me, loading, login} = useAuth();
@@ -75,6 +77,9 @@ export default function LoginPage() {
 
   return (
     <div className="bg-background relative flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
+      <div className="absolute right-4 top-4 sm:right-6 sm:top-6">
+        <LanguageToggle />
+      </div>
       <motion.div
         initial={{opacity: 0, y: 12}}
         animate={{opacity: 1, y: 0}}
@@ -82,9 +87,7 @@ export default function LoginPage() {
         className="w-full max-w-sm"
       >
         <div className="mb-6 flex flex-col items-center gap-3 text-center">
-          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground">
-            <Bot className="h-5 w-5" />
-          </div>
+          <img src={withBasePath('/favicon/zhihui-z-20261029/favicon.svg')} width={44} height={44} alt="" />
           <div className="space-y-1">
             <h1 className="text-lg font-semibold tracking-[-0.01em]">{t('brand.name')}</h1>
             <p className="text-xs text-muted-foreground">

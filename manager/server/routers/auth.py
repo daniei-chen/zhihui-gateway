@@ -54,6 +54,9 @@ async def login(request: Request) -> JSONResponse:
 
     cfg = security.load_users()
     user = next((u for u in cfg.get('users', []) if u.get('username') == username), None)
+    if not user:
+        # Avoid a no-KDF fast path that reveals whether the username exists.
+        security.dummy_verify(password)
     if not user or not security.verify_pwd(password, user.get('pwd_hash', '')):
         # 同时记 IP 与用户名：前者防单机爆破，后者防换 IP 打同一账号
         security.record_fail(ip, username)

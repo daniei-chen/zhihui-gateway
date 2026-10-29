@@ -272,12 +272,12 @@ info "安装 Python 依赖"
 "$PY" -m venv "${APP_DIR}/venv" 2>/dev/null || true
 if [ -x "${APP_DIR}/venv/bin/pip" ]; then
   "${APP_DIR}/venv/bin/pip" install -q --upgrade pip
-  "${APP_DIR}/venv/bin/pip" install -q -r "${APP_DIR}/server/requirements.txt"
+  "${APP_DIR}/venv/bin/pip" install -q --require-hashes -r "${APP_DIR}/server/requirements.hashes.txt"
   RT_PY="${APP_DIR}/venv/bin/python"
   ok "依赖已装入 venv"
 else
-  "$PY" -m pip install -q --break-system-packages -r "${APP_DIR}/server/requirements.txt" 2>/dev/null \
-    || "$PY" -m pip install -q -r "${APP_DIR}/server/requirements.txt"
+  "$PY" -m pip install -q --break-system-packages --require-hashes -r "${APP_DIR}/server/requirements.hashes.txt" 2>/dev/null \
+    || "$PY" -m pip install -q --require-hashes -r "${APP_DIR}/server/requirements.hashes.txt"
   RT_PY="$PY"
   ok "依赖已装入系统 Python"
 fi

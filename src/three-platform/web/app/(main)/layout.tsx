@@ -6,6 +6,7 @@ import {ManagementBar} from '@/components/common/layout/ManagementBar';
 import {CommandPalette} from '@/components/common/layout/CommandPalette';
 import {RealmToggle} from '@/components/common/layout/RealmToggle';
 import {PlatformToggle} from '@/components/common/layout/PlatformToggle';
+import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
 import {RealmProvider} from '@/lib/realm-context';
 import {PlatformProvider, PlatformScope} from '@/lib/platform-context';
 import {useAuth} from '@/lib/auth-context';
@@ -66,6 +67,7 @@ export default function MainLayout({
                   {/* 平台（WorkBuddy / Qoder / Trae）是大维度，版本是它下面的细分 */}
                   <PlatformToggle />
                   <RealmToggle />
+                  <LanguageToggle />
                 </div>
                 {/*
                   平台隔离的关键：切换平台时把内容子树整体重挂载。

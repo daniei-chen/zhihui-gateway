@@ -43,7 +43,7 @@ export function TokenTrendChart({
       {/* 用 ComposedChart 而不是 BarChart：BarChart 会忽略非 Bar 子组件，
           失败曲线（Line）根本不会被渲染 —— 实测踩过，图上一条线都没有。 */}
       <ComposedChart data={data} margin={{top: 4, right: 8, bottom: 0, left: -8}}
-                     barCategoryGap="20%">
+                     barCategoryGap="20%" accessibilityLayer title={`${tokensLabel} / ${failedLabel}`}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis
           dataKey="label"

@@ -225,13 +225,15 @@ class WorkerMirrorRequestTest(unittest.TestCase):
 
     def test_download_falls_back_when_the_mirror_returns_an_error_page(self) -> None:
         """镜像返回一个很小的错误页：要当成失败并回退，而不是把错误页当发布包。"""
-        with _Server(fail=True) as mirror:
+        with _Server(fail=True) as mirror, _Server(fail=True) as origin:
             mod = _load_worker(WB_GITHUB_MIRROR=mirror.url)
             dest = self.dir / 'pkg.tar.gz'
             rep = _Rep()
-            with self.assertRaises(Exception):
-                mod.download('https://github.com/a/b/releases/download/v1/x.tar.gz',
-                             dest, rep, )
+            # Both failure legs use real local HTTP. External availability must
+            # never decide whether the fallback contract passes.
+            with mock.patch.object(mod, 'mirror_url', return_value=mirror.url + 'archive'), \
+                    self.assertRaises(Exception):
+                mod.download(origin.url + 'archive.tar.gz', dest, rep)
         self.assertIn('回退直连', rep.text())
 
     def test_redirect_fallback_stays_direct(self) -> None:

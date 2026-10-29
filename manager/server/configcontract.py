@@ -2,17 +2,26 @@
 """Canonical portable config validator; generated into each independent service.
 
 Edit here, then run tools/build_config_contracts.py. No app, DB or network imports.
+
+U16（2026-10-28，**本地扩展**）：文末新增「四源对照」纯函数
+（`parse_source_defaults` / `compare_sources` / `redact_value` / `cross_checks`）。
+它们只用标准库、不 import 应用模块，因此服务进程与离线采集脚本可以共用同一份
+判定逻辑。重新生成本文件时**必须保留这一段**，否则 `/api/system/config` 与
+`server/tests/test_config_drift.py` 会失效。
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+import hmac
 import ipaddress
 import json
 import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import secrets
 from urllib.parse import urlsplit
 
 
@@ -137,6 +146,370 @@ def with_effective_values(snapshot, values, *, source):
         result['settings'][name]['value']=_safe(value,specs[name])
         result['settings'][name]['source']=source
     return result
+
+
+# ── U16（2026-10-28）：配置漂移 —— 四源对照 ────────────────────────────────
+#
+# 同一个设置值可能同时存在于四个地方，而它们**会漂移**：
+#   1. `config-schema.json` 的 `default` / `default_expression`：配置模型的权威默认值；
+#   2. 源码里的 `_env*('NAME', <default>)` 第二参数：未设置时真正生效的值；
+#   3. unit + drop-in 的 `Environment=`：运维覆盖（systemd 语义：后加载覆盖前者）；
+#   4. `/proc/<pid>/environ`：进程**启动时**真正拿到的值。
+#
+# 3 与 4 必须分开看：改了 drop-in 却没重启，进程里还是旧值 —— 这正是最容易被
+# 误读成「配置已生效」的漂移。本段只做**纯计算**（不读环境、不读文件、不 import
+# 应用模块），采集交给调用方（`server/routers/system.py` 与 `dev/u16-collect.py`），
+# 因此同一个判定逻辑既能给 API 用，也能给离线采集脚本用。
+#
+# 权威顺序（写进 `server/config.py::SCHEMA_DRIFT_ALLOWED` 的注释里，测试强制）：
+#   schema 默认值 == 源码默认值（唯一例外进 allow-list）
+#   unit/drop-in **只写与 schema 默认不同的项**，且一个键只允许出现在一个文件里。
+
+#: 漂移标记。`override`（覆盖）与 `rule_default`（规则型默认值）是**正常**的；
+#: 其余都代表某种不一致，需要人看。
+DRIFT_FLAGS = (
+    'unregistered',         # 代码读了但 schema 没登记 —— 一旦设了就让服务起不来
+    'default_mismatch',     # 源码默认值 != schema 默认值
+    'expression_mismatch',  # 表达式型默认值文本 != schema 的 default_expression
+    'declared_vs_process',  # unit 声明值 != 进程实际值（改了没重启）
+    'declared_only',        # 只在 unit 里，进程没拿到（unit 在启动后被改过）
+    'process_only',         # 只在进程里，unit 里没有（来源不明：launcher/EnvironmentFile）
+    'duplicate_in_units',   # 同一个键在多个 unit 文件里各写一份
+    'sensitive_in_unit',    # 敏感值以明文出现在 unit/drop-in 里
+    'dead_config',          # unit/进程设了，但没有任何代码读它
+    'override',             # 覆盖了 schema 默认值（正常运维动作，仅记录）
+    'rule_default',         # 默认值是一条规则（如 `base`），不按字面比较
+    'no_schema_default',    # schema 没给默认值
+    'empty_sentinel',       # 源码用空串作哨兵（后面还有 `or X` 兜底），不参与比较
+)
+
+#: 这些标记一旦出现就是缺陷（而不是"运维覆盖"）。
+_HIGH_FLAGS = frozenset({'unregistered', 'declared_vs_process', 'declared_only',
+                         'process_only', 'sensitive_in_unit'})
+_MEDIUM_FLAGS = frozenset({'default_mismatch', 'expression_mismatch',
+                           'duplicate_in_units', 'dead_config'})
+
+_ENV_NAME_RE = re.compile(r'^(?:WB_|WB2API_)[A-Za-z0-9_]{1,60}$')
+#: 进程内随机密钥：敏感值的指纹在**同一次采集内跨源可比**，但离线不可猜
+#: （固定 sha256 前缀对低熵口令可被暴力反推）。
+_FINGERPRINT_KEY = secrets.token_bytes(16)
+_SOURCE_CACHE: dict = {}
+
+
+def fingerprint(value) -> str:
+    """敏感值的可比指纹（HMAC，进程内随机密钥）。"""
+    return hmac.new(_FINGERPRINT_KEY, str(value).encode('utf-8'),
+                    hashlib.sha256).hexdigest()[:8]
+
+
+def redact_value(spec, value):
+    """敏感项只返回「是否设置 + 指纹 + 长度」；URL 里的凭据按 `_safe` 抹掉。"""
+    if value is None:
+        return None
+    spec = spec or {}
+    if spec.get('sensitive'):
+        text = str(value)
+        return {'redacted': True, 'set': bool(text),
+                'fingerprint': fingerprint(text) if text else None,
+                'length': len(text)}
+    return _safe(value, spec)
+
+
+def _is_environ_access(node) -> bool:
+    """`os.environ` / `os.environ[...]` / `environ.get(...)` 里那个 `environ`。"""
+    if isinstance(node, ast.Attribute) and node.attr == 'environ':
+        return True
+    if isinstance(node, ast.Name) and node.id == 'environ':
+        return True
+    return False
+
+
+def _env_helper_names(tree) -> set:
+    """本文件里「内部会读 os.environ」的函数名（含嵌套 def，如 deadline 的 `_num`）。
+
+    不靠名字猜（`_num` 里没有 env 字样），而是看函数体里到底有没有 `os.environ`。
+    """
+    helpers = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(_is_environ_access(sub) for sub in ast.walk(node)):
+                helpers.add(node.name)
+    return helpers
+
+
+def _reads_environment(func, helpers=frozenset()) -> bool:
+    """判断一个调用是不是「读环境变量」，避免把 `rows.get('WB_X', {})` 误判成读 env。"""
+    if isinstance(func, ast.Name):
+        return 'env' in func.id.lower() or func.id in helpers
+    if isinstance(func, ast.Attribute):
+        if func.attr not in ('get', 'getenv', 'setdefault'):
+            return False
+        return ast.unparse(func.value).endswith('environ')
+    return False
+
+
+def _opaque(value):
+    """未登记变量的值：只说明"设了/没设"，不返回内容。"""
+    if value is None:
+        return None
+    return {'unregistered': True, 'set': bool(str(value))}
+
+
+def _env_reads(node, helpers=frozenset()):
+    """从一个 AST 节点认出「读环境变量」的写法，产出 (name, default_node|None)。"""
+    if isinstance(node, ast.Call) and node.args and _reads_environment(node.func, helpers):
+        first = node.args[0]
+        if (isinstance(first, ast.Constant) and isinstance(first.value, str)
+                and _ENV_NAME_RE.match(first.value)):
+            return first.value, (node.args[1] if len(node.args) > 1 else None)
+    if isinstance(node, ast.Subscript):
+        target = node.value
+        key = node.slice
+        if (isinstance(target, ast.Attribute) and target.attr == 'environ'
+                and isinstance(key, ast.Constant) and isinstance(key.value, str)
+                and _ENV_NAME_RE.match(key.value)):
+            return key.value, None
+    return None
+
+
+def parse_source_defaults(server_dir=None, *, refresh=False):
+    """AST 扫描各模块，找出「谁、以什么默认值读了哪个环境变量」。
+
+    返回 `{NAME: {'default': 字面值|None, 'expression': 表达式文本|None,
+                  'sites': ['server/config.py:44'], 'conflict': bool}}`。
+
+    只用 `ast`（不 import 任何模块、不读环境），所以既能在服务进程里跑，也能在
+    离线采集脚本里跑 —— 判定标准只有一份。
+    """
+    directory = Path(server_dir) if server_dir else Path(__file__).resolve().parent
+    cache_key = str(directory)
+    if not refresh and cache_key in _SOURCE_CACHE:
+        return _SOURCE_CACHE[cache_key]
+    found: dict = {}
+    for path in sorted(directory.rglob('*.py')):
+        parts = set(path.parts)
+        # tests 不是配置消费者；qtgcore 是**另一个服务**（自带 schema），
+        # 用 manager 的模型去判它的变量只会产生假阳性。
+        if 'tests' in parts or 'qtgcore' in parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        helpers = _env_helper_names(tree)
+        parents: dict = {}
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+        try:
+            rel = path.relative_to(directory.parent).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        for node in ast.walk(tree):
+            read = _env_reads(node, helpers)
+            if read is None:
+                continue
+            name, default_node = read
+            entry = found.setdefault(name, {'default': None, 'expression': None,
+                                            'sites': [], 'conflict': False,
+                                            'empty_default': False,
+                                            'helpers': []})
+            entry['sites'].append('%s:%d' % (rel, node.lineno))
+            helper = ast.unparse(node.func) if hasattr(node, 'func') else 'environ[]'
+            if helper not in entry['helpers']:
+                entry['helpers'].append(helper)
+            if default_node is None:
+                # `os.environ.get('X') or 'DEFAULT'` 这种兜底写法：把 `or` 右侧的
+                # 字面量当成源码默认值，否则表里这一列会是空的（看着像没默认值）。
+                parent = parents.get(node)
+                if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or):
+                    for sibling in parent.values:
+                        if sibling is node:
+                            continue
+                        if isinstance(sibling, ast.Constant):
+                            default_node = sibling
+                            break
+                if default_node is None:
+                    continue
+            try:
+                literal = ast.literal_eval(default_node)
+            except (ValueError, SyntaxError, TypeError):
+                text = ast.unparse(default_node)
+                if entry['expression'] is None:
+                    entry['expression'] = text
+                elif entry['expression'] != text:
+                    entry['conflict'] = True
+            else:
+                # 空字符串 = 「没有默认值，后面还有 `or X` 兜底」的哨兵写法，
+                # 不当成默认值参与比较（否则 WB_SAFE_RETRY_MAX 这类会被误判）。
+                if isinstance(literal, str) and not literal.strip():
+                    entry['empty_default'] = True
+                    continue
+                if entry['default'] is None:
+                    entry['default'] = literal
+                elif entry['default'] != literal:
+                    entry['conflict'] = True
+    _SOURCE_CACHE[cache_key] = found
+    return found
+
+
+def _norm(value):
+    """把「schema 默认值 / 源码默认值 / 环境变量字符串」归一成可比较形态。"""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return '1' if value else '0'
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _norm_expression(value):
+    if value is None:
+        return None
+    return re.sub(r'\s+', '', str(value))
+
+
+def compare_sources(specs, *, source_defaults=None, process_env=None,
+                    declared_env=None, unit_duplicates=None, allowed=None):
+    """四源对照。返回 `{'rows': [...], 'summary': {...}, 'duplicate_keys': {...}}`。
+
+    - `specs`：schema 的 `settings`；
+    - `source_defaults`：`parse_source_defaults()` 的结果；
+    - `process_env`：`os.environ`（或 `/proc/<pid>/environ`）；
+    - `declared_env`：unit + drop-in 合并后的 `Environment=`；
+    - `unit_duplicates`：`{NAME: [{'file','value'}, ...]}`（一个键在多个文件里）；
+    - `allowed`：显式允许的默认值差异 `{NAME: 理由}`（见 config.py）。
+    """
+    source_defaults = source_defaults or {}
+    process_env = process_env or {}
+    declared_env = declared_env or {}
+    unit_duplicates = unit_duplicates or {}
+    allowed = allowed or {}
+    rows = []
+    names = sorted(set(specs) | set(declared_env) | set(process_env) | set(source_defaults))
+    for name in names:
+        if not _ENV_NAME_RE.match(name):
+            continue
+        spec = specs.get(name, {})
+        source = source_defaults.get(name) or {}
+        schema_default = spec.get('default')
+        schema_expression = spec.get('default_expression')
+        declared = declared_env.get(name)
+        process = process_env.get(name)
+        flags = []
+        if name not in specs:
+            flags.append('unregistered')
+        if schema_default is None and schema_expression is None:
+            flags.append('no_schema_default')
+        if schema_expression is not None:
+            flags.append('rule_default')
+        if source.get('empty_default'):
+            flags.append('empty_sentinel')
+        if 'default' in spec and source.get('default') is not None:
+            if _norm(source.get('default')) != _norm(schema_default):
+                flags.append('default_mismatch')
+        elif schema_expression and source.get('expression'):
+            if _norm_expression(source['expression']) != _norm_expression(schema_expression):
+                flags.append('expression_mismatch')
+        if declared is not None and process is not None:
+            if _norm(declared) != _norm(process):
+                flags.append('declared_vs_process')
+        elif declared is not None and process is None:
+            flags.append('declared_only')
+        elif process is not None and declared is None:
+            flags.append('process_only')
+        if name in unit_duplicates:
+            flags.append('duplicate_in_units')
+        if spec.get('sensitive') and declared is not None:
+            flags.append('sensitive_in_unit')
+        if (declared is not None or process is not None) and not source.get('sites'):
+            flags.append('dead_config')
+        if (declared is not None and _norm(declared) != _norm(schema_default)
+                and 'default_mismatch' not in flags):
+            flags.append('override')
+        if name in allowed:
+            flags = [f for f in flags if f not in ('default_mismatch', 'expression_mismatch')]
+            flags.append('allowed_difference')
+        if _HIGH_FLAGS & set(flags):
+            risk = 'high'
+        elif _MEDIUM_FLAGS & set(flags):
+            risk = 'medium'
+        elif {'override', 'rule_default', 'no_schema_default',
+              'allowed_difference'} & set(flags):
+            risk = 'ok'
+        else:
+            risk = 'ok'
+        rows.append({
+            'name': name,
+            'registered': name in specs,
+            'type': spec.get('type'),
+            'unit': spec.get('unit'),
+            'sensitive': bool(spec.get('sensitive')),
+            'schema_default': redact_value(spec, schema_default if 'default' in spec
+                                           else schema_expression),
+            'source_default': redact_value(spec, source.get('default')),
+            'source_expression': redact_value(spec, source.get('expression')),
+            'source_sites': source.get('sites', [])[:4],
+            'source_conflict': bool(source.get('conflict')),
+            # 未登记变量：模型不知道它是否敏感，所以**环境里的值一律不显示**
+            # （只说明"设了/没设"）。未登记的代码默认值仍是公开源码文本。
+            'declared': redact_value(spec, declared) if name in specs else _opaque(declared),
+            'process': redact_value(spec, process) if name in specs else _opaque(process),
+            'flags': flags,
+            'risk': risk,
+        })
+    summary = {
+        'settings': len(specs),
+        'rows': len(rows),
+        'high': sum(1 for r in rows if r['risk'] == 'high'),
+        'medium': sum(1 for r in rows if r['risk'] == 'medium'),
+        'ok': sum(1 for r in rows if r['risk'] == 'ok'),
+        'flag_counts': {},
+        'unregistered': sorted(r['name'] for r in rows if not r['registered']),
+        'source_default_conflicts': sorted(r['name'] for r in rows
+                                           if r['source_conflict']),
+    }
+    for row in rows:
+        for flag in row['flags']:
+            summary['flag_counts'][flag] = summary['flag_counts'].get(flag, 0) + 1
+    # Duplicate definitions are a second copy of environment values, not metadata.
+    duplicates = {
+        name: [{'file': item.get('file'),
+                'value': (redact_value(specs[name], item.get('value'))
+                          if name in specs else _opaque(item.get('value')))}
+               for item in definitions]
+        for name, definitions in unit_duplicates.items()
+    }
+    return {'rows': rows, 'summary': summary, 'duplicate_keys': duplicates}
+
+
+def cross_checks(specs=None, process_env=None):
+    """跨字段校验的**现状**（启动时 `validate_environment` 会拒绝，这里只复述）。
+
+    为什么要在 API 里复述：排空窗口的两个值分散在两个来源（schema 默认 + unit
+    覆盖），单看任一列都看不出「优雅退出会不会早于排空」。
+    """
+    specs = specs if specs is not None else load_schema()['settings']
+    process_env = process_env or {}
+
+    def effective(name):
+        raw = process_env.get(name)
+        if raw is not None and str(raw).strip():
+            return _norm(raw)
+        default = specs.get(name, {}).get('default')
+        return _norm(default)
+
+    graceful, drain = effective('WB_GRACEFUL_SHUTDOWN_S'), effective('WB_DRAIN_TIMEOUT_SEC')
+    try:
+        ok = float(graceful) >= float(drain)
+        detail = 'graceful=%s drain=%s（必须 graceful >= drain，否则排空会被 SIGKILL）' % (
+            graceful, drain)
+    except (TypeError, ValueError):
+        ok, detail = False, 'graceful=%r drain=%r 不是数值' % (graceful, drain)
+    return [{'check': 'graceful_shutdown_vs_drain', 'ok': ok, 'detail': detail,
+             'values': {'WB_GRACEFUL_SHUTDOWN_S': graceful,
+                        'WB_DRAIN_TIMEOUT_SEC': drain}}]
 
 
 def main():

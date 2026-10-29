@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 import logging
 import os
 import asyncio
+import threading
+import time
 
 from . import config, db, drain, redpacket, security
 from .iputil import client_ip
@@ -59,6 +61,14 @@ _configure_app_logging()
 
 logger = logging.getLogger(__name__)
 
+# 进程启动时刻（墙上钟）：/metrics 的 uptime 用它与当前时间求差。
+# 此前误用 time.monotonic()（单调钟只保证递增，不是运行时长），数值无意义。
+_PROCESS_STARTED_AT = time.time()
+
+
+def _time_now() -> float:
+    return time.time()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,6 +77,13 @@ async def lifespan(app: FastAPI):
     app.state.configuration_snapshot = validate_environment()
     config.ensure_dirs()
     db.connect()
+    # U01（2026-10-28）：启动时先消化「上次事务失败留下的完成回执」。失败不阻断
+    # 启动——monitor 循环会继续重放，且就绪判定会因积压>0 保持失败。
+    from . import ledgerreplay
+    try:
+        ledgerreplay.recover()
+    except Exception:  # noqa: BLE001
+        logger.exception('ledger receipt recovery failed at startup')
     from . import budget
     budget.recover()
     async def budget_heartbeat():
@@ -80,39 +97,55 @@ async def lifespan(app: FastAPI):
     from . import operational
     monitor_task = asyncio.create_task(operational.monitor())
     security.load_users()  # 首次启动会自动生成管理员并打印一次密码
-    weak_admins = security.weak_admin_passwords()
-    if weak_admins:
-        # 不拒绝启动：用户需要先进面板改密码。日志必须足够醒目。
-        logger.error('管理员仍在使用常见弱口令：%s。请立即在「设置 → 管理用户」'
-                     '中修改；本次生产事故的入口就是 admin123。',
-                     '、'.join(weak_admins))
+    # 弱口令巡检改后台线程（原 sitecustomize 猴子补丁收编进源码，2026-10-27）：
+    # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
+    # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
+    # 先进面板改密码，日志必须足够醒目。
+    def _weak_admin_check():
+        try:
+            weak_admins = security.weak_admin_passwords()
+            if weak_admins:
+                logger.error('管理员仍在使用常见弱口令：%s。请立即在「设置 → 管理用户」'
+                             '中修改；本次生产事故的入口就是 admin123。',
+                             '、'.join(weak_admins))
+        except Exception:  # noqa: BLE001  巡检失败不影响服务
+            logger.exception('weak admin password check failed')
+    threading.Thread(target=_weak_admin_check, daemon=True,
+                     name='wb-weak-pwd-check').start()
     _warn_if_exposed()
-    # 给「抽奖码」这一列上线之前建的红包补码（幂等）：没有码就拼不出抽奖链接，
-    # 等于那些红包只能自己发 key、没法让大家抽。
-    filled = redpacket.backfill_codes()
-    if filled:
-        logger.info('为 %d 个旧红包补上了抽奖码', filled)
-    # 后台采集上游自动任务日志（旅行/活跃/签到/保活），容器日志会被重建清掉，
-    # 这里解析后落库长期保留，界面才能看到「这趟旅行领了多少积分」
-    tasklog.start_collector()
-    # 定时领奖（成长任务里幂等的那一半）：只把已完成任务的奖励领回来，不伪造
-    # 任何活跃上报，因此可以安全地到点自动跑。点亮那半只允许手动（见 taskrun）
-    taskrun.start_scheduler()
-    # token 自动续期（issue #40）：上游只在「保活时刻」与「有流量时」刷新，
-    # 长期闲置的账号会一路走到过期。这里按剩余寿命巡检补齐那个空档。
-    renew.start_scheduler()
-    # 强制冷却到期清理：manual_disabled 不会随 until 自动消失，不清理会让
-    # 定时冷却变成永久停用（见 services/cooling.py）。
-    cooling.start_scheduler()
-    # 每日任务计划（签到 / 领奖 / 做任务）：管理端自己的调度器，把「一键」动作
-    # 做成每天到点自动跑。默认全部关闭，由用户在账号页显式开启（full 有风控风险）。
-    dailyplan.start_scheduler()
-    # 请求日志的「账号」回填（issue #69）：账号是上游选的、不在响应里回传，
-    # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
-    accountlog.start_collector()
-    # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
-    # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
-    pgsync.start_scheduler()
+    if config.BACKGROUND_JOBS:
+        # 后台作业只在「主实例」（systemd 管理的那个）运行。零停机发布的过渡
+        # 实例以 WB_BACKGROUND_JOBS=0 启动：只服务请求，不跑调度器/采集器，
+        # 避免过渡窗口内双实例重复签到、重复回填、重复对账（预算心跳除外——
+        # 它只更新自己名下的预留，必须随请求路径存在）。
+        # 给「抽奖码」这一列上线之前建的红包补码（幂等）：没有码就拼不出抽奖链接，
+        # 等于那些红包只能自己发 key、没法让大家抽。
+        filled = redpacket.backfill_codes()
+        if filled:
+            logger.info('为 %d 个旧红包补上了抽奖码', filled)
+        # 后台采集上游自动任务日志（旅行/活跃/签到/保活），容器日志会被重建清掉，
+        # 这里解析后落库长期保留，界面才能看到「这趟旅行领了多少积分」
+        tasklog.start_collector()
+        # 定时领奖（成长任务里幂等的那一半）：只把已完成任务的奖励领回来，不伪造
+        # 任何活跃上报，因此可以安全地到点自动跑。点亮那半只允许手动（见 taskrun）
+        taskrun.start_scheduler()
+        # token 自动续期（issue #40）：上游只在「保活时刻」与「有流量时」刷新，
+        # 长期闲置的账号会一路走到过期。这里按剩余寿命巡检补齐那个空档。
+        renew.start_scheduler()
+        # 强制冷却到期清理：manual_disabled 不会随 until 自动消失，不清理会让
+        # 定时冷却变成永久停用（见 services/cooling.py）。
+        cooling.start_scheduler()
+        # 每日任务计划（签到 / 领奖 / 做任务）：管理端自己的调度器，把「一键」动作
+        # 做成每天到点自动跑。默认全部关闭，由用户在账号页显式开启（full 有风控风险）。
+        dailyplan.start_scheduler()
+        # 请求日志的「账号」回填（issue #69）：账号是上游选的、不在响应里回传，
+        # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
+        accountlog.start_collector()
+        # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
+        # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
+        pgsync.start_scheduler()
+    else:
+        logger.info('WB_BACKGROUND_JOBS=0：后台调度器/采集器已停用（过渡实例形态）')
     instance_runtime = None
     # Qoder/Trae control plane (folded in from the standalone qtg service).
     # Routers read request.app.state.rt, so start the runtime before yield;
@@ -134,7 +167,8 @@ async def lifespan(app: FastAPI):
         # compat-plans 的 daily.checkin.enabled），这里只恢复代码路径。
         try:
             from .qtgcore import checkin_scheduler as _qcheckin
-            _qtg_checkin_task = _qcheckin.start(_qtg_rt)
+            # 过渡实例（WB_BACKGROUND_JOBS=0）不跑签到调度，其余 qtg 运行时照常。
+            _qtg_checkin_task = _qcheckin.start(_qtg_rt) if config.BACKGROUND_JOBS else None
             app.state.qtg_checkin_task = _qtg_checkin_task
             if _qtg_checkin_task is not None:
                 logger.info('qtgcore 每日随机签到调度已接线并在运行')
@@ -216,16 +250,9 @@ def _warn_if_exposed() -> None:
 
 
 def _release_version() -> str:
-    """A-04：版本号单一来源——当前 release 根的 .version（回退安装根）。"""
-    for path in (str(config.ROOT / '.version'), '/opt/workbuddy-manager/.version'):
-        try:
-            with open(path, encoding='utf-8') as fh:
-                text = fh.read().strip()
-            if text:
-                return text
-        except OSError:
-            continue
-    return 'unknown'
+    """Product version is independent of the inherited Manager baseline."""
+    from .product import identity
+    return 'v' + identity()['version']
 
 
 app = FastAPI(
@@ -395,14 +422,17 @@ async def _qtg_platform_route(request, call_next):
             platform = ""
     if platform in ("qoder", "trae") and _qtg_should_route(path):
         try:
-            _user = security._current_user(request)
+            _user = security.current_user(request)
         except Exception as _exc:
             # H-011：区分「鉴权失败」与「内部错误」。此前一律 401，导致
             # DB 抖动 / 用户文件读失败 / 磁盘满都表现为"未登录"——用户被莫名
             # 踢到登录页，监控上只见大量 401，真实故障（5xx 级）被完全掩盖。
-            if getattr(_exc, 'status_code', 500) in (401, 403):
+            if getattr(_exc, 'status_code', 500) == 401:
                 return JSONResponse({'detail': 'auth required'}, status_code=401,
                                     headers={'WWW-Authenticate': 'Bearer'})
+            if getattr(_exc, 'status_code', 500) == 403:
+                return JSONResponse({'detail': getattr(_exc, 'detail', 'Forbidden')},
+                                    status_code=403, headers=getattr(_exc, 'headers', None))
             logger.exception('qtg 平台路由：身份解析出现内部错误')
             return JSONResponse({'detail': 'internal error'}, status_code=500)
         import time as _t
@@ -468,7 +498,12 @@ async def cache_headers(request: Request, call_next):
     # 为什么放中间件而不是 current_user 里：那个函数是 FastAPI 依赖，只负责
     # **解析身份**，在它里面写响应会耦合出不必要的层，而且它被大量接口调用、
     # 有的还是只读的。中间件是唯一能看到「响应对象 + 请求状态」的地方。
-    if getattr(request.state, 'session_renew', False):
+    cookie_already_set = any(
+        value.split('=', 1)[0].strip() == config.COOKIE_NAME
+        for value in response.headers.getlist('set-cookie')
+    )
+    if (getattr(request.state, 'session_renew', False)
+            and response.status_code < 400 and not cookie_already_set):
         try:
             token = request.cookies.get(config.COOKIE_NAME) or ''
             cfg = security.load_users()
@@ -477,12 +512,18 @@ async def cache_headers(request: Request, call_next):
             if username:
                 # orig 原样延续 —— 续期只推后**空闲截止**，不延长**总寿命**。
                 # role 传空：鉴权一律以用户表为准（载荷里的 role 仅作展示参考）。
-                fresh = security.issue_token(username, '', orig=int(obj.get('orig') or 0) or None)
+                fresh = security.issue_token(
+                    username, '', orig=int(obj.get('orig') or 0) or None,
+                    expected_sv=int(obj.get('sv') or 0),
+                )
                 response.set_cookie(
                     config.COOKIE_NAME, fresh,
                     max_age=config.SESSION_DAYS * 86400, httponly=True,
                     samesite='lax', secure=security.cookie_secure(request), path='/',
                 )
+        except security.HTTPException:
+            # Revoked/deleted while the request was running: do not renew it.
+            pass
         except Exception as exc:  # noqa: BLE001
             # 续期失败不能让请求失败 —— 用户这次照常，只是下次要重登
             logger.warning('会话续期失败（不影响本次请求）: %s', exc)
@@ -775,7 +816,6 @@ def prometheus_metrics(request: Request):
     from .metricsauth import require_metrics
     require_metrics(request)
     from fastapi.responses import PlainTextResponse
-    import time as _time
 
     lines: list[str] = []
 
@@ -821,5 +861,51 @@ def prometheus_metrics(request: Request):
         lines.append('# metrics model aggregate unavailable')
 
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
-    _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.', int(_time.monotonic()))
+    _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
+       int(time.time() - _PROCESS_STARTED_AT))
+
+    # ── F3（2026-10-27）：延迟分位数 + 准入水位 + 拒绝面计数 ──────────────
+    try:
+        since = int(_time_now()) - 3600
+        rows = db.query(
+            'SELECT latency_ms FROM request_logs WHERE ts >= ? AND latency_ms > 0 '
+            'ORDER BY ts DESC LIMIT 20000', (since,))
+        lat = sorted(int(r['latency_ms']) for r in rows)
+        if lat:
+            def _pct(p):
+                return lat[min(len(lat) - 1, int(len(lat) * p))]
+            _m('workbuddy_latency_ms_p50_1h', 'gauge', 'P50 end-to-end latency, last 1h (ms).', _pct(0.50))
+            _m('workbuddy_latency_ms_p95_1h', 'gauge', 'P95 end-to-end latency, last 1h (ms).', _pct(0.95))
+            _m('workbuddy_latency_ms_p99_1h', 'gauge', 'P99 end-to-end latency, last 1h (ms).', _pct(0.99))
+            _m('workbuddy_latency_samples_1h', 'gauge', 'Latency samples in last 1h.', len(lat))
+    except Exception as exc:                                    # noqa: BLE001
+        logger.warning('Metrics latency percentiles unavailable (%s)', type(exc).__name__)
+
+    try:
+        from . import observability as _obs
+        snap = _obs.admission_snapshot()
+        if snap is not None:
+            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', snap['active'])
+            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', snap['large'])
+            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', snap['maximum'])
+            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', snap['inflight_body_bytes'])
+            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', snap['maximum_body_bytes'])
+            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', snap['capacity_rejections'])
+            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', snap['key_slots'])
+    except Exception as exc:                                    # noqa: BLE001
+        logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
+
+    try:
+        row = db.query_one(
+            "SELECT SUM(CASE WHEN status=429 THEN 1 ELSE 0 END) c429,"
+            " SUM(CASE WHEN status=503 THEN 1 ELSE 0 END) c503,"
+            " SUM(CASE WHEN status>=500 AND status<600 THEN 1 ELSE 0 END) c5xx"
+            " FROM request_logs WHERE ts >= ?", (int(_time_now()) - 86400,))
+        d24 = dict(row) if row is not None else {}
+        _m('workbuddy_rejections_429_24h', 'counter', 'HTTP 429 responses in last 24h (rate/key/budget gates).', int(d24.get('c429') or 0))
+        _m('workbuddy_rejections_503_24h', 'counter', 'HTTP 503 responses in last 24h (capacity/upstream).', int(d24.get('c503') or 0))
+        _m('workbuddy_errors_5xx_24h', 'counter', 'All 5xx responses in last 24h.', int(d24.get('c5xx') or 0))
+    except Exception as exc:                                    # noqa: BLE001
+        logger.warning('Metrics rejection counters unavailable (%s)', type(exc).__name__)
+
     return PlainTextResponse('\n'.join(lines) + '\n', media_type='text/plain; version=0.0.4')

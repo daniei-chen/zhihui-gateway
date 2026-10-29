@@ -84,5 +84,7 @@ class RealTCPPoolContracts(unittest.IsolatedAsyncioTestCase):
         after=len(list(fd.iterdir())) if fd.is_dir() else None
         details['after']=fd_snapshot()
         print(json.dumps({'tcp_requests':self.requests,'connections':self.connections,'fd_samples':samples,'fd_before':before,'fd_after':after,'fd_details':details}))
-        if samples:self.assertLessEqual(max(samples)-min(samples),4)
+        # Other fixtures' finalized sockets can reduce the process-wide count.
+        # A decrease is not a pool leak; bound growth from our initial sample.
+        if samples:self.assertLessEqual(max(samples)-samples[0],4)
         if before is not None:self.assertLessEqual(after,before+2)

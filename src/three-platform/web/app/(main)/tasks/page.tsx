@@ -212,7 +212,7 @@ export default function TasksPage() {
    * 一次 load 拉三份，同样是全拉）。想省这一次请求就得再拆一个 hook，代价是整页
    * 的加载 / 失败判据要手工合并——收益不值这个复杂度。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     checkin: () => accountApi.checkinLogs(CHECKIN_LIMIT, 0, undefined, Number(checkinDays), realm),
     tasks: () =>
       accountApi.taskLogs(
@@ -268,8 +268,8 @@ export default function TasksPage() {
   // 两块列表都会随任务执行而变化，停留期间心跳刷新，避免一直看旧记录。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 30 秒闪一次。
-  useHeartbeat(reload, 30000);
-  useHeartbeat(upstream.reload, 30000);
+  useHeartbeat(refresh, 30000);
+  useHeartbeat(upstream.refresh, 30000);
 
   /** 立即采集一次上游任务日志 */
   const collectTasks = useCallback(async () => {
@@ -285,7 +285,7 @@ export default function TasksPage() {
     } finally {
       setCollectBusy(false);
     }
-  }, [reload]);
+  }, [reload, t]);
 
   function accountLabel(l: TaskLog) {
     const uid = l.uid || '';

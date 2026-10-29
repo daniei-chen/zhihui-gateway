@@ -228,8 +228,12 @@ async def _catalog(rt) -> Dict[str, List[str]]:
         return out
 
     from ..cache import cache
+    from ...services.scope import scoped_key
 
-    return await cache.get_or_set("proxy.catalog", rt.settings.proxy_model_cache_sec, load)
+    # U17：key 带作用域（含 config_generation）—— 目录随上游配置变化，
+    # 配置一改就不该再命中旧目录。
+    return await cache.get_or_set(scoped_key("proxy.catalog"),
+                                  rt.settings.proxy_model_cache_sec, load)
 
 
 async def _platform_credits(rt) -> Dict[str, float]:

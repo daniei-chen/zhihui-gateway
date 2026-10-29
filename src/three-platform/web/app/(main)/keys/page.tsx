@@ -116,7 +116,7 @@ export default function KeysPage() {
    * 那是**静默的错误选择**，比「两块一起挂掉」更糟。所以宁可同生共死：
    * 一份没取到 → 整页错误态 + 重试，而不是渲染一个缺选项的表单。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     keys: () => keyApi.list(),
     upstreams: () => upstreamsApi.list(),
   }, []);
@@ -213,7 +213,7 @@ export default function KeysPage() {
   // 密钥状态可能被下游调用改变（配额用尽、过期），心跳刷新保持同步。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 60 秒闪一次。
-  useHeartbeat(reload, 60000);
+  useHeartbeat(refresh, 60000);
 
   /** 列表里显示上游名；找不到（刚被删）时退回 #id —— 不显示空白。 */
   function upstreamName(id: number): string {

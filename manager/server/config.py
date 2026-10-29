@@ -44,6 +44,28 @@ def _env_bool(name: str, default: bool = False) -> bool:
 PORT = _env_int('WB_MANAGER_PORT', 7864)
 HOST = _env('WB_MANAGER_HOST', '0.0.0.0')
 LAUNCH_ARGUMENTS = None  # managed launcher records explicit CLI/environment resolution
+
+# ── U16（2026-10-28）：配置的权威顺序与「允许的默认值差异」─────────────────
+#
+# 一个设置值可能同时存在于四处：schema 默认值、下面这些 `_env*` 的第二参数、
+# systemd unit/drop-in 的 `Environment=`、进程实际环境。四者会漂移，因此定死顺序：
+#
+#   1. **`server/config-schema.json` 是唯一配置模型**：它声明每个 `WB_*` 的类型、
+#      单位、默认值与是否敏感。没登记的变量一旦出现在环境里，`validate_environment`
+#      会让服务**启动失败**（宁可拒绝启动，也不要带着没被模型描述的配置运行）。
+#   2. **源码默认值必须等于 schema 默认值**：下面 `_env*('X', <默认>)` 里的字面量
+#      是「未设置时真正生效的值」，schema 的 `default` 必须描述它（不是反过来）。
+#      表达式型默认值（`str(ROOT / 'data')` 这类）按**文本**比较，与 schema 的
+#      `default_expression` 逐字一致。漂移由 `server/tests/test_config_drift.py`
+#      在 CI 阶段拦截 —— 不在 import 时抛错：默认值写错不该让线上起不来。
+#   3. **unit/drop-in 只写「与 schema 默认不同的项」**，且一个键只允许出现在一个
+#      文件里（两个 drop-in 各写一份 = 谁生效取决于文件名排序，没人读得出来）。
+#   4. 进程值是运行时事实；`GET /api/system/config`（admin）把四源并排输出并标出
+#      漂移，其中「unit 声明值 != 进程实际值」代表**改了没重启**。
+#
+# 允许的例外必须登记在下面这张表里（键 → 为什么允许），并由测试强制：
+# 表里没有的差异一律算缺陷。当前**没有**例外：schema 与源码默认值已经对齐。
+SCHEMA_DRIFT_ALLOWED: dict[str, str] = {}
 # 发布排空（K12）：进程收到退出信号后，等待在途请求归零的上限（秒）。
 # 必须 <= systemd TimeoutStopSec，否则会在"还在等"的时候被 SIGKILL；
 # 该值只决定"最多等多久"，不决定"接不接新请求"（那由 /api/readyz 负责）。
@@ -71,7 +93,7 @@ WB2API_LOG_FILE = Path(_env(
 
 # 本管理端数据
 DATA_DIR = Path(_env('WB_DATA_DIR', str(ROOT / 'data')))
-BACKUP_STATUS_FILE = Path(_env('WB_BACKUP_STATUS_FILE', '/root/backups/workbuddy-daily/latest.json'))
+BACKUP_STATUS_FILE = Path(_env('WB_BACKUP_STATUS_FILE', '/var/lib/zhihui-gateway/backup-status.json'))
 DB_PATH = Path(_env('WB_DB', str(DATA_DIR / 'manager.db')))
 USERS_FILE = Path(_env('WB_USERS_FILE', str(DATA_DIR / 'users.json')))
 STATIC_DIR = Path(_env('WB_STATIC_DIR', str(ROOT / 'web' / 'out')))
@@ -151,6 +173,12 @@ TRUSTED_PROXY_CIDRS = [
 ]
 # 是否暴露 /docs、/openapi.json、/redoc。生产环境建议关闭（默认关闭）。
 ENABLE_DOCS = _env('WB_ENABLE_DOCS', '0') == '1'
+
+# 后台作业总开关（2026-10-27 零停机发布改造）：
+# 主实例（systemd 管理）保持默认开启；零停机发布的过渡实例以
+# WB_BACKGROUND_JOBS=0 启动——只对外服务请求，不运行签到/任务/巡检等
+# 调度器与日志采集器，避免过渡窗口内双实例重复执行后台动作。
+BACKGROUND_JOBS = _env_bool('WB_BACKGROUND_JOBS', True)
 # 入站访问日志（安全页的「IP 访问日志」）是否记录**放行**的请求。
 #
 # 默认关闭：那张表的用途是安全审计（谁在扫我、谁被挡了），记全量会把信号淹没。

@@ -3,6 +3,7 @@
 import {createContext, useCallback, useContext, useEffect, useMemo, useState} from 'react';
 
 import {DEFAULT_PLATFORM, PLATFORM_STORAGE_KEY, platformStore, type Platform} from './platform-store';
+import {useHydrated} from './use-hydrated';
 
 export type {Platform};
 export {DEFAULT_PLATFORM};
@@ -97,8 +98,9 @@ export function PlatformProvider({children}: {children: React.ReactNode}) {
 
 export function usePlatform(): PlatformCtx {
   const ctx = useContext(Ctx);
+  const hydrated = useHydrated();
   if (!ctx) throw new Error('usePlatform must be used within PlatformProvider');
-  return ctx;
+  return hydrated ? ctx : {...ctx, platform: DEFAULT_PLATFORM, label: 'WorkBuddy', epoch: 0};
 }
 
 /**

@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import datetime
+import json
+import ssl
 import time
+from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from .. import db, security
+from .. import config, db, observability, security
 from ..services import wb2api
+
+# 2026-10-27 统计归一（用户需求）：国内版 cn: 前缀是上游路由约定，统计展示一律剥掉、同名合并；global: 原样保留。
+MODEL_BARE_SQL = "CASE WHEN model LIKE 'cn:%' THEN substr(model, 4) ELSE model END"
 
 router = APIRouter(prefix='/api/stats', tags=['stats'])
 
@@ -16,6 +22,20 @@ router = APIRouter(prefix='/api/stats', tags=['stats'])
 # （实测 /api/logs?days=999999999999999 返回 500）。
 # 10 年足够覆盖任何正常查询，同时避免溢出与全表扫描。
 _DAYS_MAX = 3650
+
+
+def _norm_realm(realm: str | None) -> str | None:
+    """归一 realm；拼错显式 400（U17 合同）。
+
+    此前多处都是 `realm in ("cn", "global")` 才过滤，拼错（`glboal`/`eu`）
+    会静默退化成「不过滤」，调用方拿到全量却以为是单版本数据。
+    返回 None 表示「不按版本过滤」，返回值本身可直接作真值判断。
+    """
+    if realm is None or realm == "":
+        return None
+    if realm not in ("cn", "global"):
+        raise HTTPException(status_code=400, detail="invalid_realm")
+    return realm
 
 
 def _clamp_days(days: int | None, default: int) -> int:
@@ -59,10 +79,10 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
         标注样本量（统计页的时间范围可能比日志保留期长）。
     """
     since = _epoch_since(days)
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     args: tuple = (since,) + ((realm,) if rf else ())
     rows = db.query(
-        'SELECT model AS name, COUNT(*) AS samples, '
+        'SELECT ' + MODEL_BARE_SQL + ' AS name, COUNT(*) AS samples, '
         'SUM(completion_tokens) AS ct, '
         'SUM(CASE WHEN latency_ms > COALESCE(first_token_ms, 0) '
         '         THEN latency_ms - COALESCE(first_token_ms, 0) ELSE 0 END) AS gen_ms '
@@ -71,7 +91,7 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
         # 生成耗时必须为正：latency=0 或 latency<=first_token 的记录算不出速率，
         # 留在分母外也不该把它们的 token 计进分子（否则速率会虚高一倍）。
         'AND latency_ms > COALESCE(first_token_ms, 0)'
-        f'{rf} GROUP BY model',
+        f'{rf} GROUP BY ' + MODEL_BARE_SQL,
         args,
     )
     out: dict[str, dict] = {}
@@ -88,25 +108,35 @@ def _throughput_by_model(days: int, realm: str | None) -> dict[str, dict]:
 
 @router.get('/credit-reconcile')
 def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
-    """C-001：计费三面口径对账（只读诊断）。
+    """C-001：计费三面口径对账（**只读诊断**，绝不写库）。
 
     背景（2026-10-27 审计 S1）：同一批用量在三个面上曾经各不相同 ——
     `usage_events`（账本，只覆盖账本上线后）17.6k、`usage_daily`（展示，全量聚合）
     55.6k、`api_keys.used_credit_units`（配额执法）45.4k，最大差 3.17 倍。
-    而**配额判断读的正是最低那个数**，于是"用户看到的用量"与"实际扣的"不是同一个。
 
-    口径现已确立并修复：
-      * 明细 `request_logs` 为全量权威；
-      * 展示 `usage_daily` = 明细的按日聚合；
-      * 执法 `api_keys.used_credit_units` = 该密钥的明细聚合（含历史）。
+    口径（U03 / 2026-10-28 复核后确立）：
+      * 明细 `request_logs` 为全量权威，但**受 90 天保留期裁剪**
+        （`db._prune_request_logs`）——它只能当"近期明细"，不能当终身累计；
+      * 展示 `usage_daily` = 明细的按日聚合，同样可被重建/裁剪；
+      * 执法 `api_keys.used_credit_units` = 该密钥**终身**累计，**不可**用明细覆盖。
 
-    本端点用于**持续自检**：任何一面再次漂移都会在 `drift_keys` 里显形。
+    ⚠️ U03：本端点**只读**。任何"用明细总和覆盖 used_credit_units"的 apply 动作
+    都已在代码侧封死（`db.assert_credit_units_unchanged`）：裁剪发生后再覆盖，
+    等于把已消耗的配额退回去。需要修漂移请用
+    `POST /api/stats/credit-reconcile/adjust`（基于不可变事件的增量调整）。
+
+    NULL 与 0 必须分开看：`credit IS NULL` = 上游没回（**未知**，不能当 0）；
+    `credit = 0` = 确实扣了 0。把未知混成 0 会让"少扣"看起来像"免费"。
     """
     scale = 1_000_000.0
     rows = [dict(r) for r in db.query(
         'SELECT k.id, k.name, k.used_credit_units, '
         '  COALESCE((SELECT SUM(r.credit) FROM request_logs r '
-        '            WHERE r.key_id=k.id AND r.credit IS NOT NULL),0) AS detail '
+        '            WHERE r.key_id=k.id AND r.credit IS NOT NULL),0) AS detail, '
+        '  (SELECT COUNT(*) FROM request_logs r '
+        '   WHERE r.key_id=k.id AND r.credit IS NOT NULL) AS known_rows, '
+        '  (SELECT COUNT(*) FROM request_logs r '
+        '   WHERE r.key_id=k.id AND r.credit IS NULL) AS unknown_rows '
         'FROM api_keys k ORDER BY k.id')]
     items = []
     drift = []
@@ -120,11 +150,18 @@ def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
         items.append({'key_id': int(r['id']), 'name': r.get('name'),
                       'enforced_credit': round(cur, 6),
                       'detail_credit': round(want, 6),
-                      'gap': gap, 'ok': not bad})
+                      'gap': gap, 'ok': not bad,
+                      'detail_credit_known_rows': int(r.get('known_rows') or 0),
+                      'detail_credit_unknown_rows': int(r.get('unknown_rows') or 0),
+                      # gap<0 多半是"明细被裁剪"而非"多扣"，不可据此下调
+                      'gap_explained_by_retention': gap < 0})
     totals = {}
     row = dict(db.query_one(
         'SELECT '
         ' (SELECT COALESCE(SUM(credit),0) FROM request_logs WHERE credit IS NOT NULL) AS detail, '
+        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NOT NULL) AS detail_known_rows, '
+        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NULL) AS detail_unknown_rows, '
+        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NOT NULL AND credit = 0) AS detail_zero_rows, '
         ' (SELECT COALESCE(SUM(credit_units),0)/1000000.0 FROM usage_events) AS ledger, '
         ' (SELECT COALESCE(SUM(COALESCE(credit_units, CAST(credit*1000000 AS INTEGER))),0)/1000000.0 FROM usage_daily) AS daily, '
         ' (SELECT COALESCE(SUM(used_credit_units),0)/1000000.0 FROM api_keys) AS enforced, '
@@ -133,6 +170,8 @@ def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
     ) or {})
     for k in ('detail', 'ledger', 'daily', 'enforced', 'orphan'):
         totals[k] = round(float(row.get(k) or 0), 6)
+    for k in ('detail_known_rows', 'detail_unknown_rows', 'detail_zero_rows'):
+        totals[k] = int(row.get(k) or 0)
     orow = dict(db.query_one(
         'SELECT COUNT(*) AS n FROM request_logs '
         'WHERE credit IS NOT NULL AND (key_id IS NULL OR key_id NOT IN (SELECT id FROM api_keys))') or {})
@@ -143,8 +182,13 @@ def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
         'drift_keys': drift,
         'ok': not drift,
         'items': items,
-        'note': 'ledger 仅覆盖账本上线后的逐请求事件；detail 为全量权威；'
-                'enforced 应等于 detail 按密钥聚合；orphan 属已删除密钥、不计入任何存活密钥',
+        'read_only': True,
+        'writes_enforced_credit': False,
+        'adjust_endpoint': '/api/stats/credit-reconcile/adjust',
+        'note': 'ledger 仅覆盖账本上线后的逐请求事件；detail 为全量权威但受 90 天裁剪；'
+                'enforced 应等于 detail 按密钥聚合；orphan 属已删除密钥、不计入任何存活密钥；'
+                'detail_unknown_rows（credit IS NULL=上游未回）不得与 detail_zero_rows'
+                '（credit=0=确实扣 0）混同；gap<0 通常由裁剪解释，禁止用 detail 覆盖 enforced',
     }
 
 
@@ -169,7 +213,7 @@ def summary(realm: str | None = None,
     today = time.strftime('%Y-%m-%d')
     week = _since(7)
     # 过滤片段：realm 为空不过滤（保持既有行为），非空则按列匹配
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     rargs: tuple = (realm,) if rf else ()
 
     def agg(where: str, args: tuple) -> tuple[int, int, float]:
@@ -188,7 +232,7 @@ def summary(realm: str | None = None,
     # 活跃密钥：密钥本身**不分版本**（同一把密钥可调两个版本，由模型名决定路由），
     # 所以按版本时应统计「**该版本有调用**的密钥数」，而不是「属于该版本的密钥数」
     # ——后者在架构上不存在。如实标注口径，避免让人以为密钥是隔离的。
-    if realm in ('cn', 'global'):
+    if _norm_realm(realm):
         active_keys = db.query_one(
             'SELECT COUNT(DISTINCT key_id) AS c FROM usage_daily WHERE realm = ?',
             (realm,),
@@ -196,8 +240,8 @@ def summary(realm: str | None = None,
     else:
         active_keys = db.query_one('SELECT COUNT(*) AS c FROM api_keys WHERE enabled = 1')['c']
     top = db.query_one(
-        'SELECT model, SUM(requests + prompt_tokens + completion_tokens) AS score '
-        f'FROM usage_daily WHERE 1=1{rf} GROUP BY model ORDER BY score DESC LIMIT 1',
+        'SELECT ' + MODEL_BARE_SQL + ' AS model, SUM(requests + prompt_tokens + completion_tokens) AS score '
+        f'FROM usage_daily WHERE 1=1{rf} GROUP BY ' + MODEL_BARE_SQL + ' ORDER BY score DESC LIMIT 1',
         rargs,
     )
     return {
@@ -215,6 +259,216 @@ def summary(realm: str | None = None,
         'top_model': top['model'] if top else None,
         'usage_health': _usage_health(today, t_req, realm),
         'failures': _failures(realm),
+    }
+
+
+# ── U21（2026-10-28）：请求轨迹的分类统计 ───────────────────────────────────
+#
+# 与 `_failures()` 的分工：那边只回答「今天/本周有多少 4xx/5xx」，取自
+# `request_logs`（因为 `usage_daily` 根本不记被拒请求）；这里回答「失败**是什么
+# 原因**、这次发布后哪类变多了」，取自 `request_outcomes` + U21 的稳定
+# `error_code`，并且**显式区分 unknown 与 0**（读不到的证据一律 null + 原因，
+# 不写 0 冒充"没有"）。
+#
+# `request_outcomes` 没有 realm 列，按版本过滤走 `request_logs` 联表
+# （历史行 realm 为 NULL → 按 cn 归类，与 `/api/logs` 同一口径）。
+
+_OUTCOME_CLASS_SQL = (
+    "CASE WHEN {col} = 'completed' THEN 'completed' "
+    "WHEN {col} = 'client_cancelled' THEN 'cancelled' "
+    "WHEN {col} = 'protocol_incomplete' THEN 'protocol_incomplete' "
+    "WHEN {col} IN ('rejected','upstream_error','transport_error',"
+    "'application_error','interrupted') THEN 'failed' "
+    "ELSE 'unknown' END"
+)
+OUTCOME_CLASSES = ('completed', 'failed', 'cancelled', 'protocol_incomplete', 'unknown')
+
+#: 499 = 客户端主动断开（nginx 记为 `client closed request`）。
+#:
+#: **它不是网关失败**：长流式请求被客户端取消、被客户端超时切断，都会落成 499；
+#: 上游把这些请求记成 `client_cancelled`（`_OUTCOME_CLASS_SQL` 里就是 'cancelled'）。
+#: 2026-10-28 实测：近 7 天 `status >= 400` 共 390 条，其中 129 条是 499 ——
+#: 把它们算进「失败」会让总览页的失败数虚高近 50%，把真正的上游故障埋掉
+#: （真实失败是 261 条）。所以下面两处「失败数」的 SQL 都显式排除 499，
+#: 并把 499 单独以 `*_client_closed` 报出来，口径不丢但要分清性质。
+CLIENT_CLOSED = 499
+
+#: 备份"新鲜"的判据（与 operational.evaluate_backup_health 同口径：26 小时）。
+_BACKUP_FRESH_S = 26 * 3600
+#: 证书剩余天数低于它就报 expiring（Let's Encrypt 常规续期窗口是 30 天）。
+_CERT_WARN_DAYS = 21
+#: 证书到期证据的可能位置（**只读**）。读不到就显式 unknown，不猜。
+CERT_EVIDENCE_FILES = (Path('/var/lib/zhihui-gateway/cert-status.json'),)
+CERT_LIVE_DIRS = (Path('/etc/letsencrypt/live'),)
+
+
+def _backup_health(now: int) -> dict:
+    """备份证据的年龄。缺失/不可读 = `unknown`（**不是** 0 秒，也不是健康）。"""
+    path = Path(config.BACKUP_STATUS_FILE)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        stat = path.stat()
+    except (OSError, ValueError):
+        return {'status': 'unknown', 'age_seconds': None, 'source': str(path),
+                'reason': '备份证据文件缺失或不可读'}
+    created = data.get('created_at') if isinstance(data, dict) else None
+    stamp = int(created) if isinstance(created, int) and not isinstance(created, bool) else None
+    age = int(now - (stamp if stamp is not None else stat.st_mtime))
+    restore = data.get('restore_check') if isinstance(data, dict) else None
+    size = data.get('bytes') if isinstance(data, dict) else None
+    verified = restore == 'ok' and isinstance(size, int) and not isinstance(size, bool) and size > 0
+    if not verified:
+        status, reason = 'unknown', '备份证据未通过校验（restore_check != ok 或 size 非法）'
+    elif age > _BACKUP_FRESH_S:
+        status, reason = 'stale', '最近一次已校验备份超过 %d 小时' % (_BACKUP_FRESH_S // 3600)
+    else:
+        status, reason = 'ok', None
+    return {'status': status, 'age_seconds': age, 'restore_check': restore,
+            'bytes': size, 'created_at': stamp, 'source': str(path), 'reason': reason}
+
+
+def _certificate_health(now: int) -> dict:
+    """证书到期时间。读不到就 `unknown` —— 绝不返回 0 天或伪造日期。"""
+    for path in CERT_EVIDENCE_FILES:
+        try:
+            data = json.loads(Path(path).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        stamp = None
+        if isinstance(data, dict):
+            for key in ('not_after', 'expires_at', 'notAfter'):
+                value = data.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    stamp = int(value)
+                    break
+        if stamp is not None:
+            return _cert_result(stamp, now, str(path), data.get('domain')
+                                if isinstance(data, dict) else None)
+    for directory in CERT_LIVE_DIRS:
+        try:
+            candidates = sorted(Path(directory).glob('*/cert.pem'))
+        except OSError:
+            continue
+        for cert in candidates:
+            try:
+                decoded = ssl._ssl._test_decode_cert(str(cert))  # noqa: SLF001 - 只解析不校验证书链
+                not_after = decoded.get('notAfter')
+                stamp = int(ssl.cert_time_to_seconds(not_after))
+            except (OSError, ValueError, AttributeError, TypeError):
+                continue
+            return _cert_result(stamp, now, str(cert), cert.parent.name)
+    return {'status': 'unknown', 'not_after': None, 'days_left': None, 'domain': None,
+            'source': None,
+            'reason': '证书到期证据不可得（/etc/letsencrypt 对服务进程不可读，'
+                      '且没有已发布的 cert-status.json）'}
+
+
+def _cert_result(stamp: int, now: int, source: str, domain) -> dict:
+    days_left = int((stamp - now) // 86400)
+    if days_left < 0:
+        status = 'expired'
+    elif days_left <= _CERT_WARN_DAYS:
+        status = 'expiring'
+    else:
+        status = 'ok'
+    return {'status': status, 'not_after': stamp, 'days_left': days_left,
+            'domain': domain if isinstance(domain, str) else None,
+            'source': source, 'reason': None}
+
+
+@router.get('/outcomes')
+def outcomes(days: int = 7, realm: str | None = None, top: int = 10,
+             user: dict = Depends(security.current_user)) -> dict:
+    """失败分类计数 + error_code Top-N + 备份年龄 + 证书期限（U21）。
+
+    **unknown 不冒充 0**：读不到的证据返回 `null` + `reason`（备份、证书），
+    历史行没有 `error_code` 时单独报 `error_code_coverage`，而不是把它算成
+    「没有错误」。
+
+    `traffic_class` 把探针（`/healthz`、`/api/readyz`、`/metrics`）与管理动作
+    （`/api/*`）从真实推理流量里切出来 —— 否则一次面板轮询就能把失败率抬高。
+
+    `error_code_top` **不含 `none`**（那是"没有错误"，会把真正的错因挤下去）；
+    成功量看 `classes.completed`。按平台过滤请走
+    `/api/logs/outcomes?upstream_platform=`：`?platform=qoder|trae` 会被
+    `main.py::_qtg_platform_route` 重写进 QTG 控制面（`/api/stats/` 在其白名单里），
+    本端点根本收不到。
+    """
+    d = _clamp_days(days, 7)
+    limit = min(50, max(1, int(top)))
+    since = _epoch_since(d)
+    now = int(time.time())
+    rf = " AND COALESCE(l.realm, 'cn') = ?" if _norm_realm(realm) else ''
+    rargs: tuple = (realm,) if rf else ()
+    has_code = observability.ensure_outcome_schema()
+    class_expr = _OUTCOME_CLASS_SQL.format(col='o.terminal_state')
+    traffic_expr = observability.traffic_class_sql('o.endpoint')
+    joined = 'FROM request_outcomes o LEFT JOIN request_logs l ON l.request_id = o.request_id'
+    base = f'{joined} WHERE o.ts >= ?{rf}'
+    base_args: tuple = (since,) + rargs
+
+    def counts(expr: str, extra: str = '', extra_args: tuple = ()) -> dict:
+        rows = db.query(f'SELECT {expr} AS k, COUNT(*) AS n {base}{extra} GROUP BY k',
+                        base_args + extra_args)
+        return {str(row['k']): int(row['n']) for row in rows}
+
+    classes = {name: 0 for name in OUTCOME_CLASSES}
+    classes.update(counts(class_expr))
+    by_terminal = counts('COALESCE(o.terminal_state, \'(null)\')')
+    by_traffic = counts(traffic_expr)
+    total = sum(classes.values())
+
+    top_rows = []
+    coverage = {'with_code': None, 'without_code': None, 'total': None, 'ratio': None,
+                'note': 'error_code 列不可用（补列失败或旧库），覆盖率未知'}
+    if has_code:
+        top_rows = [
+            {'error_code': row['code'], 'error_source': row['source'], 'count': int(row['n'])}
+            for row in db.query(
+                f'SELECT o.error_code AS code, o.error_source AS source, COUNT(*) AS n '
+                f'{base} AND o.error_code IS NOT NULL AND o.error_code <> ? '
+                f'GROUP BY o.error_code, o.error_source ORDER BY n DESC LIMIT ?',
+                base_args + (observability.ERROR_CODE_NONE, limit))
+        ]
+        row = db.query_one(
+            f'SELECT SUM(CASE WHEN o.error_code IS NULL THEN 1 ELSE 0 END) AS missing, '
+            f'COUNT(*) AS total {base}', base_args)
+        with_code = int(row['total'] or 0) - int(row['missing'] or 0)
+        coverage = {
+            'with_code': with_code,
+            'without_code': int(row['missing'] or 0),
+            'total': int(row['total'] or 0),
+            'ratio': (round(with_code / int(row['total']), 4) if row['total'] else None),
+            'note': 'NULL = 未分类（U21 上线前的历史行，或该路径没有稳定码）；不是"没出错"',
+        }
+
+    releases = [
+        {'release_id': row['release_id'], 'requests': int(row['n']),
+         'failed': int(row['failed'] or 0), 'cancelled': int(row['cancelled'] or 0)}
+        for row in db.query(
+            f"SELECT o.release_id AS release_id, COUNT(*) AS n, "
+            f"SUM(CASE WHEN {class_expr} = 'failed' THEN 1 ELSE 0 END) AS failed, "
+            f"SUM(CASE WHEN {class_expr} = 'cancelled' THEN 1 ELSE 0 END) AS cancelled "
+            f"{base} GROUP BY o.release_id ORDER BY n DESC LIMIT 5", base_args)
+    ]
+
+    return {
+        'ok': True,
+        'window': {'days': d, 'since': since, 'until': now, 'realm': realm},
+        'requests': total,
+        'classes': classes,
+        'by_terminal_state': by_terminal,
+        'by_traffic_class': by_traffic,
+        'error_code_top': top_rows,
+        'error_code_coverage': coverage,
+        'by_release': releases,
+        'backup': _backup_health(now),
+        'certificate': _certificate_health(now),
+        'notes': [
+            'classes.unknown 是"终态不在已知集合里"的行数，不是 0 失败的等价物',
+            'backup/certificate 读不到证据时 status=unknown 且 age/days_left 为 null，不写 0',
+            'traffic_class 把探针与管理动作从真实推理流量里切开（同一口径见 /api/logs/outcomes）',
+        ],
     }
 
 
@@ -252,7 +506,7 @@ def _failures(realm: str | None = None) -> dict:
         # ——**必须写成 `COALESCE(realm,'cn') = ?`，不能写成 `COALESCE(realm,?) = ?`**：
         # 后者会把 NULL 兜成「当前查询的那个版本」，于是看国际版时历史 NULL 行
         # 也被算进来（实测：只看 global 却统计到 cn 的历史记录）。
-        rf = " AND COALESCE(realm, 'cn') = ?" if realm in ('cn', 'global') else ''
+        rf = " AND COALESCE(realm, 'cn') = ?" if _norm_realm(realm) else ''
         for label, since in (('today', today), ('week', week)):
             # 用 `ts >= 当地零点` 而不是 `day_sql(ts) >= 日期串`：两者逐行等价
             # （见 test_day_filter_equivalence.py 的边界样本），但后者把 ts 包在
@@ -260,14 +514,18 @@ def _failures(realm: str | None = None) -> dict:
             # 定位）。本接口在总览页被 30 秒轮询，是热路径。
             args = (db.day_start_ts(since),) + ((realm,) if rf else ())
             row = db.query_one(
-                f"SELECT SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END) AS c4, "
-                f"SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS c5 "
+                f"SELECT SUM(CASE WHEN status >= 400 AND status < 500 "
+                f"AND status <> {CLIENT_CLOSED} THEN 1 ELSE 0 END) AS c4, "
+                f"SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS c5, "
+                f"SUM(CASE WHEN status = {CLIENT_CLOSED} THEN 1 ELSE 0 END) AS cc "
                 f"FROM request_logs WHERE ts >= ? AND key_id IS NOT NULL{rf}",
                 args,
             )
             if row:
                 out[f'{label}_4xx'] = int(row['c4'] or 0)
                 out[f'{label}_5xx'] = int(row['c5'] or 0)
+                # 499 单独报，不计入 4xx/5xx：它是客户端断开，不是网关失败
+                out[f'{label}_client_closed'] = int(row['cc'] or 0)
     except Exception:  # noqa: BLE001
         # 统计属旁路：任何一个数算不出来都不该让总览接口失败（失败计数只是
         # 锦上添花，总览本身有更多关键数字）。返回全 0，前端按「无失败」显示。
@@ -301,7 +559,7 @@ def _usage_health(today: str, today_requests: int, realm: str | None = None) -> 
     """
     try:
         # 与用量同一口径：看某版本时只看该版本（COALESCE 把历史 NULL 归 cn）
-        rgt = ' AND COALESCE(realm, ?) = ?' if realm in ('cn', 'global') else ''
+        rgt = ' AND COALESCE(realm, ?) = ?' if _norm_realm(realm) else ''
         # 只数「本该累计」的：与 _record 的 `if key:` 且 `if total or credit:` 对齐
         should = (
             'key_id IS NOT NULL'
@@ -370,7 +628,7 @@ def daily(days: int = 30, realm: str | None = None,
     （详见 `_failures`）。趋势图用它把「失败」画出来——否则全池中断那天的
     曲线是空的，看不出出过事。
     """
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     args = (_since(max(1, days)),) + ((realm,) if rf else ())
     rows = db.query(
         'SELECT day, SUM(requests) AS requests, '
@@ -410,16 +668,20 @@ def daily(days: int = 30, realm: str | None = None,
 
 
 def _daily_failures(days: int, realm: str | None = None) -> dict[str, int]:
-    """按天统计失败请求数（4xx + 5xx）。口径与 `_failures` 一致。"""
+    """按天统计**网关失败**请求数（4xx + 5xx，**不含 499 客户端断开**）。
+
+    口径与 `_failures` 一致：499 是客户端取消/超时断开，账不记在网关头上。
+    """
     try:
         # 同 `_failures`：NULL 固定归 cn，不能把 NULL 兜成查询目标版本
-        rf = " AND COALESCE(realm, 'cn') = ?" if realm in ('cn', 'global') else ''
+        rf = " AND COALESCE(realm, 'cn') = ?" if _norm_realm(realm) else ''
         # 过滤用 ts 范围（走索引），**分组**仍必须用日期表达式（要按天聚合，
         # 这个没法避免）。两者分开：过滤是热路径上的大头，分组只作用于过滤后的行。
         args = (db.day_start_ts(_since(max(1, days))),) + ((realm,) if rf else ())
         rows = db.query(
             f"SELECT {db.day_sql('ts')} AS day, COUNT(*) AS n FROM request_logs "
-            f"WHERE ts >= ? AND status >= 400 AND key_id IS NOT NULL{rf} "
+            f"WHERE ts >= ? AND status >= 400 AND status <> {CLIENT_CLOSED} "
+            f"AND key_id IS NOT NULL{rf} "
             f'GROUP BY day',
             args,
         )
@@ -448,7 +710,7 @@ def hourly(day: str | None = None, realm: str | None = None,
     # （趋势图不该因为一个手改的 URL 变成红色错误态）。
     if len(d) != 10 or d[4] != '-' or d[7] != '-':
         d = time.strftime('%Y-%m-%d')
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     rargs: tuple = (realm,) if rf else ()
     rows = db.query(
         'SELECT hour, SUM(requests) AS requests, '
@@ -476,14 +738,15 @@ def hourly(day: str | None = None, realm: str | None = None,
 
 
 def _hourly_failures(day: str, realm: str | None = None) -> dict[int, int]:
-    """某天**按小时**的失败请求数（4xx + 5xx）。口径与 `_failures` 一致。"""
+    """某天**按小时**的网关失败请求数（4xx + 5xx，不含 499）。口径同 `_failures`。"""
     try:
-        rf = " AND COALESCE(realm, 'cn') = ?" if realm in ('cn', 'global') else ''
+        rf = " AND COALESCE(realm, 'cn') = ?" if _norm_realm(realm) else ''
         # 过滤用 ts 范围（走索引），分组用小时表达式（要聚合，躲不开）
         args = (db.day_start_ts(day), db.day_start_ts(day) + 86400) + ((realm,) if rf else ())
         rows = db.query(
             f"SELECT {db.hour_sql('ts')} AS bucket, COUNT(*) AS n FROM request_logs "
-            f"WHERE ts >= ? AND ts < ? AND status >= 400 AND key_id IS NOT NULL{rf} "
+            f"WHERE ts >= ? AND ts < ? AND status >= 400 AND status <> {CLIENT_CLOSED} "
+            f"AND key_id IS NOT NULL{rf} "
             f'GROUP BY bucket',
             args,
         )
@@ -567,7 +830,7 @@ def credits_flow(days: int = 30, realm: str | None = None,
     today = time.strftime('%Y-%m-%d')
 
     # 支出：usage_daily 带 realm 列，可直接筛
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     rargs: tuple = (realm,) if rf else ()
     expense = {
         str(r['day']): float(r['credit'] or 0)
@@ -610,15 +873,15 @@ def credits_flow(days: int = 30, realm: str | None = None,
 def by_model(days: int = 30, realm: str | None = None,
              user: dict = Depends(security.current_user)) -> list[dict]:
     """按模型聚合。realm 非空时只统计该版本。"""
-    rf = ' AND realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND realm = ?' if _norm_realm(realm) else ''
     args = (_since(max(1, days)),) + ((realm,) if rf else ())
     rows = db.query(
-        'SELECT model AS name, SUM(requests) AS requests, '
+        'SELECT ' + MODEL_BARE_SQL + ' AS name, SUM(requests) AS requests, '
         'SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens, '
         'COALESCE(SUM(credit),0) AS credit, '
         'COALESCE(SUM(cache_hit_tokens),0) AS cache_hit_tokens, '
         'COALESCE(SUM(cache_miss_tokens),0) AS cache_miss_tokens '
-        f'FROM usage_daily WHERE day >= ?{rf} GROUP BY model ORDER BY SUM(prompt_tokens + completion_tokens) DESC',
+        f'FROM usage_daily WHERE day >= ?{rf} GROUP BY ' + MODEL_BARE_SQL + ' ORDER BY SUM(prompt_tokens + completion_tokens) DESC',
         args,
     )
     # 输出速率来自请求日志（issue #214）：与上面的用量表**同区间不同源**，
@@ -649,7 +912,7 @@ def by_key(days: int = 30, realm: str | None = None,
     的调用量」——所以同一把密钥在两个版本下都会出现，数字各是各的。这是如实
     反映架构，不是重复计数。
     """
-    rf = ' AND u.realm = ?' if realm in ('cn', 'global') else ''
+    rf = ' AND u.realm = ?' if _norm_realm(realm) else ''
     args = (_since(max(1, days)),) + ((realm,) if rf else ())
     rows = db.query(
         'SELECT COALESCE(k.name, u.key_id || "") AS name, SUM(u.requests) AS requests, '
@@ -689,3 +952,34 @@ async def upstream_stats(user: dict = Depends(security.current_user)) -> dict:
     api_key 不一致），界面据此说明，而不是显示一片空白让人以为「用量是 0」。
     """
     return await wb2api.get_upstream_stats()
+
+
+@router.post('/credit-reconcile/adjust')
+def credit_reconcile_adjust(payload: dict,
+                            user: dict = Depends(security.require_admin)) -> dict:
+    """基于**不可变事件**修正 `used_credit_units` 漂移（管理员；增量、只上调）。
+
+    为什么不提供"按明细覆盖"（U03，P0）：`request_logs` 有 90 天保留期
+    （`db._prune_request_logs`），而 `used_credit_units` 是终身累计。用可裁剪的
+    明细覆盖执法值 = 把已消耗的配额退回去，而且越老越严重。历史上
+    `deploy/reconcile_credits.py --apply` 正是这么做的（第 47/109/117 行），
+    该脚本不在本服务运行路径内，但必须被视为**禁用**。
+
+    本接口因此：
+      * 基线取 `usage_events`（不可变、永不裁剪）；修正落 `adjustment_events`
+        （同样不可变，作审计凭据，不计入基线以免自我叠加）；
+      * 只做**增量上调**（补记漏记）；`enforced > expected` 只报告不写库；
+      * 必须带 reason；actor 取自会话身份；每次写入落 `adjustment_events`
+        （actor/reason，不可变）+ `audit_logs`；
+      * `apply=false`（默认）为预演；重复 apply 幂等（第二次 delta=0）。
+
+    请求体：`{"reason": "...", "apply": false}`
+    """
+    reason = str(payload.get('reason') or '').strip()
+    apply = bool(payload.get('apply'))
+    actor = str(user.get('username') or 'admin')
+    try:
+        return db.reconcile_credit_from_events(actor, reason, apply=apply)
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(400, str(exc)) from exc

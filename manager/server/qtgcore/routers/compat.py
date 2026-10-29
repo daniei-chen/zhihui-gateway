@@ -27,12 +27,11 @@ from pydantic import BaseModel
 from .. import manager_api
 from ..manager_session import forward_logout, wb_cookie_header
 from ..service import all_accounts, build_aggregate, now_iso, summarize, tasks_payload
+# U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
+# 现在统一从 `_shared` 引入并**在此继续导出**，`compat._rt` 仍然可用。
+from ._shared import _rt
 
 router = APIRouter(prefix="/api", tags=["compat"])
-
-
-def _rt(request: Request):
-    return request.app.state.rt
 
 
 # ------------------------------------------------------------------ 认证

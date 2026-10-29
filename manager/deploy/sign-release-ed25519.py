@@ -88,6 +88,8 @@ def sign_file(key: Path, target: Path, signature: Path) -> None:
         capture_output=True, timeout=30)
     if proc.returncode:
         die(3, '签名失败：%s' % proc.stderr.decode('utf-8', 'replace').strip()[:400])
+    # Detached signatures are public verification material; do not inherit a private umask.
+    signature.chmod(0o644)
 
 
 def verify_file(trust: Path, target: Path, signature: Path) -> None:
@@ -147,6 +149,20 @@ def rebuild_json_manifest(root: Path, manifest: Path) -> dict:
         for problem in problems[:20]:
             sys.stderr.write('  %s\n' % problem)
         die(4, '清单与磁盘不一致（%d 项）' % len(problems))
+
+    # U11（2026-10-28）：把清单自述的 `version` 同步成 release 根的实际 `.version`。
+    # 此前 `--rebuild` 只重算逐文件哈希、从不更新这个字段，于是清单一直停在旧版本；
+    # 而 `backup_application.py` 用 `manifest.get('release_id') or manifest.get('version')`
+    # 当 release_id —— 每日备份的 latest.json 因此记的是错版本。
+    version_file = root / '.version'
+    if version_file.is_file():
+        try:
+            actual_version = version_file.read_text(encoding='utf-8').strip()
+        except OSError:
+            actual_version = ''
+        if actual_version and release.get('version') != actual_version:
+            print('version: %r -> %r' % (release.get('version'), actual_version))
+            release['version'] = actual_version
 
     manifest.write_text(json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                         encoding='utf-8')

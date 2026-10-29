@@ -9,6 +9,8 @@ const TokenTrendChart = dynamic(
   {ssr: false},
 );
 import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
+import {ChartDataTable} from '@/components/charts/ChartDataTable';
+import {OutcomeStatsPanel} from '@/components/operations/OutcomeStatsPanel';
 import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
@@ -24,7 +26,6 @@ import {
   chartSpecFor,
   dailySeries,
   hourlySeries,
-  todayKeyLocal,
   type ChartPoint,
 } from '@/lib/usage-chart';
 import {fmtCompact, fmtNumber, fmtCredit} from '@/lib/format';
@@ -158,6 +159,7 @@ export default function StatsPage() {
     isInitialFailed,
     isRefreshing,
     reload,
+    refresh,
   } = useAsyncAll(
     {
       summary: () => statsApi.summary(realm),
@@ -187,7 +189,7 @@ export default function StatsPage() {
    * 依赖用 `refreshDeps` 而不是 `deps`：时段 / 版本变了要跟着重取（改动前就是
    * 这样），但**不清空**——它跟时段无关，清空只会让面板闪一下「上游统计暂不可用」。
    */
-  const {values: upstreamValues, reload: reloadUpstream} = useAsyncAll(
+  const {values: upstreamValues, reload: reloadUpstream, refresh: refreshUpstream} = useAsyncAll(
     {
       upstream: async () => {
         try {
@@ -216,7 +218,7 @@ export default function StatsPage() {
   }, [reload, reloadUpstream]);
 
   // 用量随调用持续累计，心跳刷新让页面保持接近实时
-  useHeartbeat(retry, 60000);
+  useHeartbeat(() => Promise.all([refresh(), refreshUpstream()]), 60000);
 
   const spec = chartSpecFor(d);
   // K37：图表在首屏之后才挂载（dynamic 拆包 + 空闲帧渲染），等待期用同高度占位。
@@ -343,6 +345,7 @@ export default function StatsPage() {
         ) : (
           <StatsSkeleton />
         )}
+        <OutcomeStatsPanel days={d} />
       </div>
     );
   }
@@ -450,6 +453,11 @@ export default function StatsPage() {
             <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('stats.noUsageData')}</div>
           )}
         </div>
+        {chartData.length > 0 && <ChartDataTable
+          title={t('stats.tokenTrend')}
+          columns={[t('a11y.period'), 'Token', t('metric.requests'), t('dashboard.failedRequests')]}
+          rows={chartData.map((point) => [point.full, point.tokens, point.requests, point.failed])}
+        />}
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -520,6 +528,7 @@ export default function StatsPage() {
           </>
         ) : null}
       </section>
+      <OutcomeStatsPanel days={d} />
     </div>
   );
 }

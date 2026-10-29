@@ -126,28 +126,30 @@ class StreamErrorPassthroughTest(unittest.TestCase):
     def test_short_upstream_error_reaches_client(self) -> None:
         """**核心回归**：一二百字节的错误体也必须透传（原来被 4000 阈值滤掉）。"""
         r = self._post_stream(400, self._SHORT_ERROR)
-        self.assertIn('event: error', r.text,
-                      '上游报错但客户端没收到 error 事件——这就是「静默空回复」的成因')
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.headers['content-type'], 'application/json')
+        self.assertEqual(r.json()['type'], 'error')
+        self.assertEqual(r.json()['error']['code'], 'model_not_found')
         self.assertIn('does not exist', r.text, '错误内容应透传，不能只给个笼统提示')
 
     def test_error_is_not_treated_as_success(self) -> None:
         """错误响应不能只给一套「成功收尾」的事件——那是客户端误判的来源。"""
         r = self._post_stream(400, self._SHORT_ERROR)
-        self.assertIn('event: error', r.text)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()['error']['type'], 'invalid_request_error')
+        self.assertNotIn('event: message_stop', r.text)
 
-    def test_error_precedes_message_stop(self) -> None:
-        """**顺序**：error 必须在 message_stop 之前。
+    def test_http_error_has_no_success_stream_envelope(self) -> None:
+        """Pre-stream rejection is non-2xx JSON, per the Messages API contract.
 
-        多数 SDK 把 message_stop 当终止信号，读到就停止迭代——发在它之后的
-        error 等于没发（客户端仍表现为「成功但空」）。
+        https://platform.claude.com/docs/en/api/errors
+        Mid-stream errors still require error before message_stop (next test).
         """
         r = self._post_stream(400, self._SHORT_ERROR)
-        i_err = r.text.find('event: error')
-        i_stop = r.text.find('event: message_stop')
-        self.assertNotEqual(i_err, -1, '没有 error 事件')
-        self.assertNotEqual(i_stop, -1, '没有 message_stop（部分客户端会一直等）')
-        self.assertLess(i_err, i_stop,
-                        'error 发在 message_stop 之后——客户端读到 stop 就不再读了')
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn('event: message_start', r.text)
+        self.assertNotIn('event: message_stop', r.text)
+        self.assertIn('does not exist', r.json()['error']['message'])
 
     def test_midstream_error_precedes_message_stop(self) -> None:
         """状态码 **200** 但中途回 error 帧：同样要 error 在前。
@@ -171,7 +173,23 @@ class StreamErrorPassthroughTest(unittest.TestCase):
         """大错误体（原来唯一能过的情形）不能被改坏。"""
         big = json.dumps({'error': {'message': 'x' * 9000}})
         r = self._post_stream(500, big)
-        self.assertIn('event: error', r.text)
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.json()['error']['message'], 'x' * 4096)
+
+    def test_business_code_hint_and_upstream_id_survive(self) -> None:
+        error = {'error': {'type': 'permission_error', 'code': 'provider_rejected',
+                          'message': 'Explicit provider refusal', 'gateway_hint': 'Contact provider'},
+                 'request_id': 'provider-request-123'}
+        r = self._post_stream(403, json.dumps(error))
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()['error'], error['error'])
+        self.assertEqual(r.json()['upstream_request_id'], error['request_id'])
+        self.assertEqual(r.json()['request_id'], r.headers['x-request-id'])
+
+    def test_error_message_is_bounded_for_large_invalid_body(self) -> None:
+        r = self._post_stream(502, 'bad upstream body ' * 10000)
+        self.assertEqual(r.status_code, 502)
+        self.assertLessEqual(len(r.json()['error']['message']), 4096)
 
     def test_success_stream_has_no_error_event(self) -> None:
         """正常流不该凭空冒出 error 事件。"""

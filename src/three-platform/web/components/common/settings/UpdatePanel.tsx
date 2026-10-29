@@ -19,7 +19,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import {errText, systemApi} from '@/lib/api';
-import type {GithubMirror, UpdateCheck, UpdatePackageMeta, UpdateStatus} from '@/lib/types';
+import type {GithubMirror, UpdateCheck, UpdatePackageMeta, UpdateStatus, Versions} from '@/lib/types';
+import {PRODUCT_REPOSITORY, PRODUCT_REPOSITORY_URL} from '@/lib/product';
 import {notify} from '@/lib/toast';
 import {fmtAgo, fmtDateTime} from '@/lib/format';
 import {useAuth} from '@/lib/auth-context';
@@ -58,7 +59,7 @@ export function UpdatePanel() {
   const {isAdmin} = useAuth();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [versions, setVersions] = useState<{manager: string; upstream_connected: boolean; upstream_accounts: number | null} | null>(null);
+  const [versions, setVersions] = useState<Versions | null>(null);
   const [check, setCheck] = useState<UpdateCheck | null>(null);
   const [checking, setChecking] = useState(false);
   /**
@@ -162,37 +163,6 @@ export function UpdatePanel() {
     }).catch(() => setMirror(null));
   }, []);
 
-  const saveGh = useCallback(async (token: string) => {
-    setGhBusy(true);
-    try {
-      const r = await systemApi.saveGithubToken(token);
-      setGh({...r, source: r.configured ? 'panel' : ''});
-      setGhInput('');
-      notify.ok(token ? t('updatePanel.ghSaved') : t('updatePanel.ghCleared'));
-      await recheck();
-    } catch (e) {
-      notify.err(errText(e));
-    } finally {
-      setGhBusy(false);
-    }
-  }, [t]);
-
-  const saveMirror = useCallback(async (value: string) => {
-    setMirrorBusy(true);
-    try {
-      const r = await systemApi.saveGithubMirror(value);
-      setMirror(r);
-      setMirrorInput(r.stored);
-      notify.ok(value.trim() ? t('updatePanel.mirrorSaved') : t('updatePanel.mirrorCleared'));
-      // 换了取版本的路子，缓存里的结论就不作数了
-      await recheck();
-    } catch (e) {
-      notify.err(errText(e));
-    } finally {
-      setMirrorBusy(false);
-    }
-  }, [t]);
-
   /** 强制重新检测（绕过服务端 6 小时缓存） */
   const recheck = useCallback(async () => {
     setChecking(true);
@@ -217,7 +187,38 @@ export function UpdatePanel() {
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [t]);
+
+  const saveGh = useCallback(async (token: string) => {
+    setGhBusy(true);
+    try {
+      const r = await systemApi.saveGithubToken(token);
+      setGh({...r, source: r.configured ? 'panel' : ''});
+      setGhInput('');
+      notify.ok(token ? t('updatePanel.ghSaved') : t('updatePanel.ghCleared'));
+      await recheck();
+    } catch (e) {
+      notify.err(errText(e));
+    } finally {
+      setGhBusy(false);
+    }
+  }, [t, recheck]);
+
+  const saveMirror = useCallback(async (value: string) => {
+    setMirrorBusy(true);
+    try {
+      const r = await systemApi.saveGithubMirror(value);
+      setMirror(r);
+      setMirrorInput(r.stored);
+      notify.ok(value.trim() ? t('updatePanel.mirrorSaved') : t('updatePanel.mirrorCleared'));
+      // 换了取版本的路子，缓存里的结论就不作数了
+      await recheck();
+    } catch (e) {
+      notify.err(errText(e));
+    } finally {
+      setMirrorBusy(false);
+    }
+  }, [t, recheck]);
 
   useEffect(() => {
     load();
@@ -245,7 +246,7 @@ export function UpdatePanel() {
     }
   }, [status?.logs]);
 
-  const logs = status?.logs ?? [];
+  const logs = useMemo(() => status?.logs ?? [], [status?.logs]);
   const logText = useMemo(
     () => (logs.length ? logs.map((l) => l.text).join('\n') : status?.log_tail || ''),
     [logs, status?.log_tail],
@@ -288,6 +289,9 @@ export function UpdatePanel() {
   }
 
   const done = !!status && !status.running && status.ok !== null && !resultDismissed;
+  const product = versions?.product ?? status?.product;
+  const managed = product?.managed === true;
+  const updatesBlocked = managed || product?.web_update_enabled === false;
 
   return (
     <div className="space-y-4">
@@ -321,8 +325,8 @@ export function UpdatePanel() {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-2xl bg-background/60 px-3.5 py-3">
-            <div className="text-[11px] text-muted-foreground">{t('updatePanel.manager')}</div>
-            <div className="mt-1 flex items-center gap-1.5 text-sm font-semibold tabular-nums">
+            <div className="text-[11px] text-muted-foreground">{t('product.version')}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 break-all text-sm font-semibold tabular-nums">
               {versions?.manager || status?.version || '—'}
               {/* 本次装的东西有没有被核对过：让用户看得见，不只留在日志里 */}
               {status?.integrity?.status === 'digest' && (
@@ -365,6 +369,28 @@ export function UpdatePanel() {
             </div>
           </div>
         </div>
+        <div className="mt-3 rounded-2xl border border-border/60 bg-background/60 p-3.5" data-slot="product-origin">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">{t('product.origin')}</span>
+            <a href={PRODUCT_REPOSITORY_URL} target="_blank" rel="noopener noreferrer"
+               className="break-all text-xs font-medium text-primary underline-offset-4 hover:underline">
+              {PRODUCT_REPOSITORY}
+            </a>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-muted-foreground">
+            <span>{t('product.sourceCommit')}: <code>{product?.source_commit?.slice(0, 12) || t('product.unrecorded')}</code></span>
+            {product?.manager_baseline && <span>{t('product.baseline')}: <code className="break-all">{product.manager_baseline}</code></span>}
+            <a href={`${PRODUCT_REPOSITORY_URL}/releases`} target="_blank" rel="noopener noreferrer"
+               className="text-primary hover:underline">{t('product.releases')}</a>
+          </div>
+          <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{t('product.providerBoundary')}</p>
+        </div>
+        {managed && (
+          <div role="status" className="mt-3 flex items-start gap-2 rounded-2xl border border-blue-500/20 bg-blue-500/5 p-3 text-[11px] leading-5">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+            <div><span className="font-medium">{t('product.controlledTitle')}</span><p className="text-muted-foreground">{t('product.controlledDetail')}</p></div>
+          </div>
+        )}
         {status?.upstream_dir && (
           <div className="mt-2 truncate font-mono text-[11px] text-muted-foreground" title={status.upstream_dir}>
             {t('updatePanel.upstreamDir', {dir: status.upstream_dir})}
@@ -426,7 +452,7 @@ export function UpdatePanel() {
                   className="rounded-full"
                   // 产物未就位时不放行：这条路必然以 404 收场，让用户点了再失败只是把
                   // 同一条信息换个地方说（见上方提示）。
-                  disabled={!isAdmin || busy || running || check.manager.assets_ready === false
+                  disabled={!isAdmin || busy || running || updatesBlocked || check.manager.assets_ready === false
                     || (!!check.manager.upstream_changed && status?.can_update_upstream === false)}
                   title={check.manager.assets_ready === false
                     ? t('updatePanel.assetsPending')
@@ -671,14 +697,15 @@ export function UpdatePanel() {
         <div className="mb-3 text-[11px] leading-4 text-muted-foreground">
           {t('updatePanel.oneClickUpdateDesc')}
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" data-slot="update-target">
           {TARGETS.map((target, i) => {
             // 能否更新上游取决于**能否操作 docker**（后端按实际能力判定），
             // 而不是"是否在容器里"：容器挂了 docker.sock 就能做这些事。
             // 不可用时直接禁用并说明替代做法，而不是让用户点了才失败。
-            const blocked = status?.can_update_upstream === false && target.id !== 'manager';
-            const text = blocked
-              ? t('updatePanel.dockerBlocked')
+            const blocked = updatesBlocked || (status?.can_update_upstream === false && target.id !== 'manager');
+            const text = updatesBlocked
+              ? t('product.controlledDetail')
+              : blocked ? t('updatePanel.dockerBlocked')
               : t('updatePanel.targetDescText', {
                   desc: t(target.descKey),
                   hint: t(target.hintKey),
@@ -754,13 +781,13 @@ export function UpdatePanel() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" className="rounded-full"
-                        disabled={busy || running}
+                        disabled={busy || running || updatesBlocked}
                         onClick={() => void startFromPackage('both')}>
                   <DownloadCloud className="mr-1.5 h-3.5 w-3.5" />
                   {t('updatePanel.pkgUseBoth')}
                 </Button>
                 <Button size="sm" variant="outline" className="rounded-full"
-                        disabled={busy || running}
+                        disabled={busy || running || updatesBlocked}
                         onClick={() => void startFromPackage('manager')}>
                   {t('updatePanel.pkgUseManager')}
                 </Button>

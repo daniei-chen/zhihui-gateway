@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional
 from .. import manager_api
 from ..config import Settings
 from .base import BaseAdapter
+from .local_settings import read_panel as _read_settings_panel
 
 
 log = logging.getLogger("qtg.adapters.workbuddy")
@@ -1148,15 +1149,25 @@ class WorkBuddyAdapter(BaseAdapter):
 
     def _settings_from_sql(self, cfg: Dict[str, Any], sched: Dict[str, Any],
                            tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """sqlite 读模式下的设置聚合。
+
+        U28（2026-10-28）收敛：`panel` 原先用
+        `SELECT * FROM settings LIMIT 1` 取**一行**再 `dict(zip(cols,row))`，
+        得到的是 `{'key': …, 'value': …}` —— 与 U19 在 `routers/settings.py`
+        修掉的是同一个缺陷（形状不对 + 取到哪一行由扫描顺序决定，可能正好是
+        `github_token`）。现在改走 `local_settings.read_panel()`：key/value 逐键
+        + 白名单 + JSON 解析，与 Manager 的 `/api/settings/panel` 同一口径
+        （两份实现由 `test_module_convergence.py` 断言等价）。
+
+        **外层信封保持原样**（`scheduler` / `pool` / `raw`）：`qtgcore/service.py`
+        读的是 `wb_settings['scheduler']`，改信封会静默打断它 —— 那是破坏性变更，
+        不在本轮的低风险收敛范围内。
+        """
         panel: Dict[str, Any] = {}
         conn = self._db()
         if conn is not None:
             try:
-                row = conn.execute("SELECT * FROM settings LIMIT 1").fetchone()
-                if row is not None:
-                    cols = [c[0] for c in conn.execute(
-                        "SELECT * FROM settings LIMIT 1").description or []]
-                    panel = dict(zip(cols, row))
+                panel = _read_settings_panel(conn)
             except sqlite3.Error:
                 panel = {}
             finally:

@@ -1,0 +1,48 @@
+name: Product source checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-and-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/three-platform/web/package-lock.json
+      - name: Check product identity and public-source policy
+        run: |
+          python -B tools/check_product.py
+          python -B -m unittest discover -s tests -p test_product_release.py -v
+          python -B tests/linux_lab/scan_secret_plaintext.py --out /tmp/product-secret-scan.json --fail-on-risk
+      - name: Install locked frontend dependencies
+        working-directory: src/three-platform/web
+        run: npm ci
+      - name: Typecheck, unit tests and static build
+        working-directory: src/three-platform/web
+        run: |
+          npm run typecheck
+          npm test
+          npm run build:export
+
+# The production full backend gate remains independent, with a private provider,
+# exact skip set and signed receipt. This job is not a production release approval.
+# Historical real-nginx fixtures are deliberately not executed by this workflow.

@@ -49,7 +49,8 @@ export function TrendChart({
 }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{top: 4, right: 8, bottom: 0, left: 0}}>
+      <AreaChart data={data} margin={{top: 4, right: 8, bottom: 0, left: 0}}
+                 accessibilityLayer title={`${requestsLabel} / ${failedLabel}`}>
         <defs>
           <linearGradient id="gReq" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} />
@@ -107,7 +108,8 @@ export function FlowChart({
     <ResponsiveContainer width="100%" height="100%">
       {/* 左边距不能给负数：轴宽 48 减去它才是刻度的可用宽度，
           4 位数的刻度会越出图表左边缘被裁掉（issue #184 的遮挡就是这么来的）。 */}
-      <LineChart data={data} margin={{top: 4, right: 4, bottom: 0, left: 0}}>
+      <LineChart data={data} margin={{top: 4, right: 4, bottom: 0, left: 0}}
+                 accessibilityLayer title={`${incomeLabel} / ${expenseLabel}`}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11}
                stroke="var(--muted-foreground)" />

@@ -1,72 +1,30 @@
-# 发版与签名
+# 发版与签名：0.0.2 的当前合同
 
-智汇网关的发布包走 **Ed25519 双门禁**：生产启动前会验签名、再逐文件比对哈希，
-任一不符直接拒绝启动。这样即使有人改了磁盘上的文件，也起不来。
+> 当前权威入口：[PRODUCT-RELEASE.md](PRODUCT-RELEASE.md)。本文替代早期“缺清单警告放行 / 签完裸重启”的说明；历史 Git 提交可追溯，但旧流程不得再用于当前受控实例。
 
-## 两条独立的门禁
+## 先区分源码、产物和运行状态
 
-| 门禁 | 覆盖范围 | 清单文件 | 签名文件 |
-|---|---|---|---|
-| 源码门禁 | 后端与部署脚本 | `deploy/managed-release.json` | `deploy/managed-release.sig` |
-| 前端门禁 | 静态导出产物 | `<web-root>/manifest.sha256` | `<web-root>/manifest.sig` |
+- `VERSION`、`manager/server/product-release.json`、前端 package version 必须一致。
+- 源码固定为 daniei-chen/zhihui-gateway 的完整提交，不将可移动 main 当作安装批准。
+- `release-provenance.json` 在组装时记录仓库、产品版本和完整提交，并纳入后端签名闭包；无记录时界面显示“未记录”，不编造 SHA。
+- 公开源码不包含某台服务器的私钥、运行数据库或签名回执。复制源码不等于安装了受信版本。
 
-- 校验器：`deploy/source_preflight.py`、`deploy/web_preflight.py`
-- 信任锚：`/opt/workbuddy-manager/release-trust-ed25519.pem`（公钥，644）
-- 验签方式：`openssl pkeyutl -verify -pubin -inkey <trust> -rawin -in <manifest> -sigfile <sig>`
+## 当前门禁不能降级
 
-## 退出码
+后端的已安装 root-owned bootstrap 先核对签名，再导入经核验的检查器。运行源码应全部在精确清单内，新增模块也必须加入。缺清单、清单外代码、签名不符、内容漂移均不能通过“旧安装兼容”放行。
 
-| 码 | 含义 |
-|---|---|
-| 0 | 通过（或「没有清单」—— 旧安装，打印 WARN 放行） |
-| 2 | 信任锚缺失或为软链 |
-| 3 | 签名校验失败（产物被改过，或签名与清单不配套） |
-| 4 | 清单格式错误 / 逐文件哈希不符 |
+严格测试门禁要求完整用例、零失败、用例数量下限和精确 skip 集合；独立回执绑定实际输入和 Python 运行时。变更输入后重新测试，不复用旧版本回执、不刷新失败基线掩盖问题。应用目录里的同名工具不替代已安装的外部信任锚。
 
-## 「没有清单就放行」是刻意设计
+控制台使用独立静态发布合同：固定构建 ID、源码/输出清单、签名与精确前身比较；旧 chunks 保留。首页、登录页与 favicon 的变更各自核对，不宣称跨目录全局原子。
 
-部署顺序是「先装校验器与 ExecStartPre，再发布带签名的产物」。若「无清单即拒绝」，
-中间态就没法引导。所以判据是：
+## 发布与回退
 
-- **没有**清单 → 打印 WARN 并放行；
-- **有**清单 → 必须签名有效 + 逐文件哈希一致，否则拒绝启动。
+生产由既有可信发布器完成路由屏障、排空、代码切换、身份和双入口健康核验；**不要执行裸 `systemctl restart workbuddy-web`**，不要通过旧网页覆盖安装绕过发布器。门禁阻断时保留证据和仍在服务的实例，不直接改清单或杀 helper 强行推进。
 
-这里的关键是：**清单存在，就等于产物声明「我受门禁保护」**。此后任何改动都必须重新签名。
-若有人删掉清单来绕过，nginx 服务的仍是被改过的文件，但「清单缺失」会在启动日志留 WARN，
-运维侧可见。
+代码回退仍使用可信发布器和兼容的旧受信版本。前端回退必须指向准确事务及前身；不要删旧资源来模拟回退。业务数据库、账号、额度、会话撤销和设备授权不随代码回退，数据恢复须采用独立灾备合同。
 
-## 改代码后的正确流程
+## 密钥与能力边界
 
-```bash
-# 1) 改文件
-# 2) 重算清单哈希并重新签名（--rebuild 只更新已有条目的哈希，不新增文件）
-REL=/opt/workbuddy-manager/releases/<version>
-sudo $REL/deploy/sign-release-ed25519.py \
-  --manifest $REL/deploy/managed-release.json \
-  --root $REL \
-  --key /opt/zhihui-release/keys/release-priv.pem \
-  --rebuild
+生产私钥只在服务器受保护签名流程中使用，不进入仓库、CI 日志或公开 Release。仓库 `tools/release_sign.py` 是另一套独立离线签名实验工具，不能自动充当生产信任锚。
 
-# 3) 先验签，再重启
-sudo $REL/deploy/sign-release-ed25519.py \
-  --manifest $REL/deploy/managed-release.json --root $REL --verify
-sudo systemctl restart workbuddy-web
-```
-
-> **新增文件时 `--rebuild` 不会把它加进清单**，需要用 `--add`。新增了 `server/` 下的模块
-> 却忘了 `--add`，会出现「文件在磁盘上存在、但不在清单里」—— 门禁不管它，等于多了一个
-> 不受保护的入口。
-
-## 私钥保管
-
-私钥在 `/opt/zhihui-release/keys/release-priv.pem`（600，仅 root 可读）。
-**能拿到本机 root 的人就能签发布包** —— 这是这条链的边界，不是漏洞。真正的高保障需要
-把私钥移到离线机或 HSM，本机只留公钥。
-
-签名时临时拷入、用完立即删除，是目前可接受的折中。
-
-## 已知边界
-
-- 门禁防的是「磁盘文件被改」，**不防**「有 root 的人重新签一份」。
-- 前端门禁校验的是 nginx 实际服务的那棵树（软链指向同一目录），所以两者不会漂移；
-  但如果直接把产物复制到另一个目录而没走发布流程，那棵树就完全没有保护。
+签名证明输入身份和未授权漂移，不保证业务正确，也不抵御掌握本机 root/Docker 控制权的攻击者。短窗口健康探针不等于外部互联网 SLO、真实供应商推理验收或离机恢复验证。

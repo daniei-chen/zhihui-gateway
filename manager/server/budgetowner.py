@@ -62,7 +62,13 @@ def alive(owner):
             except (BlockingIOError, OSError):
                 return True
             return False
-    except FileNotFoundError:
+    except OSError:
+        # 打不开 ≠ 已死（N-01，2026-10-28 增量审计）。原实现只捕获
+        # FileNotFoundError，遇到属主不是本进程 uid 的旧锁文件（root 手动运行/
+        # 测试残留）会抛 PermissionError 一路穿到 lifespan，实测造成过
+        # 5-8 秒启动失败（08:44:57 journal 有完整 traceback）。
+        # 返回 None（不确定）—— 由对账流程按 unknown 保守处理，
+        # 绝不把「读不到」当成「已死」去释放别人的预留。
         return None
 
 def close():
