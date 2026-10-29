@@ -1,26 +1,10 @@
-"""发布包完整性校验的回归测试（更新器侧的最后一关）。
+"""继承下载器的字节校验与当前受控发布文档的回归测试。
 
-背景：一键更新以 **root** 把 Release 产物直接落盘并重启服务。包来自项目的
-GitHub Release（HTTPS），更新器下载后核对**发布页给的 sha256 摘要与文件大小**，
-不符即中止、一个字节都不落盘。
+verify_download 只核对下载摘要/大小，不是生产安装授权。缺摘要的历史兼容
+分支仍标注未比对，但当前受控实例另有安装拒绝、Ed25519、完整测试回执和
+外部可信发布器门禁。旧 OpenSSH helper 不复活，也不能要求文档取消现用签名。
 
-2026-10-13 之前这里还有一层「维护者离线私钥签名」（OpenSSH 签名 + 代码内嵌
-公钥），后来按主流做法去掉了 —— 取舍与信任边界见 docs/release-signing.md。去掉
-的是「签不出来」这层，**校验本身还在**：它挡的是下载被截断、以及在传输途中被换掉。
-
-锁定以下不变量：
-  1. 摘要一致 → 放行，并把结果记进状态（界面显示「已校验」）
-  2. 摘要不一致 → 拒绝，且不落盘（攻击者换包的主要目标）
-  3. 大小不符（下载被截断）→ 拒绝，并说清是「再点一次更新」就能解决的事
-  4. 拿不到发布页摘要（免 API 的回退路径）→ 照装，但**如实记成未比对**并打出本地摘要
-  5. 校验发生在**解压之前**（先确认包下全了、没被换过，再谈包里的内容）
-  6. 旧的签名机制不留残渣（公钥、WB_SKIP_SIGNATURE、release-signing-key.pub）
-  7. 发布侧：工作流把 sha256 印进发布说明；deploy/verify-release.sh 校的也是 sha256
-
-测试策略：不 mock 任何标准库 —— 校验是纯函数（两个文件 + 一个摘要串），直接
-真实调用即可。早先的版本用 `mock.patch.object(urllib.request, 'urlopen')` 替换
-**共享的** stdlib 模块，伪造响应在用例之间互相泄漏，出现过时灵时不灵的失败；
-那种脆弱性本身就是风险。
+校验使用临时真实文件，不替换共享标准库、不连接生产。
 """
 from __future__ import annotations
 
@@ -127,8 +111,8 @@ class DownloadIntegrityTest(unittest.TestCase):
                         '解压排在了校验之前 —— 半截/被换过的包会先进文件系统')
 
 
-class SignatureMachineryIsGoneTest(unittest.TestCase):
-    """旧的离线签名机制要清干净：留着会让人以为还有这道门禁。"""
+class LegacyUpdaterBoundaryTest(unittest.TestCase):
+    """区分已移除的 OpenSSH 下载 helper 与当前受信 Ed25519 发布合同。"""
 
     def test_key_and_helpers_are_removed(self) -> None:
         src = (_ROOT / 'deploy' / 'update.py').read_text(encoding='utf-8')
@@ -154,10 +138,11 @@ class SignatureMachineryIsGoneTest(unittest.TestCase):
         self.assertIn('产物校验（sha256）', src)
         self.assertNotIn('tar.gz.sig', src, '工作流里还留着签名资产的处理逻辑')
 
-    def test_docs_no_longer_claim_signatures(self) -> None:
+    def test_docs_require_current_ed25519_release_contract(self) -> None:
         doc = (_ROOT / 'docs' / 'release-signing.md').read_text(encoding='utf-8')
-        self.assertIn('sha256', doc, '文档得说清现在靠什么保证完整性')
-        self.assertIn('取消', doc, '文档要写清签名已取消，别让人以为还在签')
+        for requirement in ('sha256', 'Ed25519', '完整隔离测试',
+                            '签名或回执时阻断', 'root-owned', '业务数据库'):
+            self.assertIn(requirement, doc, '文档缺少当前受控发布要求: ' + requirement)
 
 
 if __name__ == '__main__':
