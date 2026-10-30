@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {createPreviewServer, siteRoot, homeCsp, loginCsp} from '../tools/preview-server.mjs';
+import {createPreviewServer, siteRoot, homeCsp, loginCsp, sceneCsp} from '../tools/preview-server.mjs';
 
 const manifest = JSON.parse(fs.readFileSync(path.join(siteRoot, 'home-import.json'), 'utf8'));
 const prefix = manifest.asset_prefix;
@@ -56,6 +56,12 @@ test('production-like routes serve every local reference with strict MIME and CS
     assert.equal(response.headers.get('content-security-policy'), homeCsp);
     assert.ok(!homeCsp.includes("'unsafe-eval'"));
     assert.match(homeCsp, /frame-src 'self'/);
+    for (const scene of ['task-workspace', 'pelican-ride']) {
+      const child = await fetch(origin + prefix + `animations/${scene}.html`);
+      assert.equal(child.headers.get('x-frame-options'), 'SAMEORIGIN');
+      assert.equal(child.headers.get('content-security-policy'), sceneCsp);
+      assert.match(sceneCsp, /connect-src 'none'/);
+    }
     assert.equal((await fetch(origin + '/models/thinker.glb')).status, 404);
     assert.equal((await fetch(origin + '/api/me')).status, 403);
     assert.equal((await fetch(origin + '/api/login', {method: 'POST', body: '{}'})).status, 405);

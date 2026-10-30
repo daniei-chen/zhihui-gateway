@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 
 export const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const homeCsp = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+export const sceneCsp = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'";
 const loginSource = fs.readFileSync(path.join(siteRoot, 'login/index.html'), 'utf8');
 const loginHashes = [...loginSource.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
   .map(match => `'sha256-${crypto.createHash('sha256').update(match[1]).digest('base64')}'`);
@@ -42,6 +43,10 @@ export function createPreviewServer({degrade3d = false} = {}) {
       response.setHeader('Cache-Control', 'no-store');
       response.setHeader('X-Content-Type-Options', 'nosniff');
       if (login || pathname === '/') response.setHeader('Content-Security-Policy', login ? loginCsp : homeCsp);
+      if (/\/animations\/(?:task-workspace|pelican-ride)\.html$/.test(pathname)) {
+        response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        response.setHeader('Content-Security-Policy', sceneCsp);
+      }
       if (login) response.setHeader('X-Frame-Options', 'DENY');
       response.writeHead(200);
       if (request.method === 'HEAD') return response.end();
