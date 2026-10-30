@@ -115,6 +115,32 @@ class PanelReaderHttpTest(unittest.TestCase):
                 security.require_panel_reader(user)
         self.assertEqual(security.require_panel_reader({'role': 'account_admin'})['role'], 'account_admin')
 
+    def test_engine_settings_read_is_an_explicit_credential_free_projection(self):
+        from types import SimpleNamespace
+        from server.routers import qtg_panel
+
+        qoder = {'api_keys': [{'id': '1', 'name': 'primary', 'masked': '***demo',
+                              'key': 'synthetic-private-qoder', 'future_secret': 'synthetic-future'}],
+                 'auth_required': True, 'version': 'fixture', 'api_key': 'synthetic-root'}
+        trae = {'notify': {'url': 'https://example.invalid/synthetic-private-webhook'},
+                'settings': {'token': 'synthetic-private-trae'}}
+        rt = SimpleNamespace(qoder=SimpleNamespace(settings=mock.AsyncMock(return_value=qoder)),
+                             trae=SimpleNamespace(settings=mock.AsyncMock(return_value=trae)),
+                             settings=SimpleNamespace(read_requires_auth=True, qoder_base='http://127.0.0.1:8799',
+                                                      trae_base='http://127.0.0.1:8080', data_dir=self.tmp.name))
+        app = FastAPI()
+        app.include_router(qtg_panel.router)
+        client = TestClient(app)
+        client.cookies.set(config.COOKIE_NAME, security.issue_token('alice', 'account_admin'))
+        with mock.patch.object(qtg_panel, '_rt_or_503', new=mock.AsyncMock(return_value=rt)):
+            response = client.get('/api/v1/settings')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['qoder']['api_keys'][0]['masked'], '***demo')
+        self.assertTrue(response.json()['qoder']['auth_required'])
+        for secret in ('synthetic-private', 'synthetic-future', 'synthetic-root'):
+            self.assertNotIn(secret, response.text)
+        self.assertEqual(qoder['api_keys'][0]['key'], 'synthetic-private-qoder')
+
 
 if __name__ == '__main__':
     unittest.main()

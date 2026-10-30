@@ -58,6 +58,8 @@
 
 账号池、模型、访问 Key、用量与日志，一处掌握。保留浮动 Dock、明暗主题、平台切换与五语界面。
 
+权限分清，不把视野关小：普通管理员可浏览全部控制台页面与脱敏数据，只能添加授权账号；超级管理员负责账号维护、密钥额度、用户权限与系统设置。
+
 <picture>
   <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
   <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="实际控制台仪表盘：左上角智汇网关标识、三平台切换、冰蓝趋势图与浮动 Dock。所有数值为合成数据。" />
