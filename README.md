@@ -139,7 +139,7 @@ cd zhihui-gateway
 
 产品源码采用 [MIT](LICENSE)，组件版权与第三方声明见 [Manager LICENSE](manager/LICENSE)。模型与账号授权遵循各自服务条款。
 
-新版首页的三维扫描及衍生海报适用 CC BY-SA 4.0，Three.js、Draco 保留各自许可；任务与骑行插画的再分发许可尚待核对，不包含在 MIT 授权承诺中。来源与复现边界见 [首页集成说明](site/home-source/INTEGRATION.md)。
+新版首页的三维扫描及衍生海报适用 CC BY-SA 4.0，Three.js、Draco 保留各自许可；任务与骑行动画已替换为本仓库原创 HTML/CSS/SVG，不再发布参考站插画。来源与复现边界见 [首页集成说明](site/home-source/INTEGRATION.md)。
 
 <div align="center">
 <br />

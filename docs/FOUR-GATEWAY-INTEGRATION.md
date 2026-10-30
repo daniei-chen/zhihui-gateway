@@ -14,14 +14,17 @@ CSS and SVG artwork. Reference-site illustration source is retained privately
 as audit evidence, not included in the public source or selected asset closure.
 The attributed Thinker model retains its separate CC BY-SA license.
 
-Candidate review: 2026-10-30, Asia/Shanghai. This document is not a deployment receipt.
+The three-platform release was deployed on 2026-10-30, Asia/Shanghai. The exact
+production build and verification boundaries are recorded in
+[the release receipt](RELEASE-20261030-THREE.md). The diagnostic stages below
+remain historical evidence, not claims that those earlier builds are running.
 
 ## Delivered In Source
 
 - The selected homepage uses the blue-white Z identity. Login retains the exact
-  serving original layout, styles, SVG and behavior; only two platform text
-  strings name Codex, WorkBuddy, Qoder and Trae and say four gateways. The new
-  three-dimensional login concept from the supplied export is not adopted.
+  serving original layout, styles, SVG, three-platform text and behavior, with
+  no text replacements. Neither the four-gateway wording nor the new
+  three-dimensional login concept from the supplied export is adopted.
 - Homepage assets have content-derived URLs because production caches
   `/home-assets/` as immutable. Different bytes must never reuse the same URL.
 - Essential hero text and the console entry stay painted from the first frame.
@@ -68,16 +71,15 @@ campaign eligibility or reward-issuance policy. Local activity is bounded,
 rotated evidence, not a complete provider billing or reward ledger. No extra
 provider check-in, OAuth exchange or SMS was triggered to investigate this.
 
-## What Still Prevents A Final Release
+## Remaining Work Beyond This Three-Platform Release
 
 | Boundary | Remaining acceptance |
 | --- | --- |
-| Codex production identity | The supplied engine/workbench is a mock-transport integration package. Production OAuth mode, authorized scope, client registration and Linux acceptance are not established. Do not silently substitute an API key or reuse desktop credentials. |
-| Codex quota and settlement | Trusted account/window observations, Manager RBAC/pool/key bindings, native Responses routing and reliable usage delivery are not connected. Unknown usage must remain unknown. |
+| Independent Codex product | Outside the shipped three-platform scope. The supplied engine/workbench is a mock-transport package; production identity, authorized audience, client registration, account-window observations and settlement need a separate design and acceptance. Do not silently substitute an API key or reuse desktop credentials. |
 | Pending check-in reconciliation | Exact, already-persisted terminal responses can repair scheduler bookkeeping. Lost/pending/failed engine results still need attempt-correlated completion and proof the engine operation has stopped; age, midnight or a random adapter generation cannot unlock them. |
 | Competing engine writers | Manager no longer independently schedules Qoder2 claims. Its direct/manual interface can still compete with an engine action; a cross-process lease/attempt protocol is required before claiming global exactly-once execution or safe takeover. |
-| Release and rollback | Apply the signed-source gate, persistent compatibility floor and writer closure. Code rollback must preserve current users, revocations, accounts, credits and token rotation. Old code that ignores new roles or quotas is not an acceptable rollback target. |
-| Public artwork rights | Task/bicycle illustrations retain their reference provenance; redistribution permission is not established. Replace with original work or clear rights before treating them as publishable original artwork. The Thinker and renderer dependencies keep their separate licenses. |
+| Release and rollback | Signed deployment and the persistent compatibility floor are applied. Original business state is retained. A compatible fallback is installed, but full production backend rollback/forward acceptance and durable launcher/readiness/ingress-generation follow-ups remain open. Old code that ignores new roles or quotas is not an acceptable rollback target. |
+| Public artwork rights | Reference task/bicycle art has been removed from the public source and selected closure, replaced by original local scenes. The Thinker and renderer dependencies keep their separate licenses. |
 
 The recovery above closes a local bookkeeping crash window, not a lost engine
 response. Trae's current submission/SSE protocol has no attempt-correlated
