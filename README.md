@@ -37,7 +37,7 @@
 冰蓝、留白、轻盈的光路。首页、登录页与工作台，共享同一枚 Z。
 
 > [!IMPORTANT]
-> 2026-10-30 已发布三平台构建 `v0.0.2+three.20261030.1`：WorkBuddy、Qoder、Trae。首页和控制台同步更新，登录页逐字节保留原版。Codex / ChatGPT 网关留待独立产品，不在本次提供入口。页面动画不代表真实流量，生产发布与验收边界见[本次发布记录](docs/RELEASE-20261030-THREE.md)。
+> 2026-10-30 当前构建 `v0.0.2+roles.20261030.1`：WorkBuddy、Qoder、Trae。普通管理员可浏览完整控制台，仅允许添加账号；首页与原版登录页保持不变。Codex / ChatGPT 网关留待独立产品，不在本次提供入口。页面动画不代表真实流量，生产发布与验收边界见[本次发布记录](docs/RELEASE-20261030-ROLES.md)。
 
 [本轮集成与验收边界](docs/FOUR-GATEWAY-INTEGRATION.md) · [可编辑首页与复现](site/home-source/INTEGRATION.md)
 
