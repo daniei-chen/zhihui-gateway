@@ -15,6 +15,7 @@ import {SectionTabs, type SectionTabItem} from '@/components/common/layout/Secti
 import {BASE_PATH} from '@/lib/base-path';
 import {useT} from '@/lib/i18n/provider';
 import {SECTION_NAV, sectionNavFromPath, type SectionNavIconKey} from '@/lib/section-nav';
+import {usePlatform} from '@/lib/platform-context';
 
 /**
  * 页面内的二级导航（批次 4 ②）。
@@ -46,6 +47,7 @@ const ICONS: Record<SectionNavIconKey, ReactNode> = {
 
 export function PageSectionTabs() {
   const t = useT();
+  const {platform} = usePlatform();
   // `usePathname()` 在子路径部署下**带着**部署前缀，所以要把它交给解析函数剥掉
   // （本组件可以 import `BASE_PATH`；`section-nav.ts` 不能，它要保持零依赖，
   // 见那个文件顶部的说明）。
@@ -55,11 +57,13 @@ export function PageSectionTabs() {
   // 页面凭空长出两条指向别处的 Tab，比不渲染更糟（见 `sectionNavFromPath`）。
   if (!here) return null;
 
-  const items: SectionTabItem[] = SECTION_NAV[here.section].map((item) => ({
+  const items: SectionTabItem[] = SECTION_NAV[here.section].filter(item =>
+    item.href !== '/tasks' || platform === 'workbuddy',
+  ).map((item) => ({
     href: item.href,
     label: t(item.labelKey),
     icon: ICONS[item.iconKey],
   }));
 
-  return <SectionTabs items={items} active={here.item.href} />;
+  return items.length > 1 ? <SectionTabs items={items} active={here.item.href} /> : null;
 }

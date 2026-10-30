@@ -73,7 +73,7 @@ export function hourlySeries(points: readonly UsageHourPoint[], nowHour?: number
     return {
       label: `${pad(h)}:00`,
       full: `${p?.day ?? ''} ${pad(h)}:00`,
-      tokens: (p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0),
+      tokens: p?.total_tokens ?? ((p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0)),
       requests: p?.requests ?? 0,
       failed: p?.failed ?? 0,
       isNow: nowHour === h,
@@ -122,7 +122,7 @@ export function dailySeries(
     return {
       label: key.slice(5),
       full: key,
-      tokens: (p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0),
+      tokens: p?.total_tokens ?? ((p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0)),
       requests: p?.requests ?? 0,
       failed: p?.failed ?? 0,
     };

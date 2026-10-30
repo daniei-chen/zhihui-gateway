@@ -18,6 +18,8 @@ venv/
 /evidence/
 /src/three-platform/evidence/
 /dist/
+/site/home-source/public/
+/site/home-source/dist/
 /releases/
 /runtime/
 **/managed-release.json

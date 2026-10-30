@@ -58,11 +58,11 @@ npm run build:export
 在仓库根目录执行：
 
 ```bash
-python3 -m http.server 8080 --bind 127.0.0.1 --directory site/home
+node site/tools/preview-server.mjs --port 4184
 ```
 
-访问 `http://127.0.0.1:8080`。首页预览使用合成数据生成的控制台截图，不连接生产服务。
-此静态服务不提供登录、控制台或 `/favicon/` 的生产路径；相关入口依赖真实部署。
+访问 `http://127.0.0.1:4184` 或 `/login`。首页预览使用合成数据生成的控制台截图，不连接生产服务。
+此服务验证 `/home-assets/` 资源、CSP 和登录布局；控制台入口只到本地导航验证页，不提供业务 API 或真实认证。
 页面、手机入口与交互测试见 [site/README.md](../site/README.md)。
 
 ## 生产升级
@@ -112,3 +112,20 @@ python3 -m unittest discover -s tests -p test_readme_assets.py
 
 真实界面预览来自本仓库对应源码或控制台构建；其中数字均为合成示例，不是生产状态、性能承诺或供应商可用性证明。
 来源、尺寸和摘要见 [`docs/images/readme/manifest.json`](images/readme/manifest.json)。
+
+## Qoder 引擎日界与配置生成
+
+`QTG_QODER2_TIMEZONE` 是引擎的 IANA 时区，默认 `Asia/Shanghai`，不是浏览器或
+Manager 时区。小时统计会先对照引擎的当日零点；配置不一致时报错，不把别的日界
+当成所选当天。改变引擎时区时应同步配置并重新验收，不需要也不应改历史用量。
+
+只生成独立 QTG 的配置合同：
+
+```bash
+python3 tools/build_config_contracts.py --service qtg
+python3 -m pytest tests/test_qoder_config_generation.py
+```
+
+生成器要求明确选择服务，且拒绝用便携核心覆盖 Manager 已扩展的运行时校验器。
+Manager 的配置来源对账、启动参数和脱敏检查必须保留，不能为了增加一个变量
+整份重置。生成后的文件须连同实际消费代码一起测试和发布。

@@ -1,0 +1,330 @@
+{
+  "original_zip_sha256": "f328157a8bb8c0db48ff8adb315e43f9a34d5855cbd19e64f270b1cf72134e07",
+  "editable_source": true,
+  "raw_model_and_intermediate_files_excluded": true,
+  "reference_animation_rights_unconfirmed": false,
+  "files": [
+    {
+      "path": "build-viewer.mjs",
+      "bytes": 951,
+      "sha256": "043f0e8f2c8365fd2e9a0b249099999132f6db4699222498d4dd477b2538ae5f"
+    },
+    {
+      "path": "build.mjs",
+      "bytes": 311,
+      "sha256": "dfc629c8e84b66f629fa25af829251d6a424dde3d20e8e917ae89be9daf486c6"
+    },
+    {
+      "path": "build_scenes.py",
+      "bytes": 7756,
+      "sha256": "f681875d2284f6ef3cf34cbf9e1957010a6f7c90da151f745c3f54e408caa654"
+    },
+    {
+      "path": "compress-model.mjs",
+      "bytes": 2643,
+      "sha256": "fb9600e0ae610de1cd9260d62338dd7f7d1ffd07d3bc3c8eadc680a89b8a1380"
+    },
+    {
+      "path": "design-qa.md",
+      "bytes": 9315,
+      "sha256": "e5eacfeb3b4b3bcac00325f6ba0a27835aec4b27d84d76c4bdc0b562bd6576a9"
+    },
+    {
+      "path": "export-gateway.mjs",
+      "bytes": 869,
+      "sha256": "d582f28a9d92a476e073cb2cbcc60e3224438aff2d25980578a1aaef75bd9c38"
+    },
+    {
+      "path": "HANDOFF.md",
+      "bytes": 10335,
+      "sha256": "62a83d7cf57c4e9a24e1bb435a5bccdea48f74633dfc4699afb5baaeac4f7fb2"
+    },
+    {
+      "path": "LOGIN-HANDOFF.md",
+      "bytes": 4012,
+      "sha256": "3af2f67d7ac93c29aa7558ff2bc819a018288d0c297f6fd45be8263420784413"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 34972,
+      "sha256": "abb39ad5cd25f5275bb3de98c7a532ecb14b328b6a423ee0e3dee7f46bca8be2"
+    },
+    {
+      "path": "package.json",
+      "bytes": 1216,
+      "sha256": "af23cb128ef7ab7b82f6c103eafcc9757a550e5c53e8339c26d08db2d4af35bc"
+    },
+    {
+      "path": "page_content.py",
+      "bytes": 9207,
+      "sha256": "a9598649759a4130a46cf8bd026626e6516b986d59e9f637fb7aa57ca97fbd75"
+    },
+    {
+      "path": "prepare.py",
+      "bytes": 9636,
+      "sha256": "0599ff9a33a6bfe8135d1850acaab0a9b1fde93105d48de300d6d5a1885ad36e"
+    },
+    {
+      "path": "prepare_model.py",
+      "bytes": 3027,
+      "sha256": "adff22392ca139fac0c08001d278798dc3c3dd695a29d5fa85c9829ae685fc8c"
+    },
+    {
+      "path": "README.md",
+      "bytes": 4290,
+      "sha256": "ccaf3103d2aff971db69462212506c9459189ad156468dd629bdf364280c8cbc"
+    },
+    {
+      "path": "reference-models/DRACO-LICENSE.txt",
+      "bytes": 13898,
+      "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4"
+    },
+    {
+      "path": "reference-motion/home.css",
+      "bytes": 82609,
+      "sha256": "421960ffa413f4748320e936d9198386009ef87b4e63f29af38c75e3ff8370f9"
+    },
+    {
+      "path": "reference-motion/home.js",
+      "bytes": 52494,
+      "sha256": "fb52b42319c7e7a0f04506aab578cccc492d888af4ba101f8d660823e54c3d5b"
+    },
+    {
+      "path": "reference-motion/NOTES.md",
+      "bytes": 5190,
+      "sha256": "aa49a6e2a7ebefd9e3774a134b11d35ef4d36f0c6b8f0e53594abf13a28eb53b"
+    },
+    {
+      "path": "reference-motion/pelican-ride.html",
+      "bytes": 30603,
+      "sha256": "9a0c292f4158e9040fe037c163c402db30e6c8941388a3632f3354026a1dba9f"
+    },
+    {
+      "path": "release.json",
+      "bytes": 19644,
+      "sha256": "90ac85862891adc2ca6b24c2f50be8e178e9e4b89990207a36f9c49773207737"
+    },
+    {
+      "path": "render_gateway.py",
+      "bytes": 2881,
+      "sha256": "5df5e4ac3fa19b1b5615e074ad47a20525f9bdc1d252fdc23b01fa15e958e803"
+    },
+    {
+      "path": "render_model.py",
+      "bytes": 3527,
+      "sha256": "cd12195c241d60419dcd4a6e85356ffddfba143aa18bfda3aed510a5da37d173"
+    },
+    {
+      "path": "sections/details.html",
+      "bytes": 1752,
+      "sha256": "940675484ba79f4f2d4253536f3c4a9273d2575bc6eb4c5592189cae79721d9b"
+    },
+    {
+      "path": "sections/intro-screens.html",
+      "bytes": 2428,
+      "sha256": "47290d1b6a2d8dc4390408b0018817d5c92c8ab53c4df1f3c6e1bf75b3a70b82"
+    },
+    {
+      "path": "sections/sculpture.html",
+      "bytes": 2988,
+      "sha256": "4dd40b1684fd04522254f261ca23d65ae73dc33be017b457eb565ef694e64ce8"
+    },
+    {
+      "path": "server.mjs",
+      "bytes": 1991,
+      "sha256": "a256f9775a6476b326a42961df81b921ead7efc5227635a4c609a744831cf52e"
+    },
+    {
+      "path": "source-snapshot/manifest.json",
+      "bytes": 5064,
+      "sha256": "d382c747c9c257d0c0255de5d4e852f05c09a9e661283f61894cf9aa30dc079a"
+    },
+    {
+      "path": "source-snapshot/site/android-chrome-192x192.png",
+      "bytes": 38371,
+      "sha256": "81774fe87445d84f82698f5398b0eba7e3a2eff37117f4b48407afca9f6f556c"
+    },
+    {
+      "path": "source-snapshot/site/android-chrome-512x512.png",
+      "bytes": 203911,
+      "sha256": "d1db7743ee6615ce032abc1fb39bf36b477295dd7504be832ec66f40d9b7dd18"
+    },
+    {
+      "path": "source-snapshot/site/apple-touch-icon.png",
+      "bytes": 34224,
+      "sha256": "5cfa64b096980714729f41cdd70ead4e8b46ac0598cf5382042b92807b2612ca"
+    },
+    {
+      "path": "source-snapshot/site/BUILD_INFO.json",
+      "bytes": 360,
+      "sha256": "df2812709fa48b3113c7dc6b36e5856a69759b80f9b41bb4db7d0fd62bbf3dc5"
+    },
+    {
+      "path": "source-snapshot/site/CONTENT-SHA256.txt",
+      "bytes": 2402,
+      "sha256": "86c4a1602673fd9bbf1c73e10b065d2d5aca47a23cce2380a51860a66d0fcb31"
+    },
+    {
+      "path": "source-snapshot/site/favicon-16x16.png",
+      "bytes": 797,
+      "sha256": "923bc97b962b73defc89be57136ea6cafd0ebc0b09824e4d7d249ee9aa972d8b"
+    },
+    {
+      "path": "source-snapshot/site/favicon-32x32.png",
+      "bytes": 2061,
+      "sha256": "99be83162cea05fa9953dd83a18066a90e424bf8e6bb461cd39bfcb6daee396e"
+    },
+    {
+      "path": "source-snapshot/site/favicon.ico",
+      "bytes": 95056,
+      "sha256": "28c38d66ccdd946e64ff8b387c898cb945735307515774e405f6b413e615968b"
+    },
+    {
+      "path": "source-snapshot/site/favicon.svg",
+      "bytes": 706,
+      "sha256": "b4da49287f1690ebc27c950774f8adf2877324de3b24a65add3143cbc9c29652"
+    },
+    {
+      "path": "source-snapshot/site/index.html",
+      "bytes": 205738,
+      "sha256": "ef19d27d47706e05e68352476c0382436bbc53f539af461cdd31dd76ce69df25"
+    },
+    {
+      "path": "source-snapshot/site/logo.png",
+      "bytes": 14648,
+      "sha256": "e7587c03981e758b7f30fb8991b9a03c0ba37bf3276c1c058fa1aceccbf31b44"
+    },
+    {
+      "path": "source-snapshot/site/preview/accounts-desktop.jpg",
+      "bytes": 78803,
+      "sha256": "9a1f2505d8c2b8eb2f5d83d9b86b33359949b1b5d1c40c80e4b324faa352bed7"
+    },
+    {
+      "path": "source-snapshot/site/preview/accounts-mobile.jpg",
+      "bytes": 37504,
+      "sha256": "b6cf559df54f51dfca18503ef96c3e7733ce138d2e0dfe62f1d31b5cacd802d8"
+    },
+    {
+      "path": "source-snapshot/site/preview/dashboard-desktop.jpg",
+      "bytes": 94497,
+      "sha256": "82b6a815892d154b612c8a2fec876f22435d26749037a1c3aed96379c0cf8d10"
+    },
+    {
+      "path": "source-snapshot/site/preview/dashboard-mobile.jpg",
+      "bytes": 28912,
+      "sha256": "d64d190a5529cf33388579d7564ef41a1b81e7d192e05c81f571d3fc2974ea28"
+    },
+    {
+      "path": "source-snapshot/site/preview/keys-desktop.jpg",
+      "bytes": 56627,
+      "sha256": "301f67b285e569b7cab02737bf2802db8e99af91ea9625a2617e2c2bb3c98aeb"
+    },
+    {
+      "path": "source-snapshot/site/preview/keys-mobile.jpg",
+      "bytes": 29767,
+      "sha256": "07b4dc904887f6ad70c575e17665b3a318ceb392a2a507d21df00b911f34e8b6"
+    },
+    {
+      "path": "source-snapshot/site/preview/logs-desktop.jpg",
+      "bytes": 79768,
+      "sha256": "a9c5b2fec5f5b31582bd7980c7cb544426d063f6cab5e6bed57c39eb8d5954dd"
+    },
+    {
+      "path": "source-snapshot/site/preview/logs-mobile.jpg",
+      "bytes": 31921,
+      "sha256": "421e4207672e98525591a45a0e1f78686694b623e5a04284e2bcd39c7bf7445d"
+    },
+    {
+      "path": "source-snapshot/site/preview/manifest.json",
+      "bytes": 4045,
+      "sha256": "62f17ebdaaca646f1b3f22cb07e7b0d8e890d572efdaf96c9906ff6317f2523c"
+    },
+    {
+      "path": "source-snapshot/site/preview/models-desktop.jpg",
+      "bytes": 86991,
+      "sha256": "da722b4b0bcf485d3a832dc3be1ed76d73901e3602b69b7413af0484d7958d9a"
+    },
+    {
+      "path": "source-snapshot/site/preview/models-mobile.jpg",
+      "bytes": 33673,
+      "sha256": "2cbd6ae05f94b571aaacf581a5fa408e9577c6d55254ddc6334084383e8b2db1"
+    },
+    {
+      "path": "source-snapshot/site/preview/security-desktop.jpg",
+      "bytes": 83087,
+      "sha256": "c05458537fb830bda2e3bdffe25fc2e609e0eee2bd931fdcd2a4c86ee96161a6"
+    },
+    {
+      "path": "source-snapshot/site/preview/security-mobile.jpg",
+      "bytes": 33277,
+      "sha256": "7c3122a7f13026f5adefc5e992afd8c36bb948aa5f22e3fb46c31e4f0f66d4a9"
+    },
+    {
+      "path": "source-snapshot/site/preview/stats-desktop.jpg",
+      "bytes": 89576,
+      "sha256": "169889f6994056ea00f89f58e305d10351b70594701669bf302ebc8a1db04492"
+    },
+    {
+      "path": "source-snapshot/site/preview/stats-mobile.jpg",
+      "bytes": 34125,
+      "sha256": "418bf799d72dec3b6ac1303524b6585f01d3766a437c7ae67144e67d842ccaf2"
+    },
+    {
+      "path": "source-snapshot/site/preview/tasks-desktop.jpg",
+      "bytes": 102388,
+      "sha256": "0428f132cdd467930c6a53c1d4f51a2febdc44dd387fed4eb59f00fa7a5c99f3"
+    },
+    {
+      "path": "source-snapshot/site/preview/tasks-mobile.jpg",
+      "bytes": 35357,
+      "sha256": "397735232b8fb24288283223466b63a46d2a6a015084aa81c79cac67a9685a09"
+    },
+    {
+      "path": "source-snapshot/site/site.webmanifest",
+      "bytes": 568,
+      "sha256": "77f7db08337d113f20c5fc5a3e452acb5e0c069f2105d88cae2b53e543767dde"
+    },
+    {
+      "path": "src/gateway-model.js",
+      "bytes": 4929,
+      "sha256": "d2c0f31a1072e80929094f66bbe2fb2ddcd9d98faa81396000e8587c9056f924"
+    },
+    {
+      "path": "src/gateway-viewer.js",
+      "bytes": 4366,
+      "sha256": "cce24f704b046e831407f1649f6737d62ab5e2101ba88ba95887e438609b061a"
+    },
+    {
+      "path": "src/sculpture-viewer.js",
+      "bytes": 7072,
+      "sha256": "5386edbe483ddc28a3bbf9bf2d7d31836847f7d81871cd6d9a366171ce49f9e9"
+    },
+    {
+      "path": "tests/interactions.test.mjs",
+      "bytes": 13343,
+      "sha256": "1f22d4762a6a633518319a9e44afa9633293e422b00864595c63d1f503fc7a59"
+    },
+    {
+      "path": "tests/login.test.mjs",
+      "bytes": 8433,
+      "sha256": "2ee93ed9234d2f3bc628f1c90ed48902bb2409d99d124fef969377d98769ab85"
+    },
+    {
+      "path": "tests/pelican.test.mjs",
+      "bytes": 2722,
+      "sha256": "e19dc3f8696940515e68bb6aebed9f0851fd9436df27e29c73c4e27324545684"
+    },
+    {
+      "path": "tests/scenes.test.mjs",
+      "bytes": 8696,
+      "sha256": "08cf40ce04e476f73db1eab755467ed8293f8fd71269c7b3068fefc665539065"
+    },
+    {
+      "path": "verify.py",
+      "bytes": 5321,
+      "sha256": "c1ac49a52c5e417e6f13898388928f6ff8a1d49cba521e0e187a2db49fd2ebba"
+    }
+  ],
+  "historical_reference_assets_removed_from_release": true,
+  "selected_scene_source": "scenes/ (original local artwork)"
+}

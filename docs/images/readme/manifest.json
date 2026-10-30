@@ -26,43 +26,33 @@
     },
     {
       "path": "docs/images/readme/capabilities-mobile.svg",
-      "bytes": 4949,
-      "sha256": "84c4e9583bf3054328d384cb016e4c57ab1038a5decf35da2ab4c11a826f967a"
+      "bytes": 4937,
+      "sha256": "563a148cb256df7a066e08e07e0b9940dace6b5b69b57456870cd4421480708a"
     },
     {
       "path": "docs/images/readme/capabilities.svg",
-      "bytes": 4949,
-      "sha256": "8df1ef0ce067551a6fab9384bc5ecfeeeb21a9c1cda75d006346cd7a3e8666cd"
+      "bytes": 4937,
+      "sha256": "6d156bba419df8c709c0e9726395fdc85d9bebbeb5381fbf60c251a7ebd5aa83"
     },
     {
       "path": "docs/images/readme/cover-mobile.svg",
-      "bytes": 5120,
-      "sha256": "e15a8c5ae7cc9d53bf2b662e9183b8c58a65ed900f3f2650b00599d6c35111c5"
+      "bytes": 5752,
+      "sha256": "1e4596c0bd32b02743b404db2fa7c1d04b7203b0f9cd07136cbcd2e28f3c109d"
     },
     {
       "path": "docs/images/readme/cover.svg",
-      "bytes": 5690,
-      "sha256": "dd507865925e21bafe3c0ceefd4b33e0d6ca53c30a5f32766de44187d29da0d9"
+      "bytes": 6325,
+      "sha256": "91b9cf9170050e0374d4e8f701a6a5f0fb937e00e63794dd4452f2321f4d6938"
     },
     {
       "path": "docs/images/readme/routing-mobile.svg",
-      "bytes": 5625,
-      "sha256": "5c35305e2aa8a07d41584662a58dbcb5a2d918a8acb5e6fd733080b87063a173"
+      "bytes": 5559,
+      "sha256": "10eb709a56c89d035c3aa3288d66cc310163bbafa24006ad478a7938d4f132aa"
     },
     {
       "path": "docs/images/readme/routing.svg",
-      "bytes": 5703,
-      "sha256": "21b1aac7de91526d3a06d6d78ab995a836708d4a0c1292100ae033ed50b920b3"
-    },
-    {
-      "path": "docs/images/zhihui-home-mobile.png",
-      "bytes": 141408,
-      "sha256": "385271a509820ca591106213336e6b74a69a6b794cc6980c6dd9e048f08aac45"
-    },
-    {
-      "path": "docs/images/zhihui-home.png",
-      "bytes": 506651,
-      "sha256": "05723feb85b4e2c0df4b2a4e35ba02a4f41654b9f9d2a7443507ea739e3de94c"
+      "bytes": 5631,
+      "sha256": "594912a2f99d4313dd52060fa72c0399e893717eeb82a9f8c18d38bff30b6d6c"
     },
     {
       "path": "site/home/preview/accounts-desktop.jpg",

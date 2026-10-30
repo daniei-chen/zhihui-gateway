@@ -15,6 +15,8 @@ from ..identity import platform_of
 
 import secrets
 import datetime as dt
+import hashlib
+import math
 import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -25,6 +27,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .. import manager_api
+from ..checkin_result import classify_result, reward_amount
+from ..checkin_scheduler import dispatch_checkin
 from ..manager_session import forward_logout, wb_cookie_header
 from ..service import all_accounts, build_aggregate, now_iso, summarize, tasks_payload
 # U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
@@ -306,29 +310,99 @@ async def compat_logs(
 
 
 @router.get("/checkin-logs")
-async def compat_checkin_logs(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
+async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
+                              limit: int = Query(default=20, ge=1, le=200),
+                              offset: int = Query(default=0, ge=0, le=100000),
+                              days: int = Query(default=30, ge=1, le=365),
+                              uid: str = Query(default="")) -> Dict[str, Any]:
     """签到记录：按平台分开。
 
     * trae：上游 `/api/checkin` 的历史留痕（按天汇总）；
-    * qoder：账号 JSON 里的 `lastCheckin` / 今天是否已签（没有逐条历史）。
+    * qoder2：本地动作流水；处理成功与实际新增积分分开呈现。
+    * 旧 qoder：只有账号签到日期，不能冒充逐条奖励历史。
     """
     rt = _rt(request)
-    agg = await build_aggregate(rt)
     plat = platform_of(request)
     items: List[Dict[str, Any]] = []
+    if plat == "qoder" and callable(getattr(rt.qoder, "checkin_activity", None)):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid history realm')
+        selected_realm = 'intl' if realm == 'global' else realm
+        payload = await rt.qoder.checkin_activity()
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or len(rows) > 1000 or payload.get('ok') is False:
+            raise HTTPException(status_code=502, detail="签到流水格式异常，结果未确认")
+        # History must not depend on Trae, WorkBuddy or every statistics endpoint.
+        # Resolve the engine's shortened IDs only against this same account pool.
+        account_payload = await rt.qoder.accounts()
+        account_rows = account_payload.get('accounts') if isinstance(account_payload, dict) else None
+        if not isinstance(account_rows, list) or len(account_rows) > 10000 or account_payload.get('ok') is False:
+            raise HTTPException(status_code=502, detail='账号范围未确认，无法关联签到流水')
+        account_ids = set()
+        for account in account_rows:
+            if (not isinstance(account, dict) or not isinstance(account.get('uid'), str)
+                    or not account['uid'] or len(account['uid']) > 256):
+                raise HTTPException(status_code=502, detail='账号范围格式异常，无法关联签到流水')
+            account_ids.add(account['uid'])
+        cutoff = time.time() - days * 86400
+        identities: Dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict) or row.get("kind") != "checkin":
+                continue
+            stamp = row.get("ts")
+            if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp) or stamp < cutoff:
+                continue
+            if selected_realm and row.get('realm') != selected_realm:
+                continue
+            short_uid = str(row.get("uid") or "")
+            matches = [account_id for account_id in account_ids if account_id.startswith(short_uid)] if short_uid else []
+            full_uid = matches[0] if len(matches) == 1 else short_uid
+            if uid and (len(matches) != 1 or full_uid != uid):
+                continue
+            amount = reward_amount(row.get("amount"))
+            processed = row.get("ok") is True
+            kind = classify_result({'ok': row.get('ok'), 'earned_credit': amount})
+            message = f"本次新增 {amount:g} 积分" if kind == "rewarded" else "处理完成，本次新增 0 积分（不等同于今日已领取）" if kind == "no_reward" else "处理完成，新增积分未确认" if processed else "签到处理失败，未确认奖励"
+            signature = f"qoder:{stamp}:{short_uid}:{row.get('realm')}:{kind}:{amount}"
+            ordinal = identities.get(signature, 0)
+            identities[signature] = ordinal + 1
+            identity = f"{signature}:{ordinal}".encode()
+            items.append({"id": int.from_bytes(hashlib.sha256(identity).digest()[:6], "big"),
+                          "ts": stamp, "uid": full_uid, "nickname": str(row.get("nickname") or ""),
+                          "source": "engine", "kind": "checkin", "success": processed,
+                          "code": None, "message": message, "earned_credit": amount,
+                          "reward_status": kind})
+        items.sort(key=lambda row: row['ts'], reverse=True)
+        from pathlib import Path
+        from ..checkin_scheduler import _load, _today, automatic_owner, dispatch_state
+        try:
+            state = _load(Path(rt.settings.data_dir) / 'random_checkin.json')
+            scheduler_state = 'uncertain' if 'qoder' in state.get('uncertain', {}) else 'confirmed' if state.get('day') == _today() and 'qoder' in state.get('done', {}) else 'scheduled' if state.get('day') == _today() else 'unknown'
+            dispatch = dispatch_state(Path(rt.settings.data_dir), 'qoder')
+            if dispatch == 'uncertain':
+                scheduler_state = 'uncertain'
+            elif dispatch == 'unknown':
+                scheduler_state = 'unknown'
+        except (RuntimeError, AttributeError):
+            scheduler_state = 'unknown'
+        return {"total": len(items), "items": items[offset:offset + limit],
+                "local_total": len(items), "auto_total": 0,
+                "scheduler": {"state": scheduler_state, "automation_owner": await automatic_owner(rt, 'qoder')},
+                "evidence_source": "engine_local_activity", "history_limit": 1000,
+                "note": "引擎本地动作流水，不是上游发放凭证；零奖励不等于今日已领"}
+    agg = await build_aggregate(rt)
     if plat == "qoder":
         for a in agg.qoder_accounts:
             if not a.last_checkin and not a.checked_today:
                 continue
             date = str(a.last_checkin or "")[:10]
-            ok = 1 if a.checked_today else 0
             items.append({
                 "id": abs(hash(str(a.uid) + date)) % 100000,
                 "ts": 0, "uid": a.uid, "nickname": a.name or a.uid[:8],
                 "source": "auto", "kind": "checkin",
-                "success": bool(ok), "code": None, "date": date,
-                "ok": ok, "already": 0, "failed": 0 if ok else 1,
-                "message": f"{date} {'已签到' if ok else '未签到'}",
+                "success": True, "code": None, "date": date,
+                "ok": 1, "already": 0, "failed": 0,
+                "message": f"最近签到记录：{date or '日期未知'}；本次新增积分未确认",
             })
     elif plat == "workbuddy":
         for row in (agg.wb_raw.get("checkin") or []):
@@ -488,11 +562,12 @@ async def compat_account_checkin(request: Request, file: str) -> Dict[str, Any]:
     rt = _rt(request)
     platform, uid = _split_file(file)
     if platform == "qoder":
-        res = await rt.qoder.checkin()
-        # 上游的 checkin 是**整池**动作（旧 BFF 只有全量签到接口），这里必须按 uid
-        # 过滤出本账号的结果。过滤不到时**不能回退到 results[0]** —— 那会把别的号
-        # 的签到结果当成这个号的（审计点名的问题）。
-        rows = [r for r in (res.get("results") or []) if str(r.get("uid")) == uid]
+        dispatch = getattr(rt.qoder, 'checkin_one', None)
+        if not callable(dispatch):
+            raise HTTPException(status_code=409, detail="当前引擎不支持单账号签到；未向整池派发，请使用批量签到")
+        res = await dispatch_checkin(rt, 'qoder', uid=uid)
+        # Scope the provider action itself, not just the displayed result.
+        rows = [r for r in (res.get("results") or []) if isinstance(r, dict) and str(r.get("uid")) == uid]
         if not rows:
             return {
                 "code": 0,
@@ -500,9 +575,11 @@ async def compat_account_checkin(request: Request, file: str) -> Dict[str, Any]:
                 "message": "上游未返回该账号的签到结果（可能今日已签或 uid 不匹配）",
                 "detail": {},
             }
-        hit = rows[0]
+        hit = _batch_results({"results": rows})[0]
         return {"code": 1 if hit.get("ok") else 0, "ok": bool(hit.get("ok")),
-                "message": f"签到{'成功' if hit.get('ok') else '失败'}", "detail": hit}
+                "already": hit["already"], "reward_status": hit["reward_status"],
+                "earned_credit": hit["earned_credit"],
+                "message": hit["message"], "detail": hit}
     if platform == "workbuddy":
         w = getattr(rt, "wb", None)
         if w is None:
@@ -512,14 +589,7 @@ async def compat_account_checkin(request: Request, file: str) -> Dict[str, Any]:
         hit = rows[0] if rows else {"ok": False, "message": "上游未返回签到结果"}
         return {"code": 0, "ok": False, "already": bool(hit.get("already")),
                 "message": hit.get("message") or "", "detail": hit}
-    res = await rt.trae.checkin()
-    rows = _batch_results(res)
-    if not rows:
-        return {"code": 0, "ok": False, "message": "上游未返回签到结果", "detail": {}}
-    hit = rows[0]
-    return {"code": 1 if hit.get("ok") else 0, "ok": bool(hit.get("ok")),
-            "already": bool(hit.get("already")), "message": hit.get("message") or "",
-            "detail": hit}
+    raise HTTPException(status_code=409, detail="当前引擎仅支持批量签到；未向整池派发，请使用批量签到")
 
 
 
@@ -774,22 +844,26 @@ def _batch_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(r, dict):
             continue
         status = str(r.get("status") or "").lower()
-        # already 的判定：trae 看 checkin_results.status；qoder2 上游没有 status，
-        # 但给了 earned_credit / claimed —— 赚到 0 且没领取就是「今日已领」。
-        already = status == "already" or bool(r.get("already"))
-        if not already and status != "success":
-            earned = r.get("earned_credit")
-            if bool(r.get("ok")) and earned is not None and float(earned or 0) == 0:
-                already = True
+        kind = classify_result(r)
+        already = kind == "already"
+        message = str(r.get("message") or r.get("msg") or "")
+        if kind == "no_reward":
+            message = "本次未新增积分" + (f"：{message}" if message else "（不等同于今日已领取）")
+        elif kind == "rewarded" and not message:
+            message = f"本次新增 {r['earned_credit']} 积分"
+        elif not message:
+            message = "今日已领取（未重复发放）" if already else "签到结果未确认" if kind == "unknown" else "签到处理完成" if r.get("ok") is True else "签到失败"
         out.append({
             "nickname": str(r.get("nickname") or r.get("name") or r.get("uid") or ""),
             "uid": str(r.get("uid") or ""),
-            "ok": bool(r.get("ok")),
-            "message": str(r.get("message") or r.get("msg") or ""),
+            "ok": kind in ("rewarded", "already", "completed"),
+            "processed": r.get("ok") is True,
+            "message": message,
             "code": r.get("code"),
             "status": status,
             "already": already,
-            "earned_credit": r.get("earned_credit"),
+            "reward_status": kind,
+            "earned_credit": reward_amount(r.get("earned_credit")),
             "next_available_at": r.get("next_available_at"),
             "next_available_note": r.get("next_available_note"),
         })
@@ -803,12 +877,16 @@ async def compat_checkin_all(request: Request) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     if plat in ("", "qoder"):
         try:
-            results += _batch_results(await rt.qoder.checkin())
+            results += _batch_results(await dispatch_checkin(rt, 'qoder'))
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             results.append({"nickname": "Qoder", "ok": False, "message": str(exc)[:160], "code": None})
     if plat in ("", "trae"):
         try:
-            results += _batch_results(await rt.trae.checkin())
+            results += _batch_results(await dispatch_checkin(rt, 'trae'))
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             results.append({"nickname": "Trae", "ok": False, "message": str(exc)[:160], "code": None})
     if plat == "workbuddy":
@@ -825,7 +903,8 @@ async def compat_checkin_all(request: Request) -> Dict[str, Any]:
     # 前端契约（lib/api.ts checkinAll）：total 只算「本次真正发起签到」的账号，
     # 今天已签的进 already、不适用的进 skipped —— 它们既不算成功也不算失败。
     already_rows = [r for r in results if r.get("already")]
-    fresh_rows = [r for r in results if not r.get("already")]
+    skipped_rows = [r for r in results if r.get("reward_status") in ("no_reward", "skipped", "pending")]
+    fresh_rows = [r for r in results if not r.get("already") and r not in skipped_rows]
     ok = len([r for r in fresh_rows if r["ok"]])
     failed = len(fresh_rows) - ok
     if not fresh_rows and already_rows:
@@ -834,14 +913,19 @@ async def compat_checkin_all(request: Request) -> Dict[str, Any]:
                      if r.get("next_available_note")), "")
         if note:
             msg += f"；下次可签：{note}"
+    elif not fresh_rows and skipped_rows:
+        msg = "本次未确认新增积分；请查看各账号的领取结果"
     else:
         msg = f"签到完成：新签成功 {ok} / {len(fresh_rows)}"
         if already_rows:
             msg += f"，今日已签 {len(already_rows)}"
         if failed:
             msg += f"，失败 {failed}"
+    if skipped_rows:
+        msg += f"；{len(skipped_rows)} 个账号未新增积分或仍待确认"
     return {"total": len(fresh_rows), "succeeded": ok, "already": len(already_rows),
-            "skipped": 0, "results": results, "message": msg}
+            "skipped": len(skipped_rows), "results": results, "message": msg,
+            "no_reward": sum(r.get("reward_status") == "no_reward" for r in results)}
 
 
 @router.post("/accounts/refresh-tokens")
@@ -1030,11 +1114,18 @@ async def compat_daily_plan_run(request: Request) -> Dict[str, Any]:
     daily = plans.setdefault("daily", {})
     if task == "checkin":
         res = await compat_checkin_all(request)
-        ok, msg = True, str(res.get("message") or "签到完成")
+        from ..checkin_result import summarize_result
+        ok = summarize_result(res)['ok']
+        msg = str(res.get('message') or '签到结果未确认')
     elif task == "claim":
         try:
-            await rt.trae.checkin()   # 上游把签到与领奖合并在同一个动作里
-            ok, msg = True, "已向上游发起领奖（Trae 签到动作内含领奖）"
+            result = await dispatch_checkin(rt, 'trae')
+            from ..checkin_result import summarize_result
+            summary = summarize_result(result)
+            ok = summary['ok']
+            msg = '已向上游提交；新增积分以流水为准' if ok else '任务已提交或结果未确认，请核对领取记录，不要重复提交'
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             ok, msg = False, f"领奖失败：{str(exc)[:120]}"
     else:

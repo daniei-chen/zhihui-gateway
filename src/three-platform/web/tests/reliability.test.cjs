@@ -76,6 +76,30 @@ test('usage cache rates preserve missing data, true zero and provider denominato
   }
 });
 
+test('provider total tokens never becomes a fabricated output count or unknown zero', () => {
+  const {usageTokenTotal} = load('lib/usage-metrics.ts', {});
+  assert.equal(usageTokenTotal({total_tokens: 190, prompt_tokens: null, completion_tokens: null}), 190);
+  assert.equal(usageTokenTotal({total_tokens: 0, prompt_tokens: 20, completion_tokens: 30}), 0);
+  assert.equal(usageTokenTotal({prompt_tokens: 20, completion_tokens: 30}), 50);
+  for (const total_tokens of [null, -1, NaN, Infinity, true, '12']) {
+    assert.equal(usageTokenTotal({total_tokens, prompt_tokens: 20, completion_tokens: 30}), null);
+  }
+  for (const row of [{}, {prompt_tokens: null, completion_tokens: 30}, {prompt_tokens: 20},
+                     {prompt_tokens: Infinity, completion_tokens: 0}]) assert.equal(usageTokenTotal(row), null);
+  const {dailySeries, hourlySeries} = load('lib/usage-chart.ts', {});
+  const points = dailySeries([{day: '2026-10-30', total_tokens: 190, prompt_tokens: 30, completion_tokens: 50}], 1);
+  assert.equal(points[0].tokens, 190);
+  const hourly = hourlySeries([{day: '2026-10-30', hour: 0, total_tokens: 190, prompt_tokens: 30, completion_tokens: 50}]);
+  assert.equal(hourly[0].tokens, 190);
+  assert.equal(hourly[1].tokens, 0);
+  assert.equal(hourlySeries([{hour: 0, total_tokens: 0, prompt_tokens: 30, completion_tokens: 50}])[0].tokens, 0);
+});
+
+test('Qoder hourly highlight follows the engine calendar, not the browser timezone', () => {
+  const source = fs.readFileSync(path.join(root, 'app/(main)/stats/page.tsx'), 'utf8');
+  assert.match(source, /hourlySeries\(hourly, platform === 'qoder' \? hourly\[0\]\?\.current_hour \?\? undefined : nowTick\?\.hour\)/);
+});
+
 test('user password reset keeps root policy distinct, preserves raw input and clears on close', async () => {
   const policy = load('lib/managed-user-password.ts', {});
   const jsx = (type, props) => ({type, props});
@@ -156,6 +180,7 @@ test('usage page contains no operational or process-lifetime stats fetches', () 
   assert.match(source, /formatCacheHitRate\(it\)/);
   assert.match(source, /formatOutputRate\(it.tokens_per_sec\)/);
   assert.match(source, /currentKeysHint/);
+  assert.match(source, /dailySeries\(daily, d, platform === 'qoder' \? undefined : nowTick\?\.today\)/);
 });
 
 function asyncHook() {

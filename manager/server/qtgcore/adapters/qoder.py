@@ -86,7 +86,7 @@ class QoderAdapter(BaseAdapter):
 
     # ---- 写操作 ----
     async def checkin(self) -> Dict[str, Any]:
-        return await self._json("POST", "/api/up/accounts/checkin", json_body={}) or {}
+        return await self._json("POST", "/api/up/accounts/checkin", json_body={}, retry=False) or {}
 
     async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
         body: Dict[str, Any] = {} if not uid else {"uid": uid}

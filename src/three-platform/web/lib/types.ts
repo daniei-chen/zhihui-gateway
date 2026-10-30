@@ -677,6 +677,8 @@ export interface UsagePoint {
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;
+  /** Explicit provider total, which need not equal its input/output split. */
+  total_tokens?: number;
   /** 当日实际扣费合计 */
   credit: number;
   /**
@@ -694,9 +696,8 @@ export interface UsagePoint {
 /**
  * 某一天**按小时**的用量（`/api/stats/hourly`）。
  *
- * 「今日」趋势图用：范围只有一天时按天聚合只会得到一根柱子（那正是用户反馈的
- * 「今日还是柱状图，不太对劲」）。与 `UsagePoint` **同源同口径** —— 小时表与
- * 按天表由同一处写入累计，所以图与页头卡片永远一致，清日志也不会打架。
+ * 「今日」趋势图用。Qoder 使用引擎日志，WorkBuddy 使用 Manager 台账；
+ * 不同接口快照与失败用量规则可能不同，不承诺与汇总瞬时完全一致。
  */
 export interface UsageHourPoint {
   /** `YYYY-MM-DD` */
@@ -706,6 +707,10 @@ export interface UsageHourPoint {
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;
+  total_tokens?: number;
+  /** Engine-local "now", independent of the browser timezone. */
+  current_hour?: number | null;
+  timezone?: string;
   credit: number;
   /** 该小时的失败请求数（来自请求日志，与 `UsagePoint.failed` 同一口径） */
   failed: number;
@@ -715,11 +720,11 @@ export interface UsageHourPoint {
 export interface CreditsFlowPoint {
   day: string;
   /** 收入：余额增加流水（kind='credit'）当日合计 */
-  income: number;
+  income: number | null;
   /** 支出：调用实际扣费（usage.credit）当日合计 */
-  expense: number;
+  expense: number | null;
   /** income - expense */
-  net: number;
+  net: number | null;
 }
 
 /**
@@ -733,9 +738,11 @@ export interface CreditsFlow {
   days: number;
   from: string;
   to: string;
-  today: {income: number; expense: number; net: number};
-  week: {income: number; expense: number; net: number};
-  total: {income: number; expense: number; net: number};
+  today: {income: number | null; expense: number | null; net: number | null};
+  week: {income: number | null; expense: number | null; net: number | null};
+  total: {income: number | null; expense: number | null; net: number | null};
+  income_status?: 'unavailable';
+  source?: string;
   daily: CreditsFlowPoint[];
 }
 
@@ -743,10 +750,12 @@ export interface UsageBreakdown {
   key_id?: number;
   name: string;
   requests: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  /** 该维度实际扣费合计 */
-  credit: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  /** Provider total; null means unknown, never an invented output split. */
+  total_tokens?: number | null;
+  /** Recorded charge; null when any included request has no confirmed amount. */
+  credit: number | null;
   /** Only provider-reported cache tokens; unknown is null, not a zero rate. */
   cache_hit_tokens?: number | null;
   cache_miss_tokens?: number | null;
@@ -926,6 +935,8 @@ export interface CheckinLog {
   success: boolean;
   code: number | null;
   message: string;
+  earned_credit?: number | null;
+  reward_status?: 'rewarded' | 'already' | 'no_reward' | 'completed' | 'skipped' | 'pending' | 'failed' | 'unknown';
   /** true = 来自上游自动签到（采集器落库），false = 本端触发 */
   auto?: boolean;
 }
@@ -1008,6 +1019,9 @@ export interface TaskRunStatus {
 /** 签到记录分页返回 */
 export interface CheckinLogPage {
   items: CheckinLog[];
+  evidence_source?: string;
+  history_limit?: number;
+  scheduler?: {state: 'confirmed' | 'uncertain' | 'scheduled' | 'unknown'; day?: string; automation_owner?: 'manager' | 'engine' | 'unverified'};
   /** 当前筛选下的总条数（本端触发 + 上游自动） */
   total: number;
   /** 其中本端触发的条数 */

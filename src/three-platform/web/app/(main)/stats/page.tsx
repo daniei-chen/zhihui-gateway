@@ -27,7 +27,7 @@ import {
   type ChartPoint,
 } from '@/lib/usage-chart';
 import {fmtCompact, fmtNumber, fmtCredit} from '@/lib/format';
-import {formatCacheHitRate, formatOutputRate} from '@/lib/usage-metrics';
+import {formatCacheHitRate, formatOutputRate, usageTokenTotal} from '@/lib/usage-metrics';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {StatCard} from '@/components/common/layout/StatCard';
 import {EmptyState} from '@/components/common/layout/EmptyState';
@@ -36,6 +36,7 @@ import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {useAuth} from '@/lib/auth-context';
 import {useRealm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 import {Button} from '@/components/ui/button';
 import {
   Select,
@@ -100,6 +101,7 @@ function usageHealthDetail(
 
 export default function StatsPage() {
   const {isAdmin} = useAuth();
+  const {platform} = usePlatform();
   // 统计随顶部版本切换：两个版本走的是不同账号池，混在一起看没有意义
   const {realm, label: realmName} = useRealm();
   const t = useT();
@@ -194,8 +196,8 @@ export default function StatsPage() {
    *  · 多日 → 按天并补齐到窗口长度（缺的那天不再是「凭空消失」而是画成 0）。
    */
   const chartData: ChartPoint[] = spec.granularity === 'hour'
-    ? hourlySeries(hourly, nowTick?.hour)
-    : dailySeries(daily, d, nowTick?.today);
+    ? hourlySeries(hourly, platform === 'qoder' ? hourly[0]?.current_hour ?? undefined : nowTick?.hour)
+    : dailySeries(daily, d, platform === 'qoder' ? undefined : nowTick?.today);
 
   /** 今日失败总数（4xx + 5xx）。单独来自请求日志——用量汇总只含成功请求。 */
   const todayFailed =
@@ -425,7 +427,7 @@ export default function StatsPage() {
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <BreakdownPanel title={t('stats.byModel')} icon={Cpu} items={byModel} />
-        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} currentKeys />
+        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} currentKeys retainedLogs={platform !== 'workbuddy'} />
       </section>
     </div>
   );
@@ -436,14 +438,16 @@ function BreakdownPanel({
   icon: Icon,
   items,
   currentKeys = false,
+  retainedLogs = false,
 }: {
   title: string;
   icon: typeof Cpu;
   items: UsageBreakdown[];
   currentKeys?: boolean;
+  retainedLogs?: boolean;
 }) {
   const t = useT();
-  const max = Math.max(1, ...items.map((i) => i.prompt_tokens + i.completion_tokens));
+  const max = Math.max(1, ...items.map((i) => usageTokenTotal(i) ?? 0));
   return (
     <div className="min-w-0 rounded-[20px] bg-muted p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
@@ -468,9 +472,9 @@ function BreakdownPanel({
           </TableHeader>
           <TableBody>
             {items.map((it, i) => {
-              const tokens = it.prompt_tokens + it.completion_tokens;
+              const tokens = usageTokenTotal(it);
               return (
-                <TableRow key={`${it.name}-${i}`} className="border-b border-border/40">
+                <TableRow key={it.key_id ?? `${it.name}-${i}`} className="border-b border-border/40">
                   <TableCell className="pl-0">
                     <div className="flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full" style={{background: CHART_COLORS[i % CHART_COLORS.length]}} />
@@ -480,14 +484,14 @@ function BreakdownPanel({
                       <div
                         className="h-full rounded-full"
                         style={{
-                          width: `${(tokens / max) * 100}%`,
+                          width: `${tokens === null ? 0 : (tokens / max) * 100}%`,
                           background: CHART_COLORS[i % CHART_COLORS.length],
                         }}
                       />
                     </div>
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtNumber(it.requests)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{fmtCompact(tokens)}</TableCell>
+                  <TableCell className="text-xs tabular-nums">{tokens === null ? '—' : fmtCompact(tokens)}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.cacheHitHint')}>
                     {formatCacheHitRate(it)}
                   </TableCell>
@@ -495,7 +499,7 @@ function BreakdownPanel({
                     {formatOutputRate(it.tokens_per_sec)}
                   </TableCell>
                   <TableCell className="pr-0 text-xs tabular-nums">
-                    {it.credit > 0 ? fmtCredit(it.credit) : <span className="text-muted-foreground/70">—</span>}
+                    {fmtCredit(it.credit)}
                   </TableCell>
                 </TableRow>
               );
@@ -510,7 +514,7 @@ function BreakdownPanel({
           className="flex flex-col items-center justify-center py-10 text-center"
         />
       )}
-      {currentKeys && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t('stats.currentKeysHint')}</p>}
+      {currentKeys && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t(retainedLogs ? 'stats.retainedKeyLogsHint' : 'stats.currentKeysHint')}</p>}
     </div>
   );
 }

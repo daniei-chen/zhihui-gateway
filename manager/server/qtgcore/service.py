@@ -126,6 +126,23 @@ async def _safe(coro, default=None, errors: Optional[List[str]] = None, label: s
 
 
 # ---------------------------------------------------------------- 映射
+def _qoder_checked_today(raw: Dict[str, Any]) -> bool:
+    # canCheckin=False also means unsupported; a historical stamp is not today.
+    explicit = raw.get("checkedInToday")
+    if isinstance(explicit, bool):
+        return explicit
+    stamp = raw.get("lastCheckin")
+    if not isinstance(stamp, str):
+        return False
+    try:
+        when = dt.datetime.fromisoformat(stamp.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=TZ)
+    return when.astimezone(TZ).date() == dt.datetime.now(TZ).date()
+
+
 def map_qoder_account(raw: Dict[str, Any]) -> Account:
     credits = raw.get("credits") or {}
     remain = _f(credits.get("remain"))
@@ -159,7 +176,7 @@ def map_qoder_account(raw: Dict[str, Any]) -> Account:
         expires_at=_i(expires_at) or None,
         expires_iso=_iso(expires_at),
         days_left=dleft,
-        checked_today=bool(raw.get("canCheckin") is False or raw.get("lastCheckin")),
+        checked_today=_qoder_checked_today(raw),
         last_checkin=str(raw.get("lastCheckin") or "") or None,
         plan=str(raw.get("plan") or ""),
         in_flight=_i(raw.get("inFlight")) if raw.get("inFlight") is not None else None,
@@ -582,8 +599,8 @@ def usage_payload(agg: Aggregate, days: int = 14) -> UsageResponse:
             {
                 "platform": "qoder",
                 "date": str(d.get("day") or ""),
-                "income": round(_f(d.get("income")), 4),
-                "expense": round(_f(d.get("expense")), 4),
+                "income": round(_f(d.get("income")), 4) if d.get('income') is not None else None,
+                "expense": round(_f(d.get("expense")), 4) if d.get('expense') is not None else None,
             }
         )
     for d in agg.trae_usage.get("credits_daily") or []:

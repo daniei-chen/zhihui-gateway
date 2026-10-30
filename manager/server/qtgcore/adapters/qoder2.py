@@ -97,8 +97,24 @@ class Qoder2Adapter(BaseAdapter):
         `service.map_qoder_account()` 直接可解析。"""
         return await self._json("GET", "/accounts") or {}
 
+    async def checkin_activity(self) -> Dict[str, Any]:
+        # Local engine evidence only: this endpoint does not contact the provider.
+        return await self._json("GET", "/accounts/activity", params={"limit": 1000}) or {}
+
     async def scheduler(self) -> Dict[str, Any]:
         return await self._json("GET", "/scheduler", required=False) or {}
+
+    async def automatic_checkin_owner(self) -> str:
+        """Observe ownership without toggling schedules or contacting a provider.
+
+        The current engine does not expose a cycle lease or an idle receipt.
+        Even enabled=False cannot prove an earlier engine cycle has stopped.
+        """
+        value = await self._json("GET", "/scheduler", required=True)
+        if (not isinstance(value, dict) or type(value.get('enabled')) is not bool
+                or value.get('ok') is False):
+            raise UpstreamError('Qoder automatic check-in ownership unavailable')
+        return 'engine' if value['enabled'] else 'unverified'
 
     async def usage_analytics(self) -> Dict[str, Any]:
         return await self._json("GET", "/usage/analytics", required=False) or {}
@@ -173,26 +189,59 @@ class Qoder2Adapter(BaseAdapter):
         旧 BFF 的 `/api/credits/flow` 给的是 `{daily:[{day,income,expense}]}`；
         qoder2 没有同形状接口，但 `/usage/daily` 的每个时间桶里带 `credit`
         （当天真实消耗），这里转成同一形状，`service.usage_payload()` 直接用。
-        另外附上 `/usage/remaining`（每账号余额 + 预计可用天数）供别的调用方取。
+        收入不由此接口提供，必须保留未知，不能从余额或历史奖励推断。
         """
+        return await self.credits_flow_scoped(days, '')
+
+    async def usage_scoped(self, days: int, realm: str) -> Dict[str, Any]:
+        from ..qoder_usage import daily_evidence
+
         days = max(1, min(90, int(days)))
+        selected = {'': 'all', 'cn': 'cn', 'global': 'intl'}.get(realm)
+        if selected is None:
+            raise ValueError('invalid usage realm')
+        payload = await self._json('GET', '/usage/daily',
+                                   params={'days': days, 'realm': selected, 'group': 'model'}, required=True)
+        return daily_evidence(payload, days, realm)
+
+    async def usage_summary_scoped(self, realm: str) -> Dict[str, Any]:
+        import asyncio
+        from ..qoder_usage import summary_evidence
+
+        selected = {'': 'all', 'cn': 'cn', 'global': 'intl'}.get(realm)
+        if selected is None:
+            raise ValueError('invalid usage realm')
+        daily, snapshot = await asyncio.gather(
+            self.usage_scoped(7, realm),
+            self._json('GET', '/usage', params={'realm': selected}, required=True))
+        return summary_evidence(daily, snapshot, realm)
+
+    async def usage_hourly_scoped(self, day: str, realm: str) -> List[Dict[str, Any]]:
+        from ..qoder_usage import hourly_evidence, hourly_window
+
+        selected = {'': 'all', 'cn': 'cn', 'global': 'intl'}.get(realm)
+        if selected is None:
+            raise ValueError('invalid usage realm')
+        calendar = await self._json('GET', '/usage/daily',
+            params={'days': 1, 'realm': selected, 'group': 'model'}, required=True)
+        window = hourly_window(day, self.cfg.qoder2_timezone, calendar, realm)
+        payload = await self._json('GET', '/usage/timeseries', params={
+            'realm': selected, 'range': 'custom', 'since': window['since'],
+            'until': window['until'], 'bucket': 60}, required=True)
+        return hourly_evidence(payload, window, realm)
+
+    async def credits_flow_scoped(self, days: int, realm: str) -> Dict[str, Any]:
+        """Consumption is known; this endpoint has no authoritative income ledger."""
+        from ..qoder_usage import credits_evidence
+
+        days = max(1, min(90, int(days)))
+        selected = {'': 'all', 'cn': 'cn', 'global': 'intl'}.get(realm)
+        if selected is None:
+            raise ValueError('invalid credits realm')
         daily = await self._json(
-            "GET", "/usage/daily", params={"days": days}, required=False
-        ) or {}
-        rows: List[Dict[str, Any]] = []
-        for s in daily.get("series") or []:
-            day = str(s.get("day") or "")[:10]
-            if not day:
-                continue
-            rows.append(
-                {
-                    "day": day,
-                    "income": 0.0,
-                    "expense": round(_f(s.get("credit")), 6),
-                }
-            )
-        remaining = await self._json("GET", "/usage/remaining", required=False) or {}
-        return {"daily": rows, "remaining": remaining}
+            'GET', '/usage/daily', params={'days': days, 'realm': selected}, required=True
+        )
+        return credits_evidence(daily, days, realm)
 
     async def settings(self) -> Dict[str, Any]:
         return await self._json("GET", "/settings", required=False) or {}
@@ -276,7 +325,12 @@ class Qoder2Adapter(BaseAdapter):
 
     # ---- 写操作 ----
     async def checkin(self) -> Dict[str, Any]:
-        return await self._json("POST", "/accounts/checkin", json_body={}) or {}
+        return await self._json("POST", "/accounts/checkin", json_body={}, retry=False) or {}
+
+    async def checkin_one(self, uid: str) -> Dict[str, Any]:
+        if not isinstance(uid, str) or not uid or len(uid) > 256:
+            raise ValueError('invalid account uid')
+        return await self._json("POST", "/accounts/checkin", json_body={"uid": uid}, retry=False) or {}
 
     async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
         body: Dict[str, Any] = {} if not uid else {"uid": uid}

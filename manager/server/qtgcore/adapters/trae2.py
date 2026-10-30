@@ -100,10 +100,10 @@ class Trae2Adapter(BaseAdapter):
         self.authorization_generation = secrets.token_hex(16)
 
     async def _cmd(self, name: str, body: Optional[Dict[str, Any]] = None,
-                   required: bool = True) -> Dict[str, Any]:
+                   required: bool = True, *, retry: bool = True) -> Dict[str, Any]:
         """Tauri 风格的命令通道：`POST /api/cmd/<name>`。"""
         out = await self._json(
-            "POST", f"/api/cmd/{name}", json_body=body or {}, required=required
+            "POST", f"/api/cmd/{name}", json_body=body or {}, required=required, retry=retry
         )
         return out if isinstance(out, dict) else {}
 
@@ -394,43 +394,17 @@ class Trae2Adapter(BaseAdapter):
         """aiwork 的 `checkin_start` 是**异步任务**（返回 ok 后后台跑，重复调用会报
         「已有签到任务正在进行中」）。这里把它翻译成 qtg 认识的 `results[]`，
         否则兼容层的批量签到会显示「成功 0 / 0」。"""
-        r = await self._cmd("checkin_start", {"scope": "all"}, required=False)
-        ok = bool(r.get("ok"))
+        r = await self._cmd("checkin_start", {"scope": "all"}, retry=False)
+        ok = r.get('ok') is True
         err = str(r.get("error") or "")
         if not ok:
             return {"ok": False,
                     "results": [{"nickname": "Trae", "ok": False,
                                  "message": err or "签到失败"}]}
-        # `checkin_start` 只是「启动」；真实结果由 aiwork 写进 `checkin_results`
-        # （status = success / already / failed）。不读这张表就会把「今天早就签过」
-        # 也报成「签到成功」——2026-10-23 用户实测发现的 bug。
-        rows: List[Dict[str, Any]] = []
-        for _ in range(5):
-            rows = self._today_checkin()
-            if rows:
-                break
-            await asyncio.sleep(1.6)
-        if not rows:
-            return {"ok": True,
-                    "results": [{"nickname": "Trae", "ok": True,
-                                 "message": "签到任务已提交，上游仍在执行"
-                                            "（约 10 秒后刷新可见结果）"}]}
-        results = []
-        any_fail = False
-        for row in rows:
-            st = row.get("status") or ""
-            name = row.get("name") or row.get("uid") or "Trae"
-            if st == "success":
-                results.append({"nickname": name, "ok": True, "status": st,
-                                "message": "签到成功（+100 积分）"})
-            elif st == "already":
-                results.append({"nickname": name, "ok": True, "status": st,
-                                "message": "今日已签到过（未重复发放积分）"})
-            else:
-                any_fail = True
-                results.append({"nickname": name, "ok": False, "status": st or "failed",
-                                "message": "签到失败（%s）" % (st or "未知状态")})
-        return {"ok": not any_fail, "results": results}
+        # Today's table may contain an earlier batch. The engine exposes no task
+        # identity here, so those rows cannot prove this dispatched job finished.
+        return {'ok': True, 'results': [{'nickname': 'Trae', 'ok': True, 'status': 'pending',
+                'message': '签到任务已提交；本次完成状态待核对，历史记录不能证明本次任务完成，请勿重复提交'}]}
 
     async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
         """`refresh_jwt` —— aiwork 里刷新某个账号 JWT 的命令（要 user_id）。"""

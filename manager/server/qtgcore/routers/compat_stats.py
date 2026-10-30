@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..identity import platform_of
 from ..service import build_aggregate, usage_payload
@@ -114,6 +114,15 @@ async def _payload(request: Request, days: int = 14):
 
 @router.get("/stats/summary")
 async def stats_summary(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
+    rt = _rt(request)
+    scoped = getattr(rt.qoder, 'usage_summary_scoped', None) if _platform(request) == 'qoder' else None
+    if callable(scoped):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid usage realm')
+        summary = await scoped(realm)
+        summary['active_keys'] = sum(1 for key in rt.store.list_keys()
+                                     if key.get('enabled') and 'qoder' in (key.get('platforms') or PLATFORMS))
+        return summary
     # workbuddy：直接按 manager 的口径查库（total_* 是全表，不是某个时间窗）。
     # 早期实现从 14 天窗口推 total_*，16 万次请求只显示成 3.3 万次。
     w = getattr(_rt(request), "wb", None)
@@ -165,6 +174,11 @@ async def stats_summary(request: Request, realm: str = Query(default="")) -> Dic
 @router.get("/stats/daily")
 async def stats_daily(request: Request, days: int = Query(default=14),
                       realm: str = Query(default="")) -> List[Dict[str, Any]]:
+    scoped = getattr(_rt(request).qoder, 'usage_scoped', None) if _platform(request) == 'qoder' else None
+    if callable(scoped):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid usage realm')
+        return (await scoped(max(1, min(90, days)), realm))['daily']
     if not await _realm_available(request, _platform(request), realm):
         return []
     _, payload = await _payload(request, days)
@@ -174,15 +188,23 @@ async def stats_daily(request: Request, days: int = Query(default=14),
 @router.get("/stats/hourly")
 async def stats_hourly(request: Request, day: str = Query(default=""),
                        realm: str = Query(default="")) -> List[Dict[str, Any]]:
-    """按小时分桶。
-
-    上游（qoder2 / aiwork）都只给按天聚合、没有小时桶。旧实现直接造 24 个 0 桶，
-    界面于是「当日 11 次请求、图上全是 0」——自相矛盾（审计点名）。
-    现在改用**本机代理流水**的 epoch 分桶，反映经过 qtg 的真实调用时间。
-    """
+    """Qoder2 uses engine evidence, WorkBuddy its ledger, others local traffic."""
+    rt = _rt(request)
+    scoped = getattr(rt.qoder, 'usage_hourly_scoped', None) if _platform(request) == 'qoder' else None
+    if callable(scoped):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid usage realm')
+        if day:
+            try:
+                date = dt.date.fromisoformat(day)
+                if date.isoformat() != day or not 1971 <= date.year <= 9998:
+                    raise ValueError('invalid day')
+            except ValueError:
+                raise HTTPException(status_code=422, detail='Invalid usage day') from None
+        return await scoped(day, realm)
     # workbuddy：查它自己的 usage_hourly（24 桶固定补零，failed 取 request_logs）。
     # qtg 的流水表里没有 workbuddy 的调用，原来图上永远是 0。
-    w = getattr(_rt(request), "wb", None)
+    w = getattr(rt, "wb", None)
     if _platform(request) == "workbuddy" and w is not None:
         rows = await w.usage_hourly(day, realm)
         if rows:
@@ -196,6 +218,11 @@ async def stats_hourly(request: Request, day: str = Query(default=""),
 @router.get("/stats/by-model")
 async def stats_by_model(request: Request, days: int = Query(default=30),
                          realm: str = Query(default="")) -> List[Dict[str, Any]]:
+    scoped = getattr(_rt(request).qoder, 'usage_scoped', None) if _platform(request) == 'qoder' else None
+    if callable(scoped):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid usage realm')
+        return (await scoped(max(1, min(90, days)), realm))['by_model']
     # workbuddy：按 manager 的 SQL 直接聚合 usage_daily（排序用 token 总量，
     # 带 cache 字段）。早期实现从 14 天窗口数请求数，数字偏多且 tokens 恒 0。
     w = getattr(_rt(request), "wb", None)
@@ -230,39 +257,37 @@ async def stats_by_model(request: Request, days: int = Query(default=30),
 @router.get("/stats/by-key")
 async def stats_by_key(request: Request, days: int = Query(default=30),
                        realm: str = Query(default="")) -> List[Dict[str, Any]]:
-    """按密钥统计：数据源只有 qtg 自己的代理流水（上游不认识我们的密钥）。
+    """Current Manager keys, with exact recorded platform/realm attribution."""
+    platform = _platform(request)
+    if platform in ('qoder', 'trae'):
+        import sqlite3
+        from starlette.concurrency import run_in_threadpool
+        from ...platformstats import current_key_usage
 
-    这里修了两处审计问题：① token 数以前恒 0（SQL 已经算出 `t` 却没返回）；
-    ② 以前不按平台过滤，qoder 页面会混进 trae 的密钥用量。
-    """
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid key-usage realm')
+        try:
+            return await run_in_threadpool(current_key_usage, max(1, min(90, days)), realm, platform)
+        except (sqlite3.Error, ValueError):
+            raise HTTPException(status_code=503, detail='Manager key-usage evidence unavailable') from None
     # workbuddy：只列仍存在的 manager 密钥。qtg 自己的
     # 流水表里没有 workbuddy 的调用（它不经过 qtg 转发时不会落库），直接查库才对。
     w = getattr(_rt(request), "wb", None)
     if _platform(request) == "workbuddy" and w is not None:
         # An empty current-key list is authoritative, not a fallback signal.
         return await w.usage_by_key(days, realm)
-    rt = _rt(request)
-    rows = rt.store.stats(days, _platform(request)).get("by_key") or []
-    out: List[Dict[str, Any]] = []
-    for r in rows:
-        tokens = int(r.get("t") or 0)
-        out.append({
-            "name": r.get("key_name") or "",
-            "requests": int(r.get("c") or 0),
-            # 流水只存合计，没有输入/输出拆分：如实放 completion，prompt 留 0
-            "prompt_tokens": 0,
-            "completion_tokens": tokens,
-            "credit": 0,
-            "cache_hit_rate": None,
-            "tokens_per_sec": None,
-            "throughput_samples": 0,
-        })
-    return out
+    raise HTTPException(status_code=503, detail='Manager key-usage source unavailable')
 
 
 @router.get("/stats/credits")
 async def stats_credits(request: Request, days: int = Query(default=30),
                         realm: str = Query(default="")) -> Dict[str, Any]:
+    rt = _rt(request)
+    scoped = getattr(rt.qoder, 'credits_flow_scoped', None) if _platform(request) == 'qoder' else None
+    if callable(scoped):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid credits realm')
+        return await scoped(max(1, min(90, days)), realm)
     # workbuddy：照 manager 的 /stats/credits —— 收入来自 task_logs(kind='credit')，
     # 支出来自 usage_daily.credit。qtg 原来把收入硬算成 0，所以曲线只跌不涨。
     w = getattr(_rt(request), "wb", None)

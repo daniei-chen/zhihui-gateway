@@ -51,7 +51,12 @@ function fixture(url, request) {
   }));
   if (p === '/api/stats/daily') return [{day: today, requests: amount, prompt_tokens: 1000, completion_tokens: 2000, failed: 1}];
   if (p === '/api/stats/hourly') return [{day: today, hour: 10, requests: amount, prompt_tokens: 1000, completion_tokens: 2000, failed: 1}];
-  if (p === '/api/stats/credits') return {days: 7, from: today, to: today, today: {income: 19710, expense: 17014.094, net: 2695.906}, week: {income: 19710, expense: 17014.094, net: 2695.906}, total: {income: 19710, expense: 17014.094, net: 2695.906}, daily: [{day: today, income: 19710, expense: 17014.094, net: 2695.906}]};
+  if (p === '/api/stats/credits') {
+    const values = {income: platform === 'qoder' ? null : 19710, expense: 17014.094, net: platform === 'qoder' ? null : 2695.906};
+    return {days: 7, from: today, to: today, today: values, week: values, total: values,
+      ...(platform === 'qoder' ? {income_status: 'unavailable', source: 'engine_usage_daily'} : {}),
+      daily: [{day: today, ...values}]};
+  }
   if (['/api/stats/by-model', '/api/stats/by-key'].includes(p)) return [
     {name: p.endsWith('by-key') ? 'creative-studio' : 'fixture-model', key_id: 7, requests: 12,
       prompt_tokens: 10000, completion_tokens: 2000, credit: 1.25, cache_hit_tokens: 9400,
@@ -67,6 +72,11 @@ function fixture(url, request) {
   if (p === '/api/model-catalog') return {models: [], source: 'none', source_label: 'Fixture', via: '', errors: [], cached: false, cache_age: 0, summary: {total: 0, reasoning: 0, large_context: 0, max_context: 0, series: [], unique_ids: 0}};
   if (p === '/api/playground/models') return {models: [], default: '', default_model: '', realm};
   if (p === '/api/security/config') return {enabled: true, mode: 'blacklist'};
+  if (p === '/api/checkin-logs' && platform === 'qoder') return {items: [
+    {id: 1, ts: 1793232000, uid: 'qoder-cn', nickname: 'Qoder fixture', success: true, reward_status: 'no_reward', earned_credit: 0},
+    {id: 2, ts: 1793145600, uid: 'qoder-cn', nickname: 'Qoder fixture', success: true, reward_status: 'rewarded', earned_credit: 100},
+    {id: 3, ts: 1793059200, uid: 'qoder-cn', nickname: 'Qoder fixture', success: true, reward_status: 'unknown', earned_credit: null},
+  ], total: 3, scheduler: {state: 'uncertain'}, evidence_source: 'engine_local_activity'};
   if (p === '/api/audit-logs' || p === '/api/checkin-logs') return {items: [], total: 0};
   if (p === '/api/task-logs') return {logs: [], total: 0, stats: {by_kind: {}, total: 0, total_credits: 0}, kinds: {}, collector: {}};
   if (p === '/api/task-run') return {running: false, mode: '', target: '', started_at: 0, finished_at: 0, exit_code: null, timed_out: false, error: '', lines: [], tasks: [], available: false, unavailable_reason: 'Local fixture', schedule: {enabled: false, hours: []}};
@@ -125,7 +135,11 @@ const server = http.createServer((request, response) => {
   else send();
 });
 
-(async () => {
+if (process.env.QA_SERVE_ONLY) {
+  const port = Number(process.env.QA_SERVE_ONLY);
+  assert.ok(Number.isInteger(port) && port > 0 && port < 65536);
+  server.listen(port, '127.0.0.1', () => console.log(`Synthetic console: http://127.0.0.1:${port}/accounts/`));
+} else (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({headless: true});

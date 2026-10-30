@@ -83,9 +83,9 @@ def hero(mobile=False):
         body += text(1140, 60, f'SELF-HOSTED / {VERSION}', 11, MUTED, text_anchor='middle', letter_spacing='.6')
     x, top = (42, 136) if mobile else (59, 168)
     body += text(x, top, 'PRIVATE AI INFRASTRUCTURE', 11 if mobile else 12, BLUE, letter_spacing='2')
-    body += text(x - 2, top + 66, '多源汇入，', 48 if mobile else 52, weight=700)
-    body += text(x - 2, top + 129, '一核择路。', 48 if mobile else 52, weight=700)
-    body += text(x, top + 174, '让每次调用，都走对路径。', 20 if mobile else 21, MUTED)
+    body += text(x - 2, top + 66, '让灵感出发，', 43 if mobile else 47, weight=700)
+    body += text(x - 2, top + 129, '让工作向前。', 43 if mobile else 47, weight=700)
+    body += text(x, top + 174, '三种入口，同一个智汇。', 20 if mobile else 21, MUTED)
     cx, cy, radius = (336, 492, 164) if mobile else (926, 259, 220)
     body += f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="url(#halo)"/>'
     for r in ([105, 154] if mobile else [136, 194]):
@@ -93,10 +93,10 @@ def hero(mobile=False):
     zx, zy, scale = (272, 437, 3.1) if mobile else (846, 186, 4)
     body += f'<g opacity=".52">{zmark(zx - 5, zy + 9, scale)}</g>'
     body += zmark(zx, zy, scale)
-    points = [(62, 412, 'WorkBuddy', 137), (438, 409, 'Qoder', 110), (445, 562, 'Trae', 98)] if mobile else [
-        (696, 118, 'WorkBuddy', 137), (1070, 163, 'Qoder', 110), (1038, 357, 'Trae', 98)]
-    flows = ['M199 430 C236 430 244 445 272 448', 'M438 427 C416 427 401 435 390 448', 'M445 580 C408 580 401 553 382 540'] if mobile else [
-        'M833 136 C860 136 861 166 884 186', 'M1070 181 C1040 181 1034 194 1006 213', 'M1038 375 C1004 375 986 345 974 318']
+    points = [(62, 412, 'WorkBuddy', 137), (438, 409, 'Qoder', 110), (445, 562, 'Trae', 98), (42, 558, '独立授权', 137)] if mobile else [
+        (696, 118, 'WorkBuddy', 137), (1070, 163, 'Qoder', 110), (1038, 357, 'Trae', 98), (684, 357, '独立授权', 137)]
+    flows = ['M199 430 C236 430 244 445 272 448', 'M438 427 C416 427 401 435 390 448', 'M445 580 C408 580 401 553 382 540', 'M205 576 C244 576 253 555 272 540'] if mobile else [
+        'M833 136 C860 136 861 166 884 186', 'M1070 181 C1040 181 1034 194 1006 213', 'M1038 375 C1004 375 986 345 974 318', 'M847 375 C865 375 875 343 884 318']
     for i, (px, py, label, pw) in enumerate(points):
         body += path(flows[i], '#bed2ff', 1.4) + travel(flows[i], f'-{i * 3}s') + chip(px, py, label, pw)
     bottom = 636 if mobile else 439
@@ -104,8 +104,8 @@ def hero(mobile=False):
     body += text(x, bottom + 28, '三平台接入   /   独立授权   /   用量有据', 13, MUTED)
     if not mobile:
         body += text(w - x, bottom + 28, 'LESS NOISE. MORE CONTROL.', 10, MUTED, text_anchor='end', letter_spacing='1.5')
-    return canvas(w, h, '智汇网关 · 多源汇入，一核择路',
-                  '蓝白品牌封面。WorkBuddy、Qoder、Trae 汇入同一枚蓝色 Z。让每次调用，都走对路径。', body)
+    return canvas(w, h, '智汇网关 · 让灵感出发，让工作向前',
+                  '蓝白品牌封面。WorkBuddy、Qoder、Trae 汇入同一枚蓝色 Z，保留独立授权和调用记录。', body)
 
 
 def capability_icon(kind, x, y):
@@ -126,7 +126,7 @@ def capability_icon(kind, x, y):
 
 def capabilities(mobile=False):
     w, h = (640, 688) if mobile else (1280, 284)
-    items = [('CONNECT', '一处接入', '三平台，独立路由。', '常用协议，共用访问边界。'),
+    items = [('CONNECT', '一处接入', '三种入口，独立路由。', 'WorkBuddy / Qoder / Trae。'),
              ('AUTHORIZE', '边界清楚', '凭证、模型与 IP 策略。', '按需授权，不混淆身份。'),
              ('OBSERVE', '消耗有据', '缓存命中与输出速度。', '用量缺失，不冒充零消耗。')]
     body = ''
@@ -140,11 +140,11 @@ def capabilities(mobile=False):
         body += text(tx, ty + 37, title, 27 if mobile else 24, weight=700)
         body += text(tx, ty + 70, line1, 17, MUTED)
         body += text(tx, ty + 97, line2, 15, MUTED)
-    return canvas(w, h, '接入、授权、核对', '一处接入三平台，保持独立路由与权限；展示缓存命中和输出速度，不把缺失用量当作零。', body)
+    return canvas(w, h, '接入、授权、核对', '三平台路由，保持独立路由与权限；展示缓存命中和输出速度，不把缺失用量当作零。', body)
 
 
 def routing(mobile=False):
-    w, h = (640, 794) if mobile else (1280, 384)
+    w, h = (640, 904) if mobile else (1280, 450)
     body = rect(1, 1, w - 2, h - 2, 26, 'url(#paper)')
     if mobile:
         body += text(34, 40, 'ONE ENTRY. DISTINCT ROUTES.', 11, BLUE, letter_spacing='1.6')
@@ -153,16 +153,16 @@ def routing(mobile=False):
         body += path('M319 140 V190', '#b8ccfb') + travel('M319 140 V190', '-2s')
         body += rect(171, 190, 296, 103, 24, '#edf3ff') + zmark(202, 225, .75)
         body += text(254, 233, '智汇网关', 23, weight=700) + text(254, 259, '鉴权 / 路由 / 计量', 14, MUTED)
-        body += path('M319 293 V323 H75 V623', '#c9d8fa', 1.6)
+        body += path('M319 293 V323 H75 V733', '#c9d8fa', 1.6)
         rows = [(347, 'WorkBuddy', '/v1/*'), (457, 'Qoder', '/qoder/v1/*'), (567, 'Trae', '/trae/v1/*')]
         for i, (y, name, prefix) in enumerate(rows):
             d = f'M75 {y + 44} H136'
             body += path(d, '#b7ccfc', 1.6) + travel(d, f'-{i * 2}s') + dot(75, y + 44, 3)
             body += rect(136, y, 402, 88, 20)
             body += text(161, y + 33, name, 22, weight=600) + text(161, y + 61, prefix, 17, MUTED)
-        body += path('M34 700 H606', LINE, 1)
-        body += text(34, 734, '管理视图 ≠ 客户端地址', 18, weight=600)
-        body += text(34, 762, '协议能力以对应引擎及账号授权为准。', 14, MUTED)
+        body += path('M34 810 H606', LINE, 1)
+        body += text(34, 844, '管理视图 ≠ 客户端地址', 18, weight=600)
+        body += text(34, 872, '协议能力以对应引擎及账号授权为准。', 14, MUTED)
     else:
         body += text(38, 43, 'ONE ENTRY. DISTINCT ROUTES.', 11, BLUE, letter_spacing='1.8')
         body += rect(42, 145, 239, 103, 22) + text(161, 186, '你的客户端', 23, weight=700, text_anchor='middle')
@@ -170,16 +170,16 @@ def routing(mobile=False):
         body += path('M281 197 H432', '#adc5fb', 1.7) + travel('M281 197 H432', '-3s')
         body += rect(432, 129, 303, 137, 26, '#edf3ff') + zmark(466, 174, .9)
         body += text(526, 186, '智汇网关', 27, weight=700) + text(526, 219, '鉴权 / 路由 / 计量', 15, MUTED)
-        for i, (y, name, prefix) in enumerate([(83, 'WorkBuddy', '/v1/*'), (165, 'Qoder', '/qoder/v1/*'), (247, 'Trae', '/trae/v1/*')]):
+        for i, (y, name, prefix) in enumerate([(69, 'WorkBuddy', '/v1/*'), (145, 'Qoder', '/qoder/v1/*'), (221, 'Trae', '/trae/v1/*')]):
             d = f'M735 197 C795 197 797 {y + 30} 861 {y + 30}'
             body += path(d, '#bfd0f7', 1.7) + travel(d, f'-{i * 2}s')
             body += rect(861, y, 374, 60, 18) + dot(884, y + 30, 3)
             body += text(901, y + 26, name, 16, weight=600) + text(1214, y + 39, prefix, 15, MUTED, text_anchor='end')
-        body += path('M38 332 H1242', LINE, 1)
-        body += text(38, 360, '管理视图 ≠ 客户端地址', 13, MUTED)
-        body += text(1242, 360, '协议能力以对应引擎及账号授权为准。', 12, MUTED, text_anchor='end')
+        body += path('M38 398 H1242', LINE, 1)
+        body += text(38, 426, '管理视图 ≠ 客户端地址', 13, MUTED)
+        body += text(1242, 426, '协议能力以对应引擎及账号授权为准。', 12, MUTED, text_anchor='end')
     return canvas(w, h, '客户端、智汇与三平台路由',
-                  '你的客户端经智汇鉴权、路由及计量后访问平台。WorkBuddy 使用 /v1/*，Qoder 使用 /qoder/v1/*，Trae 使用 /trae/v1/*。切换管理视图不会更改客户端地址。', body)
+                  'WorkBuddy 使用 /v1/*，Qoder 使用 /qoder/v1/*，Trae 使用 /trae/v1/*。切换管理视图不会更改客户端地址。', body)
 
 
 def button(label, width, primary=False):

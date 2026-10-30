@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>智汇 · 工作流演示</title><link rel="stylesheet" href="/animations/task-workspace.css"></head>
+<body><main class="workspace" aria-label="智汇开发任务动画，合成示例数据">
+  <header><span class="brand">Z <b>智汇工作空间</b></span><span class="window-dots" aria-hidden="true">● ● ●</span></header>
+  <div class="workspace-body"><aside><small>WORKSPACE</small><span class="selected">概览</span><span>任务</span><span>变更</span><span>验证</span><div class="account"><i></i>授权工作空间</div></aside>
+    <section class="conversation"><div class="section-label"><i></i> IDEAS IN MOTION <span>动画演示</span></div>
+      <h1>让想法，有序发生。</h1><p class="request">整理接口、补齐测试，再检查每一条路径。</p>
+      <div class="workflow"><div class="task"><span class="task-icon">01</span><div><b>理解上下文</b><small>连接需求与当前工作</small></div><span class="status">已就绪</span></div>
+      <div class="task"><span class="task-icon">02</span><div><b>组织实现</b><small>保持边界清晰</small></div><span class="status">已就绪</span></div>
+      <div class="task running"><span class="task-icon">03</span><div><b>检查与验证</b><small>让每一步都有依据</small></div><span class="activity" aria-hidden="true"><i></i><i></i><i></i></span></div></div>
+      <div class="code"><div><span>验证工作流</span><small>示例代码</small></div><pre><span>const</span> result = <span>await</span> gateway.run({
+  task: <em>"build, test, review"</em>,
+  boundary: <em>"authorized"</em>
+});</pre><div class="progress"><i></i></div></div>
+      <footer><span>写下需求，继续下一步</span><b>↗</b></footer>
+    </section><section class="insights"><small>FLOW / DEMO</small><div class="rate"><strong id="demoThroughput">321</strong><span>tokens/s</span></div><p>演示数值 · 非实时性能</p><div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="check">✓ 入口校验</div><div class="check">✓ 路径选择</div><div class="check">✓ 记录回执</div></section>
+  </div><div class="workspace-note">智汇工作流 · 原创交互示意 · 不读取真实账号</div>
+</main><script src="/animations/task-workspace.js"></script></body></html>

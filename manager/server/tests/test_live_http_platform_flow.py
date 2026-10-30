@@ -99,6 +99,23 @@ class LiveHttpPlatformFlowTest(unittest.TestCase):
                 self.assertTrue(all(row['terminal_state'] == 'completed' for row in rows))
                 usage = db.query_one('SELECT used_tokens FROM api_keys WHERE id=?', (key['id'],))
                 self.assertGreater(usage['used_tokens'], 0)
+                if platform != 'workbuddy':
+                    # Exercise the public platform middleware and the same
+                    # Manager keys used above, not an independent QTG ledger.
+                    for scope in ({'platform': platform}, {}):
+                        stats_headers = self.admin if scope else {**self.admin, 'X-QTG-Platform': platform}
+                        stats = self.client.get('/api/stats/by-key', headers=stats_headers,
+                                                params={'days': 1, 'realm': 'cn', **scope})
+                        self.assertEqual(stats.status_code, 200, stats.text)
+                        current = next(row for row in stats.json() if row['key_id'] == key['id'])
+                        self.assertEqual(current['platform'], platform)
+                        self.assertEqual(current['requests'], 2, 'Model discovery is not inference usage')
+                        expected = db.query_one(
+                            'SELECT SUM(prompt_tokens+completion_tokens) t FROM request_logs '
+                            'WHERE key_id=? AND actual_platform=? AND usage_complete=1',
+                            (key['id'], platform))['t']
+                        self.assertEqual(current['total_tokens'], expected)
+                        self.assertEqual(current['source'], 'manager_retained_request_logs')
                 sent = self.provider_stats()['total']
                 removed = self.client.delete(f"/api/keys/{key['id']}", headers=self.admin)
                 self.assertEqual(removed.status_code, 200, removed.text)
@@ -106,6 +123,11 @@ class LiveHttpPlatformFlowTest(unittest.TestCase):
                 self.assertEqual(denied.status_code, 401, denied.text)
                 self.assertEqual(self.provider_stats()['total'], sent,
                                  'Revoked keys must be rejected before upstream I/O')
+                if platform != 'workbuddy':
+                    stats = self.client.get('/api/stats/by-key', headers=self.admin,
+                                            params={'platform': platform, 'days': 1, 'realm': 'cn'})
+                    self.assertEqual(stats.status_code, 200, stats.text)
+                    self.assertNotIn(key['id'], [row['key_id'] for row in stats.json()])
         after = self.provider_stats()
         self.assertEqual(after['by_path'].get('/v1/chat/completions', 0) -
                          before['by_path'].get('/v1/chat/completions', 0), 6,

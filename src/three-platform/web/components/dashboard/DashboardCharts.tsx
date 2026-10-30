@@ -32,9 +32,9 @@ export type TrendPoint = {
 
 export type FlowPoint = {
   day: string;
-  income: number;
-  expense: number;
-  net?: number;
+  income: number | null;
+  expense: number | null;
+  net?: number | null;
 };
 
 /** 近 N 天请求趋势（实线=请求数，虚线=失败数，两条来自不同数据源）。 */

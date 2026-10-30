@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile.svg" />
-    <img src="docs/images/readme/cover.svg" width="100%" alt="智汇网关 · 多源汇入，一核择路。让每次调用，都走对路径。" />
+    <img src="docs/images/readme/cover.svg" width="100%" alt="智汇网关 · 让灵感出发，让工作向前。" />
   </picture>
 </a>
 
@@ -18,13 +18,14 @@
 **WorkBuddy · Qoder · Trae**
 
 把复杂留给网关，把清晰还给你。<br />
-统一访问与管理，保留每个平台自己的路由、授权与记录。
+三种入口，同一个智汇。<br />
+保留每个平台自己的路由、授权与记录。
 
 <br />
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/capabilities-mobile.svg" />
-  <img src="docs/images/readme/capabilities.svg" width="100%" alt="一处接入三平台；凭证、模型与 IP 边界清楚；缓存命中与输出速度有据可查，用量缺失不写成零。" />
+  <img src="docs/images/readme/capabilities.svg" width="100%" alt="三平台独立路由与授权；缓存命中与输出速度有据可查，用量缺失不写成零。" />
 </picture>
 
 </div>
@@ -35,14 +36,23 @@
 
 冰蓝、留白、轻盈的光路。首页、登录页与工作台，共享同一枚 Z。
 
+> [!IMPORTANT]
+> 本轮发布范围固定为 WorkBuddy、Qoder、Trae 三平台，首页、原版登录与控制台同步验收。Codex / ChatGPT 网关改为后续独立产品，不在本次发布中提供入口或调用承诺。发布状态以受控部署回执为准，页面动画不代表真实流量。
+
+[本轮集成与验收边界](docs/FOUR-GATEWAY-INTEGRATION.md) · [可编辑首页与复现](site/home-source/INTEGRATION.md)
+
 <a href="https://zhihui.kaogong.art/">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/zhihui-home-mobile.png" />
-    <img src="docs/images/zhihui-home.png" width="100%" alt="智汇实际首页：居中首屏、进入控制台入口、蓝色粒子与悬浮 Z，下接真实构建的控制台预览。" />
+    <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
+    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="智汇实际控制台构建预览，蓝白卡片与清晰的工作流；全部使用合成示例数据。" />
   </picture>
 </a>
 
-<p align="center"><sub>粒子随指针轻动，平台与光路联动，账本落下回执。<a href="https://zhihui.kaogong.art/">去网站感受完整交互 ↗</a></sub></p>
+<p align="center"><sub>粒子随指针轻动，平台与光路联动，账本落下回执。<a href="https://zhihui.kaogong.art/">访问现有网站 ↗</a></sub></p>
+
+新版首页保留居中首屏、蓝色粒子、光路与主入口；页面动画是独立演示，不读取账号信息。
+
+登录保留熟悉的原版卡片、Z 标识、轻动效与表单交互，不采用新的三维登录设计；布局、文案与交互均保留原版。
 
 ### 看起来更轻，用起来不减
 
@@ -79,7 +89,7 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由和计量后访问三平台：WorkBuddy /v1/*，Qoder /qoder/v1/*，Trae /trae/v1/*。协议能力依对应引擎及账号授权。" />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="智汇三平台路由：WorkBuddy /v1/*，Qoder /qoder/v1/*，Trae /trae/v1/*。" />
 </picture>
 
 一次失败不代表没有消耗；上游缺少 `usage` 时保留未知状态，不把它美化成零。
@@ -128,6 +138,8 @@ cd zhihui-gateway
 智汇在既有组件上持续演进。感谢 WorkBuddy Manager contributors、workbuddy2api、Qoder / Trae 相关项目与 [linux-do/cdk](https://github.com/linux-do/cdk) 的界面基础。
 
 产品源码采用 [MIT](LICENSE)，组件版权与第三方声明见 [Manager LICENSE](manager/LICENSE)。模型与账号授权遵循各自服务条款。
+
+新版首页的三维扫描及衍生海报适用 CC BY-SA 4.0，Three.js、Draco 保留各自许可；任务与骑行插画的再分发许可尚待核对，不包含在 MIT 授权承诺中。来源与复现边界见 [首页集成说明](site/home-source/INTEGRATION.md)。
 
 <div align="center">
 <br />

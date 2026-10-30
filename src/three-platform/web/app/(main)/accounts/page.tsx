@@ -66,6 +66,7 @@ import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {AddAccountDialog} from '@/components/common/accounts/AddAccountDialog';
 import {AccountIntake} from '@/components/common/accounts/AccountIntake';
+import {QoderCheckinHistory} from '@/components/common/accounts/QoderCheckinHistory';
 import {UploadAccountsButton} from '@/components/common/accounts/UploadAccountsButton';
 import {CreditCountdown} from '@/components/common/accounts/CreditCountdown';
 import {AccountNoteDialog} from '@/components/common/accounts/AccountNoteDialog';
@@ -123,7 +124,7 @@ export default function AccountsPage() {
 
 function FullAccountsPage() {
   const {realm, label: realmName} = useRealm();
-  const {label: platformName} = usePlatform();
+  const {platform, label: platformName} = usePlatform();
   const t = useT();
   const {isAdmin} = useAuth();
   const [addOpen, setAddOpen] = useState(false);
@@ -335,6 +336,7 @@ function FullAccountsPage() {
         );
       }
       await reloadAll();
+      window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
       notify.err(errText(e));
     } finally {
@@ -348,9 +350,7 @@ function FullAccountsPage() {
     try {
       const r = await accountApi.checkinAll(groupId);
       const failed = r.total - r.succeeded;
-      // 两类账号都不计入分母，各自补一句说明，否则用户会以为漏签了：
-      //   skipped — 国际版没有签到体系，点多少次都是「已跳过」
-      //   already — 今天已经签过，本次没再打上游（这正是「不重复签到」的效果）
+      // Completed checks without a reward must not look like fresh credit grants.
       const notes = [
         r.skipped > 0 ? t('accounts.checkinSkippedNote', {skipped: r.skipped}) : '',
         r.already > 0 ? t('accounts.checkinAlreadyNote', {n: r.already}) : '',
@@ -365,6 +365,8 @@ function FullAccountsPage() {
             t('accounts.checkinNothingPending'),
             t('accounts.checkinNothingPendingDetail', {n: r.already}) + note,
           );
+        } else if (r.skipped > 0 && r.message) {
+          notify.info(r.message);
         } else {
           notify.info(t('accounts.noCheckinTargets'), notes.trim() || undefined);
         }
@@ -380,6 +382,7 @@ function FullAccountsPage() {
         );
       }
       await reloadAll();
+      window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
       notify.err(errText(e));
     } finally {
@@ -511,6 +514,7 @@ function FullAccountsPage() {
         ok?: boolean;
         credits?: number | null;
         expiries?: CreditExpiry[];
+        reward_status?: string;
       };
       const ok = res.ok !== false;
       // 签到 / 测活会带回**刚问到**的实时积分与到期时间。
@@ -529,7 +533,10 @@ function FullAccountsPage() {
           [uid]: {...prev[uid], cached: false, cache_age: null, expiries: res.expiries},
         }));
       }
-      (ok ? notify.ok : notify.err)(ok && preferOkMsg ? okMsg : (res.message || okMsg));
+      const unconfirmed = ['no_reward', 'unknown', 'pending', 'skipped'].includes(res.reward_status ?? '');
+      (unconfirmed ? notify.info : ok ? notify.ok : notify.err)(
+        ok && preferOkMsg && !unconfirmed ? okMsg : (res.message || okMsg),
+      );
       await reloadAll();
       window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
@@ -1621,14 +1628,15 @@ function FullAccountsPage() {
       </section>
       )}
 
-      {/* 签到与任务记录已独立成页（账号一多，堆在本页会越滑越长） */}
-      <div className="flex flex-wrap items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      {platform === 'qoder' && <QoderCheckinHistory />}
+      {/* WorkBuddy growth tasks do not apply to the other engines. */}
+      {platform === 'workbuddy' && <div className="flex flex-wrap items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span>{t('accounts.movedTo')}</span>
         <Link href="/tasks" className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 font-medium text-foreground transition-colors hover:bg-muted/70">
           {t('nav.tasks')}
           <ChevronRight className="h-3 w-3" />
         </Link>
-      </div>
+      </div>}
 
       <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={reloadAll}
                         upstreamId={groupId} />

@@ -351,6 +351,8 @@ export const accountApi = {
       message: string;
       /** 今天已经签过：后端没打上游请求，直接就地返回。提示语要与「刚签上」分开 */
       already?: boolean;
+      reward_status?: string;
+      earned_credit?: number | null;
       credits?: number | null;
     }>(`/api/accounts/${encodeURIComponent(file)}/checkin${groupQs(upstreamId)}`),
   /** 单个账号的实时积分（直接向腾讯查询） */
@@ -378,16 +380,17 @@ export const accountApi = {
   checkinAll: (upstreamId?: number | null) =>
     post<{
       /**
-       * 只统计**本次真正发起签到**的账号：国际版（不适用）与今天已签到的都不进
-       * 分母，分别见 skipped / already。原先 total 里混着「今天已签过」的账号，
-       * 界面会把「无需重复」说成「刚签成功」。
+       * Completed/new attempts only. Already-claimed, inapplicable, zero-reward
+       * and pending outcomes are reported separately, not as fresh rewards.
        */
       total: number;
       succeeded: number;
-      /** 今天已签到、本次被跳过的账号数（没打上游请求） */
+      /** Provider-confirmed already-claimed outcomes; a check may have been sent. */
       already: number;
-      /** 不适用的账号数（国际版没有签到体系）。它既不算成功也不算失败 */
+      /** 未新增积分、不适用或仍待确认的账号，不计入新签成功。 */
       skipped: number;
+      no_reward?: number;
+      message?: string;
       results: {
         nickname: string; ok: boolean; message: string;
         code?: number; skipped?: boolean; already?: boolean;

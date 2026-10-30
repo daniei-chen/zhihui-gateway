@@ -121,6 +121,8 @@ class Settings:
     qoder_data_dir: str = "/opt/qoder-hub"
     qoder2_base: str = "http://127.0.0.1:8799"
     qoder2_panel_password_file: str = "/opt/workbuddy-manager/engine/secrets/qoder2_panel_password"
+    # Must match the engine calendar; hourly reads verify its current midnight.
+    qoder2_timezone: str = "Asia/Shanghai"
     # trae 侧同样两个实现（见 runtime.py）：
     #   bff   = 旧 Go 薄封装（源码丢失，仅回滚）
     #   aiwork= 直连 aiwork-server(:8080)，Rust 实现、镜像可升级
@@ -268,6 +270,7 @@ def load_settings() -> Settings:
         qoder2_panel_password_file=_abs(
             "qoder2_panel_password_file", "/opt/workbuddy-manager/engine/secrets/qoder2_panel_password"
         ),
+        qoder2_timezone=_env_str("qoder2_timezone", "Asia/Shanghai"),
         trae_engine=(_env_str("trae_engine", _trae_engine_default()) or "bff").strip().lower(),
         aiwork_base=_env_str("aiwork_base", "http://127.0.0.1:8080"),
         aiwork_admin_token_file=_abs(

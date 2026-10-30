@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class ConfigurationError(ValueError):
@@ -60,6 +61,9 @@ def _parse(raw, spec):
         try:
             for item in value.split(','):ipaddress.ip_network(item.strip(),strict=False)
         except ValueError:raise ValueError('invalid_ip_network') from None
+    if spec.get('format') == 'iana_timezone':
+        try: ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError):raise ValueError('invalid_timezone') from None
     if 'choices' in spec and str(result).lower() not in spec['choices']:
         raise ValueError('invalid_choice')
     if 'normalize_minimum' in spec:

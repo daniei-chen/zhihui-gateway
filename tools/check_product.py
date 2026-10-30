@@ -30,9 +30,24 @@ def main():
             'name', 'repository', 'version', 'origin', 'sourceCommit', 'unrecorded',
             'baseline', 'releases', 'providerBoundary', 'controlledTitle', 'controlledDetail',
         }, locale
-    for page in ['site/home/index.html', 'site/login/index.html']:
-        text = (ROOT / page).read_text(encoding='utf-8')
-        assert '/favicon/zhihui-z-20261029/favicon.svg' in text, page
+    home_import = json.loads((ROOT / 'site/home-import.json').read_bytes())
+    prefix = home_import['asset_prefix']
+    assert re.fullmatch(r'/home-assets/r-[a-f0-9]{20}/', prefix)
+    files = {row['path']: row for row in home_import['files']}
+    icon = 'site/home/' + prefix.removeprefix('/home-assets/') + 'favicon.svg'
+    assert icon.removeprefix('site/') in files
+    import hashlib
+    assert hashlib.sha256((ROOT / icon).read_bytes()).hexdigest() == files[icon.removeprefix('site/')]['sha256']
+    assert prefix + 'favicon.svg' in (ROOT / 'site/home/index.html').read_text(encoding='utf-8')
+    login = (ROOT / 'site/login/index.html').read_bytes()
+    preserved = json.loads((ROOT / 'site/login/preservation.json').read_bytes())
+    assert hashlib.sha256(login).hexdigest() == preserved['candidate_sha256']
+    assert b'/favicon/zhihui-z-20261029/favicon.svg' in login
+    assert '三平台' in login.decode('utf-8')
+    assert preserved['candidate_sha256'] == preserved['source_sha256']
+    assert preserved['permitted_text_changes'] == []
+    home = (ROOT / 'site/home/index.html').read_text(encoding='utf-8')
+    assert 'data-platform="codex"' not in home and '四种入口' not in home
     readme = (ROOT / 'README.md').read_text(encoding='utf-8')
     targets = re.findall(r'(?:src|href)="([^"#]+)"', readme)
     targets += re.findall(r'\]\(([^)#]+)\)', readme)

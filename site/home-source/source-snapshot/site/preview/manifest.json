@@ -1,0 +1,154 @@
+{
+  "scope": "Actual exported console rendering with synthetic local fixtures. No production data or provider calls.",
+  "buildId": "L56xJIgc6_WtFFG8UVFfz",
+  "brandCssSha256": "10ae209aff9bc8e8168812b0c6136377e2208be71c8787ad7391145e386a92e9",
+  "previews": [
+    {
+      "route": "/dashboard",
+      "image": "dashboard-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "82b6a815892d154b612c8a2fec876f22435d26749037a1c3aed96379c0cf8d10"
+    },
+    {
+      "route": "/dashboard",
+      "image": "dashboard-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "d64d190a5529cf33388579d7564ef41a1b81e7d192e05c81f571d3fc2974ea28"
+    },
+    {
+      "route": "/accounts",
+      "image": "accounts-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "9a1f2505d8c2b8eb2f5d83d9b86b33359949b1b5d1c40c80e4b324faa352bed7"
+    },
+    {
+      "route": "/accounts",
+      "image": "accounts-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "b6cf559df54f51dfca18503ef96c3e7733ce138d2e0dfe62f1d31b5cacd802d8"
+    },
+    {
+      "route": "/keys",
+      "image": "keys-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "301f67b285e569b7cab02737bf2802db8e99af91ea9625a2617e2c2bb3c98aeb"
+    },
+    {
+      "route": "/keys",
+      "image": "keys-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "07b4dc904887f6ad70c575e17665b3a318ceb392a2a507d21df00b911f34e8b6"
+    },
+    {
+      "route": "/models",
+      "image": "models-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "da722b4b0bcf485d3a832dc3be1ed76d73901e3602b69b7413af0484d7958d9a"
+    },
+    {
+      "route": "/models",
+      "image": "models-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "2cbd6ae05f94b571aaacf581a5fa408e9577c6d55254ddc6334084383e8b2db1"
+    },
+    {
+      "route": "/logs",
+      "image": "logs-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "a9c5b2fec5f5b31582bd7980c7cb544426d063f6cab5e6bed57c39eb8d5954dd"
+    },
+    {
+      "route": "/logs",
+      "image": "logs-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "421e4207672e98525591a45a0e1f78686694b623e5a04284e2bcd39c7bf7445d"
+    },
+    {
+      "route": "/tasks",
+      "image": "tasks-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "0428f132cdd467930c6a53c1d4f51a2febdc44dd387fed4eb59f00fa7a5c99f3"
+    },
+    {
+      "route": "/tasks",
+      "image": "tasks-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "397735232b8fb24288283223466b63a46d2a6a015084aa81c79cac67a9685a09"
+    },
+    {
+      "route": "/security",
+      "image": "security-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "c05458537fb830bda2e3bdffe25fc2e609e0eee2bd931fdcd2a4c86ee96161a6"
+    },
+    {
+      "route": "/security",
+      "image": "security-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "7c3122a7f13026f5adefc5e992afd8c36bb948aa5f22e3fb46c31e4f0f66d4a9"
+    },
+    {
+      "route": "/stats",
+      "image": "stats-desktop.jpg",
+      "viewport": {
+        "width": 1440,
+        "height": 930
+      },
+      "sha256": "169889f6994056ea00f89f58e305d10351b70594701669bf302ebc8a1db04492"
+    },
+    {
+      "route": "/stats",
+      "image": "stats-mobile.jpg",
+      "viewport": {
+        "width": 390,
+        "height": 650
+      },
+      "sha256": "418bf799d72dec3b6ac1303524b6585f01d3766a437c7ae67144e67d842ccaf2"
+    }
+  ],
+  "errors": [],
+  "unknownFixtures": [],
+  "status": "passed"
+}

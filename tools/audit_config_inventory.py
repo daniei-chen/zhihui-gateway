@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-QTG_DIR = ROOT / 'qtg' / 'app' / 'qtg'
+QTG_DIR = ROOT / 'manager' / 'server' / 'qtgcore'
 QTG_SCHEMA = QTG_DIR / 'config-schema.json'
 MANAGER_DIR = ROOT / 'manager' / 'server'
 MANAGER_SCHEMA = MANAGER_DIR / 'config-schema.json'

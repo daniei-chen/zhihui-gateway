@@ -17,6 +17,7 @@ const FlowChart = dynamic(
 );
 import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
 import {ChartDataTable} from '@/components/charts/ChartDataTable';
+import {CreditFlowTile} from '@/components/dashboard/CreditFlowTile';
 import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
@@ -90,9 +91,9 @@ const EMPTY_FLOW: CreditsFlow = {
   days: 0,
   from: '',
   to: '',
-  today: {income: 0, expense: 0, net: 0},
-  week: {income: 0, expense: 0, net: 0},
-  total: {income: 0, expense: 0, net: 0},
+  today: {income: null, expense: null, net: null},
+  week: {income: null, expense: null, net: null},
+  total: {income: null, expense: null, net: null},
   daily: [],
 };
 
@@ -244,7 +245,7 @@ export default function DashboardPage() {
     rawFlow && rawFlow.total && Array.isArray(rawFlow.daily) ? rawFlow : EMPTY_FLOW;
   const flowFailed = 'flow' in flowState.errors;
   /** 区间内是否有任何收支——全 0 时画图没意义，给空态 */
-  const hasFlow = flow.total.income > 0 || flow.total.expense > 0;
+  const hasFlow = flow.daily.some(row => (row.income ?? 0) > 0 || (row.expense ?? 0) > 0);
 
   const slices: GroupSlice[] = values.pool ?? EMPTY_SLICES;
   const summary: StatsSummary | null = values.summary ?? null;
@@ -404,7 +405,7 @@ export default function DashboardPage() {
   const chartData = daily.map((d) => ({
     day: d.day.slice(5),
     requests: d.requests,
-    tokens: d.prompt_tokens + d.completion_tokens,
+    tokens: d.total_tokens ?? (d.prompt_tokens + d.completion_tokens),
     // 失败数与请求数是**两条独立的数据来源**（前者取自请求日志，后者取自用量
     // 汇总），所以曲线不会互相覆盖：某天「requests=0 但 failed=31」是完全
     // 可能的形态（全池中断），图上看得出「那天出过事」而不是「没有请求」。
@@ -680,6 +681,11 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
+            {flow.income_status === 'unavailable' && (
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                {t('dashboard.creditsIncomeUnavailable')}
+              </p>
+            )}
             {/* 三个数字都跟着上面的时段走（收入 / 支出 / 净增），不再固定写死
                 「今日」「近 7 天」。 */}
             <div className="grid grid-cols-3 gap-3">
@@ -687,7 +693,7 @@ export default function DashboardPage() {
                 label={t('dashboard.income')}
                 value={flow.total.income}
                 tone="income"
-                title={t('dashboard.creditsIncomeTip')}
+                title={t(flow.income_status === 'unavailable' ? 'dashboard.creditsIncomeUnavailable' : 'dashboard.creditsIncomeTip')}
               />
               <CreditFlowTile
                 label={t('dashboard.expense')}
@@ -699,7 +705,7 @@ export default function DashboardPage() {
                 label={t('dashboard.creditsNet')}
                 value={flow.total.net}
                 tone="net"
-                title={t('dashboard.creditsNetTip')}
+                title={t(flow.income_status === 'unavailable' ? 'dashboard.creditsIncomeUnavailable' : 'dashboard.creditsNetTip')}
               />
             </div>
 
@@ -716,14 +722,18 @@ export default function DashboardPage() {
                 )
               ) : (
                 <div className="grid h-full place-items-center text-xs text-muted-foreground">
-                  {t('dashboard.creditsFlowEmpty')}
+                  {t(flow.income_status === 'unavailable'
+                    ? flow.daily.some(row => row.expense === null)
+                      ? 'dashboard.creditsConsumptionUnknown'
+                      : 'dashboard.creditsConsumptionOnly'
+                    : 'dashboard.creditsFlowEmpty')}
                 </div>
               )}
             </div>
             {hasFlow && <ChartDataTable
               title={t('dashboard.creditsFlowTitle')}
               columns={[t('a11y.period'), t('dashboard.income'), t('dashboard.expense')]}
-              rows={flow.daily.map((point) => [point.day, point.income, point.expense])}
+              rows={flow.daily.map((point) => [point.day, point.income ?? '—', point.expense ?? '—'])}
             />}
           </>
         )}
@@ -980,42 +990,5 @@ function DashboardSkeleton() {
         </div>
       </section>
     </>
-  );
-}
-
-/**
- * 积分收支小卡片：收入（正）绿、支出红，悬停给出统计口径。
- *
- * 为什么不用顶部那个 StatCard：本块在 `bg-muted` 的 section 内部，再嵌一层
- * 同色的 bg-muted 会看不出卡片边界；这里用 `bg-background/60` 区分层次。
- */
-function CreditFlowTile({label, value, tone, title}: {
-  label: string;
-  value: number;
-  tone: 'income' | 'expense' | 'net';
-  title: string;
-}) {
-  // 收入绿、支出红；净增按正负取色（正绿负红、零中性）。
-  const color =
-    tone === 'income'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : tone === 'expense'
-        ? 'text-red-600 dark:text-red-400'
-        : value > 0
-          ? 'text-emerald-600 dark:text-emerald-400'
-          : value < 0
-            ? 'text-red-600 dark:text-red-400'
-            : 'text-gray-900 dark:text-gray-100';
-  // 符号把「进 / 出」直接写在数字上：收入 +、支出 −、净增按正负。
-  // 金额一律取绝对值再拼符号，避免出现「−-120」这种双重负号。
-  const sign = tone === 'expense' || (tone === 'net' && value < 0) ? '−' : '+';
-  return (
-    <div className="rounded-2xl bg-background/60 px-3 py-2.5" title={title}>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className={'mt-1 text-lg font-semibold tabular-nums ' + color}>
-        {sign}
-        {fmtNumber(Math.abs(value))}
-      </div>
-    </div>
   );
 }
