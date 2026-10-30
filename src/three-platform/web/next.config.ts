@@ -38,6 +38,7 @@ const nextConfig: NextConfig = {
   // 界面上「Build At」会永远显示同一个日期，属于会误导人的信息。
   // 运行版本另以后端为准，这里只回答「这份前端产物是什么时候构建的」。
   env: {
+    NEXT_PUBLIC_ZHIHUI_DEMO: process.env.NEXT_PUBLIC_ZHIHUI_DEMO === '1' ? '1' : '0',
     NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
     // 显式回注规范化后的值（去掉尾部斜杠），保证客户端 lib/base-path.ts 拿到的
     // 与上面 basePath 用的是同一个字符串，不会出现「路由带前缀、跳转不带」的错位。
