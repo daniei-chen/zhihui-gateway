@@ -20,7 +20,7 @@ test('public demo renders finite synthetic data entirely inside the client', asy
   assert.ok(data.data.every(row => Number.isFinite(row.requests)));
   assert.doesNotMatch(fs.readFileSync(filename, 'utf8'), /\b(fetch|XMLHttpRequest|WebSocket|sendBeacon)\s*\(/);
   const api = fs.readFileSync(path.join(__dirname, '../lib/api.ts'), 'utf8');
-  assert.match(api, /process\.env\.NEXT_PUBLIC_ZHIHUI_DEMO === '1' \? \{adapter: publicDemoAdapter\}/);
+  assert.match(api, /process\.env\.NEXT_PUBLIC_ZHIHUI_DEMO === '1' \? \{adapter: require\('\.\/public-demo'\)\.publicDemoAdapter\}/);
 });
 
 test('public demo denies every write and unknown route without network fallback', async () => {
