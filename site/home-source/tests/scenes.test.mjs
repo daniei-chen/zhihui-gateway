@@ -45,15 +45,35 @@ test('task animation advances, pauses and supports explicit reduced motion overr
   try {
     w.eval(script);
     assert.equal(timers.size, 1);
-    [...timers.values()].forEach(cb => cb());
-    assert.equal(w.document.getElementById('demoThroughput').textContent, '328');
+    const tick = count => { for (let i=0;i<count;i++) [...timers.values()].forEach(cb => cb()); };
+    tick(4);
+    assert.equal(w.document.querySelectorAll('.context-card.arrived').length, 3);
+    assert.equal(w.document.querySelectorAll('.context-card.focused').length, 1);
+    const focused = w.document.querySelector('.context-card.focused').dataset.context;
+    tick(2);
+    assert.notEqual(w.document.querySelector('.context-card.focused').dataset.context, focused);
+    assert.ok(w.document.getElementById('contextSummary').textContent.includes('关联'));
+    tick(1);
+    assert.equal(w.document.querySelector('.workspace').dataset.stage, 'build');
+    assert.ok(w.document.querySelector('#codeStream code').textContent.length > 0);
+    tick(10);
+    assert.equal(w.document.querySelector('.workspace').dataset.stage, 'test');
+    assert.ok(w.document.querySelectorAll('.check.checked').length > 0);
+    tick(5);
+    assert.equal(w.document.querySelector('.workspace').dataset.stage, 'done');
+    assert.ok(w.document.querySelector('#deliveryReceipt').classList.contains('visible'));
+    const frozen = w.document.querySelector('.workspace').outerHTML;
     send({ paused: true });
     assert.equal(timers.size, 0);
+    tick(10);
+    assert.equal(w.document.querySelector('.workspace').outerHTML, frozen);
     assert.equal(w.document.documentElement.dataset.playback, 'paused');
     media.matches = true; change(); send({ paused: false });
     assert.equal(timers.size, 0);
     send({ paused: false, reducedMotionOverride: true });
     assert.equal(timers.size, 1);
+    tick(4);
+    assert.equal(w.document.querySelector('.workspace').dataset.stage, 'context');
     assert.ok(w.document.documentElement.hasAttribute('data-motion-override'));
     hidden = true; w.document.dispatchEvent(new w.Event('visibilitychange'));
     assert.equal(timers.size, 0);
@@ -67,6 +87,29 @@ test('task animation advances, pauses and supports explicit reduced motion overr
     assert.ok(css.includes('@media(max-width:600px)'));
     assert.doesNotMatch(w.document.body.textContent, /Codex/);
   } finally { w.close(); }
+});
+
+test('embedded workspace reports intrinsic height after resize without viewport-height feedback or code clipping',()=>{
+  const html=readFileSync(new URL('../public/animations/task-workspace.html',import.meta.url),'utf8');
+  const script=readFileSync(new URL('../public/animations/task-workspace.js',import.meta.url),'utf8');
+  const css=readFileSync(new URL('../public/animations/task-workspace.css',import.meta.url),'utf8');
+  const dom=new JSDOM(html,{runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,messages=[];
+  let measure=570,resize;
+  Object.defineProperty(w,'parent',{value:{postMessage:data=>messages.push(data)}});
+  w.matchMedia=()=>({matches:false,addEventListener(){}});
+  w.document.querySelector('.workspace').getBoundingClientRect=()=>({height:measure});
+  w.ResizeObserver=class{constructor(fn){resize=fn;}observe(){}};
+  try{
+    const style=w.document.createElement('style');style.textContent=css;w.document.head.append(style);
+    w.eval(script);
+    const heights=()=>messages.filter(m=>m.type==='task-height');
+    assert.equal(heights().at(-1).height,608); // 570 + body padding 18*2 + 2.
+    resize();assert.equal(heights().length,1,'Identical height must not cause an iframe feedback loop');
+    measure=652;resize();assert.equal(heights().at(-1).height,690);
+    assert.equal(w.getComputedStyle(w.document.body).minHeight,'0px');
+    assert.equal(w.getComputedStyle(w.document.querySelector('.code pre')).maxHeight,'none');
+    assert.equal(w.getComputedStyle(w.document.querySelector('.code pre')).overflow,'visible');
+  }finally{w.close();}
 });
 
 async function sculptureFixture(failLoad = false) {

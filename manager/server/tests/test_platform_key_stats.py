@@ -73,6 +73,8 @@ class PlatformKeyStatsTests(unittest.TestCase):
         row = self.rows()[0]
         self.assertEqual((row['requests'], row['total_tokens'], row['credit']), (2, 350, 1))
         self.assertEqual((row['cache_hit_rate'], row['cache_samples']), (0.4, 2))
+        self.assertEqual((row['cache_hit_requests'], row['cache_observed_requests'],
+                          row['cache_request_hit_rate']), (1, 2, .5))
         self.assertEqual((row['tokens_per_sec'], row['throughput_samples']), (37.5, 2))
         self.assertEqual(row['source'], 'manager_retained_request_logs')
 
@@ -84,6 +86,8 @@ class PlatformKeyStatsTests(unittest.TestCase):
             self.assertIsNone(row[field], field)
         self.assertEqual((row['token_unknown_requests'], row['credit_unknown_requests']), (1, 1))
         self.assertEqual(row['throughput_samples'], 0)
+        self.assertIsNone(row['cache_request_hit_rate'])
+        self.assertEqual(row['cache_observed_requests'], 0)
         self.log(40, prompt_tokens=0, completion_tokens=0, credit=0, cache_hit_tokens=0, cache_miss_tokens=10)
         zero = next(r for r in self.rows() if r['key_id'] == 40)
         self.assertEqual((zero['total_tokens'], zero['credit'], zero['cache_hit_rate']), (0, 0, 0))

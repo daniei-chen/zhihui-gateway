@@ -1,4 +1,3 @@
-const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -55,12 +54,19 @@ function fixture(url, request) {
     const values = {income: platform === 'qoder' ? null : 19710, expense: 17014.094, net: platform === 'qoder' ? null : 2695.906};
     return {days: 7, from: today, to: today, today: values, week: values, total: values,
       ...(platform === 'qoder' ? {income_status: 'unavailable', source: 'engine_usage_daily'} : {}),
-      daily: [{day: today, ...values}]};
+      daily: process.env.QA_DESIGN_PREVIEW ? [
+        [800, 240], [1400, 900], [1100, 750], [2200, 600], [3600, 2100], [3100, 1700], [1700, 1200],
+      ].map(([income, expense], index) => ({
+        day: new Date(Date.now() - (6 - index) * 86400000).toISOString().slice(0, 10),
+        income: platform === 'qoder' ? null : income, expense,
+        net: platform === 'qoder' ? null : income - expense,
+      })) : [{day: today, ...values}]};
   }
   if (['/api/stats/by-model', '/api/stats/by-key'].includes(p)) return [
     {name: p.endsWith('by-key') ? 'creative-studio' : 'fixture-model', key_id: 7, requests: 12,
       prompt_tokens: 10000, completion_tokens: 2000, credit: 1.25, cache_hit_tokens: 9400,
-      cache_miss_tokens: 600, cache_hit_rate: 0.94, tokens_per_sec: 37.5, throughput_samples: 12},
+      cache_miss_tokens: 600, cache_hit_rate: 0.94, cache_hit_requests: 11, cache_observed_requests: 12,
+      cache_request_hit_rate: 0.916667, tokens_per_sec: 37.5, throughput_samples: 12},
     {name: 'no-measurement', key_id: 8, requests: 2, prompt_tokens: 300, completion_tokens: 100,
       credit: 0, cache_hit_rate: null, tokens_per_sec: null, throughput_samples: 0},
   ];
@@ -140,6 +146,7 @@ if (process.env.QA_SERVE_ONLY) {
   assert.ok(Number.isInteger(port) && port > 0 && port < 65536);
   server.listen(port, '127.0.0.1', () => console.log(`Synthetic console: http://127.0.0.1:${port}/accounts/`));
 } else (async () => {
+  const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({headless: true});

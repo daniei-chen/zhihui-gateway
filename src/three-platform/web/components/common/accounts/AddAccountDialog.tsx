@@ -324,9 +324,9 @@ export function AddAccountDialog({open, onOpenChange, onSuccess, upstreamId}: {
                 }}>
                 {t('addAccount.openPlatform', {platform: platformName})}<ExternalLink className="h-3.5 w-3.5" />
               </a></Button>
-              <div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{new URL(authUrl).hostname}</span>
-                <CopyButton value={authUrl} size="sm" showLabel label={t('addAccount.copyLink')} variant="ghost" />
+              <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-background px-3 py-2">
+                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">https://{new URL(authUrl).hostname}</span>
+                <CopyButton value={authUrl} size="sm" showLabel label={t(platform === 'trae' ? 'addAccount.copyOfficialLink' : 'addAccount.copyLink')} variant="outline" className="rounded-full" />
               </div>
               <p className="text-center text-[11px] leading-4 text-muted-foreground">{t('addAccount.privateLink')}</p>
             </div>
@@ -336,7 +336,7 @@ export function AddAccountDialog({open, onOpenChange, onSuccess, upstreamId}: {
               <label htmlFor="trae-auth-callback" className="text-xs font-medium">{t('addAccount.callbackLabel')}</label>
               <Textarea id="trae-auth-callback" autoComplete="off" spellCheck={false} value={callbackUrl}
                 disabled={phase === 'submitting'} onChange={event => setCallbackUrl(event.target.value)}
-                placeholder="http://127.0.0.1:17388/authorize?..." className="min-h-24 break-all text-xs" />
+                placeholder={t('addAccount.callbackPlaceholder')} className="min-h-24 break-all text-xs" />
               <p className="text-[11px] leading-4 text-muted-foreground">{t('addAccount.callbackHint')}</p>
               <Button className="w-full rounded-full" disabled={!callbackUrl.trim() || phase === 'submitting'} onClick={finish}>
                 {phase === 'submitting' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{t('addAccount.confirmCallback')}

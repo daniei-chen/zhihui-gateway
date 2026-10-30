@@ -76,6 +76,19 @@ test('usage cache rates preserve missing data, true zero and provider denominato
   }
 });
 
+test('request cache incidence never falls back to token-weighted efficiency', () => {
+  const {formatCacheRequestRate} = load('lib/usage-metrics.ts', {});
+  assert.equal(formatCacheRequestRate({cache_hit_requests: 9, cache_observed_requests: 10}), '90.0%');
+  assert.equal(formatCacheRequestRate({cache_hit_requests: 0, cache_observed_requests: 10}), '0.0%');
+  assert.equal(formatCacheRequestRate({cache_hit_requests: 7033, cache_observed_requests: 7488}), '93.9%');
+  for (const row of [{cache_hit_rate: .66}, {cache_hit_requests: 1},
+    {cache_hit_requests: 1, cache_observed_requests: 0}, {cache_hit_requests: 11, cache_observed_requests: 10},
+    {cache_hit_requests: -1, cache_observed_requests: 10}, {cache_hit_requests: .5, cache_observed_requests: 1},
+    {cache_hit_requests: true, cache_observed_requests: 1}, {cache_hit_requests: 1, cache_observed_requests: Infinity}]) {
+    assert.equal(formatCacheRequestRate(row), '—');
+  }
+});
+
 test('provider total tokens never becomes a fabricated output count or unknown zero', () => {
   const {usageTokenTotal} = load('lib/usage-metrics.ts', {});
   assert.equal(usageTokenTotal({total_tokens: 190, prompt_tokens: null, completion_tokens: null}), 190);
@@ -178,6 +191,9 @@ test('usage page contains no operational or process-lifetime stats fetches', () 
   const source = fs.readFileSync(path.join(root, 'app/(main)/stats/page.tsx'), 'utf8');
   assert.doesNotMatch(source, /OutcomeStatsPanel|UpstreamMetric|statsApi\.upstream\(/);
   assert.match(source, /formatCacheHitRate\(it\)/);
+  assert.match(source, /formatCacheRequestRate\(it\)/);
+  assert.match(source, /stats.cacheTokenShare/);
+  assert.match(source, /stats.cacheScopeHint/);
   assert.match(source, /formatOutputRate\(it.tokens_per_sec\)/);
   assert.match(source, /currentKeysHint/);
   assert.match(source, /dailySeries\(daily, d, platform === 'qoder' \? undefined : nowTick\?\.today\)/);
@@ -309,7 +325,8 @@ test('API platform query defaults preserve explicit values and storage failure d
   }})};
   const window = {sessionStorage: {getItem() { throw new Error('denied'); }}, location: {pathname: '/dashboard', href: '/dashboard'}};
   load('lib/api.ts', {axios: {default: axios}, './base-path': {BASE_PATH: ''}, './err-envelope': {}, './i18n': {},
-    './platform-store': {platformStore: {explicit: () => explicit}}, globals: {window, URLSearchParams}});
+    './public-demo': {}, './platform-store': {platformStore: {explicit: () => explicit}},
+    globals: {window, URLSearchParams, process: {env: {}}}});
   for (const params of [undefined, {}, {platform: undefined}]) {
     const config = requestInterceptor({headers: {}, params});
     assert.equal(config.headers['X-QTG-Platform'], 'qoder'); assert.equal(config.params.platform, 'qoder');
@@ -386,6 +403,7 @@ test('backend error details remain authoritative and server diagnostics get loca
     './err-envelope': {backendErrorText: body => typeof body?.detail === 'string' ? body.detail : '', channelCheckDetails: () => null},
     './i18n': {t: (key, params) => params ? `${key}: ${params.detail}` : key, tp: text => text},
     './platform-store': {},
+    './public-demo': {}, globals: {process: {env: {}}},
   });
   assert.equal(errText({response: {status: 403, data: {detail: 'Only local calls are allowed'}}}), 'Only local calls are allowed');
   assert.equal(errText({response: {status: 403, data: {}}}), 'error.forbidden');

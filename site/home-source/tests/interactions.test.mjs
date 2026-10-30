@@ -254,3 +254,17 @@ test('copy writes the selected example and reports clipboard failures', async ()
     assert.deepEqual(f.errors, []);
   } finally { f.close(); }
 });
+
+test('workspace grows to its complete document only for bounded height messages from its own frame',()=>{
+  const f=fixture();
+  try {
+    f.w.eval(readFileSync(new URL('../public/scripts/ride.js',import.meta.url),'utf8'));
+    const frame=f.$('#taskWorkspace'),host=frame.parentElement;
+    const send=(source,height)=>f.w.dispatchEvent(new f.w.MessageEvent('message',{source,data:{type:'task-height',height}}));
+    send(f.w,900);assert.equal(host.style.height,'');
+    send(frame.contentWindow,742);assert.equal(host.style.height,'742px');
+    for(const invalid of [NaN,Infinity,-1,12,2000,'800',742.2])send(frame.contentWindow,invalid);
+    assert.equal(host.style.height,'742px');assert.equal(frame.dataset.contentHeight,'742');
+    send(frame.contentWindow,561);assert.equal(host.style.height,'561px');
+  }finally{f.close();}
+});

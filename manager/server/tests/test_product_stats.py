@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from starlette.requests import Request
 
-from server import config, db
+from server import cachemetrics, config, db
 from server.routers import stats
 from server.qtgcore.adapters.workbuddy import WorkBuddyAdapter
 from server.qtgcore.routers import compat_stats
@@ -85,6 +85,59 @@ class ProductStatsTests(unittest.TestCase):
         self.assertIsNone(rows[32]['cache_hit_rate'])
         self.assertEqual(rows[40]['cache_hit_rate'], 0)
 
+    def test_mixed_model_rate_is_input_weighted_not_mean_of_percentages(self):
+        for model, count, prompt, output, hit, miss in (
+            ('cn:deepseek-v4.1-flash', 3130, 448120299, 3233527, 439610362, 8509937),
+            ('cn:hy3', 4358, 303590977, 4621202, 59696256, 243894721),
+        ):
+            self.usage(32, hit, miss, model=model)
+            db.execute('UPDATE usage_daily SET requests=?,prompt_tokens=?,completion_tokens=? '
+                       'WHERE key_id=? AND model=?', (count, prompt, output, 32, model))
+        row = self.rows()[0]
+        self.assertEqual(row['requests'], 7488)
+        self.assertEqual(row['cache_hit_tokens'], 499306618)
+        self.assertEqual(row['cache_miss_tokens'], 252404658)
+        self.assertAlmostEqual(row['cache_hit_rate'], 0.664227, places=6)
+        rates = {row['name']: row['cache_hit_rate'] for row in stats.by_model(1, 'cn', {})}
+        self.assertAlmostEqual(rates['deepseek-v4.1-flash'], 0.981010, places=6)
+        self.assertAlmostEqual(rates['hy3'], 0.196634, places=6)
+
+    def cache_log(self, hit, miss, *, model='cn:model', realm='cn', protocol='anthropic', ts=None):
+        db.execute('INSERT INTO request_logs(ts,key_id,model,realm,protocol,cache_hit_tokens,'
+                   'cache_miss_tokens) VALUES(?,?,?,?,?,?,?)',
+                   (time.time() if ts is None else ts, 32, model, realm, protocol, hit, miss))
+
+    def test_request_incidence_is_distinct_from_token_efficiency_and_scope_is_exact(self):
+        self.usage(32, 1, 999)
+        self.usage(32, 0, 1, model='other')
+        self.cache_log(1, 999)
+        self.cache_log(0, 1, model='other')
+        for hit, miss in ((None, None), (0, 0), (-1, 10), (1, None)):
+            self.cache_log(hit, miss)
+        self.cache_log(100, 0, realm='global')
+        self.cache_log(100, 0, protocol='http')
+        self.cache_log(100, 0, ts=stats._epoch_since(1)-1)
+        before = [dict(row) for row in db.query('SELECT * FROM usage_daily')]
+        row = self.rows()[0]
+        self.assertEqual((row['cache_hit_requests'], row['cache_observed_requests']), (1, 2))
+        self.assertEqual(row['cache_request_hit_rate'], .5)
+        self.assertAlmostEqual(row['cache_hit_rate'], 1/1001, places=6)
+        models = {row['name']: row for row in stats.by_model(1, 'cn', {})}
+        self.assertEqual(models['model']['cache_request_hit_rate'], 1)
+        self.assertEqual(models['other']['cache_request_hit_rate'], 0)
+        adapter = WorkBuddyAdapter.__new__(WorkBuddyAdapter)
+        adapter.cfg = SimpleNamespace(wb_read_mode='sqlite', wb_db=str(config.DB_PATH))
+        self.assertEqual(adapter._usage_by_key_from_sql(1, 'cn')[0]['cache_request_hit_rate'], .5)
+        self.assertEqual(before, [dict(row) for row in db.query('SELECT * FROM usage_daily')])
+
+    def test_daily_token_totals_cannot_invent_request_cache_samples(self):
+        self.usage(32)
+        row = self.rows()[0]
+        self.assertIsNone(row['cache_request_hit_rate'])
+        self.assertEqual(row['cache_observed_requests'], 0)
+        with self.assertRaises(KeyError):
+            cachemetrics.request_rates(db.query, 0, None, 'key_id; DELETE FROM api_keys')
+
     def test_weighted_generation_speed_and_sample_count(self):
         self.usage(32)
         self.log(32)
@@ -141,6 +194,17 @@ class ProductStatsTests(unittest.TestCase):
             self.assertIsNone(rows[0]['tokens_per_sec'])
             self.assertEqual(rows[0]['throughput_samples'], 0)
             self.assertEqual(rows[0]['cache_hit_rate'], 0.8)
+
+    def test_legacy_schema_without_protocol_cannot_invent_request_cache_rate(self):
+        self.usage(32)
+        adapter = WorkBuddyAdapter.__new__(WorkBuddyAdapter)
+        adapter.cfg = SimpleNamespace(wb_read_mode='sqlite', wb_db=str(config.DB_PATH))
+        db.execute('ALTER TABLE request_logs RENAME COLUMN protocol TO legacy_protocol')
+        for rows in (adapter._usage_by_key_from_sql(1, 'cn'),
+                     adapter._usage_by_model_from_sql(1, 'cn')):
+            self.assertIsNone(rows[0]['cache_request_hit_rate'])
+            self.assertEqual(rows[0]['cache_observed_requests'], 0)
+            self.assertEqual(rows[0]['cache_hit_rate'], .8)
 
     def test_deleting_current_key_hides_only_its_row_not_model_totals(self):
         self.usage(32)

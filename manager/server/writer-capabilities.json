@@ -1,7 +1,7 @@
 {
   "schema": "zhihui.writer-release",
   "version": 1,
-  "release_id": "v0.0.2+ice.20261030.1",
+  "release_id": "v0.0.2+flow.20261030.1",
   "role_policy": 2,
   "key_daily_usage": 1,
   "account_admin_routes": "account-add-only-default-deny"

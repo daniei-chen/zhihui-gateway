@@ -9,9 +9,11 @@ export function CreditFlowTile({label, value, tone, title}: {
   const known = typeof value === 'number' && Number.isFinite(value);
   const color = !known || value === 0
     ? 'text-muted-foreground'
-    : tone === 'expense' || value < 0
-      ? 'text-red-600 dark:text-red-400'
-      : 'text-emerald-600 dark:text-emerald-400';
+    : tone === 'expense'
+      ? 'text-amber-700 dark:text-amber-400'
+      : value < 0
+        ? 'text-red-600 dark:text-red-400'
+        : 'text-emerald-600 dark:text-emerald-400';
   const sign = known && (tone === 'expense' || value < 0) ? '−' : '+';
   return (
     <div className="rounded-2xl bg-background/60 px-3 py-2.5" title={title}>

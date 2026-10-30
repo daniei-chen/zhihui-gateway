@@ -27,7 +27,7 @@ import {
   type ChartPoint,
 } from '@/lib/usage-chart';
 import {fmtCompact, fmtNumber, fmtCredit} from '@/lib/format';
-import {formatCacheHitRate, formatOutputRate, usageTokenTotal} from '@/lib/usage-metrics';
+import {formatCacheHitRate, formatCacheRequestRate, formatOutputRate, usageTokenTotal} from '@/lib/usage-metrics';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {StatCard} from '@/components/common/layout/StatCard';
 import {EmptyState} from '@/components/common/layout/EmptyState';
@@ -461,8 +461,9 @@ function BreakdownPanel({
               <TableHead className="pl-0 text-[11px] text-muted-foreground">{t('metric.name')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">{t('metric.requestsShort')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">Token</TableHead>
-              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground" title={t('stats.cacheHitHint')}>
-                {t('stats.cacheHitRate')}
+              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground" title={t('stats.cacheRequestDefinition')}>
+                {t('stats.cacheRequestRate')}
+                <span className="block font-normal text-muted-foreground/80">{t('stats.cacheTokenShare')}</span>
               </TableHead>
               <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground">
                 {t('stats.tokensPerSec')}
@@ -492,8 +493,11 @@ function BreakdownPanel({
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtNumber(it.requests)}</TableCell>
                   <TableCell className="text-xs tabular-nums">{tokens === null ? '—' : fmtCompact(tokens)}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.cacheHitHint')}>
-                    {formatCacheHitRate(it)}
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.cacheRequestHint', {hit: it.cache_hit_requests ?? 0, total: it.cache_observed_requests ?? 0})}>
+                    {formatCacheRequestRate(it)}
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground" title={t('stats.cacheHitHint')}>
+                      Token {formatCacheHitRate(it)}
+                    </span>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.throughputHint', {n: it.throughput_samples ?? 0})}>
                     {formatOutputRate(it.tokens_per_sec)}
@@ -514,6 +518,7 @@ function BreakdownPanel({
           className="flex flex-col items-center justify-center py-10 text-center"
         />
       )}
+      {items.length > 0 && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t('stats.cacheScopeHint')}</p>}
       {currentKeys && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t(retainedLogs ? 'stats.retainedKeyLogsHint' : 'stats.currentKeysHint')}</p>}
     </div>
   );

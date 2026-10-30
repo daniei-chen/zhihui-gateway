@@ -760,6 +760,10 @@ export interface UsageBreakdown {
   cache_hit_tokens?: number | null;
   cache_miss_tokens?: number | null;
   cache_hit_rate?: number | null;
+  /** Requests with any reported cache hit / requests with known cache observations. */
+  cache_request_hit_rate?: number | null;
+  cache_hit_requests?: number;
+  cache_observed_requests?: number;
   /**
    * 输出速率（tokens/秒，issue #214）：按「生成耗时 = 总耗时 − 首字耗时」估算。
    * null / 缺省 = 没有可用样本（日志已清或该模型没成功请求），界面显示「—」。

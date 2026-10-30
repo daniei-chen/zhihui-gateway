@@ -21,6 +21,14 @@ export function formatCacheHitRate(row: Pick<UsageBreakdown, 'cache_hit_rate' | 
   return validCount(rate) && rate <= 1 ? `${Math.round(rate * 100)}%` : '—';
 }
 
+export function formatCacheRequestRate(row: Pick<UsageBreakdown, 'cache_request_hit_rate' | 'cache_hit_requests' | 'cache_observed_requests'>): string {
+  const hit = row.cache_hit_requests;
+  const observed = row.cache_observed_requests;
+  if (!validCount(hit) || !Number.isSafeInteger(hit) || !validCount(observed)
+      || !Number.isSafeInteger(observed) || observed <= 0 || hit > observed) return '—';
+  return `${(hit / observed * 100).toFixed(1)}%`;
+}
+
 export function formatOutputRate(value: unknown): string {
   return validCount(value) && value > 0 ? value.toFixed(1) : '—';
 }

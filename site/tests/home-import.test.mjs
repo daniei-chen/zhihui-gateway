@@ -41,6 +41,11 @@ test('production-like routes serve every local reference with strict MIME and CS
       if (!/\.(html|css|js)$/.test(row.path)) continue;
       const text = fs.readFileSync(path.join(siteRoot, row.path), 'utf8');
       for (const match of text.matchAll(/\/home-assets\/[A-Za-z0-9_./-]+/g)) {
+        if (match[0].startsWith('/home-assets/console-flow-20261030-1/')) {
+          assert.equal(row.path, 'home/index.html', 'Public demo links belong only to the parent page');
+          assert.match(text, /sandbox="allow-scripts" referrerpolicy="no-referrer"/);
+          continue; // Separate export closure is checked by the release publisher.
+        }
         assert.ok(match[0].startsWith(prefix), `${row.path}: unversioned asset`);
         if (!match[0].endsWith('/')) urls.add(match[0]);
       }

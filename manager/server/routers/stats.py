@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import config, db, observability, security
+from .. import cachemetrics, config, db, observability, security
 from ..services import wb2api
 
 # 2026-10-27 统计归一（用户需求）：国内版 cn: 前缀是上游路由约定，统计展示一律剥掉、同名合并；global: 原样保留。
@@ -904,6 +904,7 @@ def by_model(days: int = 30, realm: str | None = None,
     # 输出速率来自请求日志（issue #214）：与上面的用量表**同区间不同源**，
     # 所以只给「两边都有」的模型补字段；日志里完全没有的模型给 null（显示 —）。
     tmap = _throughput_by_model(days, realm)
+    cmap = cachemetrics.request_rates(db.query, _epoch_since(days), realm, 'model')
     out = []
     for r in rows:
         name = r['name'] or '未知'
@@ -917,6 +918,7 @@ def by_model(days: int = 30, realm: str | None = None,
             'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
             'cache_hit_rate': _cache_hit_rate(int(r['cache_hit_tokens'] or 0),
                                             int(r['cache_miss_tokens'] or 0)),
+            **cmap.get(name, cachemetrics.UNKNOWN_REQUEST_RATE),
             **tmap.get(name, {'tokens_per_sec': None, 'throughput_samples': 0}),
         })
     return out
@@ -945,6 +947,7 @@ def by_key(days: int = 30, realm: str | None = None,
     )
     # Deleted keys remain in totals and the ledger, not in the current-key list.
     tmap = _throughput_by_key(days, realm)
+    cmap = cachemetrics.request_rates(db.query, _epoch_since(days), realm, 'key')
     return [
         {
             'key_id': int(r['key_id']),
@@ -957,6 +960,7 @@ def by_key(days: int = 30, realm: str | None = None,
             'cache_miss_tokens': int(r['cache_miss_tokens'] or 0),
             'cache_hit_rate': _cache_hit_rate(int(r['cache_hit_tokens'] or 0),
                                             int(r['cache_miss_tokens'] or 0)),
+            **cmap.get(r['key_id'], cachemetrics.UNKNOWN_REQUEST_RATE),
             **tmap.get(r['key_id'], {'tokens_per_sec': None, 'throughput_samples': 0}),
         }
         for r in rows

@@ -8,6 +8,7 @@ def build_task_scene():
     target.mkdir(exist_ok=True)
     for name in ['task-workspace.html', 'task-workspace.css', 'task-workspace.js', 'pelican-ride.html']:
         shutil.copyfile(ROOT / 'scenes' / name, target / name)
+    shutil.copyfile(ROOT / 'scenes/ride-controller.js', ROOT / 'public/scripts/ride.js')
 
 if __name__ == '__main__':
     build_task_scene()

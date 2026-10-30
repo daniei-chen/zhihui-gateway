@@ -2,8 +2,8 @@
 html:has(#main-content) {
   --zh-paper: #fdfefe;
   --zh-ice: #f6f9fd;
-  --zh-blue: #b3cce8;
-  --zh-action: #4d6b91;
+  --zh-blue: #3683fc;
+  --zh-action: #2469d6;
   --zh-ink: #202a3d;
   --zh-line: #e6edf5;
   --zh-soft: #6e727e;
@@ -20,20 +20,23 @@ html:not(.dark):has(#main-content) {
   --card-foreground: var(--zh-ink);
   --popover: #ffffff;
   --popover-foreground: var(--zh-ink);
-  --primary: #222b41;
+  --primary: var(--zh-action);
   --primary-foreground: #ffffff;
   --secondary: #f7fafe;
   --secondary-foreground: #455d7c;
   --muted: #fafcff;
   --muted-foreground: #687285;
   --accent: #f4f8fd;
-  --accent-foreground: #4d6b91;
+  --accent-foreground: var(--zh-action);
   --border: var(--zh-line);
   --input: #e3ebf4;
-  --ring: #7a9cbe;
-  --chart-1: #88a9ce;
-  --chart-2: #529da9;
-  --chart-3: #849cbf;
+  --ring: var(--zh-blue);
+  --chart-1: #3683fc;
+  --chart-2: #159d8d;
+  --chart-3: #cf8b32;
+  --chart-4: #c77768;
+  --chart-5: #7587ad;
+  --chart-expense: #cf8b32;
 }
 
 html:has(#main-content) body {
@@ -44,10 +47,12 @@ html:has(#main-content) body {
 html:not(.dark):has(#main-content) body {
   background-color: var(--zh-paper);
   background-image:
-    radial-gradient(ellipse 70% 480px at 78% 0, rgba(218, 233, 250, .16), transparent 80%),
-    radial-gradient(ellipse 40% 700px at 0 40%, rgba(237, 245, 253, .14), transparent 85%),
+    radial-gradient(ellipse 34% 700px at 0 58%, #eaf7f3 0, transparent 100%),
+    radial-gradient(ellipse 34% 700px at 100% 53%, #fff2e5 0, transparent 100%),
+    radial-gradient(ellipse 65% 420px at 50% 0, rgba(218, 233, 250, .12), transparent 80%),
     linear-gradient(180deg, #ffffff 0, #fdfefe 800px);
   background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 #main-content {
@@ -91,7 +96,7 @@ html:not(.dark):has(#main-content) body {
   width: 2rem;
   height: 2rem;
   flex-shrink: 0;
-  color: #8aafd4;
+  color: #7391fa;
   filter: drop-shadow(0 4px 7px rgba(111, 149, 226, .12));
 }
 
@@ -169,7 +174,7 @@ html:not(.dark) [data-slot="command-palette-trigger"] {
 }
 
 html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true"] {
-  color: #4d6b91;
+  color: var(--zh-action);
 }
 
 html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true"] > span:first-child:not(:only-child) {
@@ -207,7 +212,7 @@ html:not(.dark) #main-content :is([class~="text-violet-600"], [class~="text-blue
   color: var(--zh-action);
 }
 
-/* Blue carries neutral usage; danger and success remain semantic. */
+/* Series colors describe their meaning; only failures use destructive red. */
 #main-content .recharts-text,
 #main-content .recharts-default-tooltip {
   font-family: var(--font-sans);
@@ -236,7 +241,7 @@ html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray
 
 html:not(.dark) [data-slot="dock-root"] a:hover [class~="aspect-square"][class~="bg-gray-200"] {
   background: #eef5fc;
-  color: #4d6b91;
+  color: var(--zh-action);
 }
 
 html:not(.dark) [data-slot="dock-tip"] {
@@ -254,7 +259,7 @@ html:not(.dark):has(#main-content) :is([data-slot="dialog-content"], [data-slot=
 }
 
 html:has(#main-content) :is(button, a, input, select, textarea, [role="button"]):focus-visible {
-  outline: 2px solid #7a9cbe;
+  outline: 2px solid var(--zh-blue);
   outline-offset: 3px;
 }
 
@@ -392,6 +397,15 @@ html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray
 
 html:not(.dark) #main-content .recharts-cartesian-grid-horizontal line { stroke-opacity: .8; }
 html:not(.dark) #main-content .recharts-cartesian-axis-tick-value { fill: #687b92; }
+
+html:not(.dark) #main-content [class~="bg-primary"] {
+  background-color: var(--zh-action);
+  color: #fff;
+}
+
+html:not(.dark) #main-content [class~="bg-primary"]:hover { background-color: #1e5dbf; }
+
+.dark { --chart-expense: #e8ae61; }
 
 /* Recharts retains desktop coordinates on hidden tooltips after a viewport resize. */
 #main-content .recharts-tooltip-wrapper[style*="visibility: hidden"] {

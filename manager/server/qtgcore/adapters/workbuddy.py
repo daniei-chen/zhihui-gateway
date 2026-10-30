@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .. import manager_api
+from ... import cachemetrics
 from ..config import Settings
 from .base import BaseAdapter
 from .local_settings import read_panel as _read_settings_panel
@@ -76,6 +77,15 @@ def _schema_ok(conn: sqlite3.Connection, known: set[str]) -> bool:
 
 def _reported_cache_rate(hit: int, miss: int) -> float | None:
     return round(hit / (hit + miss), 6) if hit >= 0 and miss >= 0 and hit + miss > 0 else None
+
+
+def _sql_cache_requests(conn: sqlite3.Connection, since: str, realm: str, dimension: str) -> dict:
+    epoch = int(_time.mktime(_time.strptime(since, '%Y-%m-%d')))
+    try:
+        return cachemetrics.request_rates(conn.execute, epoch, realm, dimension, normalize_models=False)
+    except sqlite3.Error:
+        # Legacy schemas cannot supply per-request cache observations.
+        return {}
 
 
 def _sql_throughput(conn: sqlite3.Connection, since: str, realm: str, dimension: str) -> dict:
@@ -751,6 +761,7 @@ class WorkBuddyAdapter(BaseAdapter):
             )
             rows = cur.fetchall()
             throughput = _sql_throughput(conn, since, realm, "model")
+            cache_requests = _sql_cache_requests(conn, since, realm, 'model')
             return [{
                 "name": r[0] or "未知",
                 "requests": _i(r[1]),
@@ -760,6 +771,7 @@ class WorkBuddyAdapter(BaseAdapter):
                 "cache_hit_tokens": _i(r[5]),
                 "cache_miss_tokens": _i(r[6]),
                 "cache_hit_rate": _reported_cache_rate(_i(r[5]), _i(r[6])),
+                **cache_requests.get(r[0], cachemetrics.UNKNOWN_REQUEST_RATE),
                 **throughput.get(r[0], {"tokens_per_sec": None, "throughput_samples": 0}),
             } for r in rows]
         except sqlite3.Error:
@@ -809,6 +821,7 @@ class WorkBuddyAdapter(BaseAdapter):
             )
             rows = cur.fetchall()
             throughput = _sql_throughput(conn, since, realm, "key")
+            cache_requests = _sql_cache_requests(conn, since, realm, 'key')
             return [{
                 "key_id": int(r[7]),
                 "name": r[0] or "未知",
@@ -819,6 +832,7 @@ class WorkBuddyAdapter(BaseAdapter):
                 "cache_hit_tokens": _i(r[5]),
                 "cache_miss_tokens": _i(r[6]),
                 "cache_hit_rate": _reported_cache_rate(_i(r[5]), _i(r[6])),
+                **cache_requests.get(r[7], cachemetrics.UNKNOWN_REQUEST_RATE),
                 **throughput.get(r[7], {"tokens_per_sec": None, "throughput_samples": 0}),
             } for r in rows]
         except sqlite3.Error:

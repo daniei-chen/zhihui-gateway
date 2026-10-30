@@ -1817,6 +1817,25 @@ def _listing_compat_models(payload: object) -> object:
 _SESSION_HEADERS = ('x-session-id', 'x-conversation-id', 'conversation-id')
 
 
+def _session_key_source(body: dict) -> str:
+    meta = body.get('metadata')
+    for container, fields in ((meta, ('conversation_id', 'conversationId')),
+                              (body, ('conversation_id', 'conversationId', 'prompt_cache_key'))):
+        if isinstance(container, dict):
+            for field in fields:
+                value = container.get(field)
+                if isinstance(value, str) and value.strip():
+                    return value
+    return ''
+
+
+def _session_key_digest(body: dict) -> str | None:
+    """Log only a digest, using the engine's explicit session-key precedence."""
+    import hashlib
+    value = _session_key_source(body)
+    return hashlib.sha256(value.strip().encode('utf-8', 'ignore')).hexdigest()[:16] if value else None
+
+
 def _stable_session_fallback(body: 'dict') -> str:
     """客户端不带会话头时，用 body 的稳定前缀生成会话键。
 
@@ -1852,10 +1871,7 @@ def _stable_session_fallback(body: 'dict') -> str:
 def _inject_session_key(body: 'dict', request: Request) -> None:
     if not isinstance(body, dict):
         return
-    if body.get('conversation_id') or body.get('conversationId'):
-        return
-    meta = body.get('metadata')
-    if isinstance(meta, dict) and (meta.get('conversation_id') or meta.get('conversationId')):
+    if _session_key_source(body):
         return
     for name in _SESSION_HEADERS:
         v = (request.headers.get(name) or '').strip()
@@ -1934,12 +1950,7 @@ async def _chat(request: Request, upstream_path: str):
 
     _inject_session_key(body, request)
     # 观测：把最终会话键的 sha256 前 16 位落库，用于验证「同会话是否固定账号」。
-    session_key = None
-    if isinstance(body, dict):
-        raw_sk = body.get('conversation_id') or body.get('conversationId')
-        if isinstance(raw_sk, str) and raw_sk.strip():
-            import hashlib as _hashlib
-            session_key = _hashlib.sha256(raw_sk.strip().encode('utf-8', 'ignore')).hexdigest()[:16]
+    session_key = _session_key_digest(body) if isinstance(body, dict) else None
 
     requested_model = body.get('model') if isinstance(body, dict) else None
     # model 必须是字符串：非字符串（对象/数组/数字）会让后面的 _map_model 与

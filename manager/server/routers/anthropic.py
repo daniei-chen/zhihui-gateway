@@ -564,6 +564,18 @@ def to_openai_request(body: dict) -> dict:
     if isinstance(body.get('metadata'), dict) and body['metadata'].get('user_id'):
         out['user'] = str(body['metadata']['user_id'])
 
+    # Keep conversation-scoped routing separate from the user-scoped identity.
+    for name in ('conversation_id', 'conversationId', 'prompt_cache_key'):
+        value = body.get(name)
+        if isinstance(value, str) and value.strip():
+            out[name] = value
+    meta = body.get('metadata')
+    if isinstance(meta, dict):
+        session_meta = {name: meta[name] for name in ('conversation_id', 'conversationId')
+                        if isinstance(meta.get(name), str) and meta[name].strip()}
+        if session_meta:
+            out['metadata'] = session_meta
+
     tools = body.get('tools')
     if isinstance(tools, list) and tools:
         out['tools'] = [
@@ -1065,6 +1077,9 @@ async def messages(request: Request):
 
     if mapped:
         payload['model'] = mapped
+    gateway._inject_session_key(payload, request)
+    session_key = gateway._session_key_digest(payload)
+
     if stream:
         payload.setdefault('stream_options', {})
         if isinstance(payload['stream_options'], dict):
@@ -1120,7 +1135,7 @@ async def messages(request: Request):
                     gateway._record(key, ip, model, mapped or '', 502,
                                     _as_int(usage.get('prompt_tokens')),
                                     _as_int(usage.get('completion_tokens')), latency,
-                                    ua, str(exc), False, usage=usage)
+                                    ua, str(exc), False, usage=usage, session_key=session_key)
                     return _err('上游返回了无法解析的响应', 502, 'api_error', code='upstream_invalid_body')
             # 整份 usage 交过去（而不是只取 credit）：扣费与提示词缓存三段
             # 都在这一份里，分开取就会出现「某条协议缓存永远是空的」（issue #69）。
@@ -1131,7 +1146,7 @@ async def messages(request: Request):
                 _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
                 latency, ua, _error_diagnostic(error_response, resp.status_code)
                 if error_response is not None else None, False,
-                usage=usage,
+                usage=usage, session_key=session_key,
             )
             if error_response is not None:
                 return error_response
@@ -1142,11 +1157,12 @@ async def messages(request: Request):
             failure = deadline_mod.classify_budget_exceeded(exc)
             latency = int((time.time() - started) * 1000)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
-                            failure.message, False)
+                            failure.message, False, session_key=session_key)
             return _err(failure.message, 502, 'api_error')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False)
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False,
+                            session_key=session_key)
             return _err(f'上游不可用：{exc}', 502, 'api_error')
 
     # ── 流式 ────────────────────────────────────────────────
@@ -1162,19 +1178,21 @@ async def messages(request: Request):
         gateway._mark_pre_stream_failure(exc)
         await gateway._close_pending_response(resp, client, budgets)
         gateway._record(key, ip, model, mapped or '', 499, 0, 0,
-                        int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+                        int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
+                        session_key=session_key)
         raise
     except deadline_mod.BudgetExceeded as exc:
         await gateway._close_pending_response(resp, client, budgets)
         failure = deadline_mod.classify_budget_exceeded(exc)
         latency = int((time.time() - started) * 1000)
         gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
-                        failure.message, True)
+                        failure.message, True, session_key=session_key)
         return _err(failure.message, 502, 'api_error')
     except Exception as exc:  # noqa: BLE001
         await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True)
+        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True,
+                        session_key=session_key)
         return _err(f'上游不可用：{exc}', 502, 'api_error')
 
     status_code = resp.status_code
@@ -1195,12 +1213,14 @@ async def messages(request: Request):
         except (asyncio.CancelledError, GeneratorExit) as exc:
             gateway._mark_pre_stream_failure(exc)
             gateway._record(key, ip, model, mapped or '', 499, 0, 0,
-                            int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
+                            int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
+                            session_key=session_key)
             raise
         except (deadline_mod.BudgetExceeded, deadline_mod.ErrorBodyTooLarge) as exc:
             gateway._mark_pre_stream_failure(exc)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0,
-                            int((time.time() - started) * 1000), ua, str(exc), True)
+                            int((time.time() - started) * 1000), ua, str(exc), True,
+                            session_key=session_key)
             code = 'upstream_timeout' if isinstance(exc, deadline_mod.BudgetExceeded) else 'upstream_invalid_body'
             return _err(str(exc), 502, 'api_error', code=code)
         except Exception:  # noqa: BLE001  读不到错误体不影响回错
@@ -1216,7 +1236,8 @@ async def messages(request: Request):
         usage = gateway._response_usage(data)
         gateway._record(key, ip, model, mapped or '', status_code,
                         _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
-                        latency, ua, _error_diagnostic(error_response, status_code), True, usage=usage)
+                        latency, ua, _error_diagnostic(error_response, status_code), True, usage=usage,
+                        session_key=session_key)
         return error_response
 
     async def gen():
@@ -1324,7 +1345,7 @@ async def messages(request: Request):
                     gateway._record(key,ip,model,mapped or '',resp.status_code,
                         _as_int(usage.get('prompt_tokens')),_as_int(usage.get('completion_tokens')),
                         int((time.time()-started)*1000),ua,error_text,True,
-                        usage=usage,first_token=first_token_ms)
+                        usage=usage,first_token=first_token_ms,session_key=session_key)
 
     return observability.ManagedStreamingResponse(gen(),cleanup=lambda:observability.close_stream(resp,client,timeout=deadline_mod.close_timeout(budgets)), status_code=200, media_type='text/event-stream')
 

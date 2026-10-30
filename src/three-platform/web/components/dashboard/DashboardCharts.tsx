@@ -53,7 +53,7 @@ export function TrendChart({
                  accessibilityLayer title={`${requestsLabel} / ${failedLabel}`}>
         <defs>
           <linearGradient id="gReq" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} />
+            <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.18} />
             <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
           </linearGradient>
         </defs>
@@ -116,7 +116,7 @@ export function FlowChart({
         <YAxis yAxisId="inc" tickLine={false} axisLine={false} fontSize={11}
                stroke="var(--chart-2)" width={52} />
         <YAxis yAxisId="exp" orientation="right" tickLine={false} axisLine={false}
-               fontSize={11} stroke="var(--destructive)" width={48} />
+               fontSize={11} stroke="var(--chart-expense)" width={48} />
         <Tooltip
           contentStyle={{
             background: 'var(--popover)',
@@ -130,7 +130,7 @@ export function FlowChart({
               name={incomeLabel} stroke="var(--chart-2)"
               strokeWidth={2} dot={false} />
         <Line yAxisId="exp" type="monotone" dataKey="expense"
-              name={expenseLabel} stroke="var(--destructive)"
+              name={expenseLabel} stroke="var(--chart-expense)"
               strokeWidth={2} dot={false} />
       </LineChart>
     </ResponsiveContainer>

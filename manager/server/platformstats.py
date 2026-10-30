@@ -46,6 +46,7 @@ def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None =
           SUM(CASE WHEN {known_cache} THEN l.cache_hit_tokens ELSE 0 END) AS hit,
           SUM(CASE WHEN {known_cache} THEN l.cache_miss_tokens ELSE 0 END) AS miss,
           SUM(CASE WHEN {known_cache} THEN 1 ELSE 0 END) AS cache_samples,
+          SUM(CASE WHEN ({known_cache}) AND l.cache_hit_tokens>0 THEN 1 ELSE 0 END) AS hit_requests,
           SUM(CASE WHEN {speed_sample} THEN l.completion_tokens ELSE 0 END) AS speed_ct,
           SUM(CASE WHEN {speed_sample} THEN l.latency_ms-COALESCE(l.first_token_ms,0)
               ELSE 0 END) AS speed_ms,
@@ -63,7 +64,7 @@ def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None =
     for raw in conn.execute(sql, args).fetchall():
         row = dict(raw)
         for field in ('requests', 'token_unknown', 'pt', 'ct', 'credit_unknown',
-                      'hit', 'miss', 'cache_samples', 'speed_ct', 'speed_ms', 'speed_samples'):
+                      'hit', 'miss', 'cache_samples', 'hit_requests', 'speed_ct', 'speed_ms', 'speed_samples'):
             if type(row[field]) is not int or not 0 <= row[field] <= MAX_COUNT:
                 raise ValueError('invalid selected key-usage evidence')
         total = row['pt'] + row['ct']
@@ -85,6 +86,10 @@ def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None =
             'cache_hit_rate': round(row['hit'] / (row['hit'] + row['miss']), 6)
                 if row['cache_samples'] else None,
             'cache_samples': row['cache_samples'],
+            'cache_hit_requests': row['hit_requests'],
+            'cache_observed_requests': row['cache_samples'],
+            'cache_request_hit_rate': round(row['hit_requests'] / row['cache_samples'], 6)
+                if row['cache_samples'] else None,
             'tokens_per_sec': round(row['speed_ct'] * 1000 / row['speed_ms'], 2)
                 if row['speed_samples'] else None,
             'throughput_samples': row['speed_samples'],

@@ -4,6 +4,7 @@ import {BASE_PATH} from './base-path';
 import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
 import {t, tp} from './i18n';
 import {platformStore, type Platform} from './platform-store';
+import {publicDemoAdapter} from './public-demo';
 import type {Realm} from './realm-context';
 import type {
   Account,
@@ -70,6 +71,7 @@ import type {
 } from './types';
 
 export const http = axios.create({
+  ...(process.env.NEXT_PUBLIC_ZHIHUI_DEMO === '1' ? {adapter: publicDemoAdapter} : {}),
   // 子路径部署时接口也挂在前缀下（反向代理剥掉前缀再转发给本服务）。
   // 这里必须用 basePath，否则所有请求都会打到域名根路径的 /api 上。
   baseURL: BASE_PATH,

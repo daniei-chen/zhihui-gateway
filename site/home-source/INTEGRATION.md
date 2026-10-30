@@ -6,6 +6,15 @@ to the serving original; the source export's concept login is not published.
 Original task and cycling scenes live in `scenes/`; run `build_scenes.py` to
 copy them into the working export. Reference-site artwork is not distributed.
 
+The pending local review replaces the flat rider with the original procedural
+Three.js scene in `src/coastal-model.js` and `src/coastal-viewer.js`.
+Run `python build_scenes.py` and `node build-coastal.mjs` in this directory.
+`scenes/connected-paths.js` and `scenes/color-review.css` are deliberately loaded
+only by the review server (`node site/tools/color-review-preview.mjs` from the
+repository root), not by the published homepage export. The task scene now has
+a deterministic context/build/test/receipt sequence rather than fake throughput.
+No production publication is authorized before the user's visual review.
+
 This directory retains the supplied authoring scripts, Three.js sources, tests,
 snapshot provenance and lockfile. `source-import.json` identifies those input
 files; it is not a claim that production has been updated.
@@ -57,8 +66,22 @@ other sources inside `site/` are refused to prevent importing the output itself.
   (including the visible-first-paint animation) are normal
   Git diffs, not claims that those edited files still match the supplied ZIP.
 - The Thinker model/poster retain CC BY-SA 4.0; Three.js and Draco retain their
-  own notices. The selected task/bicycle scenes are original local artwork;
-  the prior reference illustrations are not part of the publication closure.
+  own notices. The task scene and bicycle/environment geometry were authored
+  locally; the current local-review rider is user-requested SpongeBob fan art,
+  not an original character or a transfer of character rights. No third-party
+  character mesh/textures were downloaded. Public release of that character
+  requires a separate rights review. Prior reference illustrations are not
+  part of the publication closure.
 - Supplied historical documents describe their own test dates. New browser
   checks, release evidence and production status belong to the integration
   report, not to those historical claims.
+
+## Local Bikini Bottom Review
+
+The local riding scene now has a forward-facing articulated rider, detailed
+bicycle drivetrain and a procedural Bikini Bottom neighborhood. See
+`references/bikini-modeling.md` for source/reference provenance, geometry
+budgets, camera presets and the explicit browser/rights acceptance limits.
+Rebuild with `python build_scenes.py` and `node build-coastal.mjs` from this
+directory. These commands update only the ignored local working export, not
+the approved immutable homepage or preserved login.
