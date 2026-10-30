@@ -7,6 +7,11 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 
+test('account pages do not mount or poll the internal reward history', () => {
+  const source = fs.readFileSync(path.join(root, 'app/(main)/accounts/page.tsx'), 'utf8');
+  assert.doesNotMatch(source, /QoderCheckinHistory|checkinLogs|rewardHistoryTitle/);
+});
+
 function render(state) {
   const source = fs.readFileSync(path.join(root, 'components/common/accounts/QoderCheckinHistory.tsx'), 'utf8');
   const code = ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText;

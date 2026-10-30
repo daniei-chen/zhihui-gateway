@@ -65,7 +65,6 @@ import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {AddAccountDialog} from '@/components/common/accounts/AddAccountDialog';
-import {QoderCheckinHistory} from '@/components/common/accounts/QoderCheckinHistory';
 import {UploadAccountsButton} from '@/components/common/accounts/UploadAccountsButton';
 import {CreditCountdown} from '@/components/common/accounts/CreditCountdown';
 import {AccountNoteDialog} from '@/components/common/accounts/AccountNoteDialog';
@@ -1627,7 +1626,6 @@ function FullAccountsPage() {
       </section>
       )}
 
-      {platform === 'qoder' && <QoderCheckinHistory />}
       {/* WorkBuddy growth tasks do not apply to the other engines. */}
       {platform === 'workbuddy' && <div className="flex flex-wrap items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span>{t('accounts.movedTo')}</span>
