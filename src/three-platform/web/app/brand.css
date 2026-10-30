@@ -1,14 +1,14 @@
 /* Shared public-home visual language; preserve application and Dock behavior. */
 html:has(#main-content) {
-  --zh-paper: #f7faff;
-  --zh-ice: #eef4ff;
-  --zh-blue: #7597e9;
-  --zh-action: #557df2;
+  --zh-paper: #fdfefe;
+  --zh-ice: #f6f9fd;
+  --zh-blue: #b3cce8;
+  --zh-action: #4d6b91;
   --zh-ink: #202a3d;
-  --zh-line: #e2eaf8;
+  --zh-line: #e6edf5;
   --zh-soft: #6e727e;
   --zh-ease: cubic-bezier(.22, 1, .36, 1);
-  --zh-shadow: 0 14px 42px rgba(72, 97, 151, .045);
+  --zh-shadow: 0 14px 42px rgba(72, 97, 151, .025);
   --font-sans: "MiSans", "HarmonyOS Sans SC", var(--font-inter),
     var(--font-noto-sans-sc), "PingFang SC", "Microsoft YaHei", sans-serif;
 }
@@ -22,16 +22,16 @@ html:not(.dark):has(#main-content) {
   --popover-foreground: var(--zh-ink);
   --primary: #222b41;
   --primary-foreground: #ffffff;
-  --secondary: #f0f5ff;
-  --secondary-foreground: #344b81;
-  --muted: #f4f7fc;
+  --secondary: #f7fafe;
+  --secondary-foreground: #455d7c;
+  --muted: #fafcff;
   --muted-foreground: #687285;
-  --accent: #edf2ff;
-  --accent-foreground: #3555c4;
+  --accent: #f4f8fd;
+  --accent-foreground: #4d6b91;
   --border: var(--zh-line);
-  --input: #dbe4f2;
-  --ring: #8299f1;
-  --chart-1: #7399e8;
+  --input: #e3ebf4;
+  --ring: #7a9cbe;
+  --chart-1: #88a9ce;
   --chart-2: #529da9;
   --chart-3: #849cbf;
 }
@@ -44,9 +44,9 @@ html:has(#main-content) body {
 html:not(.dark):has(#main-content) body {
   background-color: var(--zh-paper);
   background-image:
-    radial-gradient(ellipse 70% 480px at 78% 0, rgba(208, 226, 255, .36), transparent 80%),
-    radial-gradient(ellipse 40% 700px at 0 40%, rgba(234, 242, 255, .4), transparent 85%),
-    linear-gradient(180deg, #fcfdff 0, #f7faff 800px);
+    radial-gradient(ellipse 70% 480px at 78% 0, rgba(218, 233, 250, .16), transparent 80%),
+    radial-gradient(ellipse 40% 700px at 0 40%, rgba(237, 245, 253, .14), transparent 85%),
+    linear-gradient(180deg, #ffffff 0, #fdfefe 800px);
   background-repeat: no-repeat;
 }
 
@@ -91,7 +91,7 @@ html:not(.dark):has(#main-content) body {
   width: 2rem;
   height: 2rem;
   flex-shrink: 0;
-  color: #6384ef;
+  color: #8aafd4;
   filter: drop-shadow(0 4px 7px rgba(111, 149, 226, .12));
 }
 
@@ -169,27 +169,27 @@ html:not(.dark) [data-slot="command-palette-trigger"] {
 }
 
 html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true"] {
-  color: #3655bf;
+  color: #4d6b91;
 }
 
 html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true"] > span:first-child:not(:only-child) {
-  background: #eaf0ff;
-  box-shadow: 0 1px 4px rgba(83, 111, 194, .09);
+  background: #f2f7fd;
+  box-shadow: 0 1px 4px rgba(83, 111, 154, .035);
 }
 
 /* Exact existing surface classes: not every bg-muted element is a card. */
 html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"] {
   background:
-    radial-gradient(ellipse 65% 95% at 100% 0, rgba(227, 238, 255, .3), transparent 85%),
-    linear-gradient(145deg, #ffffff, #fcfdff);
+    radial-gradient(ellipse 65% 95% at 100% 0, rgba(235, 244, 253, .16), transparent 85%),
+    linear-gradient(145deg, #ffffff, #fefeff);
   border: 1px solid var(--zh-line);
   box-shadow: var(--zh-shadow);
   transition: border-color .35s var(--zh-ease), box-shadow .35s var(--zh-ease);
 }
 
 html:not(.dark) #main-content [class~="rounded-2xl"][class~="bg-background/60"] {
-  background: #f7faff;
-  border: 1px solid #eaf0fa;
+  background: #fbfdff;
+  border: 1px solid #eef3f8;
 }
 
 #main-content [class~="tabular-nums"] {
@@ -203,8 +203,8 @@ html:not(.dark) #main-content [class~="rounded-2xl"][class~="bg-background/60"] 
   row-gap: .4rem;
 }
 
-html:not(.dark) #main-content [class~="text-violet-600"] {
-  color: #4b68c8;
+html:not(.dark) #main-content :is([class~="text-violet-600"], [class~="text-blue-600"]) {
+  color: var(--zh-action);
 }
 
 /* Blue carries neutral usage; danger and success remain semantic. */
@@ -223,20 +223,20 @@ html:not(.dark) #main-content .recharts-default-tooltip {
 html:not(.dark) [data-slot="dock-root"] > [class~="md:flex"],
 html:not(.dark) [data-slot="dock-mobile-toggle"] {
   background: rgba(255, 255, 255, .88);
-  border-color: rgba(216, 227, 247, .95);
-  box-shadow: 0 12px 42px rgba(53, 77, 125, .12), 0 1px 0 #fff inset;
+  border-color: rgba(230, 237, 245, .95);
+  box-shadow: 0 12px 42px rgba(53, 77, 125, .065), 0 1px 0 #fff inset;
   backdrop-filter: blur(18px);
 }
 
 html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray-200"] {
-  background: #edf2fc;
+  background: #f6f9fd;
   color: #425372;
   box-shadow: 0 1px 0 #fff inset;
 }
 
 html:not(.dark) [data-slot="dock-root"] a:hover [class~="aspect-square"][class~="bg-gray-200"] {
-  background: #dfe8ff;
-  color: #3659bf;
+  background: #eef5fc;
+  color: #4d6b91;
 }
 
 html:not(.dark) [data-slot="dock-tip"] {
@@ -254,7 +254,7 @@ html:not(.dark):has(#main-content) :is([data-slot="dialog-content"], [data-slot=
 }
 
 html:has(#main-content) :is(button, a, input, select, textarea, [role="button"]):focus-visible {
-  outline: 2px solid #718bec;
+  outline: 2px solid #7a9cbe;
   outline-offset: 3px;
 }
 
@@ -330,7 +330,7 @@ html:has(#main-content) .skip-link:focus {
   width: min(620px, 85vw);
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(109, 161, 255, .065), transparent 70%);
+  background: radial-gradient(circle, rgba(173, 204, 238, .025), transparent 70%);
   pointer-events: none;
   z-index: 20;
   opacity: 0;
@@ -354,44 +354,44 @@ html:not(.dark) #main-content [data-slot="stat-card"]::before {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(260px circle at var(--surface-x, 70%) var(--surface-y, 0%), rgba(133, 173, 248, .1), transparent 74%);
+  background: radial-gradient(260px circle at var(--surface-x, 70%) var(--surface-y, 0%), rgba(185, 212, 242, .045), transparent 74%);
   opacity: var(--surface-light, 0);
   transition: opacity .5s ease;
 }
 
 html:not(.dark) #main-content [data-slot="stat-card"] > div:first-child > div:last-child:has(svg) {
-  background: linear-gradient(145deg, #ffffff, #eef4ff);
-  border: 1px solid #e8effb;
+  background: linear-gradient(145deg, #ffffff, #f6f9fd);
+  border: 1px solid #eef3f8;
 }
 
 html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"]:hover {
-  border-color: #ccdafa;
-  box-shadow: 0 18px 45px rgba(76, 107, 161, .065);
+  border-color: #dce7f2;
+  box-shadow: 0 18px 45px rgba(76, 107, 161, .035);
 }
 
 html:not(.dark) #main-content [data-slot="table-header"] {
-  background: linear-gradient(90deg, #f5f8ff, #f9fbff);
+  background: linear-gradient(90deg, #fafcfe, #fdfefe);
 }
 
-html:not(.dark) #main-content [data-slot="table-head"] { color: #7b8eaf; }
-html:not(.dark) #main-content [data-slot="table-row"] { border-color: #eaf0fa; }
-html:not(.dark) #main-content [data-slot="table-body"] [data-slot="table-row"]:hover { background: #f4f8ff; }
+html:not(.dark) #main-content [data-slot="table-head"] { color: #687b92; }
+html:not(.dark) #main-content [data-slot="table-row"] { border-color: #eef3f8; }
+html:not(.dark) #main-content [data-slot="table-body"] [data-slot="table-row"]:hover { background: #f8fbfe; }
 
 html:not(.dark) #main-content [data-slot="input"],
 html:not(.dark) #main-content [data-slot="select-trigger"] {
-  border-color: #dfe8f7;
-  background-color: rgba(255, 255, 255, .82);
+  border-color: #e3ebf4;
+  background-color: rgba(255, 255, 255, .94);
   box-shadow: 0 2px 7px rgba(65, 95, 147, .02);
 }
 
 html:not(.dark) [data-slot="dock-root"] [class~="aspect-square"][class~="bg-gray-200"] {
-  background: linear-gradient(145deg, #f1f6ff, #eaf1fd);
-  border: 1px solid #e3ecfc;
-  color: #6c86b4;
+  background: linear-gradient(145deg, #fafcfe, #f3f8fc);
+  border: 1px solid #eaf1f7;
+  color: #607a98;
 }
 
 html:not(.dark) #main-content .recharts-cartesian-grid-horizontal line { stroke-opacity: .8; }
-html:not(.dark) #main-content .recharts-cartesian-axis-tick-value { fill: #8c9fbf; }
+html:not(.dark) #main-content .recharts-cartesian-axis-tick-value { fill: #687b92; }
 
 /* Recharts retains desktop coordinates on hidden tooltips after a viewport resize. */
 #main-content .recharts-tooltip-wrapper[style*="visibility: hidden"] {

@@ -295,6 +295,42 @@ class PlatformAuthTest(unittest.TestCase):
         self.assertEqual(self.finish(state).json()['status'], 'success')
         self.trae.oauth_finish.assert_awaited_once()
 
+    def test_trae_official_redirect_metadata_is_validated_then_removed(self):
+        state = self.start('trae').json()['state']
+        response = self.finish(state, callback(
+            isRedirect='true', scope='trae', userRegion='cn',
+            authCodeInfo=json.dumps({'AuthCode': 'synthetic-one-use-code',
+                                     'ExpireAt': 1793337474315, 'ExpireDuration': 600000}),
+            userInfo=json.dumps({'UserID': 'synthetic-untrusted-account',
+                                 'ScreenName': 'synthetic-display'})))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['status'], 'success')
+        self.trae.oauth_finish.assert_awaited_once()
+        from urllib.parse import parse_qs
+        forwarded = parse_qs(urlsplit(self.trae.oauth_finish.await_args.args[0]).query)
+        self.assertEqual(forwarded['loginTraceID'], [TRACE])
+        self.assertEqual(forwarded['host'], ['https://api.trae.com.cn'])
+        self.assertEqual(json.loads(forwarded['authCodeInfo'][0])['AuthCode'], 'synthetic-one-use-code')
+        for key in ('isRedirect', 'scope', 'userInfo'):
+            self.assertNotIn(key, forwarded)
+
+    def test_trae_redirect_metadata_does_not_relax_pkce_or_parameter_allowlist(self):
+        state = self.start('trae').json()['state']
+        for url in [callback(isRedirect='true', scope='another-platform'),
+                    callback(isRedirect='false', scope='trae'),
+                    callback(isRedirect='', scope='trae'),
+                    callback(isRedirect='true', scope=''),
+                    callback(isRedirect='true', scope='trae', refreshToken='synthetic-forged'),
+                    callback(isRedirect='true', scope='trae', host='https://evil.invalid'),
+                    callback(isRedirect='true', scope='trae', loginTraceID='b' * 32),
+                    callback(isRedirect='true', scope='trae') + '&scope=trae',
+                    callback(isRedirect='true', scope='trae') + '&isRedirect=true']:
+            with self.subTest(url=url):
+                response = self.finish(state, url)
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertEqual(platformauth._read(state)['status'], 'waiting')
+        self.trae.oauth_finish.assert_not_awaited()
+
     def test_trae_callback_rejects_ssrf_legacy_token_bypass_and_wrong_trace(self):
         state = self.start('trae').json()['state']
         for url in [callback(host='http://127.0.0.1:8080'),

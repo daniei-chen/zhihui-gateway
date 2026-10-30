@@ -2048,7 +2048,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               <div className="mb-3 text-[11px] text-muted-foreground">
                 {t('settings.usersNewDesc')}
               </div>
-              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
+              <div data-slot="new-user-form" className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="new-user-username" className="text-[11px] text-muted-foreground">{t('login.username')}</Label>
                   <Input id="new-user-username" autoComplete="off" value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="bg-background" />
@@ -2062,14 +2062,11 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                     aria-describedby="new-user-password-hint"
                     aria-invalid={newUser.password.length > 0 && !isManagedUserPassword(newUser.password)}
                     className="bg-background" />
-                  <p id="new-user-password-hint" className="text-[11px] text-muted-foreground">
-                    {t('settings.managedPasswordHint')}
-                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-muted-foreground">{t('settings.usersRole')}</Label>
                   <Select value={newUser.role} onValueChange={(v) => setNewUser({...newUser, role: v})}>
-                    <SelectTrigger className="bg-background" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full bg-background" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="account_admin">{t('profile.roleAccountAdmin')}</SelectItem>
                       <SelectItem value="admin">{t('profile.roleSuperAdmin')}</SelectItem>
@@ -2077,7 +2074,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   </Select>
                 </div>
                 <Button
-                  className="rounded-full"
+                  className="h-9 rounded-full"
                   disabled={busy || !newUser.username.trim() || !isManagedUserPassword(newUser.password)}
                   onClick={async () => {
                     if (!newUser.username.trim() || !newUser.password) {
@@ -2105,6 +2102,9 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   {t('keys.create')}
                 </Button>
               </div>
+              <p id="new-user-password-hint" className="mt-2 text-[11px] text-muted-foreground">
+                {t('settings.managedPasswordHint')}
+              </p>
             </div>
           )}
 

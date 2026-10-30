@@ -436,7 +436,13 @@ def validated_callback(value, session):
     if not valid:
         _deny(400, '回调地址不属于本次 Trae 授权，请复制完整地址')
     query = _query(parts)
-    if set(query) - {'loginTraceID', 'host', 'authCodeInfo', 'userInfo', 'userRegion'}:
+    if set(query) - {'loginTraceID', 'host', 'authCodeInfo', 'userInfo', 'userRegion',
+                     'isRedirect', 'scope'}:
+        _deny(400, '回调参数不符合本次 Trae PKCE 授权流程，已拒绝旧令牌导入')
+    # The native IDE authorization page includes these fixed routing hints.
+    # Validate them here, but do not give the legacy exchange parser new inputs.
+    if (('isRedirect' in query and query['isRedirect'] != 'true')
+            or ('scope' in query and query['scope'] != 'trae')):
         _deny(400, '回调参数不符合本次 Trae PKCE 授权流程，已拒绝旧令牌导入')
     trace = query.get('loginTraceID', '')
     if not trace.isascii() or not hmac.compare_digest(trace, session['engine_state']):
@@ -452,6 +458,8 @@ def validated_callback(value, session):
     # Canonicalize before passing to the legacy permissive parser: no duplicate,
     # ambiguous escaping, attacker-chosen token, or attacker-chosen exchange host.
     query['host'] = TRAE_API_HOST
+    query.pop('isRedirect', None)
+    query.pop('scope', None)
     # The legacy engine trusts userInfo.UserID ahead of the exchanged JWT. Derive
     # account identity from that token instead of allowing callback text to name
     # another account whose saved credentials would then be overwritten.
