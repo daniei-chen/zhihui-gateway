@@ -1,4 +1,4 @@
-"""Synthetic role migration and exact account-intake boundary, no provider calls."""
+"""Synthetic human roles: all-page reads, account-add-only writes, no provider calls."""
 from __future__ import annotations
 
 import copy
@@ -90,12 +90,16 @@ class HumanRolesHttpTest(unittest.TestCase):
     def signin(self, username):
         self.client.cookies.set(config.COOKIE_NAME, security.issue_token(username, 'forged-snapshot'))
 
-    def test_account_admin_cannot_read_other_surfaces_or_mutate_privileges(self):
+    def test_account_admin_can_read_panel_but_cannot_mutate_privileges(self):
         self.assertEqual(self.client.get('/api/me').json()['role'], 'account_admin')
+        for path in ('/api/users', '/api/settings/panel', '/api/settings/upstream', '/api/audit-logs'):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 200)
+        with mock.patch.object(accounts.wb2api, 'list_auth_accounts', return_value=[]), \
+             mock.patch.object(accounts.wb2api, 'get_status', new=mock.AsyncMock(return_value={'connected': True})):
+            self.assertEqual(self.client.get('/api/accounts').status_code, 200)
         for method, path, body in [
-            ('GET', '/api/accounts', None), ('GET', '/api/users', None),
-            ('GET', '/api/settings/panel', None), ('GET', '/api/settings/upstream', None),
-            ('GET', '/api/audit-logs', None), ('GET', '/api/accounts/export', None),
+            ('GET', '/api/accounts/export', None),
             ('POST', '/api/users', {'username': 'evil', 'role': 'admin', 'password': '6842097531'}),
             ('PATCH', '/api/users/alice', {'role': 'admin'}),
             ('DELETE', '/api/users/admin', None), ('POST', '/api/accounts/checkin-all', {}),
@@ -104,15 +108,15 @@ class HumanRolesHttpTest(unittest.TestCase):
             with self.subTest(method=method, path=path):
                 self.assertEqual(self.client.request(method, path, json=body).status_code, 403)
 
-    def test_account_admin_can_start_default_authorization_but_not_choose_routes_or_groups(self):
+    def test_account_admin_can_add_to_existing_groups_but_not_override_routes(self):
         with mock.patch.object(accounts, '_group', return_value={'id': 1}), \
              mock.patch.object(accounts.tencent, 'start_login', new=mock.AsyncMock(return_value={
                  'state': '', 'realm': 'cn', 'authUrl': 'https://copilot.tencent.com/'})) as provider:
             response = self.client.post('/api/auth/start', json={'realm': 'cn', 'platform': 'workbuddy'})
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(self.client.post('/api/auth/start?upstream_id=8', json={'realm': 'cn'}).status_code, 403)
+            self.assertEqual(self.client.post('/api/auth/start?upstream_id=8', json={'realm': 'cn'}).status_code, 200)
             self.assertEqual(self.client.post('/api/auth/start', json={'realm': 'cn', 'proxy': 'private'}).status_code, 403)
-            provider.assert_awaited_once()
+            self.assertEqual(provider.await_count, 2)
 
     def test_only_two_roles_can_be_created_and_root_cannot_be_demoted_or_deleted(self):
         self.signin('admin')
@@ -165,7 +169,7 @@ class HumanRolesHttpTest(unittest.TestCase):
                 self.assertEqual(self.client.get('/api/me').status_code, 401)
                 self.signin(username)
                 self.assertEqual(self.client.get('/api/me').json()['role'], role)
-                self.assertEqual(self.client.get('/api/users').status_code, 200 if role == 'admin' else 403)
+                self.assertEqual(self.client.get('/api/users').status_code, 200)
                 self.assertEqual(stored('admin'), root_before)
 
         security.migrate_user_roles()
@@ -363,13 +367,40 @@ class HumanRolesHttpTest(unittest.TestCase):
 
     def test_role_boundary_is_deny_by_default_even_for_unlisted_gets(self):
         from starlette.requests import Request
-        for path in ('/api/keys', '/api/logs', '/api/stats/summary', '/api/v1/accounts',
+        for path in ('/api/accounts/export', '/api/keys/import-local/detect',
                      '/__qtg/api/accounts', '/api/auth/poll-extra', '/api/future-read-endpoint'):
             req = Request({'type': 'http', 'method': 'GET', 'path': path, 'headers': [],
                            'query_string': b'', 'scheme': 'http', 'server': ('testserver', 80)})
             with mock.patch.object(security, '_current_user', return_value={'username': 'alice', 'role': 'account_admin'}):
                 with self.assertRaises(Exception) as error:
                     security.current_user(req)
+            self.assertEqual(error.exception.status_code, 403)
+
+    def test_all_reviewed_pages_readable_and_all_non_intake_writes_denied(self):
+        from starlette.requests import Request
+        paths = set(userroles.PANEL_READ_ROUTES) | {
+            '/api/stats/summary', '/api/stats/by-key', '/api/stats/by-model',
+            '/api/accounts/synthetic.json/credits', '/api/red-packets/42', '/api/v1/accounts'}
+        for path in paths:
+            for method in ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'):
+                req = Request({'type': 'http', 'method': method, 'path': path, 'headers': [],
+                               'query_string': b'', 'scheme': 'http', 'server': ('testserver', 80)})
+                with self.subTest(method=method, path=path), mock.patch.object(
+                        security, '_current_user', return_value={'username': 'alice', 'role': 'account_admin'}):
+                    if method in ('GET', 'HEAD'):
+                        self.assertEqual(security.current_user(req)['role'], 'account_admin')
+                    else:
+                        with self.assertRaises(Exception) as error:
+                            security.current_user(req)
+                        self.assertEqual(error.exception.status_code, 403)
+
+    def test_forced_get_refresh_is_not_a_viewing_permission(self):
+        from starlette.requests import Request
+        for query in (b'force=true', b'force=1', b'force=yes'):
+            req = Request({'type': 'http', 'method': 'GET', 'path': '/api/accounts/example/credits',
+                           'headers': [], 'query_string': query, 'scheme': 'http', 'server': ('testserver', 80)})
+            with mock.patch.object(security, '_current_user', return_value={'username': 'alice', 'role': 'account_admin'}):
+                with self.assertRaises(Exception) as error: security.current_user(req)
             self.assertEqual(error.exception.status_code, 403)
 
     def test_parallel_revocations_cannot_restore_an_older_session_version(self):

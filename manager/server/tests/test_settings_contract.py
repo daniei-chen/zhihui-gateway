@@ -166,12 +166,12 @@ MATRIX = (
     ('POST', '/api/settings/upstash/reload', 'session_admin', 'skip', None),
     ('GET', '/api/settings/model-map', 'current_user', 'ok', None),
     ('POST', '/api/settings/model-map', 'admin', 'ok', {}),
-    ('GET', '/api/settings/github-token', 'admin', 'ok', None),
+    ('GET', '/api/settings/github-token', 'panel_reader', 'ok', None),
     ('PUT', '/api/settings/github-token', 'admin', 'ok', {'token': ''}),
-    ('GET', '/api/settings/github-mirror', 'admin', 'ok', None),
+    ('GET', '/api/settings/github-mirror', 'panel_reader', 'ok', None),
     ('PUT', '/api/settings/github-mirror', 'admin', 'ok', {'mirror': ''}),
     ('GET', '/api/settings/panel', 'current_user', 'ok', None),
-    ('GET', '/api/users', 'session_admin', 'ok', None),
+    ('GET', '/api/users', 'session_reader', 'ok', None),
     ('POST', '/api/users', 'session_admin', 'skip', None),
     ('PATCH', '/api/users/{username}', 'session_admin', 'skip', None),
     ('DELETE', '/api/users/{username}', 'session_admin', 'skip', None),
@@ -191,12 +191,12 @@ MATRIX = (
     ('GET', '/api/v1/audit', 'current_user', 'skip', None),
     ('POST', '/api/v1/cache/invalidate', 'current_user', 'service_503', None),
     # ── /api/system/* ────────────────────────────────────────────────────
-    ('GET', '/api/system/configuration', 'admin', 'ok', None),
+    ('GET', '/api/system/configuration', 'panel_reader', 'ok', None),
     # U16 新增的配置四源对照（只读、仅管理员）。登记在这里是为了让
     # `test_matrix_covers_every_route_in_scope` 继续有效：将来任何任务在
     # 这三个模块里加端点，都必须同时在这里补一行身份契约。
-    ('GET', '/api/system/config', 'admin', 'ok', None),
-    ('GET', '/api/system/drain', 'admin', 'ok', None),
+    ('GET', '/api/system/config', 'panel_reader', 'ok', None),
+    ('GET', '/api/system/drain', 'panel_reader', 'ok', None),
     ('POST', '/api/system/drain', 'session_admin', 'skip', None),
     ('GET', '/api/system/update-status', 'current_user', 'ok', None),
     ('POST', '/api/system/update', 'session_admin', 'skip', None),
@@ -213,6 +213,8 @@ MATRIX = (
 EXPECTED_GATE = {
     'current_user': {'current_user'},
     'admin': {'require_admin'},
+    'panel_reader': {'require_panel_reader'},
+    'session_reader': {'require_session_reader'},
     'session_admin': {'require_session_admin'},
     'admin_or_read_scope': {'require_admin_or_read_scope'},
 }

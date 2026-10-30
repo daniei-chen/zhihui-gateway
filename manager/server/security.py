@@ -789,6 +789,10 @@ def current_user(request: Request) -> dict:
     if user.get('role') == userroles.ACCOUNT_ADMIN and not user.get('scope'):
         if not userroles.account_route_allowed(request.method, request.url.path):
             raise HTTPException(status_code=403, detail='管理员仅可添加账号，其他操作需要超级管理员权限')
+        # This GET can force a provider query and credential renewal. Ordinary
+        # viewing may use the cache, but may not request the privileged refresh.
+        if request.url.path.rstrip('/').endswith('/credits') and request.query_params.get('force', '').lower() not in ('', '0', 'false', 'off', 'no'):
+            raise HTTPException(status_code=403, detail='强制刷新积分需要超级管理员权限')
     # scope=keys is a service boundary, not a generic viewer credential. Keep
     # even read-only account/log/settings endpoints outside its authority.
     if user.get('scope') == 'keys':
@@ -962,6 +966,22 @@ def require_admin(user: dict = Depends(current_user)) -> dict:
     return user
 
 
+def require_panel_reader(user: dict = Depends(current_user)) -> dict:
+    """Reviewed read responses for both human roles, never a write dependency."""
+    if user.get('role') in userroles.HUMAN_ROLES and not user.get('scope'):
+        return user
+    # Preserve existing administrator service access where it was supported.
+    if user.get('role') == 'admin':
+        return user
+    raise HTTPException(status_code=403, detail='需要管理员权限')
+
+
+def require_session_reader(request: Request, user: dict = Depends(require_panel_reader)) -> dict:
+    if getattr(request.state, 'token_id', None) is not None or user.get('scope'):
+        raise HTTPException(status_code=403, detail='该接口不接受 API Token，请用会话登录后操作')
+    return user
+
+
 def require_keys_writer(user: dict = Depends(current_user)) -> dict:
     """密钥管理写操作：admin，或 scope=keys 的内部服务令牌（K01-S2）。
 
@@ -975,18 +995,13 @@ def require_keys_writer(user: dict = Depends(current_user)) -> dict:
 
 
 def require_admin_or_read_scope(user: dict = Depends(current_user)) -> dict:
-    """管理员，或 scope=read 的内部只读服务令牌（K26 http 读通道）。
+    """两种真人管理员，或 scope=read 的内部只读服务令牌。
 
-    为什么不用 `current_user` 直接了事：`require_admin` 保护的只读端点里，有的
-    还带**敏感内容**（如 `/api/audit-logs` 含用户名与来源 IP）。直接降到
-    `current_user` 会把 `viewer` 会话也放进来——那是扩大人类用户权限，不是本任务
-    要的东西；而 `scope=read` 的令牌本来就是 K26 的只读消费方（白名单里已经显式
-    包含这些路径）。因此这里只额外放行 **scope=read**，viewer/readonly 一律不动。
-
-    `scope=read` 的"只能 GET、不能碰凭据面/用户面"由 `current_user` 的白名单先
-    拦一次，本依赖不重复实现，也不绕过它。
+    已审查的审计读取同时允许 account_admin 真人会话；历史 viewer 保持原权限，
+    机器 scope=read 继续由 current_user 的路径／方法白名单约束。
     """
-    if user.get('role') == 'admin' or user.get('scope') == 'read':
+    if (user.get('role') == 'admin' or user.get('scope') == 'read'
+            or (user.get('role') == userroles.ACCOUNT_ADMIN and not user.get('scope'))):
         return user
     raise HTTPException(status_code=403, detail='需要管理员或只读服务令牌')
 

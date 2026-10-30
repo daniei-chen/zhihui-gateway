@@ -72,7 +72,10 @@ def create_packet(body: PacketIn, request: Request,
 @router.get('')
 def list_packets(user: dict = Depends(security.current_user)) -> list[dict]:
     """红包列表（不含明文 key —— 库里也没有）。"""
-    return redpacket.list_packets()
+    rows = redpacket.list_packets()
+    if user.get('role') == 'account_admin':
+        rows = [{**row, 'code': ''} for row in rows]
+    return rows
 
 
 @router.get('/{packet_id}')
@@ -82,6 +85,8 @@ def packet_detail(packet_id: int,
     out = redpacket.packet_detail(packet_id)
     if out is None:
         raise HTTPException(status_code=404, detail='红包不存在')
+    if user.get('role') == 'account_admin':
+        out = {**out, 'code': ''}
     return out
 
 

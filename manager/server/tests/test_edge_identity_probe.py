@@ -83,6 +83,14 @@ class EdgeIdentityProbeTest(unittest.TestCase):
         security.save_users(cfg)
         self.assertEqual(self.client.get('/api/authz/probe', headers=cookie).status_code, 401)
 
+    def test_account_admin_bridge_is_read_only_not_an_add_only_dead_end(self):
+        cookie = self.cookie()
+        cfg = security.load_users()
+        cfg['users'][0]['role'] = 'account_admin'
+        security.save_users(cfg)
+        ident = self.probe(cookie)
+        self.assertEqual((ident['role'], ident['scopes']), ('viewer', ['read']))
+
     def test_token_class_scope_and_stable_subject(self):
         for scope, role, scopes in [('admin', 'admin', ['*']),
                                    ('readonly', 'viewer', ['read']),

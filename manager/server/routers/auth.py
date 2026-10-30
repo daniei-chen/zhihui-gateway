@@ -26,7 +26,7 @@ def readyz():
     return JSONResponse({'ok':result['ok']},status_code=200 if result['ok'] else 503)
 
 @router.get('/operations/health')
-def operations_health(user:dict=Depends(security.require_admin)):
+def operations_health(user:dict=Depends(security.require_panel_reader)):
     from .. import operational
     return operational.status()
 

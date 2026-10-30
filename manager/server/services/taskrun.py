@@ -325,7 +325,7 @@ async def available_async() -> tuple[bool, str]:
     return await asyncio.to_thread(available)
 
 
-def status() -> dict:
+def status(*, inspect_runtime: bool = True) -> dict:
     """当前/上次运行状态（供界面轮询）。
 
     同步版本：路由层是 `def`（FastAPI 会丢进线程池），所以这里阻塞是安全的。
@@ -337,7 +337,12 @@ def status() -> dict:
     # 界面默认展示它（用户看不出 `Sequential_Tasks_2: query 1/1 -> 可点亮…` 的
     # 要点），原文仍在「原文」页签里可查。
     snap['tasks'] = summarize_tasks(snap['lines'])
-    snap['available'], snap['unavailable_reason'] = available()
+    if inspect_runtime:
+        snap['available'], snap['unavailable_reason'] = available()
+    else:
+        # A read-only page must not extract scripts or inspect a container.
+        snap['available'] = False
+        snap['unavailable_reason'] = 'Read-only view; task execution requires a super administrator.'
     snaps = db.get_setting('task_claim_schedule') or {}
     snap['schedule'] = snaps if isinstance(snaps, dict) else {}
     return snap

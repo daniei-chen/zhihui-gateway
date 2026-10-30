@@ -317,7 +317,7 @@ export default function PlaygroundPage() {
         <LoadError message={t('state.partialFailed')} onRetry={reloadModels} />
       )}
 
-      {!isAdmin ? (
+      {!isAdmin && (
         <div className="flex items-start gap-2.5 rounded-[20px] border border-amber-500/30 bg-amber-500/10 p-4 text-xs">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <div className="space-y-1">
@@ -327,7 +327,8 @@ export default function PlaygroundPage() {
             </div>
           </div>
         </div>
-      ) : (
+      )}
+      {(
         <>
           {/* 对话区。不加卡片底色：消息直接落在页面背景上更清爽，
               也让输入框成为视觉焦点（原先整块 bg-muted 显得很重）。 */}

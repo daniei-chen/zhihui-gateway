@@ -7,6 +7,7 @@ import type {DailyPlan, DailyTask, DailyTaskConfig, RefreshPlan} from '@/lib/typ
 import {fmtDateTime} from '@/lib/format';
 import {notify} from '@/lib/toast';
 import {useT} from '@/lib/i18n/provider';
+import {useAuth} from '@/lib/auth-context';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
@@ -68,8 +69,9 @@ function HourSelect({value, onChange, ariaLabel}: {
  */
 export function RefreshPlanCard({onRan}: {onRan?: () => void}) {
   const t = useT();
+  const {isAdmin} = useAuth();
   return (
-    <section className="space-y-3 rounded-[20px] bg-muted px-3.5 py-3">
+    <fieldset disabled={!isAdmin} className="min-w-0 space-y-3 rounded-[20px] bg-muted px-3.5 py-3">
       <div className="flex items-center gap-2">
         <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="text-sm font-medium">{t('tasks.planCardTitle')}</div>
@@ -78,7 +80,7 @@ export function RefreshPlanCard({onRan}: {onRan?: () => void}) {
       <div className="border-t border-border/60 pt-3">
         <DailyTasksSection onRan={onRan} />
       </div>
-    </section>
+    </fieldset>
   );
 }
 

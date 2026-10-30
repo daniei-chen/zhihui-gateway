@@ -101,10 +101,8 @@ export function ProxyPanel() {
   }, []);
 
   useEffect(() => {
-    // 非管理员不拉列表：接口都是 require_session_admin（脱敏串里带着代理用户名），
-    // 拉了只会吃 403 并弹一条没有可行动信息的报错（与其它设置面板一致）。
-    if (isAdmin) void load();
-  }, [load, isAdmin]);
+    void load();
+  }, [load]);
 
   async function savePool(patch: Partial<ProxyPool>) {
     if (!pool) return;
@@ -274,17 +272,6 @@ export function ProxyPanel() {
     }
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="rounded-[20px] bg-muted p-8 text-center text-sm">
-        <div className="font-medium">{t('settings.proxyAdminRequired')}</div>
-        <div className="mx-auto mt-2 max-w-[38rem] text-xs text-muted-foreground">
-          {t('settings.proxyAdminRequiredDesc')}
-        </div>
-      </div>
-    );
-  }
-
   const shown = routes.filter((r) => {
     const needle = query.trim().toLowerCase();
     return !needle || r.name.toLowerCase().includes(needle)
@@ -306,7 +293,8 @@ export function ProxyPanel() {
         : 'settings.proxyGlobalSourceNone';
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={!isAdmin} className="min-w-0 space-y-4">
+      {!isAdmin && <p className="text-xs text-muted-foreground">{t('settings.readonlyNote')}</p>}
       {/* ── 池配置 + 线路表 ── */}
       <div className="rounded-[20px] bg-muted p-4">
         <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -788,6 +776,6 @@ export function ProxyPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </fieldset>
   );
 }

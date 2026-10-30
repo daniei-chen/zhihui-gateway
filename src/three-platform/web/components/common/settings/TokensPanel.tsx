@@ -61,27 +61,13 @@ export function TokensPanel() {
   }, []);
 
   useEffect(() => {
-    // 非管理员不拉列表：这几个接口都是 require_session_admin，拉了只会吃 403，
-    // 弹出的报错对用户没有任何可行动信息（与「设置」页其它面板的处置一致：
-    // 只读账号看到的是「为什么看不到」而不是一次失败请求）。
-    if (isAdmin) void load();
-  }, [load, isAdmin]);
-
-  if (!isAdmin) {
-    return (
-      <div className="rounded-[20px] bg-muted p-8 text-center text-sm">
-        <div className="font-medium">{t('settings.tokensAdminRequired')}</div>
-        <div className="mx-auto mt-2 max-w-[38rem] text-xs text-muted-foreground">
-          {t('settings.tokensAdminRequiredDesc')}
-        </div>
-      </div>
-    );
-  }
+    void load();
+  }, [load]);
 
   return (
     <div className="space-y-4">
       {/* ── 新建 ── */}
-      <div className="rounded-[20px] bg-muted p-4">
+      {isAdmin && <div className="rounded-[20px] bg-muted p-4">
         <div className="mb-1 text-sm font-medium">{t('settings.tokensNew')}</div>
         <div className="mb-3 text-[11px] text-muted-foreground">{t('settings.tokensNewDesc')}</div>
         <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
@@ -159,10 +145,10 @@ export function TokensPanel() {
             {t('keys.create')}
           </Button>
         </div>
-      </div>
+      </div>}
 
       {/* ── 明文（仅此一次）── */}
-      {created && (
+      {isAdmin && created && (
         <div className="rounded-[20px] border border-amber-500/40 bg-amber-500/5 p-4">
           <div className="mb-1 text-sm font-medium">{t('settings.tokensCreated')}</div>
           <div className="mb-2 text-[11px] text-muted-foreground">
@@ -209,9 +195,9 @@ export function TokensPanel() {
               <TableHead className="text-[11px] text-muted-foreground">
                 {t('settings.tokensColLastUsed')}
               </TableHead>
-              <TableHead className="pr-4 text-right text-[11px] text-muted-foreground">
+              {isAdmin && <TableHead className="pr-4 text-right text-[11px] text-muted-foreground">
                 {t('accounts.colActions')}
-              </TableHead>
+              </TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -248,7 +234,7 @@ export function TokensPanel() {
                       }`
                     : t('settings.tokensNeverUsed')}
                 </TableCell>
-                <TableCell className="pr-4 text-right">
+                {isAdmin && <TableCell className="pr-4 text-right">
                   <div className="flex justify-end gap-1">
                     <Button
                       variant="ghost"
@@ -293,7 +279,7 @@ export function TokensPanel() {
                       }
                     />
                   </div>
-                </TableCell>
+                </TableCell>}
               </TableRow>
             ))}
           </TableBody>

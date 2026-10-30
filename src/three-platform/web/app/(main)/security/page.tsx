@@ -130,7 +130,7 @@ const EMPTY_LOGS: IpAccessLog[] = [];
 const EMPTY_AUDIT: AuditLog[] = [];
 
 export default function SecurityPage() {
-  const {isAdmin} = useAuth();
+  const {isAdmin, role} = useAuth();
   const t = useT();
 
   /**
@@ -154,8 +154,8 @@ export default function SecurityPage() {
     config: () => securityApi.config(),
     rules: () => securityApi.rules(),
     logs: () => securityApi.logs(200),
-    ...(isAdmin ? {audit: () => settingsApi.auditLogs(200)} : {}),
-  }, [isAdmin]);
+    ...(isAdmin || role === 'account_admin' ? {audit: () => settingsApi.auditLogs(200)} : {}),
+  }, [isAdmin, role]);
 
   /** null = 这份数据还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const config: SecurityConfig | null = values.config ?? null;

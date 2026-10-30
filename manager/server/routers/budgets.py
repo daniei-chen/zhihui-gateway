@@ -11,7 +11,7 @@ class Resolution(BaseModel):
     reason: str = Field(min_length=1,max_length=500)
 
 @router.get('/unresolved')
-def unresolved(user=Depends(security.require_admin)):
+def unresolved(user=Depends(security.require_panel_reader)):
     """未结算预留 + unknown 分类汇总（U02）。
 
     返回结构向后兼容（`items` 原样保留），新增 `summary`：

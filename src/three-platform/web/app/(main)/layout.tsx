@@ -1,21 +1,18 @@
 'use client';
 
-import {memo, useEffect, useState} from 'react';
-import {usePathname, useRouter} from 'next/navigation';
+import {memo, useEffect} from 'react';
+import {useRouter} from 'next/navigation';
 import {ManagementBar} from '@/components/common/layout/ManagementBar';
 import {CommandPalette} from '@/components/common/layout/CommandPalette';
 import {RealmToggle} from '@/components/common/layout/RealmToggle';
 import {PlatformToggle} from '@/components/common/layout/PlatformToggle';
 import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
-import {Button} from '@/components/ui/button';
 import {BrandHome} from '@/components/common/layout/BrandHome';
 import {ConsoleAtmosphere} from '@/components/common/layout/ConsoleAtmosphere';
 import {RealmProvider} from '@/lib/realm-context';
 import {PlatformProvider, PlatformScope} from '@/lib/platform-context';
 import {useAuth} from '@/lib/auth-context';
 import {useT} from '@/lib/i18n/provider';
-import {errText} from '@/lib/api';
-import {notify} from '@/lib/toast';
 
 const MemoizedManagementBar = memo(ManagementBar);
 
@@ -24,27 +21,14 @@ export default function MainLayout({
 }: {
   children: React.ReactNode
 }) {
-  const {me, loading, logout} = useAuth();
+  const {me, loading} = useAuth();
   const router = useRouter();
-  const pathname = usePathname();
-  const atIntake = pathname.replace(/\/+$/, '') === '/accounts';
-  const limited = me?.role === 'account_admin';
   const t = useT();
-  const [loggingOut, setLoggingOut] = useState(false);
-
-  async function signOut() {
-    if (loggingOut) return;
-    setLoggingOut(true);
-    try { await logout(); }
-    catch (error) { notify.err(errText(error)); }
-    finally { setLoggingOut(false); }
-  }
 
   // Do not mount protected pages until the authoritative role is known.
   useEffect(() => {
     if (!loading && !me) router.replace('/login');
-    else if (!loading && limited && !atIntake) router.replace('/accounts');
-  }, [loading, me, router, limited, atIntake]);
+  }, [loading, me, router]);
 
   return (
     <RealmProvider>
@@ -60,7 +44,7 @@ export default function MainLayout({
         <a href="#main-content" className="skip-link">
           {t('common.skipToContent')}
         </a>
-        {!loading && me && !limited && <MemoizedManagementBar />}
+        {!loading && me && <MemoizedManagementBar />}
         <div className="flex flex-1 flex-col">
           <div className="@container/main flex flex-1 flex-col gap-2">
             <div className="flex min-h-0 flex-1 flex-col px-4 pt-12 py-8 sm:px-6 md:px-8 lg:px-12">
@@ -77,12 +61,11 @@ export default function MainLayout({
                 <div className="zh-console-header">
                   <BrandHome />
                   <div className="zh-console-controls">
-                    {!loading && me && !limited && <CommandPalette />}
+                    {!loading && me && <CommandPalette />}
                     {/* 平台（WorkBuddy / Qoder / Trae）是大维度，版本是它下面的细分 */}
                     <PlatformToggle />
                     <RealmToggle />
                     <LanguageToggle />
-                    {limited && <Button variant="outline" className="rounded-full text-xs" disabled={loggingOut} onClick={signOut}>{t('profile.logout')}</Button>}
                   </div>
                 </div>
                 {/*
@@ -93,7 +76,7 @@ export default function MainLayout({
                   挂载用的是 **epoch** 而不是 platform：见 lib/platform-context.tsx 的
                   说明——水合到持久化平台不算「切换」，否则首屏数据会被请求两遍。
                 */}
-                <PlatformScope>{!loading && me && (!limited || atIntake) ? children : null}</PlatformScope>
+                <PlatformScope>{!loading && me ? children : null}</PlatformScope>
               </main>
             </div>
           </div>

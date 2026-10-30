@@ -65,7 +65,6 @@ import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {AddAccountDialog} from '@/components/common/accounts/AddAccountDialog';
-import {AccountIntake} from '@/components/common/accounts/AccountIntake';
 import {QoderCheckinHistory} from '@/components/common/accounts/QoderCheckinHistory';
 import {UploadAccountsButton} from '@/components/common/accounts/UploadAccountsButton';
 import {CreditCountdown} from '@/components/common/accounts/CreditCountdown';
@@ -117,16 +116,16 @@ const PAGE_SIZE = 20;
 const groupOf = (a: Account) => availabilityGroup(availabilityOf(a));
 
 export default function AccountsPage() {
-  const {role, loading, me} = useAuth();
+  const {loading, me} = useAuth();
   if (loading || !me) return null;
-  return role === 'account_admin' ? <AccountIntake /> : <FullAccountsPage />;
+  return <FullAccountsPage />;
 }
 
 function FullAccountsPage() {
   const {realm, label: realmName} = useRealm();
   const {platform, label: platformName} = usePlatform();
   const t = useT();
-  const {isAdmin} = useAuth();
+  const {isAdmin, canAddAccounts} = useAuth();
   const [addOpen, setAddOpen] = useState(false);
   const [proxyRoutes, setProxyRoutes] = useState<string[] | null>(null);
   // 备注编辑（issue #67）：记的是**哪个账号**而不是布尔——弹窗要以该账号当前的
@@ -1268,7 +1267,7 @@ function FullAccountsPage() {
             {isAdmin && (
               <UploadAccountsButton upstreamId={groupId} groups={groups} onSuccess={reloadAll} />
             )}
-            {isAdmin && (
+            {canAddAccounts && (
               <Button size="sm" className="rounded-full" onClick={() => setAddOpen(true)}>
                 <Plus />
                 {t('accounts.addAccount')}
@@ -1568,7 +1567,7 @@ function FullAccountsPage() {
             description={isAdmin ? t('accounts.emptyDescAdmin') : t('accounts.emptyDescViewer')}
             className="flex flex-col items-center justify-center py-16 text-center"
           >
-            {isAdmin && (
+            {canAddAccounts && (
               <Button className="mt-4 rounded-full" onClick={() => setAddOpen(true)}>
                 <Plus />
                 {t('accounts.addAccount')}

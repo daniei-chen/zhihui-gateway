@@ -496,8 +496,8 @@ export function UpdatePanel() {
       )}
 
       {/* GitHub Token（issue #205）：未认证 60 次/小时/IP，共享出口很容易被限流 */}
-      {isAdmin && (
-        <div className="rounded-[20px] bg-muted p-4">
+      {(
+        <fieldset disabled={!isAdmin} className="rounded-[20px] bg-muted p-4">
           <div className="mb-1 text-xs font-medium">{t('updatePanel.ghTitle')}</div>
           <div className="mb-2 text-[11px] leading-4 text-muted-foreground">
             <RichText text={t('updatePanel.ghDesc')} />
@@ -533,12 +533,12 @@ export function UpdatePanel() {
                 ? t('updatePanel.ghConfigured', {masked: gh.masked})
                 : t('updatePanel.ghNotSet')}
           </div>
-        </div>
+        </fieldset>
       )}
 
       {/* GitHub 镜像（issue #216）：国内机器直连 GitHub 超时时用它加速 */}
-      {isAdmin && (
-        <div className="rounded-[20px] bg-muted p-4">
+      {(
+        <fieldset disabled={!isAdmin} className="rounded-[20px] bg-muted p-4">
           <div className="mb-1 text-xs font-medium">{t('updatePanel.mirrorTitle')}</div>
           <div className="mb-2 text-[11px] leading-4 text-muted-foreground">
             <RichText text={t('updatePanel.mirrorDesc')} />
@@ -589,7 +589,7 @@ export function UpdatePanel() {
                 ? t('updatePanel.mirrorActive', {value: mirror.mirror})
                 : t('updatePanel.mirrorNone')}
           </div>
-        </div>
+        </fieldset>
       )}
 
       {/* 本次检测失败、值来自上次成功结果：必须说明，不能让人以为「已经是最新」 */}

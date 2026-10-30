@@ -59,8 +59,7 @@ def assertion(request: Request, user: dict) -> str:
     else:
         sub, method = str(user.get('username') or ''), 'edge_session'
         role = 'admin' if user.get('role') == 'admin' else 'viewer'
-        scopes = (['accounts:add'] if user.get('role') == 'account_admin' else
-                  ['*'] if role == 'admin' else ['read'])
+        scopes = ['*'] if role == 'admin' else ['read']
     if not sub:
         raise HTTPException(status_code=401, detail='未登录')
     now = int(time.time())

@@ -94,7 +94,7 @@ class DriftAllSourceRedactionTest(unittest.TestCase):
     def test_real_endpoint_never_serializes_sensitive_duplicate_or_source_values(self):
         original = dict(main.app.dependency_overrides)
         try:
-            main.app.dependency_overrides[security.require_admin] = lambda: {'role': 'admin', 'username': 'fixture'}
+            main.app.dependency_overrides[security.require_panel_reader] = lambda: {'role': 'admin', 'username': 'fixture'}
             name = 'WB_ADMIN_PASSWORD'
             unit = {'declared': {name: self.SENTINEL}, 'duplicates': {
                 name: [{'file': 'a.conf', 'value': self.SENTINEL},
@@ -191,7 +191,7 @@ class TaskStatusFilesystemFailureTest(unittest.TestCase):
     def test_real_read_endpoint_survives_permission_error_without_task_execution(self):
         original = dict(main.app.dependency_overrides)
         try:
-            main.app.dependency_overrides[security.require_admin] = lambda: {'role': 'admin', 'username': 'fixture'}
+            main.app.dependency_overrides[security.require_panel_reader] = lambda: {'role': 'admin', 'username': 'fixture'}
             with mock.patch.object(taskrun, '_script_path', side_effect=PermissionError('synthetic')), \
                  mock.patch.object(taskrun.db, 'get_setting', return_value={}), \
                  mock.patch('subprocess.run') as spawn:

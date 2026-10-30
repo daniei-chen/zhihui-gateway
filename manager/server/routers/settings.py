@@ -118,7 +118,7 @@ def save_model_map(body: dict[str, str], user: dict = Depends(security.require_a
 
 # ── GitHub Token（版本检测 / 一键更新）────────────────────
 @router.get('/settings/github-token')
-def get_github_token(user: dict = Depends(security.require_admin)) -> dict:
+def get_github_token(user: dict = Depends(security.require_panel_reader)) -> dict:
     """读当前生效的 GitHub Token（**只回掩码**）。
 
     为什么只给管理员：它是凭据，能操作对应的 GitHub 账号配额；普通用户不需要它。
@@ -154,7 +154,7 @@ def save_github_token(body: dict, user: dict = Depends(security.require_admin)) 
 
 # ── GitHub 镜像（issue #216）─────────────────────────────────
 @router.get('/settings/github-mirror')
-def get_github_mirror(user: dict = Depends(security.require_admin)) -> dict:
+def get_github_mirror(user: dict = Depends(security.require_panel_reader)) -> dict:
     """当前生效的 GitHub 镜像基址 + 来源（面板 / 环境变量 / 未配置）。"""
     env_value = updater.normalize_mirror(os.environ.get('WB_GITHUB_MIRROR') or '')
     stored = updater.stored_github_mirror()
@@ -289,9 +289,7 @@ def settings_panel(user: dict = Depends(security.current_user)) -> dict:
 
 
 @router.get('/users')
-def list_users(user: dict = Depends(security.require_session_admin)) -> list[dict]:
-    if user.get('role') != 'admin' or user.get('scope'):
-        raise HTTPException(status_code=403, detail='用户管理仅对超级管理员开放')
+def list_users(user: dict = Depends(security.require_session_reader)) -> list[dict]:
     return _public(security.load_users())
 
 

@@ -87,7 +87,7 @@ type DockPositions = Partial<Record<DockViewport, StoredDockPosition>>;
 
 export function ManagementBar() {
   const themeUtils = useThemeUtils();
-  const {me, isAdmin, logout} = useAuth();
+  const {me, isAdmin, canAddAccounts, logout} = useAuth();
   const t = useT();
   const [mounted, setMounted] = useState(false);
   const [dockViewport, setDockViewport] = useState<DockViewport>('desktop');
@@ -644,14 +644,14 @@ export function ManagementBar() {
           // 角色、可访问名称与键盘操作（K38）：否则 Tab 永远到不了、读屏只会
           // 念「分组」，而它其实是「快速添加账号」的入口。
           role="button"
-          tabIndex={isAdmin ? 0 : -1}
+          tabIndex={canAddAccounts ? 0 : -1}
           aria-label={t('nav.quickAdd')}
-          aria-disabled={!isAdmin}
+          aria-disabled={!canAddAccounts}
           onClick={() => {
-            if (isAdmin) setAddOpen(true);
+            if (canAddAccounts) setAddOpen(true);
           }}
           onKeyDown={(event) => {
-            if (!isAdmin) return;
+            if (!canAddAccounts) return;
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
               setAddOpen(true);
@@ -752,7 +752,7 @@ export function ManagementBar() {
                             cookie 立即失效**，而不只是清掉本机这一个。用于怀疑会话被人
                             拿到（在别人电脑上登过、旧设备没退、备份里有 cookie）——
                             不必改密码（那会连带影响下游配置）。 */}
-                        <div className="mt-2 flex justify-end">
+                        {isAdmin && <div className="mt-2 flex justify-end">
                           <ConfirmDialog
                             title={t('profile.revokeTitle')}
                             description={t('profile.revokeDesc')}
@@ -781,7 +781,7 @@ export function ManagementBar() {
                               </Button>
                             }
                           />
-                        </div>
+                        </div>}
 
                         <Separator />
 

@@ -654,8 +654,8 @@ async def auth_start(
     user = security.authorization_owner(user)
     platform = platformauth.platform_for(request, body)
     r = platformauth.realm_from(request, body, realm)
-    if user.get('role') == 'account_admin' and (upstream_id is not None or (body or {}).get('proxy')):
-        raise HTTPException(status_code=403, detail='管理员添加账号仅使用默认账号池和默认线路')
+    if user.get('role') == 'account_admin' and (body or {}).get('proxy'):
+        raise HTTPException(status_code=403, detail='管理员添加账号仅使用默认线路')
     if platform != 'workbuddy':
         if request is None:
             raise HTTPException(status_code=400, detail='授权缺少平台请求上下文')
@@ -1784,9 +1784,9 @@ _provisioned_states: dict[str, float] = {}
 
 
 @router.get('/task-run')
-def task_run_status(user: dict = Depends(security.require_admin)) -> dict:
+def task_run_status(user: dict = Depends(security.require_panel_reader)) -> dict:
     """当前/上次执行状态与输出尾部（界面轮询）。"""
-    return taskrun.status()
+    return taskrun.status(inspect_runtime=user.get('role') == 'admin')
 
 
 @router.post('/task-run')
@@ -1827,7 +1827,7 @@ async def task_run_stop(user: dict = Depends(security.require_admin)) -> dict:
 
 
 @router.get('/task-claim-schedule')
-def task_claim_schedule_get(user: dict = Depends(security.require_admin)) -> dict:
+def task_claim_schedule_get(user: dict = Depends(security.require_panel_reader)) -> dict:
     """定时领奖配置（仅幂等领奖，不含点亮）。"""
     return taskrun.get_schedule()
 

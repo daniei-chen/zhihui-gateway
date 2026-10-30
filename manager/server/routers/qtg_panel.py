@@ -178,6 +178,14 @@ async def settings(request: Request,
         'features': ['unified-contract', 'manager-session-auth', 'hmac-audit-chain',
                      'prometheus-metrics', 'single-flight-cache', 'circuit-breaker'],
     }
+    if user.get('role') == 'account_admin':
+        # Upstream settings objects may grow new credential fields. A page read
+        # is not authority to receive raw engine settings or notification URLs.
+        keys = qservice.keys_payload(qs or {}, {})
+        qs = {'api_keys': [row.model_dump() for row in keys.qoder],
+              'auth_required': (qs or {}).get('auth_required'),
+              'version': (qs or {}).get('version')}
+        ts = {}
     return qservice.settings_payload(qs or {}, ts or {}, meta)
 
 

@@ -44,19 +44,34 @@ def _masked(value: str) -> str:
     return routesvc.mask_url(value) if value else ''
 
 
+def _reader_url(value: str, user: dict) -> str:
+    """Account identifiers in proxy userinfo are not needed for page viewing."""
+    if user.get('role') != 'account_admin' or not value:
+        return value
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(value)
+        netloc = parts.netloc.rsplit('@', 1)[-1]
+        if '@' in parts.netloc:
+            netloc = '***:***@' + netloc
+        return urlunsplit((parts.scheme, netloc, '', '', ''))
+    except ValueError:
+        return '***'
+
+
 @router.get('/proxy-routes')
 def list_proxy_routes(upstream_id: int | None = Query(None),
-                      user: dict = Depends(security.require_session_admin)) -> dict:
+                      user: dict = Depends(security.require_session_reader)) -> dict:
     """线路列表（凭据已脱敏）+ 每条线路的绑定账号数。
 
-    仅会话管理员可读：地址虽然脱了敏，**用户名本身**往往是住宅代理的账号标识
-    （例如 `api07…_c_CN_city_Shanghai_s_…`），只读令牌 / 只读账号不该看到它。
+    两种真人管理员可读；普通管理员额外遮蔽代理用户名，服务令牌仍不可读。
     账号页选线路走的仍是老的 `/api/proxies`（只有名字），不受这里影响。
     """
     auth_dir = _auth_dir(upstream_id)
     routes = routesvc.list_routes(auth_dir)
     healthy = routesvc.health()
     for item in routes:
+        item['masked'] = _reader_url(item.get('masked', ''), user)
         item['probe'] = healthy.get(item['name'])
         # 一条线路上挂太多账号是风控特征（同一个出口 IP 上的号会被上游按 IP 聚类），
         # 界面据此给出提示，阈值 3。
@@ -156,7 +171,7 @@ async def probe_proxy_route(body: dict = Body(...),
 
 @router.get('/proxy-routes/bindings')
 def list_bindings(upstream_id: int | None = Query(None),
-                  user: dict = Depends(security.require_session_admin)) -> dict:
+                  user: dict = Depends(security.require_session_reader)) -> dict:
     """绑定管理：全部账号 + 各自绑定的线路（空 = 跟随池策略）。
 
     与参考项目的 `get_all_account_bindings` 同一个用途：一个弹窗里把「谁走哪条」
@@ -231,7 +246,7 @@ def save_proxy_pool(request: Request, body: dict = Body(...),
 # ── 全局出口代理 ─────────────────────────────────────────────
 # 存面板设置（key: http_proxy / update_proxy），空串 = 清除（回落到环境变量）。
 @router.get('/settings/proxy')
-def get_proxy_settings(user: dict = Depends(security.require_session_admin)) -> dict:
+def get_proxy_settings(user: dict = Depends(security.require_session_reader)) -> dict:
     """当前出口代理配置（脱敏）+ 生效来源。"""
     stored_http = config.stored_http_proxy()
     stored_update = str(db.get_setting('update_proxy', '') or '')
@@ -241,13 +256,13 @@ def get_proxy_settings(user: dict = Depends(security.require_session_admin)) -> 
               'panel' if stored_http else 'env' if config.HTTP_PROXY else 'none')
     return {
         'global_proxy_enabled': bool(enabled),
-        'http_proxy': _masked(stored_http),
-        'update_proxy': _masked(stored_update),
+        'http_proxy': _reader_url(_masked(stored_http), user),
+        'update_proxy': _reader_url(_masked(stored_update), user),
         'http_configured': bool(stored_http),
         'update_configured': bool(stored_update),
-        'env_http_proxy': _masked(config.HTTP_PROXY),
-        'env_update_proxy': _masked(str(os.environ.get('WB_UPDATE_PROXY') or '')),
-        'effective': _masked(effective),
+        'env_http_proxy': _reader_url(_masked(config.HTTP_PROXY), user),
+        'env_update_proxy': _reader_url(_masked(str(os.environ.get('WB_UPDATE_PROXY') or '')), user),
+        'effective': _reader_url(_masked(effective), user),
         'source': source,
         'probe_url': config.PROXY_PROBE_URL,
     }

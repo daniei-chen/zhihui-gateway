@@ -27,7 +27,7 @@ export default function LoginPage() {
   const [expired, setExpired] = useState(false);
 
   useEffect(() => {
-    if (!loading && me) router.replace(me.role === 'account_admin' ? '/accounts' : '/dashboard');
+    if (!loading && me) router.replace('/dashboard');
   }, [loading, me, router]);
 
   useEffect(() => {

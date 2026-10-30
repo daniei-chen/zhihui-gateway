@@ -12,23 +12,30 @@ exports.run = async function(context, page, origin, output, controls) {
   for (const target of ['/dashboard', '/keys', '/settings/users', '/stats', '/accounts']) {
     const start = controls.trace.length;
     await page.goto(origin + target, {waitUntil: 'networkidle'});
-    await page.waitForURL(/\/accounts\/?$/);
-    await page.locator('[data-slot=account-intake]').waitFor({state: 'visible'});
-    assert.equal(await page.locator('[data-slot=account-intake]').isVisible(), true);
-    assert.equal(await page.locator('[data-slot=dock]').count(), 0);
-    assert.equal(await page.getByRole('button', {name: '添加账号', exact: true}).isVisible(), true);
+    assert.equal(new URL(page.url()).pathname.replace(/\/+$/, ''), target);
+    assert.equal(await page.locator('[data-slot=account-intake]').count(), 0);
+    assert.equal(await page.locator('[data-slot=dock]').count(), 1);
+    assert.equal(await page.locator('[data-slot=dock-quick-add]').getAttribute('aria-disabled'), 'false');
+    if (target === '/accounts') {
+      assert.equal(await page.getByRole('button', {name: '添加账号', exact: true}).first().isVisible(), true);
+      assert.equal(await page.getByRole('button', {name: '一键刷新令牌', exact: true}).count(), 0);
+    }
     const requests = controls.trace.slice(start).map(row => row.path);
-    assert.deepEqual(requests.filter(item => !['/api/me'].includes(item)), []);
+    assert.ok(requests.includes('/api/me'));
+    assert.ok(requests.some(item => item !== '/api/me'), 'Read data must load instead of a blank intake shell');
     result.restricted.push({target, final: new URL(page.url()).pathname, requests});
   }
   await page.setViewportSize({width: 390, height: 844});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({path: path.join(output, 'account-admin-mobile.png'), fullPage: true, animations: 'disabled'});
+  await page.locator('[data-slot=dock-profile-trigger]').click();
   await page.getByRole('button', {name: '退出登录', exact: true}).click();
+  await page.getByRole('alertdialog').getByRole('button', {name: '退出登录', exact: true}).click();
   await page.getByText(/Simulated logout failure; session remains active/).waitFor();
   assert.match(page.url(), /\/accounts/);
   controls.setLogout('success');
   await page.getByRole('button', {name: '退出登录', exact: true}).click();
+  await page.getByRole('alertdialog').getByRole('button', {name: '退出登录', exact: true}).click();
   await page.waitForURL(/\/login\/?$/);
   controls.authenticate();
   controls.setRole('admin');

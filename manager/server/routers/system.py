@@ -103,7 +103,7 @@ def _release_id() -> str:
 
 @router.get('/config')
 def configuration_drift(request: Request, refresh: bool = False,
-                        user: dict = Depends(security.require_admin)) -> dict:
+                        user: dict = Depends(security.require_panel_reader)) -> dict:
     """U16：**配置四源对照 + 漂移标记**（只读，仅管理员）。
 
     四个来源（缺一个就看不出漂移在哪）：
@@ -182,7 +182,7 @@ def configuration_drift(request: Request, refresh: bool = False,
 
 @router.get('/configuration')
 def configuration_snapshot(request: Request,
-                           user: dict = Depends(security.require_admin)) -> dict:
+                           user: dict = Depends(security.require_panel_reader)) -> dict:
     from ..configcontract import validate_environment
     loaded = getattr(request.app.state, 'configuration_snapshot', None)
     return {'ok': True, 'configuration': loaded or validate_environment(),
@@ -199,7 +199,7 @@ class DrainIn(BaseModel):
 
 
 @router.get('/drain')
-def drain_status(user: dict = Depends(security.require_admin)) -> dict:
+def drain_status(user: dict = Depends(security.require_panel_reader)) -> dict:
     return drain.snapshot()
 
 
@@ -450,8 +450,7 @@ def internal_session_verify(request: Request,
     import time as _time
     import uuid as _uuid
     role = 'admin' if user.get('role') == 'admin' else 'viewer'
-    scopes = (['accounts:add'] if user.get('role') == 'account_admin' else
-              ['*'] if role == 'admin' else ['read'])
+    scopes = ['*'] if role == 'admin' else ['read']
     now = int(_time.time())
     payload = {
         'sub': str(user.get('username') or 'unknown'),

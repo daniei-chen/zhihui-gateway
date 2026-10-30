@@ -1510,7 +1510,7 @@
     "mapAdd": "Add mapping",
     "mapEmpty": "No mappings yet; downstream can use the names from Available models above",
     "usersNew": "Add console user",
-    "usersNewDesc": "Super administrators have full control. Administrators can only add authorized accounts, not view pools, keys or statistics, or change settings.",
+    "usersNewDesc": "Super administrators have full control. Administrators can view every page and redacted data, and add authorized accounts; other management actions are not allowed.",
     "usersRole": "Role",
     "roleAdmin": "Administrator (read/write)",
     "roleViewer": "Read-only (view only)",
@@ -1921,7 +1921,9 @@
     "需要管理员或密钥管理权限": "Administrator or key management permission is required",
     "只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）": "A read-only service token may only read existing data (no writes, and no access to credential or user surfaces).",
     "仅允许本机调用": "Only local calls are allowed",
-    "管理员仅可添加账号，其他操作需要超级管理员权限": "Administrators can only add accounts. Other actions require a super administrator.",
+    "强制刷新积分需要超级管理员权限": "Forced credit refresh requires a super administrator.",
+    "管理员添加账号仅使用默认线路": "Administrators add accounts using the default route.",
+    "管理员仅可添加账号，其他操作需要超级管理员权限": "Administrators can view all pages and add accounts; other actions require a super administrator.",
     "添加账号需要管理员或超级管理员本人会话": "Adding accounts requires an administrator or super administrator session.",
     "管理员添加账号仅使用默认账号池和默认线路": "Administrators can add accounts only to the default pool using the default route.",
     "用户管理仅对超级管理员开放": "User management is restricted to super administrators.",
@@ -2101,7 +2103,7 @@
     "eyebrow": "ZHIHUI · ACCOUNT CONNECTION",
     "title": "Connect an account to Zhihui.",
     "description": "Choose a platform and region, then authorize on the official site. Super administrators manage everything else.",
-    "permission": "This role can only add accounts. Account pools, keys, statistics and system settings are not available.",
+    "permission": "All pages are visible. Adding authorized accounts is the only management action available; other changes require a super administrator.",
     "completed": "{count} authorizations confirmed saved in this visit."
   }
 }
