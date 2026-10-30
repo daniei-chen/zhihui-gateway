@@ -1,0 +1,47 @@
+[Unit]
+Description=Zhihui Trae HTTPS callback reachability experiment (no exchange)
+After=network.target workbuddy-web.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/bin/python3 -I -B /opt/zhihui-release/experiments/trae-callback-20261030-r2/server.py
+WorkingDirectory=/
+Environment=PYTHONUTF8=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+InaccessiblePaths=-/opt/workbuddy-manager -/opt/qoder-release -/opt/trae-release -/var/www
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=16
+LimitNOFILE=64
+TimeoutStartSec=20
+TimeoutStopSec=10
+RuntimeMaxSec=2d
+Restart=no
+StandardOutput=journal
+StandardError=null
