@@ -1,6 +1,6 @@
 # Request Upload Deadlines
 
-The `v0.0.3+body.20261031.1` candidate addresses local HTTP 408
+The deployed `v0.0.3+body.20261031.1` addresses local HTTP 408
 `body_read_timeout`. It does not change provider timeouts, retry inference,
 disable body limits, or modify keys, quotas, recipients or historical records.
 
@@ -42,7 +42,9 @@ Third-party clients must opt in; server changes cannot compress bytes before a
 remote client uploads them. The decoded limit remains 128 MiB.
 
 The reviewed host transaction sets Manager input/forward limits to 128 MiB,
-retained input+output budget to 384 MiB, and large concurrency to 2. WorkBuddy
+retained input+output budget to 384 MiB. Large concurrency initially set to 2
+proved too restrictive under production traffic and was corrected to 16 in a
+separate guarded configuration transaction on 2026-11-01. WorkBuddy
 retains a 256 MiB raw-body budget with a 128 MiB per-request limit. These are
 byte budgets, not whole-heap guarantees: parsed objects/temporary copies still
 need the process memory guard. Qoder/Trae retain their separate provider limits.
@@ -60,3 +62,8 @@ Synthetic tests cover progress beyond 30 seconds, total/idle expiration, empty
 frames, cancellation, schema bounds, and no application/provider dispatch on
 timeout. Production activation and a harmless slow-upload check are recorded
 separately; a passing local test alone is not a deployment receipt.
+
+The 2026-11-01 controlled transaction and public TLS upload checks passed.
+See [the production receipt](RELEASE-20261101-STABILITY.md), including the real
+31-second upload, gzip validation, exact identities and remaining CPU/memory
+and no-downtime limitations.

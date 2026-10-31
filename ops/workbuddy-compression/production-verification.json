@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "state": "production_active",
+  "at": "2026-11-01T03:41:39+08:00",
+  "manager_release": "v0.0.3+body.20261031.1",
+  "source_commit": "b2fb21008e0d16e2cf395b1fa3de611965b10cff",
+  "manager_manifest_sha256": "d9f987c9a644b412d38cbe20be07561030af74c6c9940dfd5514847f4d94b636",
+  "web_build": "DwWBHflLtup50sqUaIh4H",
+  "image": "sha256:f21e496202e2c1d6e0b1c7e8d62d381ef1fb6224d625c742af4fa982ae0578f3",
+  "binary_sha256": "9f02980b372a0f4517a7961d1786a01d209b904abd2b84cc5f0d62e73c3664df",
+  "source_tree_sha256": "fcf2949320e442b2b568088ba6607a7137ebc5bf7af41c5ef3effd5614348e7d",
+  "limits": {
+    "public_body_bytes": 134217728,
+    "manager_body_bytes": 134217728,
+    "manager_forward_bytes": 134217728,
+    "manager_retained_bytes": 402653184,
+    "manager_large_concurrency": 16,
+    "body_total_seconds": 180,
+    "body_idle_seconds": 60,
+    "engine_body_bytes": 134217728,
+    "engine_raw_body_budget_bytes": 268435456,
+    "engine_body_leases": 32
+  },
+  "compression": {
+    "engine_enabled": true,
+    "threshold_bytes": 262144,
+    "level": "gzip.BestSpeed",
+    "minimum_saving_percent": 10,
+    "third_party_client_adoption_required": true,
+    "manager_to_local_engine_compression": false
+  },
+  "tests": {
+    "signed_manager_linux": {"passed": 3997, "failed": 0, "existing_skips": 9},
+    "engine_linux": {"passed": 1369, "failed": 0, "skipped": 0},
+    "controller_linux": {"passed": 220, "failed": 0, "skipped": 0},
+    "private_tls_matrix": {"passed": 22, "failed": 0, "skipped": 0},
+    "native_engine_http_gzip": {"passed": 9, "failed": 0}
+  },
+  "live_upload_checks": {
+    "three_protocols_gzip_reached_model_validation": true,
+    "slow_upload_seconds": 31.041,
+    "slow_upload_result": "model_not_allowed_not_408",
+    "above_128MiB_headers_only": 413,
+    "synthetic_decoded_bytes": 400112,
+    "synthetic_gzip_bytes": 2282,
+    "test_model_dispatch": false
+  },
+  "old_engine_stopped_retained_restart_disabled": true,
+  "capacity_correction": {
+    "transaction": "capacity-16-forward",
+    "completed_at": "2026-11-01T04:46:54+08:00",
+    "initial_large_concurrency": 2,
+    "corrected_large_concurrency": 16,
+    "initial_capacity_rejections_observed": 262,
+    "byte_budget_unchanged": true,
+    "engine_restarted_again": false,
+    "long_term_slo_verified": false
+  },
+  "key_inventory_unchanged": true,
+  "recipient_policy_unchanged": true,
+  "business_state_restored": false,
+  "legacy_timer_disabled": true,
+  "legacy_onfailure_bridge": "signed_steward_watchdog",
+  "test_mail_delivery_id": 50,
+  "test_mail_attempts": 1,
+  "test_mail_smtp_accepted": true,
+  "inbox_delivery_verified": false,
+  "zero_downtime_claimed": false,
+  "production_rollback_exercised": false,
+  "all_audit_findings_closed": false,
+  "receipt": "docs/RELEASE-20261101-STABILITY.md"
+}

@@ -5,6 +5,14 @@ Manager 交互补丁 `.2` 的源码/签名清单不变；此补丁单独发布�
 `manifest.json` 与 `candidate-verification.json` 保留候选时点，不能改写为历史上已经部署。
 最新现场回执见 `production-verification.json`。
 
+## 后续生产迭代
+
+本文保留 2026-10-31 的64MiB基线和当时未关闭项。2026-11-01 已发布新的
+128MiB/阈值压缩引擎，并协调 Manager 的上传与转换体积预算；旧候选清单与回执不覆盖。
+当前运行身份、真实验收和仍未完成的生产回退演练见
+[稳定性回执](../../docs/RELEASE-20261101-STABILITY.md)与
+[后续引擎回执](../workbuddy-compression/production-verification.json)。
+
 ## 修复范围
 
 - 保留现有鉴权顺序：无效密钥在读取 body 之前返回401。

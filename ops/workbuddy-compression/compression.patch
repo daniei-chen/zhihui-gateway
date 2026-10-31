@@ -1,0 +1,93 @@
+--- a/internal/upstream/channel_transport_zhihui_test.go
++++ b/internal/upstream/channel_transport_zhihui_test.go
+@@ -21,7 +21,7 @@
+   w.Header().Set("Content-Type","text/event-stream");io.WriteString(w,"data: [DONE]\n\n")
+  }));defer srv.Close()
+  c:=New();c.GzipBody=true;c.ChatBaseCN=srv.URL
+- body:=[]byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"system","content":"system stays system"},{"role":"user","content":"`+strings.Repeat("hello",30000)+`"}]}`)
++ body:=[]byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"system","content":"system stays system"},{"role":"user","content":"`+strings.Repeat("hello",gzipBodyThreshold/5+100)+`"}]}`)
+  rc,s,raw,e:=c.ChatStream(&auth.Auth{UID:"u1",AccessToken:"test",ExpiresAt:9999999999},body,"",ChatMeta{})
+  if rc!=nil{rc.Close()};if e!=nil||s!=200||calls!=2{t.Fatalf("status=%d calls=%d error=%v raw=%s",s,calls,e,raw)}
+  if !bytes.Contains(first,[]byte(`"role":"system"`)){t.Fatal("system role lost")}
+--- a/internal/upstream/client.go
++++ b/internal/upstream/client.go
+@@ -1405,10 +1405,10 @@
+ 
+ // gzipBodyThreshold chat 请求体超过这个大小才压缩（issue #297）。
+ //
+-// 64KB 的依据：小请求压了只多一次分配与 CPU，省下的带宽可以忽略；而长上下文
++// 256KB 的依据：小请求压了只多一次分配与 CPU，省下的带宽可以忽略；而长上下文
+ // 请求体在 1MB 以上（实测 4.2 字节/token，78 万 token ≈ 3.3MB），服务器出口
+ // 只有 ~1Mbps 时首字节要等 20-30 秒 —— 压到 1/4.5 就是实打实的提速。
+-const gzipBodyThreshold = 64 << 10
++const gzipBodyThreshold = 256 << 10
+ 
+ // channelBlockTTL 渠道校验命中后「优先走 /console」的时长（issue #296）。
+ // 10 分钟覆盖一轮长对话；过短会反复撞 /v2，过长则上游策略变化后迟迟不切回。
+@@ -1421,7 +1421,7 @@
+ 		return body, ""
+ 	}
+ 	var buf bytes.Buffer
+-	zw, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
++	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+ 	if err != nil {
+ 		return body, ""
+ 	}
+@@ -1432,8 +1432,8 @@
+ 	if err := zw.Close(); err != nil {
+ 		return body, ""
+ 	}
+-	// 压缩后反而更大（已压缩过的二进制内容）→ 不压，省得上游多解一次。
+-	if buf.Len() >= len(body) {
++	// Only use compression when it saves at least ten percent on the wire.
++	if int64(buf.Len())*10 > int64(len(body))*9 {
+ 		return body, ""
+ 	}
+ 	return buf.Bytes(), "gzip"
+--- /dev/null
++++ b/internal/upstream/gzip_threshold_zhihui_test.go
+@@ -0,0 +1,44 @@
++package upstream
++
++import (
++	"bytes"
++	"compress/gzip"
++	"io"
++	"math/rand"
++	"testing"
++)
++
++func TestZhihuiGzipThresholdAndSavings(t *testing.T) {
++	c := &Client{GzipBody: true}
++	if gzipBodyThreshold != 256<<10 {
++		t.Fatal("expected reviewed 256 KiB threshold")
++	}
++	for _, n := range []int{gzipBodyThreshold - 1, gzipBodyThreshold, gzipBodyThreshold + 1} {
++		raw := bytes.Repeat([]byte("x"), n)
++		out, encoding := c.outboundBody(raw)
++		if n < gzipBodyThreshold {
++			if encoding != "" || !bytes.Equal(out, raw) {
++				t.Fatal("small payload changed")
++			}
++			continue
++		}
++		if encoding != "gzip" || int64(len(out))*10 > int64(len(raw))*9 {
++			t.Fatal("large text must save ten percent")
++		}
++		reader, err := gzip.NewReader(bytes.NewReader(out))
++		if err != nil {
++			t.Fatal(err)
++		}
++		back, err := io.ReadAll(reader)
++		_ = reader.Close()
++		if err != nil || !bytes.Equal(back, raw) {
++			t.Fatal("compression changed content")
++		}
++	}
++	raw := make([]byte, 512<<10)
++	_, _ = rand.New(rand.NewSource(19)).Read(raw)
++	out, encoding := c.outboundBody(raw)
++	if encoding != "" || !bytes.Equal(out, raw) {
++		t.Fatal("incompressible input must stay unchanged")
++	}
++}
