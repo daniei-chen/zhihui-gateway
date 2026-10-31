@@ -232,7 +232,9 @@ def _authorize(request: Request, model: str | None, *,
         # 再往后不记，避免把凭据写进日志。
         # 只在本网关前缀（wbk_）上打前缀——客户端可能同时带了别的服务的凭据
         # （实测遇到过 sk- 开头的），那种串的前缀不该被抄进本项目的日志。
-        hint = token[:12] if token.startswith(keysvc.TOKEN_PREFIX) else '(非本网关前缀)'
+        # Generic sk- credentials may belong to another provider. A failed hash
+        # lookup cannot establish ownership, so never log their prefix.
+        hint = token[:12] if token.startswith(keysvc.LEGACY_TOKEN_PREFIX) else '(凭据已隐藏)'
         logger.warning(
             '令牌无法解析：候选=%d 个，最长 %d 位、前缀=%r；x-api-key 长度=%d，authorization 长度=%d；请求头: %s',
             len(_token_candidates(request)), len(token), hint,

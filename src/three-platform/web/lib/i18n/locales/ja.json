@@ -1509,7 +1509,7 @@
     "usersEmptyDesc": "管理者アカウントを最低 1 つ残してください",
     "aboutDesc": "本プロジェクトは workbuddy2api（Tencent CodeBuddy → OpenAI 互換プロキシ）に Web 管理画面と対外 API ゲートウェイを提供します。アカウントのローテーション・並行処理・サーキットブレーカーは workbuddy2api が担当し、本管理端はアカウント取り込み・キー配布・IP 制御・リクエストログ・使用量統計を担当します。",
     "aboutCredits": "画面デザインは linux-do/cdk（MIT）を参考にしています。感謝します。",
-    "aboutUsage": "下流の接続: Base URL に `https://あなたのドメイン/v1`、キーは「API キー」ページで発行した `wbk_...` を使います。",
+    "aboutUsage": "下流の接続: Base URL に `https://あなたのドメイン/v1`、キーは「API キー」ページで発行した `sk-…` を使います。",
     "fieldInvalid": "「{label}」の入力が正しくありません",
     "noChanges": "保存する変更はありません",
     "savedManualStep": "設定を保存しましたが、手動での 1 ステップが必要です",

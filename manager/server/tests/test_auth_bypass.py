@@ -471,7 +471,7 @@ class KeysAuditRegressionTest(unittest.TestCase):
         r = self.c.post('/api/keys', json={'name': 'test-key'})
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
-        self.assertTrue(str(body.get('key', '')).startswith('wbk_'),
+        self.assertTrue(str(body.get('key', '')).startswith('sk-'),
                         '创建时必须回一次明文密钥')
 
     def test_delete_key_returns_200(self) -> None:

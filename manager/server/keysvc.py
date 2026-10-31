@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -10,7 +11,9 @@ import time
 from . import db, legacymig
 from .iputil import ip_matches
 
-TOKEN_PREFIX = 'wbk_'
+TOKEN_PREFIX = 'sk-'
+LEGACY_TOKEN_PREFIX = 'wbk_'
+_TOKEN_SHAPE = re.compile(r'sk-[0-9a-f]{32}\Z')
 
 
 class Rejection(str):
@@ -272,7 +275,7 @@ def create_key(
     """
     from . import platformpolicy
     policy = platformpolicy.normalize(platforms)
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    token = TOKEN_PREFIX + secrets.token_hex(16)
     sql = ('INSERT INTO api_keys(name, key_hash, prefix, enabled, expires_at, max_ips, '
            'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, used_credit_units, '
            'created_at, upstream_id, platforms, daily_token_quota,daily_credit_quota,assigned_to) '
@@ -427,15 +430,16 @@ def _resolve_legacy_qtg(token: str) -> dict | None:
 
 
 def resolve(token: str) -> dict | None:
-    """按前缀定位后比对哈希，避免全表扫描。
+    """Resolve exact new-format credentials or explicitly supported legacy keys.
 
-    K01-S1（方案 a）：QTG 已发出的 `sk-qtg-` 旧 key 通过迁移台账继续可用；
-    `wbk_` 分支保持原样（一行未改），也不会因为新增兼容而放宽成"任意前缀都查"。
+    A prefix never grants access: indexed candidates still require the complete
+    SHA-256 match and retain the same authoritative ID, policy and usage.
     """
-    # 旧 QTG key 走迁移台账；wbk_ 分支在下面保持原样。
-    if token and token.startswith(legacymig.QTG_KEY_PREFIX):
+    if not isinstance(token, str) or not token:
+        return None
+    if token.startswith(legacymig.QTG_KEY_PREFIX):
         return _resolve_legacy_qtg(token)
-    if not token or not token.startswith(TOKEN_PREFIX):
+    if not (_TOKEN_SHAPE.fullmatch(token) or token.startswith(LEGACY_TOKEN_PREFIX)):
         return None
     rows = db.query('SELECT * FROM api_keys WHERE prefix = ?', (token[:12],))
     digest = _hash(token)

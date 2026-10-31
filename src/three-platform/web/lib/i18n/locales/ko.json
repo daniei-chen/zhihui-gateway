@@ -1509,7 +1509,7 @@
     "usersEmptyDesc": "관리자 계정을 최소 하나 유지하세요",
     "aboutDesc": "이 프로젝트는 workbuddy2api(Tencent CodeBuddy → OpenAI 호환 프록시)를 위한 웹 관리 화면과 대외 API 게이트웨이를 제공합니다. 계정 로테이션, 동시성, 차단은 workbuddy2api가 담당하고, 이 콘솔은 계정 등록, 키 배포, IP 제어, 요청 로그, 사용량 통계를 담당합니다.",
     "aboutCredits": "인터페이스 스타일은 linux-do/cdk(MIT)를 참고했습니다. 감사합니다.",
-    "aboutUsage": "다운스트림 연결: Base URL에 `https://내도메인/v1`을, 키는 'API 키' 페이지에서 발급한 `wbk_...`를 사용하세요.",
+    "aboutUsage": "다운스트림 연결: Base URL에 `https://내도메인/v1`을, 키는 'API 키' 페이지에서 발급한 `sk-…`를 사용하세요.",
     "fieldInvalid": "'{label}' 입력이 올바르지 않습니다",
     "noChanges": "저장할 변경이 없습니다",
     "savedManualStep": "설정을 저장했지만 수동으로 한 단계가 필요합니다",

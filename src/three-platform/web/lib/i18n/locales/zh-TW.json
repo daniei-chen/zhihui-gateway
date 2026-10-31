@@ -1509,7 +1509,7 @@
     "usersEmptyDesc": "至少保留一個管理員帳號",
     "aboutDesc": "本專案為 workbuddy2api（騰訊 CodeBuddy → OpenAI 相容代理）提供網頁管理介面與對外介面閘道。帳號輪詢、並發與熔斷由 workbuddy2api 負責；本管理端負責帳號納管、金鑰派發、IP 管控、請求日誌與用量統計。",
     "aboutCredits": "介面風格參考 linux-do/cdk（MIT），特此致謝。",
-    "aboutUsage": "下游接入：Base URL 填 `https://你的網域/v1`，金鑰用「API 金鑰」頁產生的 `wbk_...`。",
+    "aboutUsage": "下游接入：Base URL 填 `https://你的網域/v1`，金鑰用「API 金鑰」頁產生的 `sk-…`。",
     "fieldInvalid": "「{label}」填寫有誤",
     "noChanges": "沒有需要儲存的變更",
     "savedManualStep": "設定已儲存，但需要你手動一步",

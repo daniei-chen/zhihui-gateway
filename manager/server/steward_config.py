@@ -122,7 +122,7 @@ def validate_smtp(value):
 def model_key():
     from . import config
     token = secret_file(config.STEWARD_KEY_FILE).strip()
-    if not re.fullmatch(r'wbk_[A-Za-z0-9_-]{32,128}', token):
+    if not re.fullmatch(r'(?:sk-[0-9a-f]{32}|wbk_[A-Za-z0-9_-]{32,128})', token):
         raise ValueError('invalid_steward_key')
     return token
 

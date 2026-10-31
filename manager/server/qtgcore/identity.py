@@ -106,7 +106,7 @@ ROLES = frozenset({"admin", "viewer", "readonly", "internal_service", "inference
 AUTH_METHODS = frozenset({
     "session_cookie", "edge_session", "internal_service", "admin_token", "inference_key",
 })
-_INFERENCE_KEY_PREFIXES = ("sk-qtg-", "wbk-", "wbk_")
+_INFERENCE_KEY_PREFIXES = ("sk-", "wbk-", "wbk_")
 
 
 class IdentityRejected(Unauthorized):

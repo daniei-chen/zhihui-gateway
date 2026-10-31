@@ -60,7 +60,7 @@ class KeysScopeTest(unittest.TestCase):
         r = self.c.post('/api/keys', json={'name': 'svc-key'}, headers=h)
         self.assertEqual(r.status_code, 200, r.text)
         kid = r.json()['id']
-        self.assertTrue(r.json()['key'].startswith('wbk_'))
+        self.assertTrue(r.json()['key'].startswith('sk-'))
 
         r = self.c.patch(f'/api/keys/{kid}', json={'name': 'renamed'}, headers=h)
         self.assertEqual(r.status_code, 200, r.text)
