@@ -221,7 +221,7 @@ export default function DashboardPage() {
     summary: () => statsApi.summary(realm),
     daily: () => statsApi.daily(14, realm),
     credits: () => isAdmin ? loadGroupCredits() : Promise.resolve(undefined),
-  }, [realm, isAdmin]);
+  }, [realm, isAdmin], [], {progressive: true});
 
   /**
    * 积分收支的时段（当天 / 3 / 7 / 15 / 30 天）。
@@ -260,6 +260,7 @@ export default function DashboardPage() {
    * 整页错误态不会出现，因为其余三份有值）。
    */
   const poolFailed = 'pool' in errors;
+  const poolPending = values.pool === undefined && !poolFailed;
   /** 有分组没取到：下面的账号与积分**不含**它们，必须说明，否则又是「报 1/N 个池子」 */
   const failedGroups = slices.filter((s) => s.error);
   /** 多于一个分组时才需要标注统计范围与归属——单分组时界面保持原样 */
@@ -427,7 +428,7 @@ export default function DashboardPage() {
    */
   const acctCard = (
     value: ReactNode, hint: string | undefined, tone: StatTone, hintTone?: StatTone,
-  ) => (poolFailed
+  ) => (poolFailed || poolPending
     ? {value: '—' as ReactNode, hint: undefined, tone: 'neutral' as StatTone, hintTone: undefined}
     : {value, hint, tone, hintTone});
 
@@ -560,8 +561,9 @@ export default function DashboardPage() {
         />
         <StatCard
           label={t('dashboard.todayTokens')}
-          value={fmtCompact(summary?.today_tokens)}
+          value={summary ? fmtCompact(summary.today_tokens) : '—'}
           hint={
+            !summary ? undefined :
             // 有失败时**优先说失败**：这个数字是用户排查问题的入口，而
             // 「今天 N 次请求」是背景信息。没失败才显示请求数。
             todayFailed > 0
@@ -606,7 +608,9 @@ export default function DashboardPage() {
               ) : (
                 <ChartPlaceholder h={220} />
               )
-            ) : 'daily' in errors ? null : (
+            ) : 'daily' in errors ? null : values.daily === undefined ? (
+              <ChartPlaceholder h={220} />
+            ) : (
               // 用量取不到时**不说**「暂无调用数据」：那是在断言「你没有调用过」，
               // 而事实是这份数据没拿到（`daily` 单独失败时整页错误态不会出现）。
               <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('dashboard.noCallData')}</div>
@@ -639,6 +643,8 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+          ) : poolPending ? (
+            <div className="h-[160px] animate-pulse rounded-2xl bg-background/50" />
           ) : (
             <div className="grid h-[160px] place-items-center text-xs text-muted-foreground">{t('dashboard.noUpstreamStatus')}</div>
           )}
@@ -839,7 +845,7 @@ export default function DashboardPage() {
               );
             })}
           </div>
-        ) : poolFailed ? null : (
+        ) : poolFailed ? null : poolPending ? <SkeletonBar className="h-32" /> : (
           // 账号那一块没取到时**什么都不说**：「暂无账号」等于告诉用户
           // 「你一个账号都没有」，而事实是没取到（顶部那条说明已经讲了）。
           <EmptyState

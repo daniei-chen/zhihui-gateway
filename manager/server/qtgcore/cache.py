@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Generic, Optional, TypeVar
 
+from .errors import UpstreamError
+
 T = TypeVar("T")
 
 
@@ -19,6 +21,7 @@ class _Entry(Generic[T]):
     value: Optional[T] = None
     expires_at: float = 0.0
     lock: Optional[asyncio.Lock] = None
+    version: int = 0
 
 
 class TTLCache:
@@ -70,18 +73,27 @@ class TTLCache:
         if entry.lock is None:
             entry.lock = asyncio.Lock()
         lock = entry.lock
+        arrived_version = entry.version
         if lock.locked():
             self._coalesced += 1
         async with lock:
+            if self._entries.get(key) is not entry:
+                raise UpstreamError('数据已更新，请刷新后重试', code='cache_invalidated')
             # 双检：等锁期间可能已被别的协程填好
             now = time.monotonic()
-            if not force and entry.value is not None and entry.expires_at > now:
+            # Concurrent forced refreshes share the refresh started after their
+            # arrival; a later, sequential force still requests fresh evidence.
+            if entry.version != arrived_version or (
+                    not force and entry.value is not None and entry.expires_at > now):
                 self._hits += 1
                 return entry.value  # type: ignore[return-value]
             self._misses += 1
             value = await factory()
+            if self._entries.get(key) is not entry:
+                raise UpstreamError('数据已更新，请刷新后重试', code='cache_invalidated')
             entry.value = value
             entry.expires_at = time.monotonic() + max(ttl, 0.0)
+            entry.version += 1
             return value
 
 

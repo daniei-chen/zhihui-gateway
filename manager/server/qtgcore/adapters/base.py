@@ -71,7 +71,7 @@ class BaseAdapter:
             timeout = httpx.Timeout(self.cfg.upstream_timeout_sec, connect=5.0)
             self._client = httpx.AsyncClient(
                 base_url=self.base_url, timeout=timeout, limits=limits,
-                follow_redirects=False, headers={"Accept": "application/json"},
+                follow_redirects=False, trust_env=False, headers={"Accept": "application/json"},
             )
 
     async def close(self) -> None:
@@ -125,6 +125,14 @@ class BaseAdapter:
         if auth:
             await self.ensure_auth()
 
+        # Control-plane writes must not be replayed after an ambiguous timeout.
+        # Trae encodes these finite read operations as POST commands.
+        read_commands = {
+            '/api/cmd/accounts_list', '/api/cmd/api_usage_stats',
+            '/api/cmd/settings_get', '/api/cmd/pool_list', '/api/cmd/api_keys_list',
+        }
+        retry = retry and (method.upper() in ('GET', 'HEAD')
+                           or method.upper() == 'POST' and path in read_commands)
         attempts = 1 + (self.cfg.upstream_retries if retry else 0)
         last_exc: Optional[Exception] = None
         for attempt in range(attempts):

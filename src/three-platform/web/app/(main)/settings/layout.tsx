@@ -1315,9 +1315,11 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 或者以为「面板坏了」。取不到就说取不到，并给「重试」。
    */
   if (tab === 'steward' || tab === 'alerts') {
-    return <div className="flex flex-col gap-4 md:gap-6">
+    return <div className="flex min-w-0 flex-col gap-4 md:gap-6">
       {header}
-      <SectionTabs items={tabItems} active={settingsTabHref(tab)} />
+      <div className="min-w-0 max-w-full overflow-x-auto pb-1">
+        <SectionTabs items={tabItems} active={settingsTabHref(tab)} />
+      </div>
       {tab === 'steward' ? <StewardPanel /> : <AlertsPanel />}
       {children}
     </div>;

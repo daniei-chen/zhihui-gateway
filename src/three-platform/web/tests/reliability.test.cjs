@@ -256,6 +256,38 @@ test('slow initial success is not starved by repeated background refreshes', asy
   assert.equal(state.isRefreshing, false);
 });
 
+test('fast cards render before slow billing finishes and stale partial writes cannot win', async () => {
+  const {harness, useAsyncAll} = asyncHook();
+  const oldFast = deferred(), oldSlow = deferred(), nextFast = deferred(), nextSlow = deferred();
+  let realm = 'cn';
+  const render = () => harness.render(() => useAsyncAll({
+    pool: () => realm === 'cn' ? oldFast.promise : nextFast.promise,
+    billing: () => realm === 'cn' ? oldSlow.promise : nextSlow.promise,
+  }, [realm], [], {progressive: true}));
+  render(); harness.effects(); await flush();
+  oldFast.resolve(34); await flush();
+  assert.equal(render().values.pool, 34);
+  assert.equal(render().isInitialLoading, false);
+  assert.equal(render().isRefreshing, true);
+  realm = 'global'; render(); harness.effects(); await flush();
+  assert.equal(render().values.pool, undefined);
+  oldSlow.resolve(999); await flush();
+  assert.equal(render().values.billing, undefined);
+  nextFast.resolve(4); await flush();
+  assert.equal(render().values.pool, 4);
+  nextSlow.reject(new Error('billing unavailable')); await flush();
+  assert.equal(render().values.pool, 4);
+  assert.match(render().errors.billing.message, /billing unavailable/);
+  assert.equal(render().isRefreshing, false);
+});
+
+test('only audited dashboard opts into incremental fields and pending pool is not displayed as zero', () => {
+  const page = fs.readFileSync(path.join(root, 'app/(main)/dashboard/page.tsx'), 'utf8');
+  assert.match(page, /progressive: true/);
+  assert.match(page, /poolFailed \|\| poolPending/);
+  assert.match(page, /summary \? fmtCompact\(summary.today_tokens\) : '—'/);
+});
+
 test('explicit post-mutation reload supersedes old work; stale result cannot win', async () => {
   const {harness, useAsyncAll} = asyncHook();
   const requests = [];

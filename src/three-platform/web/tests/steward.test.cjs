@@ -31,7 +31,13 @@ function render(file, name, data, isAdmin = true, state = []) {
     '@/lib/steward': {stewardApi: new Proxy({}, {get: (_, key) => (...args) => {
       calls.push({key, args});
       if (data.api?.[key]) return data.api[key](...args);
-      return Promise.resolve(key === 'save' ? {policy: {...args[0], revision: args[0].revision + 1}} : {});
+      if (key === 'save') return Promise.resolve({policy: {...args[0], revision: args[0].revision + 1}});
+      if (key === 'addRecipient' || key === 'removeRecipient') {
+        const policy = data.props.settings.policy;
+        return Promise.resolve({policy: {...policy, revision: args[0] + 1,
+          recipients: key === 'addRecipient' ? [...policy.recipients, args[1]] : policy.recipients.filter(item => item !== args[1])}});
+      }
+      return Promise.resolve({});
     }})},
   };
   const helper = {exports: {}};
@@ -143,13 +149,42 @@ test('recipient dialog validates one address, rejects duplicates and enforces th
   await nodes(tree).filter(node => node.type === 'form')[1].props.onSubmit({preventDefault() {}});
   tree = component.rerender();
   assert.match(JSON.stringify(tree), /User@example.com/);
-  assert.equal(component.calls.length, 0, 'Adding to draft must not mutate server state');
-  assert.equal(nodes(tree).find(node => node.props?.children?.[1] === 'steward.testMail')?.props.disabled, true);
-  await nodes(tree).filter(node => node.type === 'form')[0].props.onSubmit({preventDefault() {}});
-  assert.equal(component.calls[0].key, 'save');
-  assert.deepEqual(Array.from(component.calls[0].args[0].recipients), ['existing@example.com', 'User@example.com']);
+  assert.equal(component.calls.length, 1, 'Confirming the dialog must durably append, not leave an unsaved draft');
+  assert.equal(component.calls[0].key, 'addRecipient');
+  assert.deepEqual(Array.from(component.calls[0].args), [1, 'User@example.com']);
+  assert.deepEqual(Array.from(component.values[1]), ['existing@example.com', 'User@example.com']);
+  assert.equal(nodes(tree).find(node => node.props?.children?.[1] === 'steward.testMail')?.props.disabled, false);
   assert.equal(component.values[0].revision, 2);
   assert.equal(component.values[7], '', 'A confirmed save must not become a client-side failure');
+});
+
+test('recipient conflict retains every existing address and never retries a stale whole-list save', async () => {
+  const settings = {policy: {revision: 4, recipients: ['existing@example.com', 'other@example.com']},
+    can_edit: true, recipient_count: 2, capabilities: {smtp_configured: true}};
+  const component = render('components/common/settings/AlertsPanel.tsx', 'AlertSettings', {
+    props: {settings, reload: async () => {}, unavailable: false},
+    api: {addRecipient: async () => {throw new Error('revision conflict');}},
+  });
+  nodes(component.tree).find(node => node.props?.id === 'steward-new-email').props.onChange({target: {value: 'third@example.com'}});
+  await nodes(component.rerender()).filter(node => node.type === 'form')[1].props.onSubmit({preventDefault() {}});
+  assert.deepEqual(Array.from(component.values[1]), settings.policy.recipients);
+  assert.equal(component.values[3], 'third@example.com');
+  assert.match(component.values[4], /revision conflict/);
+  assert.deepEqual(component.calls.map(call => call.key), ['addRecipient']);
+});
+
+test('removing an email targets one address instead of replacing the stored recipient list', async () => {
+  const settings = {policy: {revision: 4, recipients: ['existing@example.com', 'other@example.com']},
+    can_edit: true, recipient_count: 2, capabilities: {smtp_configured: true}};
+  const component = render('components/common/settings/AlertsPanel.tsx', 'AlertSettings', {
+    props: {settings, reload: async () => {}, unavailable: false},
+  });
+  const remove = nodes(component.tree).find(node => node.props?.['aria-label'] === 'steward.removeRecipient');
+  await remove.props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(component.calls.map(call => call.key), ['removeRecipient']);
+  assert.deepEqual(Array.from(component.calls[0].args), [4, 'existing@example.com']);
+  assert.deepEqual(Array.from(component.values[1]), ['other@example.com']);
 });
 
 test('conversation carries bounded long assistant history without downgrading it to the user limit', () => {
@@ -187,6 +222,23 @@ test('ability cards reflect the exact backend allowlist, never invented administ
   assert.match(text, /steward.tools.release_and_backup/);
   assert.doesNotMatch(text, /steward.tools.shell|steward.tools.restart/);
   assert.match(text, /steward.abilitiesBoundary/);
+});
+
+test('alert analysis is readable in the bounded panel, not an extra email promise or HTML', () => {
+  const answer = '<script>fixture-not-executable</script> safe analysis';
+  const values = {alerts: {incidents: [], deliveries: [], queue: {counts: {}}, analyses: [
+    {id: 1, incident_id: 2, created_at: 100, status: 'complete', answer},
+  ]}};
+  const {tree} = render('components/common/settings/AlertsPanel.tsx', 'AlertsPanel', {values});
+  const text = JSON.stringify(tree);
+  assert.ok(text.includes(answer));
+  assert.doesNotMatch(text, /dangerouslySetInnerHTML/);
+  assert.ok(nodes(tree).some(node => /max-h-64.*overflow-y-auto/.test(node.props?.className ?? '')));
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+    const strings = JSON.parse(read(`lib/i18n/locales/${lang}.json`)).steward;
+    assert.match(strings.dedup, /30|半小時|半小时/);
+    assert.ok(strings.analysisBoundary.length > 20);
+  }
 });
 
 test('demotion hides a draft email immediately, even before cleanup effects run', () => {

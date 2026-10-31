@@ -109,10 +109,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(steward_store.deliveries()), 2)
         self.assertNotIn('recipient', steward_store.deliveries()[0])
 
-    def test_escalation_bypasses_prior_delivery_dedup(self):
+    def test_escalation_replaces_unsent_warning_not_sends_both(self):
         self.signal()
         self.signal(severity='critical')
         self.assertEqual({r['event'] for r in steward_store.deliveries()}, {'firing', 'escalated'})
+        self.assertEqual(steward_store.claim('mail')['event'], 'escalated')
+        self.assertIsNone(steward_store.claim('mail'))
+        self.assertEqual(steward_store.deliveries()[-1]['status'], 'cancelled')
 
     def test_retry_is_bounded_unknown_is_not_replayed(self):
         self.signal(now=100)
@@ -228,7 +231,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(steward_store.analyses()[-1]['status'], 'cancelled')
         self.assertFalse(any(row['event'] == 'analysis-firing' for row in steward_store.deliveries()))
 
-    def test_analysis_separate_delivery_owner_cas_and_rule_priority(self):
+    def test_analysis_panel_result_owner_cas_never_adds_followup_mail(self):
         selected = steward_config.save({'enabled': True, 'ai_analysis': True,
                                        'recipients': ['fixture@example.com', 'other@example.com']})
         self.signal(analyze=True)
@@ -242,7 +245,8 @@ class StoreTests(unittest.TestCase):
                                           recipients=('other@example.com',))
         steward_store.observe('new-fault', True, 'critical', 'new', 'fixture', recipients=('fixture@example.com',))
         self.assertEqual(steward_store.claim('mail')['event'], 'firing')
-        self.assertEqual(steward_store.claim('mail')['event'], 'analysis-firing')
+        self.assertIsNone(steward_store.claim('mail'))
+        self.assertEqual(steward_store.analyses()[0]['answer'], '可能原因，不是根因')
 
     def test_escalation_invalidates_running_and_queued_warning_analysis(self):
         selected = steward_config.save({'enabled': True, 'ai_analysis': True, 'recipients': ['fixture@example.com']})
@@ -349,7 +353,8 @@ class MailTests(unittest.TestCase):
         self.assertNotIn('<script>', rendered['html'])
         self.assertNotIn('synthetic-secret', rendered['html'])
         self.assertNotIn('大肥鱼', rendered['text'] + rendered['html'])
-        self.assertNotIn('<img', rendered['html'])
+        self.assertIn('src="cid:' + steward_mail.LOGO_CID + '"', rendered['html'])
+        self.assertNotRegex(rendered['html'], r'<img[^>]+src="https?://')
         self.assertIn('AI 辅助', rendered['html'])
 
     def test_smtp_acceptance_has_plain_and_html_alternatives(self):
@@ -357,8 +362,13 @@ class MailTests(unittest.TestCase):
         result = steward_mail.send(self.settings, 'target@example.com', self.event, delivery_id=1, smtp_factory=lambda *a, **k: smtp)
         self.assertEqual(result['status'], 'accepted')
         parsed = BytesParser(policy=email_policy.default).parsebytes(smtp.raw)
-        self.assertIn('智汇管家', parsed['From'])
-        self.assertEqual([part.get_content_type() for part in parsed.iter_parts()], ['text/plain', 'text/html'])
+        self.assertEqual(parsed['From'].addresses[0].display_name, '小汇')
+        self.assertEqual([part.get_content_type() for part in parsed.iter_parts()], ['text/plain', 'multipart/related'])
+        images = [part for part in parsed.walk() if part.get_content_type() == 'image/png']
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].get_payload(decode=True), steward_mail.brand_logo())
+        self.assertEqual(images[0]['Content-ID'], '<' + steward_mail.LOGO_CID + '>')
+        self.assertEqual(images[0].get_content_disposition(), 'inline')
         self.assertTrue(smtp.closed)
 
     def test_after_data_timeout_is_unknown_never_safe_retry(self):
@@ -541,7 +551,7 @@ class RuntimeSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(steward_store.analyses()[0]['status'], 'cancelled')
         self.assertFalse(any(row['event'].startswith('analysis-') for row in steward_store.deliveries()))
 
-    async def test_completed_analysis_cancelled_before_smtp_after_ai_disabled(self):
+    async def test_completed_analysis_hidden_after_ai_disabled_without_extra_smtp(self):
         selected, instance = self.setup_analysis()
         item = steward_store.claim_analysis('model')
         steward_store.finish_analysis(item, 'analysis', revision=selected.revision, recipients=selected.recipients)
@@ -549,7 +559,9 @@ class RuntimeSafetyTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(steward_mail, 'send', side_effect=AssertionError('superseded mail sent')) as send:
             await instance.deliver_once()
         send.assert_not_called()
-        self.assertEqual(steward_store.deliveries()[0]['status'], 'cancelled')
+        self.assertEqual(len(steward_store.deliveries()), 1)
+        self.assertEqual(steward_store.deliveries()[0]['status'], 'accepted')
+        self.assertEqual(steward_store.analyses()[0]['answer'], '')
 
     async def test_blocking_write_finishes_before_cancellation_releases_owner(self):
         entered, release = threading.Event(), threading.Event()
@@ -704,6 +716,24 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(self.client.put('/api/steward/settings', json={}).status_code, 409)
         self.assertEqual(self.client.put('/api/steward/settings', json={'password': 'bad'}).status_code, 422)
+
+    def test_recipient_endpoints_persist_without_replacing_other_addresses(self):
+        selected = steward_config.save({'recipients': ['first@example.com', 'second@example.com']})
+        response = self.client.post('/api/steward/settings/recipients', json={
+            'revision': selected.revision, 'email': 'third@example.com'})
+        self.assertEqual(response.status_code, 200, response.text)
+        current = response.json()['policy']
+        self.assertEqual(current['recipients'], ['first@example.com', 'second@example.com', 'third@example.com'])
+        self.assertEqual(self.client.post('/api/steward/settings/recipients', json={
+            'revision': selected.revision, 'email': 'stale@example.com'}).status_code, 409)
+        response = self.client.post('/api/steward/settings/recipients/remove', json={
+            'revision': current['revision'], 'email': 'second@example.com'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['policy']['recipients'], ['first@example.com', 'third@example.com'])
+        self.user = {'role': 'account_admin', 'username': 'reader'}
+        for path in ('', '/remove'):
+            self.assertEqual(self.client.post('/api/steward/settings/recipients' + path,
+                json={'revision': current['revision'], 'email': 'first@example.com'}).status_code, 403)
 
     def test_readers_cannot_read_recipients_or_submit_service_tokens(self):
         steward_config.save({'recipients': ['private@example.com']})

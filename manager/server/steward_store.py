@@ -7,6 +7,8 @@ import time
 
 from . import db
 
+ALERT_COOLDOWN_SECONDS = 30 * 60
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS steward_incidents (
  id INTEGER PRIMARY KEY AUTOINCREMENT, rule TEXT NOT NULL,
@@ -32,6 +34,10 @@ CREATE TABLE IF NOT EXISTS steward_analysis (
  created_at INTEGER NOT NULL, finished_at INTEGER, owner TEXT NOT NULL DEFAULT '',
  error_code TEXT NOT NULL DEFAULT '', UNIQUE(incident_id,event)
 );
+CREATE TABLE IF NOT EXISTS steward_mail_windows (
+ rule TEXT NOT NULL, recipient TEXT NOT NULL, delivery_id INTEGER NOT NULL,
+ attempted_at INTEGER NOT NULL, PRIMARY KEY(rule,recipient)
+);
 '''
 
 
@@ -41,6 +47,14 @@ def ensure_schema():
         for statement in SCHEMA.split(';'):
             if statement.strip():
                 conn.execute(statement)
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(steward_analysis)')}
+        for name, declaration in (('answer', "TEXT NOT NULL DEFAULT ''"), ('policy_revision', 'INTEGER')):
+            if name not in columns:
+                conn.execute(f'ALTER TABLE steward_analysis ADD COLUMN {name} {declaration}')
+        # Old, not-yet-sent AI follow-ups must not leak through after an upgrade.
+        conn.execute("UPDATE steward_deliveries SET status='cancelled',finished_at=?,"
+                     "error_code='analysis_panel_only' WHERE status='pending' AND event LIKE 'analysis-%'",
+                     (int(time.time()),))
 
 
 def observe(rule, active, severity, title, detail, *, recipients=(), recover=True, analyze=False, now=None):
@@ -49,6 +63,17 @@ def observe(rule, active, severity, title, detail, *, recipients=(), recover=Tru
         prior = conn.execute("SELECT * FROM steward_incidents WHERE rule=? AND state='open'", (rule,)).fetchone()
         event = None
         if active and prior is None:
+            # A queued recovery describes the previous episode, not this new
+            # failure. Never send an old all-clear after a confirmed recurrence.
+            conn.execute("UPDATE steward_deliveries SET status='cancelled',finished_at=?,error_code='incident_recurred' "
+                         "WHERE status='pending' AND event IN ('recovered','analysis-recovered') AND incident_id IN "
+                         '(SELECT id FROM steward_incidents WHERE rule=?)', (now, rule))
+            conn.execute("UPDATE steward_analysis SET status='cancelled',finished_at=?,error_code='incident_recurred' "
+                         "WHERE status='pending' AND event='recovered' AND incident_id IN "
+                         '(SELECT id FROM steward_incidents WHERE rule=?)', (now, rule))
+            conn.execute("UPDATE steward_analysis SET error_code='incident_recurred' "
+                         "WHERE status='running' AND event='recovered' AND incident_id IN "
+                         '(SELECT id FROM steward_incidents WHERE rule=?)', (rule,))
             cursor = conn.execute(
                 'INSERT INTO steward_incidents(rule,severity,state,title,detail,first_seen,last_seen) '
                 "VALUES(?,?,'open',?,?,?,?)", (rule, severity, title, detail, now, now))
@@ -66,7 +91,7 @@ def observe(rule, active, severity, title, detail, *, recipients=(), recover=Tru
                              "WHERE incident_id=? AND status='running'", (ident,))
                 conn.execute("UPDATE steward_deliveries SET status='cancelled',finished_at=?,"
                              "error_code='incident_escalated' WHERE incident_id=? AND status='pending' "
-                             "AND event='analysis-firing'", (now, ident))
+                             "AND event!='recovered'", (now, ident))
             elif recipients:
                 # Enabling notifications or adding a recipient must also report
                 # an already-open incident. The unique key prevents repeated mail.
@@ -141,7 +166,7 @@ def analysis_is_current(item):
     payload = json.loads(item['payload'])
     return bool(row and (row['state'] == 'resolved') == (item['event'] == 'recovered')
                 and row['severity'] == payload['severity'] and job and job['status'] == 'running'
-                and job['owner'] == item['owner'] and job['error_code'] != 'incident_escalated')
+                and job['owner'] == item['owner'] and job['error_code'] not in ('incident_escalated', 'incident_recurred'))
 
 
 def defer_analysis(item):
@@ -157,7 +182,7 @@ def defer_analysis(item):
 
 
 def finish_analysis(item, answer, *, revision, recipients=(), code=''):
-    """An independent follow-up; never delay, suppress or replay the rule mail."""
+    """Persist a panel result; enrich an unsent rule mail, never send a follow-up."""
     now = int(time.time())
     with db.transaction() as conn:
         from . import steward_config
@@ -168,40 +193,57 @@ def finish_analysis(item, answer, *, revision, recipients=(), code=''):
             code = 'analysis_superseded'
         payload = json.loads(item['payload'])
         recipients = tuple(recipient for recipient in recipients if recipient in selected.recipients)
-        delivered = current and isinstance(answer, str) and bool(answer.strip()) and bool(recipients)
-        count = conn.execute("SELECT COUNT(*) FROM steward_deliveries WHERE status IN ('pending','sending')").fetchone()[0]
-        if delivered and count + len(recipients) <= 500:
-            payload.update(event='analysis', analysis=answer[:6000], related_event=item['event'],
-                           policy_revision=revision)
+        complete = current and isinstance(answer, str) and bool(answer.strip()) and bool(recipients)
+        from .notify import redact
+        answer = redact(answer, limit=6000) if complete else ''
+        if complete:
+            payload.update(analysis=answer, policy_revision=revision)
             for recipient in recipients:
-                conn.execute('INSERT OR IGNORE INTO steward_deliveries '
-                             '(incident_id,event,recipient,payload,next_at,created_at) VALUES(?,?,?,?,?,?)',
-                             (item['incident_id'], 'analysis-' + item['event'], recipient,
-                              json.dumps(payload, ensure_ascii=False), now, now))
-        elif delivered:
-            delivered, code = False, 'notification_queue_full'
-        changed = conn.execute('UPDATE steward_analysis SET status=?,finished_at=?,error_code=?,owner=? '
+                conn.execute("UPDATE steward_deliveries SET payload=? WHERE incident_id=? AND event=? "
+                             "AND recipient=? AND status='pending'",
+                             (json.dumps(payload, ensure_ascii=False), item['incident_id'], item['event'], recipient))
+        changed = conn.execute('UPDATE steward_analysis SET status=?,finished_at=?,error_code=?,owner=?,answer=?,policy_revision=? '
                                "WHERE id=? AND status='running' AND owner=?",
-                               ('complete' if delivered else 'cancelled' if not current else 'failed', now,
-                                code[:80], '', item['id'], item['owner'])).rowcount
+                               ('complete' if complete else 'cancelled' if not current else 'failed', now,
+                                code[:80], '', answer, revision, item['id'], item['owner'])).rowcount
         if changed != 1:
             raise RuntimeError('analysis ownership changed')
 
 
 def analyses(limit=30):
+    from . import steward_config
+    selected = steward_config.policy()
     return [dict(row) for row in db.query(
-        'SELECT id,incident_id,event,status,created_at,finished_at,error_code FROM steward_analysis '
-        'ORDER BY id DESC LIMIT ?', (max(1, min(100, limit)),))]
+        'SELECT id,incident_id,event,status,created_at,finished_at,error_code,'
+        'CASE WHEN policy_revision=? AND ? THEN answer ELSE \'\' END answer FROM steward_analysis '
+        'ORDER BY id DESC LIMIT ?', (selected.revision, selected.enabled and selected.ai_analysis, max(1, min(100, limit))))]
 
 
 def analysis_delivery_is_current(item, selected):
-    if not item['event'].startswith('analysis-'):
+    # A pre-upgrade follow-up can never bypass the new one-mail policy.
+    if item['event'].startswith('analysis-'):
+        return False
+    if item['event'].startswith('test-'):
         return True
+    incident = db.query_one('SELECT rule,state,severity FROM steward_incidents WHERE id=?',
+                            (item['incident_id'],))
+    if incident is None:
+        return False
+    if item['event'] == 'recovered':
+        return selected.send_recovery and incident['state'] == 'resolved' and not db.query_one(
+            "SELECT 1 FROM steward_incidents WHERE rule=? AND state='open'", (incident['rule'],))
+    return item['event'] in ('firing', 'escalated') and incident['state'] == 'open'
+
+
+def delivery_payload(item, selected):
     payload = json.loads(item['payload'])
     incident = db.query_one('SELECT state,severity FROM steward_incidents WHERE id=?', (item['incident_id'],))
-    return bool(selected.ai_analysis and payload.get('policy_revision') == selected.revision
-                and incident and incident['severity'] == payload.get('severity')
-                and (incident['state'] == 'resolved') == (payload.get('related_event') == 'recovered'))
+    if not (selected.ai_analysis and payload.get('policy_revision') == selected.revision
+            and incident and incident['severity'] == payload.get('severity')
+            and (incident['state'] == 'resolved') == (item['event'] == 'recovered')):
+        payload.pop('analysis', None)
+        payload.pop('policy_revision', None)
+    return payload
 
 
 def queue_state():
@@ -213,14 +255,42 @@ def queue_state():
 def claim(owner, *, now=None):
     now = int(time.time() if now is None else now)
     with db.transaction() as conn:
-        row = conn.execute("SELECT * FROM steward_deliveries WHERE status='pending' AND next_at<=? "
-                           "ORDER BY CASE WHEN event LIKE 'analysis-%' THEN 1 ELSE 0 END,id LIMIT 1",
-                           (now,)).fetchone()
-        if row is None:
-            return None
-        conn.execute("UPDATE steward_deliveries SET status='sending',owner=?,attempts=attempts+1 WHERE id=? AND status='pending'",
-                     (owner, row['id']))
-        return {**dict(row), 'owner': owner, 'attempts': row['attempts'] + 1}
+        rows = conn.execute("SELECT * FROM steward_deliveries WHERE status='pending' AND next_at<=? ORDER BY id LIMIT 500",
+                            (now,)).fetchall()
+        for row in rows:
+            code = 'analysis_panel_only' if row['event'].startswith('analysis-') else None
+            if row['event'] in ('firing', 'escalated'):
+                incident = conn.execute('SELECT rule FROM steward_incidents WHERE id=?', (row['incident_id'],)).fetchone()
+                if not incident:
+                    raise RuntimeError('delivery incident missing')
+                rule = incident['rule']
+                window = conn.execute('SELECT * FROM steward_mail_windows WHERE rule=? AND recipient=?',
+                                      (rule, row['recipient'])).fetchone()
+                if window is None:
+                    # Seed from old accepted/uncertain attempts, not from enqueue
+                    # time alone. Future timestamps also fence clock rollback.
+                    old = conn.execute('SELECT d.id,COALESCE(d.finished_at,d.created_at) at FROM steward_deliveries d '
+                        'JOIN steward_incidents i ON i.id=d.incident_id WHERE i.rule=? AND d.recipient=? '
+                        "AND d.attempts>0 AND d.event NOT IN ('recovered','analysis-recovered') "
+                        'ORDER BY at DESC,d.id DESC LIMIT 1', (rule, row['recipient'])).fetchone()
+                    if old:
+                        conn.execute('INSERT INTO steward_mail_windows VALUES(?,?,?,?)',
+                                     (rule, row['recipient'], old['id'], old['at']))
+                        window = {'delivery_id': old['id'], 'attempted_at': old['at']}
+                if window and window['delivery_id'] != row['id'] and now - window['attempted_at'] < ALERT_COOLDOWN_SECONDS:
+                    code = 'alert_cooldown_30m'
+                if not code:
+                    conn.execute('INSERT INTO steward_mail_windows VALUES(?,?,?,?) ON CONFLICT(rule,recipient) '
+                                 'DO UPDATE SET delivery_id=excluded.delivery_id,attempted_at=excluded.attempted_at',
+                                 (rule, row['recipient'], row['id'], now))
+            if code:
+                conn.execute("UPDATE steward_deliveries SET status='cancelled',finished_at=?,error_code=? WHERE id=?",
+                             (now, code, row['id']))
+                continue
+            conn.execute("UPDATE steward_deliveries SET status='sending',owner=?,attempts=attempts+1 WHERE id=? AND status='pending'",
+                         (owner, row['id']))
+            return {**dict(row), 'owner': owner, 'attempts': row['attempts'] + 1}
+        return None
 
 
 def finish(item, outcome, *, now=None):
@@ -239,6 +309,9 @@ def finish(item, outcome, *, now=None):
              '', item['id'], item['owner'])).rowcount
         if changed != 1:
             raise RuntimeError('delivery ownership changed')
+        if status in ('accepted', 'unknown') and item['event'] in ('firing', 'escalated'):
+            conn.execute('UPDATE steward_mail_windows SET attempted_at=MAX(attempted_at,?) WHERE delivery_id=?',
+                         (now, item['id']))
 
 
 def queue_test(recipient, *, actor):

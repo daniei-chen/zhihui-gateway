@@ -43,3 +43,10 @@ test('role descriptions state visibility separately from action authority in all
   assert.match(zh.settings.usersNewDesc, /查看全部页面/);
   assert.doesNotMatch(zh.settings.usersNewDesc, /不能查看/);
 });
+
+test('steward and alerts navigation scrolls inside its own mobile width', () => {
+  const source = read('app/(main)/settings/layout.tsx');
+  const special = source.slice(source.indexOf("if (tab === 'steward' || tab === 'alerts')"), source.indexOf('if (!cfg)'));
+  assert.match(special, /min-w-0 max-w-full overflow-x-auto/);
+  assert.match(special, /<SectionTabs/);
+});

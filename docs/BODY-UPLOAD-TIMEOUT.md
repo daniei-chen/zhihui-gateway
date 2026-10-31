@@ -32,9 +32,20 @@ operates engine-to-provider. Neither compresses the earlier client-to-Manager
 upload. An external client's own context compaction can reduce its upload size
 but does not guarantee delivery within any particular duration.
 
-This change does not silently accept gzip-encoded incoming JSON or add an
-unbounded decompressor. A client needs an explicitly supported compression
-protocol before it can upload compressed JSON.
+The candidate explicitly accepts one gzip member with `Content-Encoding: gzip`.
+Wire and decoded data are independently bounded. CRC, truncation, concatenated
+members, trailing bytes and aggregate capacity are validated before forwarding.
+
+`manager/client/zhihui_upload.py` implements the client-side policy: skip below
+256 KiB, gzip level 1 above it, use gzip only if it saves at least ten percent.
+Third-party clients must opt in; server changes cannot compress bytes before a
+remote client uploads them. The decoded limit remains 128 MiB.
+
+The reviewed host transaction sets Manager input/forward limits to 128 MiB,
+retained input+output budget to 384 MiB, and large concurrency to 2. WorkBuddy
+retains a 256 MiB raw-body budget with a 128 MiB per-request limit. These are
+byte budgets, not whole-heap guarantees: parsed objects/temporary copies still
+need the process memory guard. Qoder/Trae retain their separate provider limits.
 
 ## Evidence And Release Boundary
 

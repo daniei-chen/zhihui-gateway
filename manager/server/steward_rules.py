@@ -34,6 +34,17 @@ def evaluate(snapshot, policy):
                          or latency is None else latency >= policy.latency_warning_ms,
                          'warning', '调用完成耗时上升',
                          f'最近成功请求的总耗时 P95 为 {latency} ms；它受输出长度影响，不等于首字延迟。'))
+    for code, field, threshold, title, note in (
+            ('channel_verification', 'channel_rejections', 5, '上游渠道校验拒绝增多',
+             '核对官方客户端、授权方式及上游支持范围，不绕过渠道校验。'),
+            ('upstream_authorization', 'upstream_auth_failures', 3, '上游授权失败需要核对',
+             '按平台检查授权是否有效；不输出账号标识或令牌，不自动重放登录。'),
+            ('pool_capacity', 'pool_unavailable', 3, '账号池暂不可用',
+             '上游报告没有可用账号，核对可用余额、授权和平台范围。')):
+        count = traffic.get(field)
+        output.append(Signal(code, None if type(count) is not int else count >= threshold,
+            'critical' if code == 'channel_verification' else 'warning', title,
+            f'最近5分钟稳定错误分类记录 {count} 次；{note}'))
     unknown = snapshot['budget']['unknown_count']
     output.append(Signal('budget_evidence', unknown >= policy.budget_unknown_warning, 'warning',
                          '部分用量仍待核对', f'共有 {unknown} 条预算待核对；不能据此断言扣费，也不能无证据清零。'))

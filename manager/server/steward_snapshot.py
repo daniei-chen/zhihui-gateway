@@ -91,9 +91,18 @@ def local_facts(now=None):
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     n, failed = int(traffic['n']), int(traffic['failed'] or 0)
+    classified = db.query_one(
+        "SELECT SUM(CASE WHEN error_code IN ('channel_check_rejected','11128','11-128') THEN 1 ELSE 0 END) channel,"
+        "SUM(CASE WHEN error_source='upstream' AND (http_status=401 OR error_code IN "
+        "('session_dead','invalid_grant','upstream_unauthorized')) THEN 1 ELSE 0 END) auth,"
+        "SUM(CASE WHEN error_code IN ('no_healthy_account','11102') THEN 1 ELSE 0 END) pool "
+        "FROM request_outcomes WHERE ts>=? AND protocol!='http' AND terminal_state!='completed'", (now - 300,))
     return {'observed_at': now, 'resources': resources(),
             'traffic': {'window_seconds': 300, 'requests': n, 'failed': failed,
                         'failure_percent': round(100 * failed / n, 2) if n else None,
+                        'channel_rejections': int(classified['channel'] or 0),
+                        'upstream_auth_failures': int(classified['auth'] or 0),
+                        'pool_unavailable': int(classified['pool'] or 0),
                         'p95_total_latency_ms': p95, 'latency_samples': len(samples),
                         'latency_note': '最近最多500条成功请求的总耗时，不是首字延迟'},
             'budget': {'unknown_count': int(unknown['n']), 'oldest_at': unknown['oldest'],

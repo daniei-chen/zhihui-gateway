@@ -958,6 +958,17 @@
         "manager/server/config.py:steward"
       ],
       "description": "Operator-owned 0600 credential file; never exposed through the panel."
+    },
+    "WB_GATEWAY_MAX_FORWARD_BODY_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:max_forward_body_bytes"
+      ],
+      "default": 64,
+      "minimum": 1,
+      "maximum": 512,
+      "unit": "MiB"
     }
   }
 }

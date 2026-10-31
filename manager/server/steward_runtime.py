@@ -127,13 +127,21 @@ class StewardRuntime:
                     or (not selected.enabled and not item['event'].startswith('test-')) or not current):
                 result = {'status': 'cancelled', 'code': 'recipient_or_policy_changed'}
             else:
-                payload = json.loads(item['payload'])
                 transport = await joined_thread(steward_config.smtp_settings)
-                try:
-                    result = await joined_thread(steward_mail.send, transport,
-                                                 item['recipient'], payload, delivery_id=item['id'])
-                except Exception:
-                    result = {'status': 'unknown', 'code': 'notification_transport_outcome_unknown'}
+                # Preparation may block. Re-read authority after it, before the
+                # SMTP effect; never send a recovery for a confirmed recurrence.
+                selected = await joined_thread(steward_config.policy)
+                current = await joined_thread(steward_store.analysis_delivery_is_current, item, selected)
+                if (item['recipient'] not in selected.recipients
+                        or (not selected.enabled and not item['event'].startswith('test-')) or not current):
+                    result = {'status': 'cancelled', 'code': 'recipient_or_policy_changed'}
+                else:
+                    payload = await joined_thread(steward_store.delivery_payload, item, selected)
+                    try:
+                        result = await joined_thread(steward_mail.send, transport,
+                                                     item['recipient'], payload, delivery_id=item['id'])
+                    except Exception:
+                        result = {'status': 'unknown', 'code': 'notification_transport_outcome_unknown'}
         except Exception:
             log.error('steward delivery unavailable; no credentials or provider body logged')
             result = {'status': 'retry', 'code': 'notification_configuration_unavailable'}

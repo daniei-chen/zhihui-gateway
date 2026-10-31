@@ -1029,9 +1029,17 @@ async def messages(request: Request):
                     'api_error', code=detail.get('code'))
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
-    budget_error = gateway._prepare_forward(key,payload)
-    if budget_error:
-        return budget_error
+    wire = gateway._prepare_forward(key,payload)
+    if isinstance(wire, JSONResponse):
+        error = json.loads(wire.body).get('error') or {}
+        error_type = error.get('type', 'api_error')
+        if error_type == 'server_error':
+            error_type = 'api_error'
+        response = _err(error.get('message', '请求无法转发'), wire.status_code,
+                        error_type, code=error.get('code'))
+        if wire.headers.get('Retry-After'):
+            response.headers['Retry-After'] = wire.headers['Retry-After']
+        return response
     started = time.time()
 
     # U13（2026-10-28）：与 gateway `_chat` **共用同一套预算对象**（连接 / 首包 /
@@ -1047,7 +1055,7 @@ async def messages(request: Request):
         try:
             async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream)) as client:
                 resp = await deadline_mod.await_total(
-                    client.post(url, json=payload,
+                    client.post(url, content=wire,
                                 headers=gateway._upstream_headers(upstream)),
                     request_deadline)
             state=observability.current.get()
@@ -1104,7 +1112,7 @@ async def messages(request: Request):
     client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
     resp = None
     try:
-        req = client.build_request('POST', url, json=payload,
+        req = client.build_request('POST', url, content=wire,
                                    headers=gateway._upstream_headers(upstream))
         # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
         resp = await deadline_mod.await_headers(client.send(req, stream=True),

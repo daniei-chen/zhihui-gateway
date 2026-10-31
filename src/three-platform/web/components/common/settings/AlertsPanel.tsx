@@ -58,15 +58,36 @@ function AlertSettings({settings, reload, unavailable}: {settings: StewardSettin
     } finally { if (mounted.current) setBusy(false); }
   }
 
-  function addRecipient(event: FormEvent) {
+  async function changeRecipient(email: string, remove = false) {
+    if (!editable || busy || dirty) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const method = remove ? stewardApi.removeRecipient : stewardApi.addRecipient;
+      const result = await method(policy.revision, email);
+      if (mounted.current) {
+        setPolicy(result.policy); setRecipients(result.policy.recipients);
+        setAdding(false); setAddress(''); setAddressError('');
+        setNotice(t('steward.saved'));
+        try {
+          if (await reload() === false && mounted.current) setNotice(t('steward.savedRefreshFailed'));
+        } catch {
+          if (mounted.current) setNotice(t('steward.savedRefreshFailed'));
+        }
+      }
+    } catch (failure) {
+      if (mounted.current) {setError(errText(failure)); setAddressError(errText(failure));}
+    } finally { if (mounted.current) setBusy(false); }
+  }
+
+  async function addRecipient(event: FormEvent) {
     event.preventDefault();
     if (!editable || busy) return;
     const problem = recipientProblem(address, recipients);
     if (problem) { setAddressError(t(`steward.recipientError.${problem}`)); return; }
-    setRecipients(previous => [...previous, normalizeRecipient(address)]);
-    setAdding(false); setAddress(''); setAddressError('');
+    await changeRecipient(normalizeRecipient(address));
   }
-  const dirty = JSON.stringify({...policy, recipients}) !== JSON.stringify(settings.policy);
+  const dirty = Object.keys(policy).some(key => key !== 'revision' && key !== 'recipients'
+    && policy[key as keyof StewardPolicy] !== settings.policy[key as keyof StewardPolicy]);
 
   async function test() {
     if (!editable || busy || dirty) return;
@@ -94,10 +115,10 @@ function AlertSettings({settings, reload, unavailable}: {settings: StewardSettin
       <Switch aria-label={t('steward.enableAlerts')} checked={policy.enabled} disabled={!editable || busy} onCheckedChange={enabled => setPolicy(previous => ({...previous, enabled}))} /></div>
     <div className="grid gap-4 md:grid-cols-2">
       <div className="space-y-3" aria-labelledby="steward-recipients"><div className="flex items-center justify-between gap-2"><Label id="steward-recipients">{t('steward.recipients')}</Label>
-        {editable ? <Button type="button" size="sm" variant="outline" className="rounded-full" disabled={busy || recipients.length >= 10} onClick={() => {setAdding(true); setAddress(''); setAddressError('');}}><Plus size={13} />{t('steward.addRecipient')}</Button> : null}</div>
+        {editable ? <Button type="button" size="sm" variant="outline" className="rounded-full" disabled={busy || dirty || recipients.length >= 10} onClick={() => {setAdding(true); setAddress(''); setAddressError('');}}><Plus size={13} />{t('steward.addRecipient')}</Button> : null}</div>
         {isAdmin && settings.can_edit ? <ul className="space-y-2">
           {recipients.map(email => <li key={email} className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 px-3 py-2 text-xs"><Mail size={14} className="shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 break-all">{email}</span>
-            <Button type="button" size="icon" variant="ghost" className="size-8 shrink-0 rounded-full" aria-label={t('steward.removeRecipient', {email})} disabled={!editable || busy} onClick={() => setRecipients(previous => previous.filter(item => item !== email))}><X size={13} /></Button></li>)}
+            <Button type="button" size="icon" variant="ghost" className="size-8 shrink-0 rounded-full" aria-label={t('steward.removeRecipient', {email})} disabled={!editable || busy || dirty} onClick={() => void changeRecipient(email, true)}><X size={13} /></Button></li>)}
           {!recipients.length ? <li className="rounded-2xl border border-dashed border-border p-5 text-center text-xs text-muted-foreground">{t('steward.noRecipients')}</li> : null}
         </ul> : null}
         <p className="text-[10px] text-muted-foreground">{editable ? t('steward.recipientsHint') : t('steward.recipientCount', {n: settings.recipient_count})}</p></div>
@@ -115,7 +136,7 @@ function AlertSettings({settings, reload, unavailable}: {settings: StewardSettin
     </div>
     <p className="text-[11px] leading-6 text-muted-foreground">{t('steward.thresholdHint')}</p>
     {editable ? <div className="flex flex-wrap gap-2"><Button type="submit" size="sm" className="rounded-full" disabled={busy}>{t('steward.save')}</Button>
-      <Button type="button" variant="outline" size="sm" className="rounded-full" disabled={busy || dirty || !settings.capabilities.smtp_configured || !settings.recipient_count} onClick={() => void test()}><Mail />{t('steward.testMail')}</Button>
+      <Button type="button" variant="outline" size="sm" className="rounded-full" disabled={busy || dirty || !settings.capabilities.smtp_configured || !recipients.length} onClick={() => void test()}><Mail />{t('steward.testMail')}</Button>
       {dirty ? <p role="status" className="w-full text-[11px] text-muted-foreground">{t('steward.unsaved')}</p> : null}</div> : <p className="text-xs text-muted-foreground">{t('steward.settingsReadOnly')}</p>}
     {notice && isAdmin && settings.can_edit ? <p role="status" className="text-xs text-emerald-700">{notice}</p> : null}
     {error && isAdmin && settings.can_edit ? <p role="alert" className="text-xs text-red-600">{error}</p> : null}
@@ -182,7 +203,7 @@ export function AlertsPanel() {
       <div tabIndex={0} aria-label={t('steward.deliveries')} className="max-h-80 space-y-2 overflow-y-auto overscroll-contain pr-1">{rows?.deliveries.map(row => <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 py-3 text-xs"><span className="min-w-0 break-all text-muted-foreground">#{row.id} · {formatTime(row.created_at)}{isAdmin && row.recipient ? ` · ${row.recipient}` : ''}</span><span>{t(`steward.delivery.${row.status}`)}</span></div>)}</div>
       {rows?.analyses.length ? <div className="mt-5 border-t border-border pt-4"><h4 className="mb-2 text-xs font-medium">{t('steward.analysisRecords')}</h4>
         <p className="mb-3 text-[11px] leading-6 text-muted-foreground">{t('steward.analysisBoundary')}</p>
-        <div tabIndex={0} aria-label={t('steward.analysisRecords')} className="max-h-64 overflow-y-auto overscroll-contain">{rows.analyses.map(row => <p key={row.id} className="flex flex-wrap justify-between gap-2 py-2 text-xs"><span className="text-muted-foreground">#{row.incident_id} · {formatTime(row.created_at)}</span><span>{t(`steward.analysis.${row.status}`)}</span></p>)}</div></div> : null}
+        <div tabIndex={0} aria-label={t('steward.analysisRecords')} className="max-h-64 overflow-y-auto overscroll-contain">{rows.analyses.map(row => <article key={row.id} className="border-b border-border/60 py-3 text-xs"><p className="flex flex-wrap justify-between gap-2"><span className="text-muted-foreground">#{row.incident_id} · {formatTime(row.created_at)}</span><span>{t(`steward.analysis.${row.status}`)}</span></p>{row.answer ? <p className="mt-3 whitespace-pre-wrap break-words leading-6 text-muted-foreground">{row.answer}</p> : null}</article>)}</div></div> : null}
     </div>
   </section>;
 }

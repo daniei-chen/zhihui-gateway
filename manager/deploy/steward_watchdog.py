@@ -30,6 +30,7 @@ except ImportError:
 RULES = frozenset({'manager_readiness', 'collector_liveness'})
 TERMINAL = frozenset({'accepted', 'failed', 'rejected', 'cancelled'})
 PUBLIC_POLICY_MAX_AGE = 24 * 3600
+ALERT_COOLDOWN_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,8 @@ def validate_state(state, now):
     ids, identities = set(), set()
     for item in state['outbox']:
         if (not isinstance(item, dict)
-                or set(item) != {'id', 'recipient', 'status', 'attempts', 'next_at', 'created_at', 'code', 'payload', 'generation'}
+                or set(item) - {'id', 'recipient', 'status', 'attempts', 'next_at', 'created_at', 'code', 'payload', 'generation', 'attempted_at'}
+                or not {'id', 'recipient', 'status', 'attempts', 'next_at', 'created_at', 'code', 'payload', 'generation'} <= set(item)
                 or not integer(item.get('id')) or not 0 < item['id'] < state['next_id'] or item['id'] in ids
                 or not integer(item.get('attempts')) or item['attempts'] > 3
                 or any(not integer(item.get(key)) for key in ('next_at', 'created_at', 'generation'))
@@ -197,6 +199,8 @@ def validate_state(state, now):
                 or not isinstance(item['code'], str) or not re.fullmatch(r'[a-z0-9_]{0,80}', item['code'])
                 or not isinstance(item['recipient'], str) or Policy.emails([item['recipient']]) != [item['recipient']]):
             raise ValueError('invalid_watchdog_delivery')
+        if 'attempted_at' in item and (not integer(item['attempted_at']) or item['attempts'] < 1):
+            raise ValueError('invalid_watchdog_attempt_time')
         payload = item['payload']
         if (not isinstance(payload, dict)
                 or set(payload) != {'rule', 'event', 'severity', 'title', 'detail', 'observed_at'}
@@ -270,7 +274,7 @@ def run_once(paths, *, probe=readiness, control=read_control, maintenance=publis
             if item['status'] == 'sending':
                 item.update(status='unknown', code='watchdog_interrupted')
         state['outbox'] = [item for item in state['outbox'] if item['status'] not in TERMINAL
-                           or now - item['created_at'] < 7 * 86400]
+                           or now - max(item['created_at'], item.get('attempted_at', item['next_at'])) < 7 * 86400]
         try:
             facts = control(paths)
         except (OSError, sqlite3.Error):
@@ -312,7 +316,16 @@ def run_once(paths, *, probe=readiness, control=read_control, maintenance=publis
         for item in state['outbox']:
             if muted or sent >= 3 or item['status'] != 'pending' or item['next_at'] > now:
                 continue
-            item.update(status='sending', attempts=item['attempts'] + 1)
+            if item['payload']['event'] == 'firing' and any(
+                    old['id'] != item['id'] and old['attempts'] > 0
+                    and old['recipient'] == item['recipient'] and old['payload']['event'] == 'firing'
+                    and old['payload']['rule'] == item['payload']['rule']
+                    and now - old.get('attempted_at', max(old['created_at'], old['next_at'])) < ALERT_COOLDOWN_SECONDS
+                    for old in state['outbox']):
+                item.update(status='cancelled', code='alert_cooldown_30m')
+                atomic(target, state)
+                continue
+            item.update(status='sending', attempts=item['attempts'] + 1, attempted_at=now)
             atomic(target, state)  # Durable before any external effect.
             try:
                 raw = json.loads(steward_config.secret_file(paths.smtp))
@@ -321,12 +334,30 @@ def run_once(paths, *, probe=readiness, control=read_control, maintenance=publis
             except Exception:
                 outcome = {'status': 'retry', 'code': 'watchdog_notification_unavailable'}
             else:
+                # A sequential SMTP batch can take over two minutes. A policy
+                # removed in the meantime must not keep sending to old targets.
                 try:
-                    outcome = (sender or steward_mail.send)(transport, item['recipient'], item['payload'],
-                                                           delivery_id='watchdog-' + str(item['id']))
-                except Exception:
-                    outcome = {'status': 'unknown', 'code': 'watchdog_transport_outcome_unknown'}
-            if (not isinstance(outcome, dict) or outcome.get('status') not in ('accepted', 'unknown', 'rejected', 'retry')
+                    latest = control(paths)
+                except (OSError, sqlite3.Error):
+                    latest = None
+                if latest is not None:
+                    if not isinstance(latest, dict) or set(latest) != {'policy', 'heartbeat'}:
+                        raise ValueError('invalid_watchdog_control')
+                    selected = steward_config.validate_policy(latest['policy'] if latest['policy'] is not None else {})
+                    state['policy'], state['policy_at'] = selected.model_dump(), now
+                rule = state['rules'].get(item['payload']['rule'])
+                if (not selected.enabled or item['recipient'] not in selected.recipients
+                        or not rule or rule['generation'] != item['generation']
+                        or rule['active'] != (item['payload']['event'] == 'firing')
+                        or item['payload']['event'] == 'recovered' and not selected.send_recovery):
+                    outcome = {'status': 'cancelled', 'code': 'policy_or_state_changed'}
+                else:
+                    try:
+                        outcome = (sender or steward_mail.send)(transport, item['recipient'], item['payload'],
+                                                               delivery_id='watchdog-' + str(item['id']))
+                    except Exception:
+                        outcome = {'status': 'unknown', 'code': 'watchdog_transport_outcome_unknown'}
+            if (not isinstance(outcome, dict) or outcome.get('status') not in ('accepted', 'unknown', 'rejected', 'retry', 'cancelled')
                     or not isinstance(outcome.get('code', ''), str)
                     or not re.fullmatch(r'[a-z0-9_]{0,80}', outcome.get('code', ''))):
                 raise ValueError('invalid_watchdog_transport_result')

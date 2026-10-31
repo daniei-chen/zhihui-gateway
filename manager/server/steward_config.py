@@ -63,8 +63,9 @@ def validate_policy(value):
 
 
 def policy():
-    value = db.get_setting(SETTING)
-    return validate_policy({} if value is None else value)
+    row = db.query_one('SELECT value FROM settings WHERE key=?', (SETTING,))
+    # A corrupt recipient configuration is not a new, empty configuration.
+    return validate_policy({} if row is None else json.loads(row['value']))
 
 
 def save(value):
@@ -76,6 +77,24 @@ def save(value):
         selected.revision += 1
         db.set_setting(SETTING, selected.model_dump())
     return selected
+
+
+def change_recipient(revision, email, *, remove=False):
+    address = Policy.emails([email])[0]
+    with db.transaction():
+        current = policy()
+        if revision != current.revision:
+            raise ValueError('预警设置已被其他会话更新，请刷新后重试')
+        matched = [item for item in current.recipients if item.casefold() == address.casefold()]
+        if remove:
+            if not matched:
+                raise ValueError('这个邮箱已不在通知列表中，请刷新后重试')
+            recipients = [item for item in current.recipients if item not in matched]
+        else:
+            if matched:
+                raise ValueError('这个邮箱已经在列表中')
+            recipients = [*current.recipients, address]
+        return save({**current.model_dump(), 'recipients': recipients})
 
 
 def secret_file(path, *, limit=16384):

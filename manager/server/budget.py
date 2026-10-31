@@ -119,7 +119,7 @@ def _env_int(name, default):
 def _owned(row, state):
     return row['owner'] == budgetowner.identity() and row['fence'] == getattr(state, 'budget_fence', None)
 
-def prepare(key, body):
+def prepare(key, body, *, encoded_body=None):
     state = observability.current.get()
     if state is None: return
     state.key_id = int(key['id'])
@@ -168,7 +168,8 @@ def prepare(key, body):
         qc = ledger.units(fresh['quota_credit'])
         uc = fresh['used_credit_units'] if fresh['used_credit_units'] is not None else ledger.units(fresh['used_credit'])
         # Conservative byte estimate, with framing headroom; images use extra room.
-        encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        encoded = (encoded_body if isinstance(encoded_body, bytes) else
+                   json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
         estimated_input = len(encoded) + 2048
         if b'"image_url"' in encoded: estimated_input += 32768
         output_field = 'max_completion_tokens' if 'max_completion_tokens' in body else 'max_tokens'

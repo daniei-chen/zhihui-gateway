@@ -63,7 +63,10 @@ class WatchdogTests(unittest.TestCase):
         self.run_at(400)
         self.run_at(460)
         self.assertEqual(self.state()['rules']['manager_readiness']['generation'], 2)
-        self.assertEqual(self.sender.call_count, 3)
+        self.assertEqual(self.sender.call_count, 2)
+        self.assertEqual(self.state()['outbox'][-1]['code'], 'alert_cooldown_30m')
+        self.run_at(2000)
+        self.assertEqual(self.sender.call_count, 2, 'Suppressed events do not become a delayed email burst')
 
     def test_enable_during_open_fault_and_new_recipient_are_not_lost(self):
         self.selected = steward_config.Policy()

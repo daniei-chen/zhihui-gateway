@@ -55,6 +55,7 @@ export interface StewardDelivery {
 export interface StewardAnalysis {
   id: number; incident_id: number; event: string; status: string;
   created_at: number; finished_at: number | null; error_code: string;
+  answer?: string;
 }
 
 export interface StewardSettings {
@@ -73,6 +74,10 @@ export const stewardApi = {
     queue: {counts: Record<string, number>; oldest_pending_at: number | null}}>('/api/steward/alerts').then(r => r.data),
   settings: () => http.get<StewardSettings>('/api/steward/settings').then(r => r.data),
   save: (policy: StewardPolicy) => http.put<{ok: boolean; policy: StewardPolicy}>('/api/steward/settings', policy).then(r => r.data),
+  addRecipient: (revision: number, email: string) => http.post<{ok: boolean; policy: StewardPolicy}>(
+    '/api/steward/settings/recipients', {revision, email}).then(r => r.data),
+  removeRecipient: (revision: number, email: string) => http.post<{ok: boolean; policy: StewardPolicy}>(
+    '/api/steward/settings/recipients/remove', {revision, email}).then(r => r.data),
   test: () => http.post<{queued: number[]; accepted_by_smtp: boolean}>('/api/steward/test-mail').then(r => r.data),
   chat: (question: string, history: ConversationMessage[], signal?: AbortSignal) =>
     http.post<{answer: string; model: string; tools: string[]; observed_at: number; read_only: boolean}>(

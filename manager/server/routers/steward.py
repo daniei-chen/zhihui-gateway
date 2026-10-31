@@ -36,10 +36,11 @@ def alerts(user: dict = Depends(security.require_session_reader)):
 @router.get('/settings')
 def settings(user: dict = Depends(security.require_session_reader)):
     selected = steward_config.policy().model_dump()
+    recipient_count = len(selected['recipients'])
     if user['role'] != 'admin':
         selected['recipients'] = []
     return {'policy': selected, 'can_edit': user['role'] == 'admin',
-            'recipient_count': len(steward_config.policy().recipients),
+            'recipient_count': recipient_count,
             'capabilities': steward_config.capabilities()}
 
 
@@ -55,6 +56,35 @@ def save_settings(body: steward_config.Policy, request: Request,
                    f'revision={selected.revision};recipients={len(selected.recipients)};enabled={selected.enabled}',
                    client_ip(request))
     return {'policy': selected.model_dump(), 'ok': True}
+
+
+class RecipientChange(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    revision: int = Field(ge=0)
+    email: str = Field(min_length=3, max_length=254)
+
+
+def _recipient_change(body, request, user, *, remove):
+    try:
+        with security.authorization_guard(user):
+            selected = steward_config.change_recipient(body.revision, body.email, remove=remove)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    security.audit(user, 'steward.recipient.remove' if remove else 'steward.recipient.add', '',
+                   f'revision={selected.revision};recipients={len(selected.recipients)}', client_ip(request))
+    return {'policy': selected.model_dump(), 'ok': True}
+
+
+@router.post('/settings/recipients')
+def add_recipient(body: RecipientChange, request: Request,
+                  user: dict = Depends(security.require_session_admin)):
+    return _recipient_change(body, request, user, remove=False)
+
+
+@router.post('/settings/recipients/remove')
+def remove_recipient(body: RecipientChange, request: Request,
+                     user: dict = Depends(security.require_session_admin)):
+    return _recipient_change(body, request, user, remove=True)
 
 
 @router.post('/test-mail')

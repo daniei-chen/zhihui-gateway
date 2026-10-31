@@ -17,7 +17,8 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
 from .. import observability
-from ..requestbody import BodyReadTimeout, BodyReadWindow
+from ..requestbody import (BodyReadTimeout, BodyReadWindow, BodyEncodingError,
+                          BodySizeExceeded, body_frames, content_encoding)
 from ..services import modelcatalog, modelmap, proxyroutes
 from ..config import _env_int
 from ..routers.security import get_config as get_security_config
@@ -279,31 +280,14 @@ def _bearer(request: Request) -> str:
     return request.headers.get('x-api-key', '').strip()
 
 
-# 请求体上限。
-#
-# 上游 9d1a21b **移除了** `server.max_body_mb`，其 chat handler 也不再预拦截
-# （`io.ReadAll(r.Body)` 不设限，超限问题交给上游自然响应）。所以本端不能再拿
-# 那个键当上限来源 —— 读不到就回落默认值的话，本端会变成**隐性瓶颈**：
-# 用户发一个 20MB 的正常大上下文请求，上游能处理，我们却先 413 拦掉，而且
-# 报错里指的那个配置项在上游已经不存在了，按文档怎么调都没用。
-#
-# 但**不能因此去掉上限**：上游是 Go，读的是流且能背压；本端要在内存里拼出完整
-# body 再 json.loads，几个并发的大请求就能把内存吃光（这正是当初加上限的原因）。
-# 所以做法是：上限改成**本端自己的**配置（`WB_GATEWAY_MAX_BODY_MB`），默认调到
-# 32 MB —— 足够容纳常见的长上下文与附件，又不会让单进程内存失控。
-#
-# 上限取值（v2.4.0 语义 + 本端硬顶）：
-#   1. 上游 config.json 的 server.max_body_mb（本机 2api 写的是 1024）——**采信**；
-#   2. 读不到/没这个键 → 本端 WB_GATEWAY_MAX_BODY_MB（默认 64MB）；
-#   3. 无论哪种，都不超过本端硬顶 WB_GATEWAY_MAX_BODY_CEILING_MB（默认 1024）。
-# 为什么硬顶必须留在**网关**：本端要把完整 body 读进内存再 json.loads（峰值约
-# 体积的 2~3 倍），上游 Go 端能背压、本端不能。配置写错（比如填 99999）时
-# 不能把进程内存一次性交出去。
+# Manager owns ingress limits. A legacy upstream setting may only tighten them.
+# Serialized, transformed bodies have a separate finite egress limit.
 _BODY_LIMIT_TTL = 10
 _body_limit_cache: dict[str, float | int] = {'at': 0.0, 'bytes': 0, 'source': ''}
 DEFAULT_MAX_BODY_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_MB', 64))
 # 本端硬顶：上游配置再大也不越过它（保护本进程内存，见上面的说明）
 BODY_CEILING_MB = max(1, _env_int('WB_GATEWAY_MAX_BODY_CEILING_MB', 1024))
+DEFAULT_MAX_FORWARD_BODY_MB = max(1, _env_int('WB_GATEWAY_MAX_FORWARD_BODY_MB', 64))
 # 上限是**谁**定的：'upstream' / 'env' / ''（默认），'+ceiling' 表示被硬顶截断。
 # 保留这个字段是为了 413 文案能指向真正该改的地方。
 _BODY_LIMIT_SOURCE: dict[str, str] = {'value': ''}
@@ -317,20 +301,20 @@ def _env_set(name: str) -> bool:
 def max_body_bytes() -> int:
     """当前生效的请求体上限（字节）。
 
-    取值顺序：上游 config.json 的 `server.max_body_mb` → 本端
-    `WB_GATEWAY_MAX_BODY_MB`；最后再被 `BODY_CEILING_MB` 截断。
+    本端 WB_GATEWAY_MAX_BODY_MB 与硬顶取较小值；旧 server.max_body_mb
+    只允许进一步收紧，不能放大本端上限。
     10 秒缓存：改配置很快生效，又不必每请求读文件。
     """
     now = time.time()
     cached = int(_body_limit_cache['bytes'])
-    if cached and now - float(_body_limit_cache['at']) < _BODY_LIMIT_TTL:
+    if cached and 0 <= now - float(_body_limit_cache['at']) < _BODY_LIMIT_TTL:
         return cached
     limit_mb = DEFAULT_MAX_BODY_MB
     source = 'env' if _env_set('WB_GATEWAY_MAX_BODY_MB') else ''
     try:
         cfg = json.loads(config.UPSTREAM_CONFIG.read_text(encoding='utf-8'))
-        mb = int((cfg.get('server') or {}).get('max_body_mb') or 0)
-        if mb > 0:
+        mb = (cfg.get('server') or {}).get('max_body_mb')
+        if type(mb) is int and 0 < mb < limit_mb:
             limit_mb = mb
             source = 'upstream'
     except Exception:  # noqa: BLE001
@@ -345,6 +329,10 @@ def max_body_bytes() -> int:
     _body_limit_cache['source'] = source
     _BODY_LIMIT_SOURCE['value'] = source
     return limit
+
+
+def max_forward_body_bytes() -> int:
+    return min(DEFAULT_MAX_FORWARD_BODY_MB, BODY_CEILING_MB) * 1024 * 1024
 
 # ── max_tokens 上限钳制 ────────────────────────────────────────────
 #
@@ -389,18 +377,12 @@ def clamp_max_tokens(body: dict) -> None:
 
 
 def _payload_too_large(limit: int) -> JSONResponse:
-    """413 的正文必须说清「上限是多少、谁定的、该去哪改」。
-
-    issue #180 的教训：以前不管上限从哪来都写「由环境变量 WB_GATEWAY_MAX_BODY_MB
-    决定」—— 而用户的上游是旧版、config.json 里还留着 `server.max_body_mb`，
-    面板**优先**听它，于是用户改了环境变量毫无效果，还以为面板不认这个配置。
-    """
+    """Describe the actual Manager/legacy restriction, never promise unlimited upstreams."""
     mb = limit // 1024 // 1024
     source = _BODY_LIMIT_SOURCE.get('value') or ''
     if source == 'upstream':
-        where = ('该上限来自**上游** config.json 的 server.max_body_mb（面板优先听它，'
-                 '改本端环境变量不生效）：把那个值调大并重启上游，'
-                 '或者删掉该键让面板改用 WB_GATEWAY_MAX_BODY_MB')
+        where = ('旧 config.json 的 server.max_body_mb 进一步收紧了上限；'
+                 '它不能放大本端 WB_GATEWAY_MAX_BODY_MB 或硬顶')
     elif source == 'upstream+ceiling':
         where = (f'上游允许更大，但被本端硬顶 WB_GATEWAY_MAX_BODY_CEILING_MB 截到 {mb} MB'
                  '（保护本进程内存：单请求峰值约为体积的 2~3 倍）')
@@ -414,7 +396,7 @@ def _payload_too_large(limit: int) -> JSONResponse:
                  '（改完要重启面板）')
     return _oai_error(
         f'请求体超过 {mb} MB 上限：请压缩内容（精简上下文或附件），或提高上限。'
-        f'{where}。上游自 9d1a21b 起已不再限制请求体大小',
+        f'{where}。边缘和所选上游仍各自执行独立上限，调整需同步验收内存与并发预算',
         413, 'invalid_request_error', 'payload_too_large',
     )
 
@@ -438,31 +420,38 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
     size = 0
     window = BodyReadWindow()
     try:
-        iterator = request.stream().__aiter__()
-        while True:
-            try:
-                chunk = await window.read(iterator.__anext__)
-            except StopAsyncIteration:
-                break
+        encoding = content_encoding(request.scope.get('headers', []))
+        async for frame in body_frames(request.receive, encoding, limit, window=window):
+            chunk = frame.get('body', b'')
             size += len(chunk)
             if size > limit:
                 return None, _payload_too_large(limit)
             chunks.append(chunk)
     except BodyReadTimeout as exc:
         return None, _oai_error(exc.message, 408, 'invalid_request_error', 'body_read_timeout')
+    except BodySizeExceeded:
+        return None, _payload_too_large(limit)
+    except BodyEncodingError as exc:
+        unsupported = str(exc) == 'unsupported_content_encoding'
+        return None, _oai_error('请求体编码仅支持 identity 或 gzip' if unsupported else 'gzip 请求体损坏或未完整传输',
+                                415 if unsupported else 400, 'invalid_request_error', str(exc))
     except observability.CapacityError:
         return None, _oai_error('大上下文处理容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
     except Exception:  # noqa: BLE001
         return None, _oai_error('读取请求体失败', 400)
 
+    def parse():
+        value = json.loads(b''.join(chunks))
+        invalid = _invalid_unicode_path(value) if isinstance(value, dict) else None
+        return value, invalid
     try:
-        body = json.loads(b''.join(chunks))
+        from ..services.asyncwork import joined_thread
+        body, invalid = await joined_thread(parse)
     except Exception:  # noqa: BLE001
         return None, _oai_error('请求体不是合法 JSON', 400)
     if not isinstance(body, dict):
         return None, _oai_error('请求体必须是 JSON 对象', 400)
 
-    invalid = _invalid_unicode_path(body)
     if invalid is not None:
         return None, _oai_error(f'JSON 字符串包含孤立 Unicode surrogate：{invalid}', 400,
                                 'invalid_request_error', 'invalid_unicode')
@@ -1943,7 +1932,7 @@ def _forwarding_identity(key,upstream):
     return str(key.get('id'))+'|'+str(upstream.get('base_url'))+'|'+hashlib.sha256(token.encode()).hexdigest()
 
 def _prepare_forward(key,body):
-    from .. import budget, ledger
+    from .. import budget, ledger, wirebody
     # K27：Anthropic / Responses 两个入口自己解析上游（不在本文件），所以它们
     # 路径上没有 `_chat` 的精确归因。这里补一个**粗归因**（平台 + 密钥绑定上游
     # 的 id，没有 host），保证三条协议都有 actual_platform/upstream_ref 可查；
@@ -1955,19 +1944,23 @@ def _prepare_forward(key,body):
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128),
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128))
     try:
+        wire = wirebody.encode(body, max_forward_body_bytes(),
+                               reserve=getattr(state, 'reserve_wire_body', None))
         # U05（2026-10-28）：`budget.prepare` 会在 token 配额不足时**收缩**输出
         # 上限（`body[field] = min(output, remaining - estimated_input)`），但那条
         # 路径不产生任何客户端可见信号 —— 客户端以为额度是 max_tokens，实际拿到
-        # 更小的值，表现为「回答莫名被截断」。这里只**读**收缩前后的值（budget.py
-        # 一行不改），把契约挂到 request state，由 observability 的中间件统一写进
-        # 响应头。三条协议都经过本函数，所以只此一处就够。
+        # 更小的值，表现为「回答莫名被截断」。记录收缩契约，并重新编码最终转发体，
+        # 确保实际发送的字节与校验及配额调整一致。三条协议共用此处。
         limit_field = 'max_tokens'
         limit_before = None
         if isinstance(body, dict):
             if 'max_completion_tokens' in body:
                 limit_field = 'max_completion_tokens'
             limit_before = body.get(limit_field)
-        budget.prepare(key,body)
+        budget.prepare(key,body,encoded_body=wire)
+        if body.get(limit_field) != limit_before:
+            wire = wirebody.encode(body, max_forward_body_bytes(),
+                                   reserve=getattr(state, 'reserve_wire_body', None))
         if isinstance(body, dict):
             observability.record_max_tokens_contract(
                 observability.current.get(), limit_field, limit_before,
@@ -1988,12 +1981,26 @@ def _prepare_forward(key,body):
             state.transform=json.dumps({'protocol_bridge':state.protocol if state.protocol in ('anthropic','responses') else None,'model_alias':changed},separators=(',',':'))
             ledger.forwarding(state,'prepared')
         budget.forwarded()
+    except wirebody.TooLarge:
+        observability.mark_error('gateway.request.forward_too_large')
+        return _oai_error('协议转换后的请求体超过转发上限，请精简上下文或附件；'
+                          '本端 WB_GATEWAY_MAX_FORWARD_BODY_MB 与所选上游需分别核验',
+                          413,'invalid_request_error','forward_payload_too_large')
+    except wirebody.Invalid:
+        observability.mark_error('gateway.request.invalid')
+        return _oai_error('请求转换后不是可转发的合法 JSON',400,
+                          'invalid_request_error','invalid_forward_json')
+    except observability.CapacityError:
+        response = _oai_error('入站与转发请求体容量已满，请稍后重试',503,
+                              'server_error','gateway_capacity_exceeded')
+        response.headers['Retry-After'] = '1'
+        return response
     except budget.BudgetRejected as exc:
         # U21：预算拒绝的原因本身就是稳定码（budget_pending / insufficient_quota /
         # credit_quota_exhausted / ledger_backpressure …），直接沿用。
         observability.mark_error(getattr(exc, 'code', None))
         return _oai_error(str(exc),429,'insufficient_quota',exc.code)
-    return None
+    return wire
 
 async def _chat(request: Request, upstream_path: str):
     body, err = await _read_json_body(request)
@@ -2059,9 +2066,9 @@ async def _chat(request: Request, upstream_path: str):
                     _defused, observability.current.get().request_id
                     if observability.current.get() else None, actual_platform)
     url = f'{upstream["base_url"]}{upstream_path}'
-    budget_error = _prepare_forward(key,body)
-    if budget_error:
-        return budget_error
+    wire = _prepare_forward(key,body)
+    if isinstance(wire, JSONResponse):
+        return wire
     started = time.time()
     # K21：五类时间预算（连接 / 首包 / 流中空闲 / 总时长 / 客户端取消）。
     # 默认值不改变线上行为（见 deadline.Budgets.from_config 的说明）。
@@ -2082,7 +2089,7 @@ async def _chat(request: Request, upstream_path: str):
                 try:
                     async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream)) as client:
                         resp = await deadline_mod.await_total(
-                            client.post(url, json=body, headers=_upstream_headers(upstream)),
+                            client.post(url, content=wire, headers=_upstream_headers(upstream)),
                             request_deadline)
                     # 2026-10-28：上游「明确拒绝且未处理」的有界重试。
                     # 判据见 _is_not_processed_rejection()：这类响应没有生成、
@@ -2166,7 +2173,7 @@ async def _chat(request: Request, upstream_path: str):
     handed_off = False
     try:
         while True:
-            req = client.build_request('POST', url, json=body, headers=_upstream_headers(upstream))
+            req = client.build_request('POST', url, content=wire, headers=_upstream_headers(upstream))
             resp = await deadline_mod.await_headers(
                 client.send(req, stream=True), request_deadline)
             if resp.status_code < 400:

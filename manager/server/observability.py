@@ -46,7 +46,8 @@ import uuid
 import anyio
 import threading
 import asyncio
-from .requestbody import BodyReadTimeout, BodyReadWindow
+from .requestbody import (BodyReadTimeout, BodyReadWindow, BodyDisconnected,
+                          BodyEncodingError, BodySizeExceeded, body_frames, content_encoding)
 from starlette.responses import JSONResponse, StreamingResponse
 from dataclasses import dataclass
 
@@ -723,8 +724,8 @@ class RequestAuditMiddleware:
         self.capacity_rejections = 0
         self.maximum = _env_int('WB_GATEWAY_MAX_CONCURRENCY', 8)
         self.large_maximum = _env_int('WB_GATEWAY_LARGE_MAX_CONCURRENCY', 2)
-        # Raw request-body reservations remain held through response completion.
-        # Allow headroom for JSON/Unicode/adapter copies when sizing this budget.
+        # Retained raw input plus serialized output stay reserved through response
+        # completion. JSON objects/encoder copies still need process memory headroom.
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
@@ -758,6 +759,7 @@ class RequestAuditMiddleware:
         tracked = path.startswith(("/v1/", "/v2/", "/api/", "/qoder/v1/", "/trae/v1/")) or path in ("/responses", "/messages")
         inference=state.protocol!='http' and state.method=='POST'
         admitted=False; large=False; received=0; reserved=0
+        inbound_retained=0; wire_reserved=0
         reading_body=False
         per_request_limit=None
         if inference:
@@ -769,13 +771,28 @@ class RequestAuditMiddleware:
             if state.error_stage != 'admission':
                 self.capacity_rejections += 1
             state.terminal_state,state.error_stage='rejected','admission'
-        async def receive_audited():
+        def reserve_wire_body(size):
+            nonlocal reserved, large, wire_reserved
+            if not admitted or not inference:
+                return
+            if size <= wire_reserved:
+                return
+            needed = max(reserved, inbound_retained + size)
+            extra = needed - reserved
+            needs_large = size > 1024*1024 and not large
+            if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+                    or needs_large and self.large >= self.large_maximum):
+                capacity_rejected()
+                raise CapacityError('aggregate transformed-body capacity exceeded')
+            self.inflight_body_bytes += extra
+            reserved, wire_reserved = needed, size
+            if needs_large:
+                self.large += 1; large=True
+        state.reserve_wire_body = reserve_wire_body
+        def reserve_input(size):
             nonlocal received,large,reserved
-            message=await receive()
-            received+=len(message.get('body',b''))
+            received=size
             if inference:
-                if received > per_request_limit:
-                    raise BodyLimitError()
                 needed = max(reserved, received)
                 extra = needed - reserved
                 needs_large = received > 1024*1024 and not large
@@ -789,6 +806,11 @@ class RequestAuditMiddleware:
                 reserved = needed
                 if needs_large:
                     self.large+=1; large=True
+        async def receive_audited():
+            message=await receive()
+            reserve_input(received + len(message.get('body',b'')))
+            if inference and received > per_request_limit:
+                raise BodyLimitError()
             return message
         async def send_audited(message):
             if message["type"] == "http.response.start":
@@ -859,16 +881,18 @@ class RequestAuditMiddleware:
                     reading_body=True
                     chunks=[]
                     body_window=BodyReadWindow()
-                    while True:
-                        message=await body_window.read(receive_audited)
-                        if message['type']=='http.disconnect':
-                            state.http_status=499
-                            state.terminal_state,state.error_stage='client_cancelled','request_body'
-                            return
-                        chunks.append(message)
-                        if not message.get('more_body',False):
-                            break
+                    encoding=content_encoding(scope.get('headers', []))
+                    async for message in body_frames(receive, encoding, per_request_limit,
+                                                     window=body_window, reserve=reserve_input):
+                        if message.get('body') or not message.get('more_body',False):
+                            chunks.append(message)
                     reading_body=False
+                    inbound_retained=received
+                    if encoding == 'gzip':
+                        # Downstream parsers see decompressed JSON exactly once.
+                        scope['headers']=[(k,v) for k,v in scope.get('headers', [])
+                                          if k.lower() not in (b'content-encoding', b'content-length')]
+                        scope['headers'].append((b'content-length', str(sum(len(m.get('body',b'')) for m in chunks)).encode()))
                     cursor=0
                     async def replay_body():
                         nonlocal cursor
@@ -880,13 +904,24 @@ class RequestAuditMiddleware:
                     await self.app(scope,replay_body,send_audited)
                 else:
                     await self.app(scope,receive_audited,send_audited)
-        except BodyLimitError:
+        except BodyDisconnected:
+            state.http_status=499
+            state.terminal_state,state.error_stage='client_cancelled','request_body'
+        except BodyEncodingError as exc:
+            state.terminal_state,state.error_stage='rejected','request_body'
+            state.error_code,state.error_source=str(exc),ERROR_SOURCE_GATEWAY
+            unsupported=str(exc)=='unsupported_content_encoding'
+            await reject_response(gateway._oai_error(
+                '请求体编码仅支持 identity 或 gzip' if unsupported else 'gzip 请求体损坏或未完整传输',
+                415 if unsupported else 400,'invalid_request_error',str(exc)))
+        except (BodyLimitError, BodySizeExceeded):
             state.terminal_state,state.error_stage='rejected','validation'
             await reject_response(gateway._payload_too_large(per_request_limit))
         except BodyReadTimeout as exc:
             if not reading_body:
                 raise
             state.terminal_state,state.error_stage='rejected','request_body'
+            state.error_code,state.error_source='body_read_timeout',ERROR_SOURCE_GATEWAY
             await reject_response(gateway._oai_error(exc.message,408,'invalid_request_error','body_read_timeout'))
         except CapacityError:
             if state.http_status:
@@ -972,5 +1007,6 @@ class RequestAuditMiddleware:
                     self.active-=1
                     self.inflight_body_bytes -= reserved
                 if large: self.large-=1
+                state.reserve_wire_body = None
                 current.reset(token)
 

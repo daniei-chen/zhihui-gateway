@@ -60,7 +60,7 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   fetchers: AsyncFetchers<T>,
   deps: readonly unknown[] = [],
   refreshDeps: readonly unknown[] = [],
-  options: {enabled?: boolean} = {},
+  options: {enabled?: boolean; progressive?: boolean} = {},
 ): AsyncAllState<T> {
   const enabled = options.enabled !== false;
   const [values, setValues] = useState<Partial<T>>({});
@@ -87,6 +87,8 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   ref.current = fetchers;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const progressiveRef = useRef(options.progressive === true);
+  progressiveRef.current = options.progressive === true;
 
   const run = useCallback((mode: FetchMode, background = false): Promise<boolean> => {
     if (!enabledRef.current) return Promise.resolve(true);
@@ -101,26 +103,38 @@ export function useAsyncAll<T extends Record<string, unknown>>(
     setPending(true);
 
     const keys = Object.keys(ref.current) as (keyof T)[];
-    // 逐项独立成败：一份数据挂了不该拖垮其余几份（原写法用的就是 allSettled）。
+    // Publish each field as it settles; billing or a slow pool cannot hold the
+    // already-ready cards hostage. The generation fence applies to every write.
     const currentFetchers = ref.current;
-    const promise = Promise.allSettled(keys.map((k) => Promise.resolve().then(currentFetchers[k]))).then((settled) => {
+    const progressive = progressiveRef.current;
+    const results = keys.map((key) => Promise.resolve().then(currentFetchers[key]).then(value => {
+      if (mine === seq.current && progressive) {
+        setValues(previous => ({...previous, [key]: value}));
+        setErrors(previous => {
+          const next = {...previous};
+          delete next[key];
+          return next;
+        });
+      }
+      return {status: 'fulfilled' as const, value};
+    }, error => {
+      if (mine === seq.current && progressive) setErrors(previous => ({...previous, [key]: error}));
+      return {status: 'rejected' as const, reason: error};
+    }));
+    const promise = Promise.all(results).then((settled) => {
       // 过期响应：整包丢弃。这里**返回 true 而不是 false**——这一次的成败已经
       // 不作数了（更新的那次请求才是权威），而返回 false 会让调用方凭空报一次
       // 失败（「建好了但刷新失败」这种提示会误弹）。宁可不说，也不要误报。
       if (mine !== seq.current) return true;
 
-      const fresh = splitSettled(keys as string[], settled);
-      // 刷新时**合并**而不是替换：这次失败的字段保留上一次的值。整体替换的话，
-      // 心跳里任何一个请求超时都会把已经显示出来的内容清空。
-      setValues((prev) => (
-        mode === 'initial' ? fresh.values : {...prev, ...fresh.values}
-      ) as Partial<T>);
-      // errors 整体替换：这次成功了的字段，上一次的失败记录要一并清掉，
-      // 否则「部分数据加载失败」的提示会永远挂着。
-      setErrors(fresh.errors as Partial<Record<keyof T, unknown>>);
+      if (!progressive) {
+        const fresh = splitSettled(keys as string[], settled);
+        setValues(previous => (mode === 'initial' ? fresh.values : {...previous, ...fresh.values}) as Partial<T>);
+        setErrors(fresh.errors as Partial<Record<keyof T, unknown>>);
+      }
       setPending(false);
       // 只要还有字段没取到就算「没全部成功」。调用方据此决定要不要提示用户。
-      return Object.keys(fresh.errors).length === 0;
+      return settled.every(item => item.status === 'fulfilled');
     }).finally(() => {
       if (active.current?.sequence === mine) active.current = null;
     });

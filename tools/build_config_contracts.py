@@ -90,6 +90,7 @@ def generate(service, folder):
         extras['WB_NOTIFY_CONFIG']={'type':'absolute_path','default':'/opt/notify/config.json'}
         extras['WB_GATEWAY_BODY_READ_TIMEOUT_S']={'type':'integer','default':180,'minimum':1,'maximum':600,'unit':'seconds'}
         extras['WB_GATEWAY_BODY_IDLE_TIMEOUT_S']={'type':'integer','default':60,'minimum':1,'maximum':120,'unit':'seconds'}
+        extras['WB_GATEWAY_MAX_FORWARD_BODY_MB']={'type':'integer','default':64,'minimum':1,'maximum':512,'unit':'MiB'}
         for name, patch in extras.items():
             entry(name,'manual-reviewed-runtime-constraint',0).update(patch)
     else:
