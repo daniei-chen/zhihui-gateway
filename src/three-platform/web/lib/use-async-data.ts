@@ -127,14 +127,14 @@ export function useAsyncAll<T extends Record<string, unknown>>(
       // 失败（「建好了但刷新失败」这种提示会误弹）。宁可不说，也不要误报。
       if (mine !== seq.current) return true;
 
+      const fresh = splitSettled(keys as string[], settled);
       if (!progressive) {
-        const fresh = splitSettled(keys as string[], settled);
         setValues(previous => (mode === 'initial' ? fresh.values : {...previous, ...fresh.values}) as Partial<T>);
         setErrors(fresh.errors as Partial<Record<keyof T, unknown>>);
       }
       setPending(false);
       // 只要还有字段没取到就算「没全部成功」。调用方据此决定要不要提示用户。
-      return settled.every(item => item.status === 'fulfilled');
+      return Object.keys(fresh.errors).length === 0;
     }).finally(() => {
       if (active.current?.sequence === mine) active.current = null;
     });

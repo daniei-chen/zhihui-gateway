@@ -298,6 +298,8 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/security/rules',
         'POST /api/sessions/revoke',
         'POST /api/settings/upstream',
+        'POST /api/steward/settings/recipients',
+        'POST /api/steward/settings/recipients/remove',
         # 离线升级包（issue #153）：上传的是**可执行的代码包**，且下一步就是落盘重启
         'POST /api/system/update-package',
         'POST /api/playground/chat',  # Existing live policy: session-only generation.

@@ -123,11 +123,11 @@ class SessionForwardingTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def post(self, url, **kwargs):
-                captured.append(copy.deepcopy(kwargs['json']))
+                captured.append(json.loads(kwargs['content']))
                 return Response()
 
             def build_request(self, method, url, **kwargs):
-                captured.append(copy.deepcopy(kwargs['json']))
+                captured.append(json.loads(kwargs['content']))
                 return object()
 
             async def send(self, req, **kwargs):
@@ -147,7 +147,8 @@ class SessionForwardingTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(gateway, '_upstream_for',
                 return_value=({'base_url': 'http://fixture.invalid'}, None)))
             stack.enter_context(patch.object(gateway, '_stamp_route'))
-            stack.enter_context(patch.object(gateway, '_prepare_forward', return_value=None))
+            stack.enter_context(patch.object(gateway, '_prepare_forward',
+                side_effect=lambda key, payload: json.dumps(payload).encode()))
             stack.enter_context(patch.object(gateway, '_forwarding_identity', return_value='fixture'))
             stack.enter_context(patch.object(gateway, '_upstream_headers', return_value={}))
             stack.enter_context(patch.object(gateway, '_record',

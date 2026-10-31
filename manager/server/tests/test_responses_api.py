@@ -1226,14 +1226,14 @@ class EndpointTest(unittest.TestCase):
                 self.responses = [_StreamResponse(), _JsonResponse()]
 
             def build_request(self, method, url, **kwargs):
-                self.requests.append(kwargs['json'])
+                self.requests.append(json.loads(kwargs['content']))
                 return object()
 
             async def send(self, request, stream=True):
                 return self.responses.pop(0)
 
-            async def post(self, url, *, json, **kwargs):
-                self.requests.append(json)
+            async def post(self, url, *, content, **kwargs):
+                self.requests.append(json.loads(content))
                 return self.responses.pop(0)
 
             async def aclose(self):

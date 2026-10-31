@@ -280,7 +280,11 @@ class WatchdogWindowTests(unittest.TestCase):
 class BrandMailTests(unittest.TestCase):
     def test_confirmed_brand_asset_matches_console_and_remains_small(self):
         logo = steward_mail.brand_logo()
-        public = Path(__file__).resolve().parents[3] / 'src/three-platform/web/public/favicon/android-chrome-192x192.png'
+        root = Path(__file__).resolve().parents[2]
+        web = root / 'web'
+        if not web.exists():
+            web = root.parent / 'src/three-platform/web'
+        public = web / 'public/favicon/android-chrome-192x192.png'
         self.assertEqual(hashlib.sha256(logo).hexdigest(), hashlib.sha256(public.read_bytes()).hexdigest())
         self.assertLess(len(logo), 40000)
 
