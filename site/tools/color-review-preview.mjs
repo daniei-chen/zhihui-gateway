@@ -3,6 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {simplifyHome} from './simplify-home.mjs';
 
 const site = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.join(site, 'home-source/public');
@@ -37,7 +38,7 @@ export function reviewHtml(source) {
     @media(max-width:760px){.review-console-frame{height:650px}}
     .review-badge{position:fixed;z-index:100;bottom:12px;right:12px;padding:7px 12px;border:1px solid #e7e8ec;border-radius:20px;background:#fffffff2;color:#687285;font:10px sans-serif;pointer-events:none}
     </style></head>`).replace('</body>', '<div class="review-badge">本地待审 · 合成数据 · 未上传</div></body>');
-  return html;
+  return simplifyHome(html);
 }
 
 export function createReviewServer() {

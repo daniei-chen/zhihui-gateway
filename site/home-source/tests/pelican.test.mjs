@@ -10,7 +10,8 @@ import {BIKINI_LAYOUT} from '../src/bikini-layout.js';
 import {surfacePatch} from '../src/character-surface.js';
 import {squidHeadGeometry,squidNoseGeometry} from '../src/squidward-shape.js';
 
-const html = readFileSync(new URL('../public/animations/pelican-ride.html', import.meta.url), 'utf8');
+// Retired scene remains covered for a source-level rollback, but is not loaded by the homepage.
+const html = readFileSync(new URL('../scenes/pelican-ride.html', import.meta.url), 'utf8');
 test('SpongeBob fan-art model and bicycle have finite geometry and articulated moving parts', () => {
   const model=createCoastalModel();let vertices=0,meshes=0;
   try {

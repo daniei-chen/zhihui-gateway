@@ -6,6 +6,17 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/scripts/upgrade.js', import.meta.url), 'utf8');
 
+test('sculpted Z sits beside the introductory kicker, not over the console preview', () => {
+  const dom = new JSDOM(html);
+  try {
+    const doc = dom.window.document;
+    assert.equal(doc.querySelectorAll('.hero-signature-mark').length, 1);
+    assert.ok(doc.querySelector('.hero-signature .hero-kicker'));
+    assert.equal(doc.querySelector('#preview .prism-float, #preview .hero-beam'), null);
+    assert.ok(doc.querySelector('#preview .demo-browser'));
+  } finally {dom.window.close();}
+});
+
 function fixture(withMotion = false) {
   const errors = [];
   const console = new VirtualConsole();
@@ -101,20 +112,17 @@ test('ambient motion renders, stops on pause/background/reduced motion, and resu
   } finally { f.close(); }
 });
 
-test('workspace has eight exclusive images and supports keyboard navigation', () => {
+test('duplicate workspace is removed, hero preview and all anchors remain reachable', () => {
   const f = fixture();
   try {
-    for (const button of f.w.document.querySelectorAll('[data-console]')) {
-      button.click();
-      const visible = [...f.w.document.querySelectorAll('.console-panel')].filter(node => !node.hidden);
-      assert.equal(visible.length, 1);
-      assert.equal(visible[0].dataset.panel, button.dataset.console);
-      assert.equal(f.$('#workspaceTitle').textContent, button.textContent);
-      assert.ok(visible[0].querySelector('img').getAttribute('src').startsWith('/preview/'));
+    assert.equal(f.$('#console'), null);
+    assert.equal(f.$('[data-console]'), null);
+    assert.equal(f.w.document.querySelectorAll('.console-capture').length, 1);
+    assert.ok(f.$('.hero-actions a[href="/dashboard/"]'));
+    for (const link of f.w.document.querySelectorAll('a[href^="#"]')) {
+      const id = link.getAttribute('href').slice(1);
+      if (id) assert.ok(f.w.document.getElementById(id), id);
     }
-    f.$('[data-console="security"]').dispatchEvent(new f.w.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-    assert.equal(f.$('[data-console="overview"]').getAttribute('aria-pressed'), 'true');
-    assert.equal(f.w.document.activeElement.dataset.console, 'overview');
     assert.deepEqual(f.errors, []);
   } finally { f.close(); }
 });
@@ -196,7 +204,7 @@ test('embedded ride is local and play overrides a reduced-motion default', () =>
     const ride = f.$('#pelicanRide');
     ride.contentWindow.postMessage = value => messages.push(value);
     f.w.eval(readFileSync(new URL('../public/scripts/ride.js', import.meta.url), 'utf8'));
-    assert.equal(ride.getAttribute('src'), '/animations/pelican-ride.html');
+    assert.equal(ride.getAttribute('src'), '/animations/velo-coast.html');
     assert.equal(ride.getAttribute('sandbox'), 'allow-scripts');
     assert.equal(messages.at(-1).paused, false);
     f.click('#rideMotionControl'); assert.equal(messages.at(-1).paused, true);
@@ -227,10 +235,8 @@ test('three opening screens, original scene colors, three shipping entries and d
       assert.equal(f.$(`[data-${attribute}="codex"]`), null);
     }
     assert.doesNotMatch(f.w.document.body.textContent, /四网关|四种入口|Codex/);
-    f.click('[data-open-workspace="models"]');
-    assert.equal(f.$('[data-console="models"]').getAttribute('aria-pressed'), 'true');
-    f.click('[data-open-workspace="usage"]');
-    assert.equal(f.$('[data-console="usage"]').getAttribute('aria-pressed'), 'true');
+    assert.ok(f.$('.detail-card a[href="/models/"]'));
+    assert.ok(f.$('.detail-card a[href="/stats/"]'));
     const messages = [];
     f.$('#taskWorkspace').contentWindow.postMessage = message => messages.push(message);
     f.w.eval(readFileSync(new URL('../public/scripts/ride.js', import.meta.url), 'utf8'));

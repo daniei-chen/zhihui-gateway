@@ -6,6 +6,8 @@ from pathlib import Path
 import json
 import re
 import shutil
+import os
+import subprocess
 from build_scenes import build_task_scene
 from page_content import revise_page
 
@@ -95,6 +97,8 @@ workspace = '''<section class="console-section" id="console" data-motion-scope><
 </div></div></section>'''
 html = re.sub(r'<section class="console-section".*?</section>', lambda _: workspace, html, count=1, flags=re.S)
 html = revise_page(html)
+html = subprocess.run([os.environ.get('NODE_BINARY', 'node'), str(ROOT.parent / 'tools/simplify-home.mjs')],
+                      input=html, text=True, encoding='utf-8', capture_output=True, check=True).stdout
 html = html.replace("</body>", '<script src="/scripts/upgrade.js"></script>\n<script src="/scripts/motion.js"></script>\n<script src="/scripts/ride.js"></script>\n<script type="module" src="/scripts/sculpture.js"></script>\n</body>')
 (PUBLIC / "index.html").write_text(html, encoding="utf-8")
 manifest_path = PUBLIC / "site.webmanifest"
@@ -105,4 +109,4 @@ manifest_path.write_text(json.dumps(webmanifest, ensure_ascii=False, indent=2) +
 
 # Original scene source is the publication authority.
 build_task_scene()
-print(f"Prepared light refinement: {len(styles)} original style blocks, {len(panels)} authentic preview pages.")
+print(f"Prepared light refinement: {len(styles)} original style blocks; duplicate workspace removed.")

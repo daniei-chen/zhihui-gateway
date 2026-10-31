@@ -57,11 +57,13 @@ for asset in page.assets:
     target = (PUBLIC / unquote(url.path).lstrip("/")).resolve()
     if not target.is_relative_to(PUBLIC.resolve()) or not target.is_file():
         errors.append("Missing or invalid asset: " + asset)
-if page.buttons != page.panels or len(page.panels) != 8:
-    errors.append("Workspace selector/panel mismatch")
+if page.buttons or page.panels or 'console' in page.ids:
+    errors.append("Removed duplicate workspace has returned")
+if html.count('class="console-capture"') != 1:
+    errors.append("The original hero preview must remain unique")
 if re.findall(r'<script[^>]+src="([^"]+)"', html) != ["/scripts/upgrade.js", "/scripts/motion.js", "/scripts/ride.js", "/scripts/sculpture.js"]:
     errors.append("Unexpected script ownership")
-for scene in ['task-workspace.html', 'pelican-ride.html']:
+for scene in ['task-workspace.html', 'velo-coast.html']:
     child = Page()
     child.feed((PUBLIC / 'animations' / scene).read_text(encoding='utf-8'))
     for asset in child.assets:
@@ -107,4 +109,4 @@ if re.search(r"(?<![-\w])animation(?:-[\w]+)?\s*:", base_css):
     errors.append("Legacy animation declarations remain")
 if errors:
     raise SystemExit("\n".join(errors))
-print(f"Static checks passed: {len(page.assets)} assets, {len(page.ids)} unique ids, 8 preview panels, {len(previews['previews'])} fixture hashes, {len(provenance['files'])} snapshot hashes.")
+print(f"Static checks passed: {len(page.assets)} assets, {len(page.ids)} unique ids, one hero preview, no duplicate workspace, {len(previews['previews'])} fixture hashes, {len(provenance['files'])} snapshot hashes.")

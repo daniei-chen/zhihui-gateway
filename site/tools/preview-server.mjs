@@ -43,7 +43,7 @@ export function createPreviewServer({degrade3d = false} = {}) {
       response.setHeader('Cache-Control', 'no-store');
       response.setHeader('X-Content-Type-Options', 'nosniff');
       if (login || pathname === '/') response.setHeader('Content-Security-Policy', login ? loginCsp : homeCsp);
-      if (/\/animations\/(?:task-workspace|pelican-ride)\.html$/.test(pathname)) {
+      if (/\/animations\/(?:task-workspace|pelican-ride|inspiration-flow|velo-coast)\.html$/.test(pathname)) {
         response.setHeader('X-Frame-Options', 'SAMEORIGIN');
         response.setHeader('Content-Security-Policy', sceneCsp);
       }

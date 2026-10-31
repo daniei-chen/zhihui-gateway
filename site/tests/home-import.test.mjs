@@ -49,7 +49,8 @@ test('production-like routes serve every local reference with strict MIME and CS
         assert.ok(match[0].startsWith(prefix), `${row.path}: unversioned asset`);
         if (!match[0].endsWith('/')) urls.add(match[0]);
       }
-      assert.doesNotMatch(text, /['"]\/(?:models|vendor|scripts|styles|animations)\//, row.path);
+      // /models/ is an intentional console navigation target, not a model asset.
+      assert.doesNotMatch(text, /['"]\/(?:models\/[^'"]|(?:vendor|scripts|styles|animations)\/)/, row.path);
     }
     for (const url of urls) {
       const response = await fetch(origin + url, {method: 'HEAD'});
@@ -61,7 +62,7 @@ test('production-like routes serve every local reference with strict MIME and CS
     assert.equal(response.headers.get('content-security-policy'), homeCsp);
     assert.ok(!homeCsp.includes("'unsafe-eval'"));
     assert.match(homeCsp, /frame-src 'self'/);
-    for (const scene of ['task-workspace', 'pelican-ride']) {
+    for (const scene of ['task-workspace', 'velo-coast']) {
       const child = await fetch(origin + prefix + `animations/${scene}.html`);
       assert.equal(child.headers.get('x-frame-options'), 'SAMEORIGIN');
       assert.equal(child.headers.get('content-security-policy'), sceneCsp);

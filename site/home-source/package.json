@@ -11,7 +11,9 @@
     "build:viewer": "node build-viewer.mjs",
     "build:model": "python prepare_model.py && node compress-model.mjs && python render_model.py",
     "build:gateway": "node export-gateway.mjs && python render_gateway.py",
-    "build:coastal": "node build-coastal.mjs"
+    "build:coastal": "node build-coastal.mjs",
+    "build:inspiration": "node build-inspiration.mjs",
+    "build:velo": "node build-velo.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "4.5.1",

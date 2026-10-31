@@ -1,6 +1,32 @@
-# Design QA - local homepage upgrade
+# Design QA - Selected Seaside Cycling Review (2026-10-31)
 
 final result: blocked
+
+The user selected Jacory Ou's Pelican / Velo, with a small, smooth-scene
+requirement. The current candidate uses reduced MIT-derived sea/sky, bicycle
+and cycling rig, a short-bill partridge, flower basket and one boardwalk.
+The rejected ring and retired town are not active assets. The duplicate lower
+workspace is removed; hero console and three-platform interactions remain.
+
+Actual geometry/shaders were inspected with standalone OpenGL at coast/side/
+front angles, NOT browser captures or timing. Source/DOM tests pass 63/63,
+including historical fixtures; imported closure/HTTP/CSP tests pass 7/7.
+Preserved production login remains byte-identical. Scripts measure 160693 gzip
+bytes including Three.js; poster is 70480 bytes. Geometry has 23696 triangles
+including sky/instances, 84 drawables (not measured render-pass draw calls).
+Desktop caps automatic motion at 30fps/420000 pixels; mobile at 24fps/220000
+pixels and no shadows. These are budgets, not measured device FPS.
+
+Supported browser inventory still returns Local browser use is disabled in
+Work settings. Browser visual comparison, real WebGL, opaque-origin sandbox,
+mobile gestures and device FPS remain unverified. No workaround was used.
+After user visual approval, the static candidate was deployed on 2026-10-31;
+62 public static hashes and 33 console assets verified. Browser FPS remains
+unmeasured. See seaside-release-and-server-cleanup-20261031.md.
+HTTP preview is on port 4188 with synthetic
+console on 4189; HTTP success does not establish visual acceptance.
+
+## Historical Authoring QA (Not Current Publication Scope)
 
 ## Scope and target
 

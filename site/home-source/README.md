@@ -4,6 +4,16 @@ WorkBuddy / Qoder / Trae only. Original production login is preserved separately
 The supplied four-entry and 3D login notes below are historical, not the release contract.
 Original blue-white illustrations live in scenes/; reference-site artwork is excluded.
 
+## Selected Local Cycling Review (2026-10-31)
+
+The active candidate is the small sea/boardwalk scene adapted from Jacory Ou's
+MIT Pelican / Velo. See `references/velo-lite.md` for provenance, budgets and
+verification limits. Build with `npm run build:velo` and retain upstream notice.
+The old ring and SpongeBob town are historical sources, not active assets.
+The duplicate lower workspace is removed. The three-platform production login
+is preserved separately. Notes below are historical authoring, not authority
+to publish a four-platform/3D login.
+
 # 智汇首页 · 本地浅色升级版
 
 从服务器只读快照升级，保留浅色品牌、蓝色 Z 和宽松居中首屏。所有修改仅在本地，没有上传、部署或修改网关与生产配置。
