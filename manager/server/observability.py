@@ -46,6 +46,7 @@ import uuid
 import anyio
 import threading
 import asyncio
+from .requestbody import BodyReadTimeout, BodyReadWindow
 from starlette.responses import JSONResponse, StreamingResponse
 from dataclasses import dataclass
 
@@ -857,9 +858,9 @@ class RequestAuditMiddleware:
                     # exception into HTTP 500 before this wrapper can reject it.
                     reading_body=True
                     chunks=[]
-                    body_deadline=time.monotonic()+30
+                    body_window=BodyReadWindow()
                     while True:
-                        message=await asyncio.wait_for(receive_audited(),max(0.001,body_deadline-time.monotonic()))
+                        message=await body_window.read(receive_audited)
                         if message['type']=='http.disconnect':
                             state.http_status=499
                             state.terminal_state,state.error_stage='client_cancelled','request_body'
@@ -882,11 +883,11 @@ class RequestAuditMiddleware:
         except BodyLimitError:
             state.terminal_state,state.error_stage='rejected','validation'
             await reject_response(gateway._payload_too_large(per_request_limit))
-        except TimeoutError:
+        except BodyReadTimeout as exc:
             if not reading_body:
                 raise
             state.terminal_state,state.error_stage='rejected','request_body'
-            await reject_response(gateway._oai_error('请求体读取超过 30 秒',408,'invalid_request_error','body_read_timeout'))
+            await reject_response(gateway._oai_error(exc.message,408,'invalid_request_error','body_read_timeout'))
         except CapacityError:
             if state.http_status:
                 raise

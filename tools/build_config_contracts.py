@@ -88,6 +88,8 @@ def generate(service, folder):
         # 必须登记：本变量直接经 os.environ 读取，未登记会让设置它的实例启动即被
         # unknown_variable 拒绝（N33）。
         extras['WB_NOTIFY_CONFIG']={'type':'absolute_path','default':'/opt/notify/config.json'}
+        extras['WB_GATEWAY_BODY_READ_TIMEOUT_S']={'type':'integer','default':180,'minimum':1,'maximum':600,'unit':'seconds'}
+        extras['WB_GATEWAY_BODY_IDLE_TIMEOUT_S']={'type':'integer','default':60,'minimum':1,'maximum':120,'unit':'seconds'}
         for name, patch in extras.items():
             entry(name,'manual-reviewed-runtime-constraint',0).update(patch)
     else:

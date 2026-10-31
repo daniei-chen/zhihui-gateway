@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
 from .. import observability
+from ..requestbody import BodyReadTimeout, BodyReadWindow
 from ..services import modelcatalog, modelmap, proxyroutes
 from ..config import _env_int
 from ..routers.security import get_config as get_security_config
@@ -435,20 +436,20 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
 
     chunks: list[bytes] = []
     size = 0
-    deadline = time.monotonic() + 30
+    window = BodyReadWindow()
     try:
         iterator = request.stream().__aiter__()
         while True:
             try:
-                chunk = await asyncio.wait_for(iterator.__anext__(), max(0.001,deadline-time.monotonic()))
+                chunk = await window.read(iterator.__anext__)
             except StopAsyncIteration:
                 break
             size += len(chunk)
             if size > limit:
                 return None, _payload_too_large(limit)
             chunks.append(chunk)
-    except TimeoutError:
-        return None, _oai_error('请求体读取超过 30 秒',408,'invalid_request_error','body_read_timeout')
+    except BodyReadTimeout as exc:
+        return None, _oai_error(exc.message, 408, 'invalid_request_error', 'body_read_timeout')
     except observability.CapacityError:
         return None, _oai_error('大上下文处理容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
     except Exception:  # noqa: BLE001

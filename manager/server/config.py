@@ -70,6 +70,8 @@ SCHEMA_DRIFT_ALLOWED: dict[str, str] = {}
 # 必须 <= systemd TimeoutStopSec，否则会在"还在等"的时候被 SIGKILL；
 # 该值只决定"最多等多久"，不决定"接不接新请求"（那由 /api/readyz 负责）。
 DRAIN_TIMEOUT_SEC = _env_int('WB_DRAIN_TIMEOUT_SEC', 25)
+GATEWAY_BODY_READ_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_READ_TIMEOUT_S', 180)
+GATEWAY_BODY_IDLE_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_IDLE_TIMEOUT_S', 60)
 
 # 上游 workbuddy2api（Go）
 WB2API_BASE = _env('WB2API_BASE', 'http://127.0.0.1:7863').rstrip('/')
