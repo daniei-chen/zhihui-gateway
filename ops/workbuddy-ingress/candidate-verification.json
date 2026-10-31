@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "candidate_not_installed": true,
+  "patch_sha256": "31bcac04f5bd92e0da14a693f5bd5c3da44b13ecf255f125286582f1693b2194",
+  "source_tree_sha256": "8f0a06d3b183110044a9f00ebf325bc8b7b1f387d2ee1bd3613e750a6d7c453b",
+  "binary_sha256": "3360de3f288c454ee8b1d2c80858cfbb3f84f8d13ca4b8988b78566ad8182f87",
+  "toolchain": "go1.27.0 windows/amd64 cross-build linux/amd64 CGO_ENABLED=0",
+  "toolchain_driver_sha256": "7d828191ba32519a9c9361789ab647486236ed45c660889196c7770a8ff1985c",
+  "dependencies": {
+    "github.com/redis/go-redis/v9": "v9.18.0",
+    "github.com/cespare/xxhash/v2": "v2.3.0",
+    "github.com/dgryski/go-rendezvous": "v0.0.0-20200823014737-9f7001d12a5f",
+    "go.uber.org/atomic": "v1.11.0"
+  },
+  "linux_tests": {
+    "packages": 18,
+    "top_level_passed": 1368,
+    "pass_lines_with_subtests": 1722,
+    "failed": 0,
+    "skipped": 0
+  },
+  "windows_race": {
+    "top_level_passed": 20,
+    "pass_lines_with_subtests": 22,
+    "failed": 0
+  },
+  "native_image_http": {
+    "checks": 7,
+    "synthetic_provider_calls": 3,
+    "real_provider_calls": 0
+  },
+  "candidate_image": "sha256:3e6bdac8d0bee609b025045901c466f67557c245ff2d1510318d2e46496de9f7",
+  "image_config_equal": true,
+  "only_app_elf_changed": true,
+  "production_identity_unchanged": true,
+  "limits_of_evidence": [
+    "Not a production cutover, drain, or rollback proof.",
+    "Raw-body budget is not a whole-process heap bound.",
+    "No real provider, real browser/device, full-load or long-term SLO acceptance.",
+    "Historical executable bit-for-bit rebuild not yet proven; toolchain changed from Go1.26.10 to Go1.27.0."
+  ]
+}

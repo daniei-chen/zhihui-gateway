@@ -8,6 +8,13 @@ spec.loader.exec_module(subject)
 
 
 class ProductVersionContractTests(unittest.TestCase):
+    def test_product_changelog_copies_match(self):
+        root = Path(__file__).resolve().parents[1]
+        current = (root / 'CHANGELOG.md').read_bytes()
+        for name in ('manager/CHANGELOG.md', 'manager/server/CHANGELOG.md'):
+            with self.subTest(name=name):
+                self.assertEqual(current, (root / name).read_bytes())
+
     def test_exact_product_and_deployment_batch_preserve_own_history(self):
         notes = '## [0.0.3] - now\n- useful note\n## [0.0.2] - before\n'
         for marker in ('v0.0.3', 'v0.0.3+steward.20261031.1'):

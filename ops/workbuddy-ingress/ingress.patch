@@ -1,0 +1,789 @@
+--- a/cmd/server/config.go
++++ b/cmd/server/config.go
+@@ -11,6 +11,7 @@
+ 
+ 	"workbuddy2api/internal/config"
+ 	"workbuddy2api/internal/prompt"
++	"workbuddy2api/internal/server"
+ )
+ 
+ // boolPtr 返回 v 的指针（给带"未设置 vs 显式 false"区分的配置项用）。
+@@ -18,10 +19,11 @@
+ 
+ // Config 顶层配置。
+ type Config struct {
+-	Listen    string `json:"listen"`     // ":7863"
+-	APIKey    string `json:"api_key"`    // 空 = 不鉴权
+-	AuthDir   string `json:"auth_dir"`   // ./auths
+-	StateFile string `json:"state_file"` // ./data/state.json
++	Listen    string            `json:"listen"`     // ":7863"
++	APIKey    string            `json:"api_key"`    // 空 = 不鉴权
++	AuthDir   string            `json:"auth_dir"`   // ./auths
++	StateFile string            `json:"state_file"` // ./data/state.json
++	Ingress   server.BodyLimits `json:"ingress"`
+ 
+ 	Server struct{} `json:"server"` // 已退役段：max_body_mb 移除后无字段；旧配置该段下任意键因 JSON 未知字段而自然忽略
+ 
+@@ -360,6 +362,9 @@
+ }
+ 
+ func (c *Config) normalize() error {
++	if err := c.Ingress.Normalize(); err != nil {
++		return err
++	}
+ 	var err error
+ 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
+ 		return fmt.Errorf("cooldown.soft_rate: %w", err)
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -214,6 +214,7 @@
+ 	}
+ 
+ 	h := server.NewHandler(server.Config{
++		Ingress:      cfg.Ingress,
+ 		Pool:         p,
+ 		Upstream:     up,
+ 		APIKey:       cfg.APIKey,
+@@ -238,8 +239,7 @@
+ 		Handler:           h,
+ 		ReadHeaderTimeout: 30 * time.Second,
+ 		// ReadTimeout 覆盖整个请求读取（含 body）：防慢速 body 拖死连接。
+-		// max_body_mb 已移除（请求体无上限，交由上游自然响应），超大 body 成为
+-		// 唯一的自然约束：60s 内传不完会得到连接错误（read timeout）而非 413。
++		// ingress also bounds body bytes; the timeout independently bounds slow readers.
+ 		ReadTimeout: 60 * time.Second,
+ 		// IdleTimeout keep-alive 空闲连接回收：配合 ctx 传播（FIX-2）防连接泄漏堆积。
+ 		// 注意：SSE 流式响应期间连接非空闲，不受此项掐断；不设全局 WriteTimeout
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -7,10 +7,8 @@
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"io"
+ 	"log"
+ 	"net/http"
+-	"os"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -25,6 +23,7 @@
+ 
+ // Config handler 依赖。
+ type Config struct {
++	Ingress   BodyLimits
+ 	Pool      *pool.Pool
+ 	Upstream  *upstream.Client
+ 	APIKey    string // 空 = 不鉴权
+@@ -73,16 +72,12 @@
+ // 返回 2xx 也不带本标识，宿主据此可识别"假成功"。
+ const ServiceName = "workbuddy2api"
+ 
+-// dumpReqMinBytes WB2A_DUMP_REQ 调试落盘的"大请求"固定阈值（4MB）。原判断是
+-// 「超过 max_body_mb 上限一半」，max_body_mb 移除后改为固定值，语义不变：
+-// 小探针（{"input":"hi"} 之类）不落盘，避免覆盖真正要看的对话请求。
+-const dumpReqMinBytes = 4 << 20
+-
+ // Handler 主路由。
+ type Handler struct {
+-	cfg     Config
+-	mux     *http.ServeMux
+-	degrade degradeGate
++	bodyBudget bodyBudget
++	cfg        Config
++	mux        *http.ServeMux
++	degrade    degradeGate
+ 	// wafIP WAF IP 级拦截状态机（fail-fast，wafip.go）：短窗多号 WAF 403 →
+ 	// 激活期轮转遇 WAF 403 直接终止（不放大请求量）。进程内状态、重启清零。
+ 	wafIP wafIPGate
+@@ -90,6 +85,9 @@
+ 
+ // NewHandler 构建 handler。
+ func NewHandler(cfg Config) *Handler {
++	if err := cfg.Ingress.Normalize(); err != nil {
++		panic(err)
++	}
+ 	if cfg.MaxRotate <= 0 {
+ 		cfg.MaxRotate = 3
+ 	}
+@@ -186,6 +184,7 @@
+ 	// 只新增字段，既有 total/healthy/cooling/disabled/in_flight_full 汇总键不变（零回归）。
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"accounts":       h.cfg.Pool.List(),
++		"ingress":        h.bodyStatus(),
+ 		"total":          total,
+ 		"healthy":        healthy,
+ 		"cooling":        cooling,
+@@ -482,24 +481,12 @@
+ }
+ 
+ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+-	// 请求体无大小上限（max_body_mb 已移除）：完整读入，超限类问题交由上游自然返回
+-	// 错误（其响应经既有错误分类链路透出，信息量更大）。#41 的截断防御语义保留在
+-	// 读错误路径——移除预拦截后，截断只可能来自客户端自己断流，读 body 出错就地 400，
+-	// 不把半截 JSON 喂上游 unmarshal 报 unexpected EOF 冤枉罚号。
+-	body, err := io.ReadAll(r.Body)
++	body, releaseBody, err := h.readChatBody(w, r)
+ 	if err != nil {
+-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
++		writeBodyError(w, err)
+ 		return
+ 	}
+-	// 调试开关：设置 WB2A_DUMP_REQ 即把上游侧收到的原始请求体落盘，供离线二分定位指纹命中行。
+-	// 仅在排查上游指纹拦截时开启；不设置时零开销、不落盘。
+-	// 只落"大请求"（≥4MB 固定阈值，原 max_body_mb/2 语义的接替）：小探针
+-	// （{"input":"hi"} 之类）会覆盖掉真正要看的对话请求。
+-	if os.Getenv("WB2A_DUMP_REQ") != "" && len(body) >= dumpReqMinBytes {
+-		if err := os.WriteFile("/app/data/last_request.json", body, 0o600); err != nil {
+-			log.Printf("ERR: [server] dump req: %v", err)
+-		}
+-	}
++	defer releaseBody()
+ 	var peek struct {
+ 		Stream bool   `json:"stream"`
+ 		Model  string `json:"model"`
+--- /dev/null
++++ b/cmd/server/ingress_test.go
+@@ -0,0 +1,40 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestIngressDefaultsAndExplicitConfiguration(t *testing.T) {
++	for _, value := range []string{`{}`, `{"server":{"max_body_mb":1024}}`, `{"ingress":{"max_body_mb":2,"max_buffered_body_mb":8,"max_concurrent_bodies":3}}`} {
++		fp := filepath.Join(t.TempDir(), "config.json")
++		if err := os.WriteFile(fp, []byte(value), 0600); err != nil {
++			t.Fatal(err)
++		}
++		c, err := Load(fp)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if strings.Contains(value, `"ingress"`) {
++			if c.Ingress.MaxBodyMB != 2 || c.Ingress.MaxBufferedBodyMB != 8 || c.Ingress.MaxConcurrentBodies != 3 {
++				t.Fatalf("explicit ingress ignored: %+v", c.Ingress)
++			}
++		} else if c.Ingress.MaxBodyMB != 64 || c.Ingress.MaxBufferedBodyMB != 128 || c.Ingress.MaxConcurrentBodies != 32 {
++			t.Fatalf("defaults or legacy ignored-field contract changed: %+v", c.Ingress)
++		}
++	}
++}
++
++func TestIngressInvalidConfigurationRejectsStartup(t *testing.T) {
++	for _, fields := range []string{`"max_body_mb":-1`, `"max_body_mb":513`, `"max_body_mb":"64"`, `"max_buffered_body_mb":32`, `"max_buffered_body_mb":1025`, `"max_concurrent_bodies":-1`, `"max_concurrent_bodies":257`} {
++		fp := filepath.Join(t.TempDir(), "config.json")
++		if err := os.WriteFile(fp, []byte(`{"ingress":{`+fields+`}}`), 0600); err != nil {
++			t.Fatal(err)
++		}
++		if _, err := Load(fp); err == nil {
++			t.Fatalf("invalid ingress accepted: %s", fields)
++		}
++	}
++}
+--- /dev/null
++++ b/internal/server/bodyguard.go
+@@ -0,0 +1,186 @@
++package server
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"sync"
++)
++
++// BodyLimits bounds retained raw request bytes, not the complete process heap.
++// JSON decoding and outbound copies still require additional container headroom.
++type BodyLimits struct {
++	MaxBodyMB           int64 `json:"max_body_mb"`
++	MaxBufferedBodyMB   int64 `json:"max_buffered_body_mb"`
++	MaxConcurrentBodies int   `json:"max_concurrent_bodies"`
++}
++
++func (v *BodyLimits) Normalize() error {
++	if v.MaxBodyMB == 0 {
++		v.MaxBodyMB = 64
++	}
++	if v.MaxBufferedBodyMB == 0 {
++		v.MaxBufferedBodyMB = 128
++	}
++	if v.MaxConcurrentBodies == 0 {
++		v.MaxConcurrentBodies = 32
++	}
++	if v.MaxBodyMB < 1 || v.MaxBodyMB > 512 {
++		return fmt.Errorf("ingress.max_body_mb must be between 1 and 512")
++	}
++	if v.MaxBufferedBodyMB < v.MaxBodyMB || v.MaxBufferedBodyMB > 1024 {
++		return fmt.Errorf("ingress.max_buffered_body_mb must be between max_body_mb and 1024")
++	}
++	if v.MaxConcurrentBodies < 1 || v.MaxConcurrentBodies > 256 {
++		return fmt.Errorf("ingress.max_concurrent_bodies must be between 1 and 256")
++	}
++	return nil
++}
++
++var errBodyCapacity = errors.New("request body capacity exhausted")
++
++type bodyBudget struct {
++	mu       sync.Mutex
++	active   int
++	retained int64
++	rejected uint64
++}
++
++type bodyLease struct {
++	budget   *bodyBudget
++	reserved int64
++	released bool
++}
++
++func (h *Handler) acquireBody(declared int64) (*bodyLease, error) {
++	b := &h.bodyBudget
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	initial := max(declared, 0)
++	if b.active >= h.cfg.Ingress.MaxConcurrentBodies || initial > (h.cfg.Ingress.MaxBufferedBodyMB<<20)-b.retained {
++		b.rejected++
++		return nil, errBodyCapacity
++	}
++	b.active++
++	b.retained += initial
++	return &bodyLease{budget: b, reserved: initial}, nil
++}
++
++func (l *bodyLease) grow(size, maximum int64) error {
++	b := l.budget
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	additional := max(size-l.reserved, 0)
++	if additional > maximum-b.retained {
++		b.rejected++
++		return errBodyCapacity
++	}
++	b.retained += additional
++	l.reserved += additional
++	return nil
++}
++
++func (l *bodyLease) release() {
++	b := l.budget
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if l.released {
++		return
++	}
++	b.active--
++	b.retained -= l.reserved
++	l.released = true
++}
++
++func (h *Handler) bodyStatus() map[string]any {
++	b := &h.bodyBudget
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return map[string]any{
++		"max_body_bytes":            h.cfg.Ingress.MaxBodyMB << 20,
++		"max_buffered_body_bytes":   h.cfg.Ingress.MaxBufferedBodyMB << 20,
++		"max_concurrent_bodies":     h.cfg.Ingress.MaxConcurrentBodies,
++		"active_bodies":             b.active,
++		"reserved_body_bytes":       b.retained,
++		"capacity_rejections_total": b.rejected,
++	}
++}
++
++// The lease lives until forwarding finishes, not just until the body is read:
++// long SSE requests retain their raw body for account rotation and statistics.
++func (h *Handler) readChatBody(w http.ResponseWriter, r *http.Request) ([]byte, func(), error) {
++	limit := h.cfg.Ingress.MaxBodyMB << 20
++	if r.ContentLength > limit {
++		return nil, nil, &http.MaxBytesError{Limit: limit}
++	}
++	lease, err := h.acquireBody(r.ContentLength)
++	if err != nil {
++		return nil, nil, err
++	}
++	success := false
++	defer func() {
++		if !success {
++			lease.release()
++		}
++	}()
++	reader := http.MaxBytesReader(w, r.Body, limit)
++	defer reader.Close()
++	var body []byte
++	var scratch [32 << 10]byte
++	emptyReads := 0
++	for {
++		if err := r.Context().Err(); err != nil {
++			return nil, nil, err
++		}
++		n, err := reader.Read(scratch[:])
++		if err != nil && err != io.EOF {
++			return nil, nil, err
++		}
++		if n > 0 {
++			emptyReads = 0
++			if err := lease.grow(int64(len(body)+n), h.cfg.Ingress.MaxBufferedBodyMB<<20); err != nil {
++				return nil, nil, err
++			}
++			body = append(body, scratch[:n]...)
++		}
++		if err == io.EOF {
++			break
++		}
++		if n == 0 {
++			emptyReads++
++			if emptyReads >= 100 {
++				return nil, nil, io.ErrNoProgress
++			}
++		}
++	}
++	if r.ContentLength >= 0 && int64(len(body)) != r.ContentLength {
++		return nil, nil, io.ErrUnexpectedEOF
++	}
++	if err := r.Context().Err(); err != nil {
++		return nil, nil, err
++	}
++	success = true
++	return body, lease.release, nil
++}
++
++func writeBodyError(w http.ResponseWriter, err error) {
++	var tooLarge *http.MaxBytesError
++	var timeout net.Error
++	switch {
++	case errors.As(err, &tooLarge):
++		writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds ingress.max_body_mb")
++	case errors.Is(err, errBodyCapacity):
++		w.Header().Set("Retry-After", "1")
++		writeOpenAIError(w, http.StatusServiceUnavailable, "body_capacity_exceeded", "request body capacity exhausted; retry later")
++	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
++		writeOpenAIError(w, http.StatusRequestTimeout, "body_read_timeout", "request body read interrupted")
++	case errors.As(err, &timeout) && timeout.Timeout():
++		writeOpenAIError(w, http.StatusRequestTimeout, "body_read_timeout", "request body read timed out")
++	default:
++		// Reader errors may contain client-controlled bytes or credentials.
++		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "request body could not be read completely")
++	}
++}
+--- /dev/null
++++ b/internal/server/bodyguard_test.go
+@@ -0,0 +1,410 @@
++package server
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"workbuddy2api/internal/auth"
++)
++
++func assertBodyBudgetEmpty(t *testing.T, h *Handler) {
++	t.Helper()
++	h.bodyBudget.mu.Lock()
++	defer h.bodyBudget.mu.Unlock()
++	if h.bodyBudget.active != 0 || h.bodyBudget.retained != 0 {
++		t.Fatalf("body lease leaked: active=%d retained=%d", h.bodyBudget.active, h.bodyBudget.retained)
++	}
++}
++
++type countedBody struct {
++	r     io.Reader
++	reads int
++	close bool
++}
++
++func (r *countedBody) Read(b []byte) (int, error) { r.reads++; return r.r.Read(b) }
++func (r *countedBody) Close() error               { r.close = true; return nil }
++
++func bodyRequest(reader io.Reader, declared int64) (*http.Request, *countedBody) {
++	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++	body := &countedBody{r: reader}
++	r.Body, r.ContentLength = body, declared
++	return r, body
++}
++
++func TestIngressLimitsNormalize(t *testing.T) {
++	v := BodyLimits{}
++	if err := v.Normalize(); err != nil || v != (BodyLimits{64, 128, 32}) {
++		t.Fatalf("defaults=%+v err=%v", v, err)
++	}
++	for _, v := range []BodyLimits{{-1, 128, 32}, {513, 1024, 32}, {64, -1, 32}, {64, 63, 32}, {64, 1025, 32}, {64, 128, -1}, {64, 128, 257}} {
++		if err := v.Normalize(); err == nil {
++			t.Errorf("accepted invalid bounds: %+v", v)
++		}
++	}
++}
++
++func TestBodyGuardExactBoundaryAndUnknownLength(t *testing.T) {
++	for _, declared := range []int64{-1, 1 << 20} {
++		h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++		r, source := bodyRequest(strings.NewReader(strings.Repeat("x", 1<<20)), declared)
++		body, release, err := h.readChatBody(httptest.NewRecorder(), r)
++		if err != nil || len(body) != 1<<20 || !source.close {
++			t.Fatalf("boundary failed: bytes=%d closed=%v err=%v", len(body), source.close, err)
++		}
++		if h.bodyBudget.active != 1 || h.bodyBudget.retained != 1<<20 {
++			t.Fatal("successful read must retain its lease while forwarding")
++		}
++		release()
++		release()
++		assertBodyBudgetEmpty(t, h)
++	}
++}
++
++func TestBodyGuardRejectsDeclaredOversizeBeforeRead(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	r, source := bodyRequest(strings.NewReader("never read"), 1<<20+1)
++	_, _, err := h.readChatBody(httptest.NewRecorder(), r)
++	var large *http.MaxBytesError
++	if !errors.As(err, &large) || source.reads != 0 {
++		t.Fatalf("err=%v reads=%d", err, source.reads)
++	}
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyGuardCountsActualChunkedAndUnderstatedBytes(t *testing.T) {
++	for _, declared := range []int64{-1, 1, 1 << 20} {
++		h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++		r, source := bodyRequest(strings.NewReader(strings.Repeat("x", 2<<20)), declared)
++		_, _, err := h.readChatBody(httptest.NewRecorder(), r)
++		var large *http.MaxBytesError
++		if !errors.As(err, &large) || !source.close || source.reads > 33 {
++			t.Fatalf("err=%v closed=%v reads=%d", err, source.close, source.reads)
++		}
++		assertBodyBudgetEmpty(t, h)
++	}
++}
++
++func TestBodyGuardReadErrorAndLengthMismatchReleaseCapacity(t *testing.T) {
++	for _, value := range []struct {
++		r        io.Reader
++		declared int64
++	}{{errReader{errors.New("private-client-token")}, -1}, {strings.NewReader("short"), 10}, {strings.NewReader("long"), 1}, {strings.NewReader("undeclared"), 0}} {
++		h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++		r, source := bodyRequest(value.r, value.declared)
++		_, _, err := h.readChatBody(httptest.NewRecorder(), r)
++		if err == nil || !source.close {
++			t.Fatalf("err=%v closed=%v", err, source.close)
++		}
++		rec := httptest.NewRecorder()
++		writeBodyError(rec, err)
++		if rec.Code != 400 || strings.Contains(rec.Body.String(), "private-client-token") {
++			t.Fatalf("unsafe read error: %d %s", rec.Code, rec.Body)
++		}
++		assertBodyBudgetEmpty(t, h)
++	}
++}
++
++func TestBodyGuardCancellationReleasesAndDoesNotRead(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	r, source := bodyRequest(strings.NewReader("body"), 4)
++	ctx, cancel := context.WithCancel(r.Context())
++	cancel()
++	r = r.WithContext(ctx)
++	_, _, err := h.readChatBody(httptest.NewRecorder(), r)
++	if !errors.Is(err, context.Canceled) || source.reads != 0 || !source.close {
++		t.Fatalf("err=%v reads=%d closed=%v", err, source.reads, source.close)
++	}
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyGuardConcurrencyAndAggregateAdmission(t *testing.T) {
++	for _, limits := range []BodyLimits{{1, 1, 2}, {1, 2, 1}} {
++		h := NewHandler(Config{Ingress: limits})
++		r, _ := bodyRequest(strings.NewReader(strings.Repeat("x", 1<<20)), 1<<20)
++		_, release, err := h.readChatBody(httptest.NewRecorder(), r)
++		if err != nil {
++			t.Fatal(err)
++		}
++		r, source := bodyRequest(strings.NewReader("never read"), 1<<20)
++		_, _, err = h.readChatBody(httptest.NewRecorder(), r)
++		if !errors.Is(err, errBodyCapacity) || source.reads != 0 {
++			t.Fatalf("capacity rejection err=%v reads=%d", err, source.reads)
++		}
++		release()
++		assertBodyBudgetEmpty(t, h)
++	}
++}
++
++func TestBodyGuardChunkedGrowthHonorsOtherLeases(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 2}})
++	r, _ := bodyRequest(strings.NewReader(strings.Repeat("x", 1<<20)), -1)
++	_, release, err := h.readChatBody(httptest.NewRecorder(), r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	r, _ = bodyRequest(strings.NewReader("x"), -1)
++	_, _, err = h.readChatBody(httptest.NewRecorder(), r)
++	if !errors.Is(err, errBodyCapacity) || h.bodyBudget.active != 1 {
++		t.Fatalf("chunked growth escaped budget: %v", err)
++	}
++	release()
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyGuardRejectsBeforeUpstreamAndAccountPenalty(t *testing.T) {
++	var calls int
++	up := newFakeUpstream(t, func(string) (int, string, bool) { calls++; return 200, sseOK, true })
++	p := testPoolWith(&auth.Auth{UID: "fixture", AccessToken: "fixture", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: up, APIKey: "fixture-key", Ingress: BodyLimits{1, 1, 1}})
++	for _, valid := range []bool{false, true} {
++		r, source := bodyRequest(strings.NewReader("never read"), 1<<20+1)
++		if valid {
++			r.Header.Set("Authorization", "Bearer fixture-key")
++		}
++		rec := httptest.NewRecorder()
++		h.ServeHTTP(rec, r)
++		want, code := 401, "invalid_api_key"
++		if valid {
++			want, code = 413, "request_too_large"
++		}
++		if rec.Code != want || source.reads != 0 {
++			t.Fatalf("valid=%v status=%d reads=%d", valid, rec.Code, source.reads)
++		}
++		assertJSONErrorCode(t, rec.Body.String(), code)
++		assertBodyBudgetEmpty(t, h)
++	}
++	st, _ := p.Status("fixture")
++	if calls != 0 || st.Cooling || st.Disabled || st.ErrTotal != 0 {
++		t.Fatalf("body rejection reached provider or penalized account: calls=%d state=%+v", calls, st)
++	}
++}
++
++func TestBodyGuardRealHTTPChunkedRejectAndSmallRequest(t *testing.T) {
++	var calls atomic.Int32
++	up := newFakeUpstream(t, func(string) (int, string, bool) { calls.Add(1); return 200, sseOK, true })
++	p := testPoolWith(&auth.Auth{UID: "fixture", AccessToken: "fixture", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: up, Ingress: BodyLimits{1, 2, 2}})
++	srv := httptest.NewServer(h)
++	defer srv.Close()
++	for _, big := range []bool{true, false} {
++		value := `{"model":"glm-5.2","messages":[]}`
++		if big {
++			value = strings.Repeat("x", 2<<20)
++		}
++		req, err := http.NewRequest("POST", srv.URL+"/v1/chat/completions", struct{ io.Reader }{strings.NewReader(value)})
++		if err != nil {
++			t.Fatal(err)
++		}
++		resp, err := srv.Client().Do(req)
++		if err != nil {
++			t.Fatal(err)
++		}
++		_, _ = io.Copy(io.Discard, resp.Body)
++		resp.Body.Close()
++		want := 200
++		if big {
++			want = 413
++		}
++		if resp.StatusCode != want {
++			t.Fatalf("chunked=%v status=%d", big, resp.StatusCode)
++		}
++	}
++	if calls.Load() != 1 {
++		t.Fatalf("upstream calls=%d", calls.Load())
++	}
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyBudgetConcurrentReservationRace(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 4}})
++	var wg sync.WaitGroup
++	for i := 0; i < 32; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			r, _ := bodyRequest(bytes.NewReader(make([]byte, 64<<10)), -1)
++			_, release, err := h.readChatBody(httptest.NewRecorder(), r)
++			if err == nil {
++				release()
++			} else if !errors.Is(err, errBodyCapacity) {
++				t.Errorf("unexpected error: %v", err)
++			}
++		}()
++	}
++	wg.Wait()
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyBudgetConcurrentReleaseIsIdempotent(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	r, _ := bodyRequest(strings.NewReader("test"), 4)
++	_, release, err := h.readChatBody(httptest.NewRecorder(), r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var wg sync.WaitGroup
++	for i := 0; i < 16; i++ {
++		wg.Add(1)
++		go func() { defer wg.Done(); release() }()
++	}
++	wg.Wait()
++	assertBodyBudgetEmpty(t, h)
++}
++
++type oneEmptyRead struct{ sent bool }
++
++func (r *oneEmptyRead) Read(b []byte) (int, error) {
++	if !r.sent {
++		r.sent = true
++		return 0, nil
++	}
++	return copy(b, "test"), io.EOF
++}
++
++func TestBodyGuardPermitsTemporaryEmptyRead(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	r, _ := bodyRequest(&oneEmptyRead{}, 4)
++	value, release, err := h.readChatBody(httptest.NewRecorder(), r)
++	if err != nil || string(value) != "test" {
++		t.Fatalf("permitted reader behavior rejected: %q %v", value, err)
++	}
++	release()
++	assertBodyBudgetEmpty(t, h)
++}
++
++type emptyRead struct{}
++
++func (emptyRead) Read([]byte) (int, error) { return 0, nil }
++
++func TestBodyGuardBoundsEmptyReader(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	r, source := bodyRequest(emptyRead{}, -1)
++	_, _, err := h.readChatBody(httptest.NewRecorder(), r)
++	if !errors.Is(err, io.ErrNoProgress) || source.reads != 100 {
++		t.Fatalf("no-progress reader not bounded: reads=%d err=%v", source.reads, err)
++	}
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyGuardCapacityResponseAndPrivateStatus(t *testing.T) {
++	p := testPoolWith()
++	h := NewHandler(Config{Pool: p, APIKey: "fixture", Ingress: BodyLimits{1, 1, 1}})
++	lease, err := h.acquireBody(16)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lease.release()
++	r, source := bodyRequest(strings.NewReader("test"), 4)
++	r.Header.Set("Authorization", "Bearer fixture")
++	rec := httptest.NewRecorder()
++	h.ServeHTTP(rec, r)
++	if rec.Code != 503 || rec.Header().Get("Retry-After") != "1" || source.reads != 0 {
++		t.Fatalf("saturation response: %d reads=%d", rec.Code, source.reads)
++	}
++	assertJSONErrorCode(t, rec.Body.String(), "body_capacity_exceeded")
++	status := h.bodyStatus()
++	if status["active_bodies"] != 1 || status["reserved_body_bytes"] != int64(16) || status["capacity_rejections_total"] != uint64(1) {
++		t.Fatalf("status not actual: %+v", status)
++	}
++	r = httptest.NewRequest("GET", "/status", nil)
++	rec = httptest.NewRecorder()
++	h.ServeHTTP(rec, r)
++	if rec.Code != 401 || strings.Contains(rec.Body.String(), "reserved_body_bytes") {
++		t.Fatal("private capacity state exposed without authentication")
++	}
++}
++
++type blockingBody struct {
++	entered chan struct{}
++	finish  chan struct{}
++}
++
++func (r *blockingBody) Read([]byte) (int, error) {
++	close(r.entered)
++	<-r.finish
++	return 0, io.EOF
++}
++
++func TestBodyGuardCancelledReaderKeepsCapacityUntilReadStops(t *testing.T) {
++	h := NewHandler(Config{Ingress: BodyLimits{1, 1, 1}})
++	reader := &blockingBody{entered: make(chan struct{}), finish: make(chan struct{})}
++	r, _ := bodyRequest(reader, -1)
++	ctx, cancel := context.WithCancel(r.Context())
++	r = r.WithContext(ctx)
++	done := make(chan error, 1)
++	go func() { _, _, err := h.readChatBody(httptest.NewRecorder(), r); done <- err }()
++	select {
++	case <-reader.entered:
++	case <-time.After(3 * time.Second):
++		t.Fatal("reader did not start")
++	}
++	cancel()
++	r2, source := bodyRequest(strings.NewReader("test"), 4)
++	_, _, err := h.readChatBody(httptest.NewRecorder(), r2)
++	if !errors.Is(err, errBodyCapacity) || source.reads != 0 {
++		t.Errorf("cancellation released a still-blocked reader: %v", err)
++	}
++	close(reader.finish)
++	select {
++	case err := <-done:
++		if !errors.Is(err, context.Canceled) {
++			t.Fatalf("cancelled reader result: %v", err)
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("reader did not stop")
++	}
++	assertBodyBudgetEmpty(t, h)
++}
++
++func TestBodyGuardRetainsLeaseThroughoutProviderForwarding(t *testing.T) {
++	entered, finish := make(chan struct{}), make(chan struct{})
++	up := newFakeUpstream(t, func(string) (int, string, bool) {
++		close(entered)
++		select {
++		case <-finish:
++		case <-time.After(3 * time.Second):
++			t.Error("fixture did not release provider")
++		}
++		return 200, sseOK, true
++	})
++	p := testPoolWith(&auth.Auth{UID: "fixture", AccessToken: "fixture", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: up, Ingress: BodyLimits{1, 1, 1}})
++	done := make(chan int, 1)
++	go func() {
++		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`))
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, r)
++		done <- w.Code
++	}()
++	select {
++	case <-entered:
++	case <-time.After(3 * time.Second):
++		t.Fatal("provider did not start")
++	}
++	r, source := bodyRequest(strings.NewReader("never read"), 10)
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, r)
++	if w.Code != 503 || source.reads != 0 || h.bodyStatus()["active_bodies"] != 1 {
++		t.Errorf("body lease released before forwarding finished: code=%d reads=%d", w.Code, source.reads)
++	}
++	close(finish)
++	select {
++	case code := <-done:
++		if code != 200 {
++			t.Fatalf("original stream status: %d", code)
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("provider did not stop")
++	}
++	assertBodyBudgetEmpty(t, h)
++}
