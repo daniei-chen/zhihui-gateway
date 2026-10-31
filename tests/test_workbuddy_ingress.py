@@ -146,6 +146,22 @@ class WorkBuddyIngressPreparationTests(unittest.TestCase):
 
 
 class WorkBuddyIngressBundleTests(unittest.TestCase):
+    def test_production_receipt_does_not_rewrite_historical_candidate_or_overclaim(self):
+        folder = ROOT / 'ops/workbuddy-ingress'
+        candidate = json.loads((folder / 'candidate-verification.json').read_bytes())
+        actual = json.loads((folder / 'production-verification.json').read_bytes())
+        self.assertTrue(candidate['candidate_not_installed'])
+        self.assertEqual(actual['state'], 'production_active')
+        self.assertEqual(actual['running_elf_sha256'], candidate['binary_sha256'])
+        self.assertEqual(actual['image'], candidate['candidate_image'])
+        self.assertEqual(actual['limits'], {'max_body_bytes': 64 << 20,
+            'max_buffered_body_bytes': 128 << 20, 'max_concurrent_bodies': 32})
+        self.assertEqual(actual['phase'], 'complete')
+        for field in ('business_state_restored', 'zero_downtime_claimed',
+                      'production_rollback_exercised', 'all_audit_findings_closed'):
+            self.assertIs(actual[field], False)
+        self.assertEqual(actual['production_header_tests']['real_provider_calls'], 0)
+
     def test_real_patch_matches_manifest_and_is_narrow(self):
         folder = ROOT / 'ops/workbuddy-ingress'
         manifest = json.loads((folder / 'manifest.json').read_bytes())

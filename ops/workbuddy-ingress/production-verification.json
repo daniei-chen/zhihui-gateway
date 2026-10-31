@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "state": "production_active",
+  "date": "2026-10-31",
+  "product_version": "0.0.3",
+  "manager_release_unchanged": "v0.0.3+steward.20261031.2",
+  "manager_manifest_sha256": "13ca6eec92757dd55255cb997347a4ed274847d645c9eb4a5102aeef188c791d",
+  "patch_source_commit": "caf08d1a5b77a5e6bab4c452ea902e248f4a362a",
+  "image": "sha256:3e6bdac8d0bee609b025045901c466f67557c245ff2d1510318d2e46496de9f7",
+  "running_elf_sha256": "3360de3f288c454ee8b1d2c80858cfbb3f84f8d13ca4b8988b78566ad8182f87",
+  "limits": {
+    "max_body_bytes": 67108864,
+    "max_buffered_body_bytes": 134217728,
+    "max_concurrent_bodies": 32
+  },
+  "controller_linux_gate": {"passed": 238, "failed": 0, "skipped": 0},
+  "go_linux_tests": {"passed": 1368, "failed": 0, "skipped": 0},
+  "production_header_tests": {
+    "invalid_engine_key": 401,
+    "oversize_engine_request": 413,
+    "oversize_public_request": 413,
+    "body_bytes_sent": 0,
+    "real_provider_calls": 0
+  },
+  "transaction": "workbuddy-ingress-forward",
+  "phase": "complete",
+  "old_container_stopped_retained_restart_disabled": true,
+  "business_state_restored": false,
+  "original_login_unchanged": true,
+  "watchdog_and_reconcile_timers_active": true,
+  "zero_downtime_claimed": false,
+  "production_rollback_exercised": false,
+  "all_audit_findings_closed": false,
+  "open_contracts": [
+    "Manager per-request legacy limit precedence and transformed-body expansion",
+    "Declarative future container rebuild source",
+    "Production container rollback exercise",
+    "Historical reproducible build and complete upstream supply chain",
+    "Long-running performance and SLO acceptance"
+  ]
+}
