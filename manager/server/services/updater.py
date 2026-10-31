@@ -271,6 +271,8 @@ def read_status() -> dict:
         status['logs'] = cleaned
     # Runtime log/status files must not override the release-owned update policy.
     status['version'] = current_version()
+    from .. import release_identity
+    status['release_id'] = release_identity.current()
     status['product'] = product.metadata(config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file())
     return status
 

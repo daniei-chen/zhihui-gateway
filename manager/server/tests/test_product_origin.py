@@ -14,7 +14,7 @@ from server.services import updater
 class ProductOriginTests(unittest.TestCase):
     def test_version_is_product_not_component_baseline(self):
         value = product.identity()
-        self.assertEqual(value['version'], '0.0.2')
+        self.assertEqual(value['version'], '0.0.3')
         self.assertEqual(value['manager_baseline'], 'v10.7.22+audit.20261029.2')
 
     def test_updates_stay_in_owner_repository(self):
@@ -50,7 +50,7 @@ class ProductOriginTests(unittest.TestCase):
             root = Path(temp)
             (root / 'server').mkdir()
             path = root / 'server/release-provenance.json'
-            value = {'repository': product.REPOSITORY, 'version': '0.0.2', 'source_commit': 'a' * 40}
+            value = {'repository': product.REPOSITORY, 'version': product.identity()['version'], 'source_commit': 'a' * 40}
             path.write_text(json.dumps(value))
             self.assertEqual(product.metadata(root, managed=True)['source_commit'], 'a' * 40)
             value['version'] = '0.0.1'

@@ -97,6 +97,9 @@ BACKUP_STATUS_FILE = Path(_env('WB_BACKUP_STATUS_FILE', '/var/lib/zhihui-gateway
 DB_PATH = Path(_env('WB_DB', str(DATA_DIR / 'manager.db')))
 USERS_FILE = Path(_env('WB_USERS_FILE', str(DATA_DIR / 'users.json')))
 STATIC_DIR = Path(_env('WB_STATIC_DIR', str(ROOT / 'web' / 'out')))
+# Operator-owned files, never returned by the settings API or written by the model.
+STEWARD_SMTP_FILE = _env('WB_STEWARD_SMTP_FILE', '')
+STEWARD_KEY_FILE = _env('WB_STEWARD_KEY_FILE', '')
 # Independent scrape credential. It is never accepted by management/inference auth.
 # A 0600 file supports atomic rotation without restarting the gateway.
 METRICS_TOKEN_FILE = _env('WB_METRICS_TOKEN_FILE', '')

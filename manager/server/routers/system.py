@@ -394,6 +394,7 @@ def check_update(force: bool = False, user: dict = Depends(security.current_user
 @router.get('/versions')
 async def versions(user: dict = Depends(security.current_user)) -> dict:
     """展示当前版本，便于确认更新是否生效。"""
+    from .. import release_identity
     try:
         status = await wb2api.get_status()
         upstream_ok = bool(status.get('connected'))
@@ -403,6 +404,7 @@ async def versions(user: dict = Depends(security.current_user)) -> dict:
 
     return {
         'manager': updater.current_version(),
+        'release_id': release_identity.current(),
         'product': updater.product.metadata(
             config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file()),
         'upstream_connected': upstream_ok,

@@ -22,7 +22,10 @@ import {
   FileText,
   KeyRound,
   Route,
+  Sparkles,
+  Bell,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import {usePathname} from 'next/navigation';
 import {BASE_PATH} from '@/lib/base-path';
 import {notify} from '@/lib/toast';
@@ -84,6 +87,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+
+const StewardPanel = dynamic(() => import('@/components/common/settings/StewardPanel').then(module => module.StewardPanel));
+const AlertsPanel = dynamic(() => import('@/components/common/settings/AlertsPanel').then(module => module.AlertsPanel));
 
 /* ─────────────────────────────────────────────────────────
  * 可视化配置字段定义
@@ -918,6 +924,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * `page.tsx` 把地址换成规范路径，所以这里只是「换地址那一帧」的兜底。
    */
   const tab: SettingsTab = settingsTabFromPath(usePathname()) ?? DEFAULT_SETTINGS_TAB;
+  const independentTab = tab === 'steward' || tab === 'alerts';
 
   /**
    * 二级导航。顺序与图标取自原来的 `TabsList`（一处不差），只是每项从「一个
@@ -938,6 +945,8 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     backup: {icon: <Database className="h-3.5 w-3.5" />},
     changelog: {icon: <FileText className="h-3.5 w-3.5" />},
     about: {icon: <Info className="h-3.5 w-3.5" />},
+    steward: {icon: <Sparkles className="h-3.5 w-3.5" />},
+    alerts: {icon: <Bell className="h-3.5 w-3.5" />},
   };
   const tabItems: SectionTabItem[] = SETTINGS_TABS.map((name) => ({
     href: settingsTabHref(name),
@@ -962,7 +971,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     cfg: () => settingsApi.upstream(),
     modelMap: () => settingsApi.modelMap(),
     users: () => settingsApi.users(),
-  }, []);
+  }, [], [], {enabled: !independentTab});
 
   /** 配置：null = 还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const cfg: UpstreamConfig | null = values.cfg ?? null;
@@ -1125,8 +1134,8 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   // 配置 / 映射 / 用户由 useAsyncAll 在挂载时自己取（首屏一次），这里只管模型列表。
   useEffect(() => {
-    loadModels();
-  }, [loadModels]);
+    if (!independentTab) void loadModels();
+  }, [loadModels, independentTab]);
 
   const upstreamReady = !!cfg && cfg.available !== false;
   const upstreamError = cfg && cfg.available === false ? cfg.error : undefined;
@@ -1305,6 +1314,15 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 用户看到的是一张「能看不能改」的假配置，会据此以为「我的配置就是这样」，
    * 或者以为「面板坏了」。取不到就说取不到，并给「重试」。
    */
+  if (tab === 'steward' || tab === 'alerts') {
+    return <div className="flex flex-col gap-4 md:gap-6">
+      {header}
+      <SectionTabs items={tabItems} active={settingsTabHref(tab)} />
+      {tab === 'steward' ? <StewardPanel /> : <AlertsPanel />}
+      {children}
+    </div>;
+  }
+
   if (!cfg) {
     return (
       <div className="flex flex-col gap-4 md:gap-6">

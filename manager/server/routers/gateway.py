@@ -996,6 +996,14 @@ def _authorize(request: Request, model: str | None,
         _log_ip(ip, path, True, ua, 'invalid_key')
         return None, ip, _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
 
+    return _authorize_key(request, key, ip, model, is_model_list=is_model_list, mapped=mapped)
+
+
+def _authorize_key(request: Request, key: dict, ip: str, model: str | None,
+                   *, is_model_list: bool = False, mapped: str | None = None):
+    """One policy/order for OpenAI, Responses and Anthropic after token selection."""
+    ua = request.headers.get('user-agent')
+    path = request.url.path
     state=observability.current.get()
     if state: state.key_id=int(key["id"])
 
@@ -1060,6 +1068,49 @@ def _authorize(request: Request, model: str | None,
 
     _log_ip(ip, path, False, ua)
     return key, ip, None
+
+
+def preauthorize_body(request: Request, *, anthropic: bool = False):
+    """Reject header-proven failures before buffering; never reserve or grant use.
+
+    Key resolution and all policies run again after the body has arrived. This
+    read-only check consumes no rate, concurrency, budget or bound-IP allowance.
+    """
+    ip = iputil.client_ip(request)
+    if anthropic:
+        from .anthropic import _resolve_key
+        key, token = _resolve_key(request)
+    else:
+        token = _bearer(request)
+        key = keysvc.resolve(token) if token else None
+    if key is None:
+        _log_ip(ip, request.url.path, True, request.headers.get('user-agent'),
+                'invalid_key' if token else 'missing_key')
+        return _oai_error('API Key 无效' if token else '缺少 API Key', 401,
+                          'authentication_error', 'invalid_api_key' if token else 'missing_api_key')
+    state = observability.current.get()
+    if state:
+        state.key_id = int(key['id'])
+    if _global_ip_blocked(ip):
+        reason = keysvc.Rejection('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
+    else:
+        original = request.scope.get('zhihui.original_path', request.url.path)
+        hint = request.headers.get('x-qtg-platform', '')
+        explicit = bool(hint.strip()) or any(
+            original == f'/{p}/v1' or original.startswith(f'/{p}/v1/')
+            for p in platformpolicy.PLATFORMS)
+        try:
+            selected = platformpolicy.select(original, hint)
+        except platformpolicy.PlatformConflict as error:
+            return _oai_error(str(error), 400, 'invalid_request_error', error.code)
+        reason = keysvc.validate(key, ip, None, is_model_list=True,
+                                 platform=selected, defer_platform=not explicit)
+    if reason:
+        observability.mark_error(reason.code)
+        _log_ip(ip, request.url.path, True, request.headers.get('user-agent'), reason.code)
+        _record(key, ip, '', '', reason.status, 0, 0, 0, request.headers.get('user-agent'), reason, False)
+        return _oai_error(reason, reason.status, reason.err_type, reason.code)
+    return None
 
 
 def _key_reject_code(reason: object, is_model_list: bool) -> str:

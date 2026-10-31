@@ -1,4 +1,4 @@
-"""设置页 8 个 Tab 的可寻址子路由（批次 4 的 P1-2）+ 结构不变式。
+"""设置页 11 个 Tab 的可寻址子路由与结构不变式。
 
 为什么值得有：这一批把「一页 2060 行的单页」改成 `/settings/<tab>`，做错了**界面
 不报错**，只是行为悄悄变差——
@@ -27,20 +27,22 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from server.tests.authorization_test_support import web_root
 
 _ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = _ROOT / 'web' / 'lib' / 'settings-tabs.test.mjs'
-_PURE = _ROOT / 'web' / 'lib' / 'settings-tabs.ts'
-_NAV = _ROOT / 'web' / 'components' / 'common' / 'layout' / 'SectionTabs.tsx'
-_SETTINGS = _ROOT / 'web' / 'app' / '(main)' / 'settings'
+_WEB = web_root()
+_SCRIPT = _WEB / 'lib' / 'settings-tabs.test.mjs'
+_PURE = _WEB / 'lib' / 'settings-tabs.ts'
+_NAV = _WEB / 'components' / 'common' / 'layout' / 'SectionTabs.tsx'
+_SETTINGS = _WEB / 'app' / '(main)' / 'settings'
 _LAYOUT = _SETTINGS / 'layout.tsx'
 _INDEX = _SETTINGS / 'page.tsx'
 _VERIFY = _ROOT / 'dev' / 'verify_state_honesty.mjs'
-_LOCALES = _ROOT / 'web' / 'lib' / 'i18n' / 'locales'
+_LOCALES = _WEB / 'lib' / 'i18n' / 'locales'
 _NODE = shutil.which('node')
 
-# 路线图里写死的数字：8 个 Tab。多一个少一个都要有人主动改这里（以及 CHANGELOG）。
-_TAB_COUNT = 9
+# 原有九项之后追加管家和预警；新增路由必须同时更新清单与发布说明。
+_TAB_COUNT = 11
 
 # 只跑 .mjs，不碰 .ts —— Node 的 type stripping 从 22.6 起才有
 _MIN_MAJOR = 22
@@ -245,7 +247,7 @@ class SettingsTabsInvariantTest(unittest.TestCase):
         # 不是「渲染出来」。
         found = sum(1 for line in code.splitlines() if line.strip() == '{children}')
         self.assertEqual(
-            found, 2,
+            found, 3,
             f'外壳只在 {found} 条 return 分支里渲染了 children：`/settings` 的重定向'
             '挂在子路由的 page 上，漏掉哪条分支，那条路径下地址就不会被规范化。',
         )

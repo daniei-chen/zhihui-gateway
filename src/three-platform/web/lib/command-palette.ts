@@ -122,6 +122,10 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
    keywords: 'changelog release notes 更新日志 版本'},
   {href: '/settings/about', labelKey: 'settings.tabAbout', groupKey: 'nav.settings',
    keywords: 'about version 关于 版本'},
+  {href: '/settings/steward', labelKey: 'settings.tabSteward', groupKey: 'nav.settings',
+   keywords: 'steward deepseek assistant 管家 智汇 诊断'},
+  {href: '/settings/alerts', labelKey: 'settings.tabAlerts', groupKey: 'nav.settings',
+   keywords: 'alerts warning email smtp 预警 通知 邮箱'},
 ];
 
 /**

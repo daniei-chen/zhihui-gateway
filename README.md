@@ -10,7 +10,7 @@
 <br />
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="走进智汇：访问产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.2"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="阅读 0.0.2 发布说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="阅读 0.0.3 候选更新说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="查看开发与部署入口" /></a>
 
 <br /><br />
@@ -37,7 +37,7 @@
 冰蓝、留白、轻盈的光路。首页、登录页与工作台，共享同一枚 Z。
 
 > [!IMPORTANT]
-> 2026-10-30 当前构建 `v0.0.2+ice.20261030.1`：WorkBuddy、Qoder、Trae。工作台采用近白淡冰蓝，修复表单对齐与 Trae 回调参数兼容；普通管理员可浏览完整控制台，仅允许添加账号。首页与原版登录页保持不变，Codex / ChatGPT 留待独立产品。生产发布与验收边界见[本次发布记录](docs/RELEASE-20261030-ICE.md)。
+> `0.0.3` 候选：智汇管家与预警中心沿用现有工作台，DeepSeek 读取脱敏证据、调用有限只读工具；规则先通知，AI 再补充。当前生产仍为 `v0.0.2+quiet.20261030.1`，不把候选源码当作已上线。见[管家与邮件运行合同](docs/STEWARD.md)。WorkBuddy、Qoder、Trae 保持三平台，原版登录不改；Codex / ChatGPT 留待独立产品。
 
 [本轮集成与验收边界](docs/FOUR-GATEWAY-INTEGRATION.md) · [可编辑首页与复现](site/home-source/INTEGRATION.md)
 
@@ -105,8 +105,8 @@
 | :--- | :--- |
 | 看网站与交互 | [产品首页 ↗](https://zhihui.kaogong.art/) · [首页源码](site/home/index.html) |
 | 本地运行或改版 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
-| 了解升级和回退 | [版本与发布合同](docs/PRODUCT-RELEASE.md) · [0.0.2 发布说明](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.2) |
-| 看清已做与待做 | [本版审计边界](docs/AUDIT-0.0.2.md) · [更新日志](CHANGELOG.md) |
+| 了解升级和回退 | [版本与发布合同](docs/PRODUCT-RELEASE.md) · [0.0.3 候选说明](CHANGELOG.md) |
+| 看清已做与待做 | [本版审计边界](docs/AUDIT-0.0.3.md) · [更新日志](CHANGELOG.md) |
 
 <details>
 <summary><b>本地开发速览</b> — Python 3.12 / Node.js 22+ / Next.js 16</summary>
@@ -123,7 +123,7 @@ cd zhihui-gateway
 
 ### 一份仓库，一条自己的版本线
 
-智汇产品版本为 **`0.0.2`**。软件源码与升级来源固定为 [本仓库](https://github.com/daniei-chen/zhihui-gateway)，不是模型供应商地址。
+当前源码版本为 **`0.0.3` 候选**。软件源码与升级来源固定为 [本仓库](https://github.com/daniei-chen/zhihui-gateway)，不是模型供应商地址。生产切换及验收以[发布合同](docs/PRODUCT-RELEASE.md)中的实际记录为准。
 
 **固定提交 → 构建与隔离测试 → 哈希、签名与回执 → 受控发布 → 运行核验。**
 
@@ -131,7 +131,7 @@ cd zhihui-gateway
 [查看完整发布链路](docs/PRODUCT-RELEASE.md)
 
 > [!NOTE]
-> 面向自托管与已获授权的使用，不绕过供应商渠道校验。`0.0.2` 不是“所有审计项已关闭”的认证；真实供应商长尾、离机灾备与长期 SLO 等边界见 [审计说明](docs/AUDIT-0.0.2.md)。
+> 面向自托管与已获授权的使用，不绕过供应商渠道校验。版本号不是“所有审计项已关闭”的认证；真实供应商长尾、离机灾备与长期 SLO 等历史边界见 [审计说明](docs/AUDIT-0.0.2.md)。新增管家不会自动关闭这些缺口。
 
 <br />
 

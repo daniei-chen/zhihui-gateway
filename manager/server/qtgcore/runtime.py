@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -99,16 +100,17 @@ class Runtime:
         log.info("qtg 停止")
 
     async def health_snapshot(self) -> List[dict]:
-        q = await self.qoder.health()
-        t = await self.trae.health()
-        out = [
-            {"name": self.qoder.name, **q},
-            {"name": self.trae.name, **t},
-        ]
-        if self.wb is not None:
-            w = await self.wb.health()
-            out.append({"name": self.wb.name, **w})
-        return out
+        async def probe(adapter):
+            try:
+                result = await asyncio.wait_for(adapter.health(), timeout=6)
+                if not isinstance(result, dict) or type(result.get('up')) is not bool:
+                    raise ValueError('invalid health contract')
+                return {**result, 'name': adapter.name}
+            except Exception:
+                return {'name': adapter.name, 'up': False, 'state': 'unknown',
+                        'error': 'health_probe_unavailable', 'latency_ms': None}
+        adapters = [self.qoder, self.trae] + ([self.wb] if self.wb is not None else [])
+        return list(await asyncio.gather(*(probe(adapter) for adapter in adapters)))
 
     def record_audit(self, **kwargs) -> dict:
         context = current_audit_identity()

@@ -342,6 +342,11 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/settings/pg-sync/test',
         'POST /api/settings/pg-sync/export',
         'POST /api/settings/pg-sync/import',
+        # Recipient/threshold changes, external mail and metered model access
+        # require a human super-admin session, never a management API token.
+        'PUT /api/steward/settings',
+        'POST /api/steward/test-mail',
+        'POST /api/steward/chat',
     }
     # 写方法但只要求「已登录」——只读令牌也能调。必须逐个有理由。
     ANY_LOGGED_IN = {

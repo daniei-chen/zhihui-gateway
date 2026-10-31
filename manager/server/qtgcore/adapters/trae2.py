@@ -307,6 +307,13 @@ class Trae2Adapter(BaseAdapter):
             rows = [rows]
         return {"accounts": rows, "checkin": self._checkin_rows()}
 
+    async def diagnostic_pool(self) -> Dict[str, Any]:
+        value = await self._cmd("accounts_list", required=True)
+        rows = value.get("data")
+        if value.get("ok") is False or not isinstance(rows, list):
+            raise ValueError("invalid_trae_pool_contract")
+        return {"accounts": rows, "scope": "engine_account_list"}
+
     async def usage(self, days: int = 14) -> Dict[str, Any]:
         """用量：**优先走 `api_usage_stats` 命令**（形状与旧 trae-bff 完全一致），
         SQLite 只做兜底——直接读库虽然快，但会被 aiwork 的写锁影响到。"""

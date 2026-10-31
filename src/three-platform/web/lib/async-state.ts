@@ -95,8 +95,8 @@ export interface DepPrints {
  * 两者同时变化时按「上下文变了」处理：先清空、再立刻把旧数据合并回来毫无意义，
  * 而且会白发一次请求（切版本时页码归 1 就会同时命中这两条）。
  */
-export function depMode(prev: DepPrints, next: DepPrints): FetchMode | null {
+export function depMode(prev: DepPrints, next: DepPrints, interrupted = false): FetchMode | null {
   if (prev.context !== next.context) return 'initial';
-  if (prev.query !== next.query) return 'refresh';
+  if (prev.query !== next.query || interrupted) return 'refresh';
   return null;
 }

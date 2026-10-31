@@ -11,7 +11,10 @@ class AdmissionBytesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.patches = [patch.dict(os.environ, {'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES': str(1024**2),
             'WB_GATEWAY_MAX_CONCURRENCY': '8', 'WB_GATEWAY_LARGE_MAX_CONCURRENCY': '8'}),
-            patch('server.db.execute'), patch('server.budget.finish')]
+            patch('server.db.execute'), patch('server.budget.finish'),
+            # These tests isolate byte/count capacity; real authentication has
+            # separate receive-count and end-to-end policy regression coverage.
+            patch('server.routers.gateway.preauthorize_body', return_value=None)]
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)

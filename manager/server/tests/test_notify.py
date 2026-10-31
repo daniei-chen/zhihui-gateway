@@ -46,6 +46,15 @@ class RedactTest(unittest.TestCase):
     def test_truncates(self) -> None:
         self.assertLessEqual(len(notify.redact('x' * 2000)), 500)
 
+    def test_named_credentials_in_json_and_key_value_are_redacted(self) -> None:
+        for raw in ('{"password":"short-secret"}', "{'access_token': 'short-secret'}",
+                    '{"api-key": "short-secret"}', 'refresh_token=short-secret',
+                    'AuthCode:short-secret', '{"cookie":"short\\\"secret"}'):
+            with self.subTest(raw=raw):
+                out = notify.redact(raw)
+                self.assertNotIn('short', out)
+                self.assertIn('***', out)
+
 
 class DispatchTest(unittest.TestCase):
     def setUp(self) -> None:

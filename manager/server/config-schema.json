@@ -9,7 +9,9 @@
     "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
       "type": "integer",
       "sensitive": false,
-      "consumers": ["server/observability.py:RequestAuditMiddleware"],
+      "consumers": [
+        "server/observability.py:RequestAuditMiddleware"
+      ],
       "default": 67108864,
       "minimum": 1,
       "unit": "bytes"
@@ -17,7 +19,9 @@
     "WB_GATEWAY_MIN_BODY_RESERVATION_BYTES": {
       "type": "integer",
       "sensitive": false,
-      "consumers": ["server/observability.py:RequestAuditMiddleware"],
+      "consumers": [
+        "server/observability.py:RequestAuditMiddleware"
+      ],
       "default": 65536,
       "minimum": 1,
       "unit": "bytes"
@@ -912,6 +916,24 @@
       "consumers": [
         "manager/server/services/keyimport.py:94"
       ]
+    },
+    "WB_STEWARD_SMTP_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "default": "",
+      "consumers": [
+        "manager/server/config.py:steward"
+      ],
+      "description": "Operator-owned 0600 credential file; never exposed through the panel."
+    },
+    "WB_STEWARD_KEY_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "default": "",
+      "consumers": [
+        "manager/server/config.py:steward"
+      ],
+      "description": "Operator-owned 0600 credential file; never exposed through the panel."
     }
   }
 }

@@ -549,7 +549,8 @@ def unknown_whitelist_entries(models: list[str], known_by_realm: dict,
 def validate(key: dict, ip: str, model: str | None,
              *, is_model_list: bool = False,
              mapped_model: str | None = None,
-             platform: str = 'workbuddy') -> str | None:
+             platform: str = 'workbuddy',
+             defer_platform: bool = False) -> str | None:
     """返回 None 表示放行，否则返回拒绝原因（`Rejection`，自带状态码）。
 
     is_model_list：请求是 `/v1/models`（模型发现，不带 model）。版本归属在这种
@@ -605,7 +606,9 @@ def validate(key: dict, ip: str, model: str | None,
     legacy = key.get('legacy_platforms')
     if legacy is not None:
         platforms = [p for p in platforms if p in legacy]
-    if platform not in platforms:
+    # Header-only admission cannot infer a model-prefix-selected platform yet.
+    # The full route always revalidates with the actual model and platform.
+    if not defer_platform and platform not in platforms:
         return Rejection(
             f'该密钥仅限 {"/".join(platforms)} 平台使用，当前请求是 {platform} 平台',
             403, 'permission_error', 'platform_not_allowed')

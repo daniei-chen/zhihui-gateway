@@ -7,8 +7,10 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 import inspect
+import unicodedata
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -58,6 +60,10 @@ _WEAK_PASSWORDS = frozenset({
     'qwertyuiop', 'qwerty123456', 'qwertyuiop123',
     'workbuddy', 'workbuddy123', 'workbuddy1234', 'workbuddy2024',
     'letmein12345', 'iloveyou1234', '111111111111', '000000000000',
+    '12345678', '123456789', '1234567890', '12345678901',
+    '87654321', '0987654321', 'password1', 'password12',
+    'qwerty123', 'qwerty12', 'qwer1234', 'abcd1234',
+    'letmein1', 'iloveyou', 'welcome1', 'changeme',
 })
 
 
@@ -84,10 +90,18 @@ def password_problem(pwd: str, username: str = '') -> str | None:
     return None
 
 
-def managed_user_password_problem(pwd: str) -> str | None:
-    """Count raw Unicode characters; root retains its separate strong policy."""
+def managed_user_password_problem(pwd: str, username: str = '') -> str | None:
+    """Keep the eight-character/numeric option; reject known trivial secrets."""
     if not isinstance(pwd, str) or len(pwd) < 8:
         return '用户登录密码至少 8 位'
+    low = unicodedata.normalize('NFKC', pwd).casefold()
+    if low in _WEAK_PASSWORDS or not low.strip() or len(set(low)) == 1:
+        return '密码过于常见，请换一个'
+    if any(unicodedata.category(char) == 'Cc' for char in pwd):
+        return '密码过于常见，请换一个'
+    user = unicodedata.normalize('NFKC', username).strip().casefold()
+    if user and (low == user or low.startswith(user) and low[len(user):].isdigit()):
+        return '密码不能是用户名加数字'
     return None
 
 
@@ -105,7 +119,7 @@ def weak_admin_passwords() -> list[str]:
         return []
     found: list[str] = []
     for item in cfg.get('users', []):
-        if item.get('role') != 'admin':
+        if item.get('role') not in ('admin', 'account_admin'):
             continue
         stored = str(item.get('pwd_hash') or '')
         for candidate in _WEAK_PASSWORDS:
@@ -478,8 +492,20 @@ MAX_FAILS = 5
 LOCK_SECONDS = 600
 MAX_TRACKED = 5000
 _FAILS_LOADED = False
+_failures_lock = threading.RLock()
 
 
+def _serialized_login_counters(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        # Password KDFs run in parallel; counter loading and mirror updates must
+        # retain a single order, without holding this lock during a KDF.
+        with _failures_lock:
+            return function(*args, **kwargs)
+    return guarded
+
+
+@_serialized_login_counters
 def _load_fails_once() -> None:
     """把窗口内的持久化计数回载进内存（每进程一次；失败静默回退纯内存）。"""
     global _FAILS_LOADED
@@ -554,6 +580,7 @@ def _prune(store: dict[str, list]) -> None:
         store.pop(k, None)
 
 
+@_serialized_login_counters
 def login_blocked(ip: str, username: str | None = None) -> bool:
     _load_fails_once()
     now = time.time()
@@ -570,6 +597,7 @@ def login_blocked(ip: str, username: str | None = None) -> bool:
     return False
 
 
+@_serialized_login_counters
 def record_fail(ip: str, username: str | None = None) -> None:
     _load_fails_once()
     now = time.time()
@@ -591,6 +619,7 @@ def record_fail(ip: str, username: str | None = None) -> None:
     _prune(_user_fail)
 
 
+@_serialized_login_counters
 def clear_fail(ip: str, username: str | None = None) -> None:
     _fail.pop(ip, None)
     _unmirror_fail('ip', ip)
@@ -1014,7 +1043,7 @@ def require_session_admin(request: Request,
     token 自身的接口）。原则是「能改代码、能扩大权限、或能抹掉痕迹的入口只对
     真人开放」——这样即便 token 泄露，攻击面也不包含这些。（见 docs/api-tokens.md）
     """
-    if getattr(request.state, 'token_id', None) is not None:
+    if getattr(request.state, 'token_id', None) is not None or user.get('scope'):
         raise HTTPException(status_code=403,
                             detail='该接口不接受 API Token，请用会话登录后操作')
     return user

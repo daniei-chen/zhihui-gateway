@@ -375,69 +375,94 @@ def replay_ledger_receipts(now: int) -> dict:
     return result
 
 
-async def monitor():
-    failures = 0
-    next_reconcile = 0
-    next_replay = 0
-    while True:
-        now = int(time.time())
-        # U01：先消化回执再判就绪，避免「积压刚产生就报警」的抖动。
-        if now >= next_replay:
-            next_replay = now + _reconcile_env_int('WB_LEDGER_REPLAY_INTERVAL_SEC', 30)
-            replay_ledger_receipts(now)
-        status = readiness()
-        # Planned drain deliberately makes readiness 503. It must not become a
-        # database failure alert (or trigger a future self-heal restart).
-        storage_ok = status['database_write'] and status['ledger_write']
-        failures = 0 if storage_ok else failures+1
-        transition('readiness',failures>=2,'database/ledger readiness failed twice')
-        now=int(time.time())
+def _monitor_tick(now, failures, next_reconcile, next_replay):
+    """Keep disk/SQLite/replay/legacy notification I/O off the ASGI event loop."""
+    # U01：先消化回执再判就绪，避免「积压刚产生就报警」的抖动。
+    if now >= next_replay:
+        next_replay = now + _reconcile_env_int('WB_LEDGER_REPLAY_INTERVAL_SEC', 30)
+        replay_ledger_receipts(now)
+    status = readiness()
+    # Planned drain deliberately makes readiness 503. It must not become a
+    # database failure alert (or trigger a future self-heal restart).
+    storage_ok = status['database_write'] and status['ledger_write']
+    failures = 0 if storage_ok else failures+1
+    transition('readiness',failures>=2,'database/ledger readiness failed twice')
+    now=int(time.time())
+    try:
+        # U02（2026-10-28）：告警只统计**真正需要人工**的 unknown。
+        # 只有完整零回执可自动结清；拒绝错误和采集缺失仍需核对。
+        # U02 收尾：超过处理期限仍无上游证据的已归档待核对，也不再触发告警。
+        from . import budget as _budget
+        _summary = _budget.unresolved_summary(now=now)['summary']
+        _active, _detail = budget_unknown_alert(_summary)
+        transition('budget_unknown', _active, _detail)
+        row=db.query_one("SELECT count(*) n,sum(CASE WHEN terminal_state IN ('upstream_error','transport_error','protocol_incomplete','application_error','interrupted') THEN 1 ELSE 0 END) failed FROM request_outcomes WHERE protocol!='http' AND ts>=? AND terminal_state!='rejected'",(now-300,))
+        transition('model_completion',row['n']>=20 and (row['failed'] or 0)/row['n']>0.01,'model terminal failures exceed 1% / 5 minutes / >=20 requests')
+        free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
+        transition('disk_free',free is not None and free<2*1024**3,'application volume free space below 2 GiB')
+        # The installed host job is daily. Keep that honest: use a 26-hour
+        # freshness guard until operations can install a more frequent job.
+        evaluate_backup_health(now)
+    except Exception:
+        log.exception('operational health evaluation failed')
+    # P1-1：应用内增量对账。首轮立即跑（消化存量），之后按间隔。
+    # 只在主实例跑（WB_BACKGROUND_JOBS）：零停机发布的过渡实例不重复对账。
+    if now >= next_reconcile and config.BACKGROUND_JOBS:
+        next_reconcile = now + _reconcile_env_int('WB_BUDGET_RECONCILE_INTERVAL_SEC', 900)
         try:
-            # U02（2026-10-28）：告警只统计**真正需要人工**的 unknown。
-            # 只有完整零回执可自动结清；拒绝错误和采集缺失仍需核对。
-            # U02 收尾：超过处理期限仍无上游证据的已归档待核对，也不再触发告警。
+            settled_zero = reconcile_zero_reservation_unknowns(now)
+            # 完整上游零回执与不可变用量记录必须一致。
             from . import budget as _budget
-            _summary = _budget.unresolved_summary(now=now)['summary']
-            _active, _detail = budget_unknown_alert(_summary)
-            transition('budget_unknown', _active, _detail)
-            row=db.query_one("SELECT count(*) n,sum(CASE WHEN terminal_state IN ('upstream_error','transport_error','protocol_incomplete','application_error','interrupted') THEN 1 ELSE 0 END) failed FROM request_outcomes WHERE protocol!='http' AND ts>=? AND terminal_state!='rejected'",(now-300,))
-            transition('model_completion',row['n']>=20 and (row['failed'] or 0)/row['n']>0.01,'model terminal failures exceed 1% / 5 minutes / >=20 requests')
-            free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
-            transition('disk_free',free is not None and free<2*1024**3,'application volume free space below 2 GiB')
-            # The installed host job is daily. Keep that honest: use a 26-hour
-            # freshness guard until operations can install a more frequent job.
-            evaluate_backup_health(now)
+            settled_evidenced = _budget.reconcile_evidenced_unknowns(now)
+            # U02 收尾：超期无证据的 unknown 标记「已归档待核对」（不改 state、
+            # 不删除、不改用量），只把它从告警判据里摘出来。
+            archived = _budget.archive_overdue_unknowns(now)
+            # U04：给已终结、过了稳定窗口的请求补 attempt 计费事实（有界）。
+            from . import ledger as _ledger
+            billing_filled = _ledger.backfill_attempt_billing(now=now)
+            if settled_zero or settled_evidenced or archived or billing_filled:
+                log.info('budget reconcile: zero-reservation=%d evidenced=%d archived=%d '
+                         'attempt-billing=%d', settled_zero, settled_evidenced,
+                         archived, billing_filled)
         except Exception:
-            log.exception('operational health evaluation failed')
-        # P1-1：应用内增量对账。首轮立即跑（消化存量），之后按间隔。
-        # 只在主实例跑（WB_BACKGROUND_JOBS）：零停机发布的过渡实例不重复对账。
-        if now >= next_reconcile and config.BACKGROUND_JOBS:
-            next_reconcile = now + _reconcile_env_int('WB_BUDGET_RECONCILE_INTERVAL_SEC', 900)
-            try:
-                settled_zero = reconcile_zero_reservation_unknowns(now)
-                # 完整上游零回执与不可变用量记录必须一致。
-                from . import budget as _budget
-                settled_evidenced = _budget.reconcile_evidenced_unknowns(now)
-                # U02 收尾：超期无证据的 unknown 标记「已归档待核对」（不改 state、
-                # 不删除、不改用量），只把它从告警判据里摘出来。
-                archived = _budget.archive_overdue_unknowns(now)
-                # U04：给已终结、过了稳定窗口的请求补 attempt 计费事实（有界）。
-                from . import ledger as _ledger
-                billing_filled = _ledger.backfill_attempt_billing(now=now)
-                if settled_zero or settled_evidenced or archived or billing_filled:
-                    log.info('budget reconcile: zero-reservation=%d evidenced=%d archived=%d '
-                             'attempt-billing=%d', settled_zero, settled_evidenced,
-                             archived, billing_filled)
-            except Exception:
-                log.exception('incremental budget reconcile pass failed')
+            log.exception('incremental budget reconcile pass failed')
+    return failures, next_reconcile, next_replay, status
+
+
+_cached_readiness = None
+
+
+def public_readiness(now=None):
+    """A read-only, bounded-age result, never a fresh database write per visitor."""
+    from . import drain
+    now = time.monotonic() if now is None else now
+    cached = _cached_readiness
+    return bool(cached and 0 <= now - cached['at'] <= 75
+                and cached['ok'] and not drain.is_draining())
+
+
+async def monitor():
+    global _cached_readiness
+    from .services.asyncwork import joined_task
+    failures, next_reconcile, next_replay = 0, 0, 0
+    while True:
+        tick = asyncio.create_task(asyncio.to_thread(
+            _monitor_tick, int(time.time()), failures, next_reconcile, next_replay))
+        try:
+            failures, next_reconcile, next_replay, status = await joined_task(tick)
+            _cached_readiness = {'at': time.monotonic(), 'ok': bool(status['ok'])}
+        except asyncio.CancelledError:
+            # joined_task retains ownership through repeated cancellation until
+            # blocking work ends, before lifespan can close its DB/worker lease.
+            raise
+        except Exception:
+            _cached_readiness = None
+            log.exception('operational monitor tick failed; readiness unavailable')
         await asyncio.sleep(30)
 
 def _release_id() -> str:
-    try:
-        with open(config.ROOT / '.version', encoding='utf-8') as fh:
-            return fh.read().strip() or "unknown"
-    except OSError:
-        return "unknown"
+    from . import release_identity
+    return release_identity.current()
 
 
 def status():

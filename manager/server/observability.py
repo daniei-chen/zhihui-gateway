@@ -158,22 +158,8 @@ def _response_headers(state: "RequestAudit") -> list[tuple[bytes, bytes]]:
 
 
 def _release_id() -> str:
-    """发布标识：读 /opt/workbuddy-manager/.version。
-
-    2026-10-23 审计：此处曾写死 v1.0.79+closure.20261005.1，而实际部署已到
-    v2.8.3+local.20261022.3，导致 14.5 万行 request_outcomes/usage_events 的
-    release_id 全部错标、审计追溯失效。改为读版本文件。
-    """
-    from . import config
-    for path in (str(config.ROOT / '.version'), '/opt/workbuddy-manager/.version'):
-        try:
-            with open(path, encoding='utf-8') as fh:
-                text = fh.read().strip()
-            if text:
-                return text
-        except OSError:
-            continue
-    return "unknown"
+    from . import release_identity
+    return release_identity.current()
 
 
 RELEASE_ID = _release_id()
@@ -436,6 +422,7 @@ def admission_snapshot() -> dict | None:
     if inst is None:
         return None
     return {'active': int(getattr(inst, 'active', 0)),
+            'preauth_active': int(getattr(inst, 'preauth_active', 0)),
             'large': int(getattr(inst, 'large', 0)),
             'maximum': int(getattr(inst, 'maximum', 0)),
             'large_maximum': int(getattr(inst, 'large_maximum', 0)),
@@ -724,7 +711,7 @@ class RequestAuditMiddleware:
         self.app = app
         # One worker: bounded admission before body allocation, no unbounded queue.
         # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
-        self.active=0; self.large=0
+        self.active=0; self.large=0; self.preauth_active=0
         self.inflight_body_bytes = 0
         # U21：启动时幂等补 request_outcomes.error_code / error_source。
         # 放在这里是因为中间件在 app 启动时构造一次，而 main.py 不在本轮可改范围。
@@ -774,7 +761,6 @@ class RequestAuditMiddleware:
         per_request_limit=None
         if inference:
             from .routers import gateway
-            per_request_limit=gateway.max_body_bytes()
         try: declared=max(0,int(headers.get(b'content-length',b'0')))
         except ValueError: declared=0
         initial_reservation = max(declared, self.minimum_body_bytes)
@@ -833,7 +819,28 @@ class RequestAuditMiddleware:
                              if key not in ('content-length','content-type')})
             await response(scope,receive,send_audited)
         try:
-            if inference and declared > per_request_limit:
+            auth_error = None
+            if inference and path in ('/v1/chat/completions', '/v2/chat/completions',
+                                       '/v1/messages', '/v1/messages/count_tokens',
+                                       '/v1/responses', '/responses'):
+                from starlette.requests import Request
+                from .services.asyncwork import joined_thread
+                # Bound thread submissions independently of admitted bodies.
+                if self.preauth_active >= self.maximum:
+                    await reject_capacity()
+                    return
+                self.preauth_active += 1
+                try:
+                    auth_error = await joined_thread(gateway.preauthorize_body, Request(scope),
+                                                     anthropic=protocol == 'anthropic')
+                finally:
+                    self.preauth_active -= 1
+            if inference and auth_error is None:
+                per_request_limit = gateway.max_body_bytes()
+            if auth_error is not None:
+                state.terminal_state, state.error_stage = 'rejected', 'authorization'
+                await reject_response(auth_error)
+            elif inference and declared > per_request_limit:
                 state.terminal_state,state.error_stage='rejected','validation'
                 await reject_response(gateway._payload_too_large(per_request_limit))
             elif inference and (self.active>=self.maximum or declared>1024*1024 and self.large>=self.large_maximum

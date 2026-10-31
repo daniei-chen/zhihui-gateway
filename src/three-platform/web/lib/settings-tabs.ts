@@ -27,6 +27,8 @@ export const SETTINGS_TABS = [
   'backup',
   'changelog',
   'about',
+  'steward',
+  'alerts',
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -63,6 +65,8 @@ export const SETTINGS_TAB_LABEL_KEYS: Record<SettingsTab, string> = {
   backup: 'settings.tabBackup',
   changelog: 'settings.tabChangelog',
   about: 'settings.tabAbout',
+  steward: 'settings.tabSteward',
+  alerts: 'settings.tabAlerts',
 };
 
 /**

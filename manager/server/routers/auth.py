@@ -8,10 +8,13 @@ from fastapi.responses import JSONResponse
 
 from .. import config, security
 from ..iputil import client_ip
+from ..services.asyncwork import joined_thread
 
 logger = logging.getLogger('workbuddy.auth')
 
 router = APIRouter(prefix='/api', tags=['auth'])
+_login_active = 0
+_LOGIN_MAX_ACTIVE = 4
 
 
 @router.get('/healthz')
@@ -49,6 +52,20 @@ async def login(request: Request) -> JSONResponse:
     username = str(body.get('username', '')).strip()[:64]
     password = str(body.get('password', ''))
 
+    global _login_active
+    if _login_active >= _LOGIN_MAX_ACTIVE:
+        raise HTTPException(status_code=429, detail='登录繁忙，请稍后重试')
+    _login_active += 1
+    try:
+        # PBKDF2 and atomic user-store/DB work must not stall inference streams.
+        # joined_thread retains this admission slot until the worker has ended,
+        # including repeated client cancellation. No unbounded work queue.
+        return await joined_thread(_complete_login, request, ip, username, password)
+    finally:
+        _login_active -= 1
+
+
+def _complete_login(request: Request, ip: str, username: str, password: str) -> JSONResponse:
     if security.login_blocked(ip, username):
         raise HTTPException(status_code=429, detail='失败次数过多，请 10 分钟后再试')
 

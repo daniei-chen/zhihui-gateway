@@ -92,14 +92,8 @@ BASELINE_COLUMNS = {
 
 
 def _app_version() -> str:
-    """当前 release 标识；与 `observability._release_id` 读同一个文件。"""
-    version = os.environ.get('WB_APP_VERSION', '').strip()
-    if version:
-        return version
-    try:
-        return Path('/opt/workbuddy-manager/.version').read_text(encoding='utf-8').strip() or 'unknown'
-    except OSError:
-        return 'unknown'
+    from . import release_identity
+    return release_identity.current()
 
 
 # ── v1 baseline ────────────────────────────────────────────────────────

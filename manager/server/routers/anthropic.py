@@ -38,7 +38,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import config, db, iputil, keysvc, upstreamsvc
 from .. import deadline as deadline_mod
-from ..routers.security import get_config as get_security_config
 # responses 只为复用推理凭据的编解码（`_encode_credential` / `_decode_credential`）：
 # Anthropic 的 `signature` 与 Responses 的 `encrypted_content` 语义完全相同——
 # 都是「客户端原样搬来搬去的不透明串」，两边编解码必须一致，否则同一轮对话在
@@ -221,23 +220,8 @@ def _resolve_key(request: Request):
 
 def _authorize(request: Request, model: str | None, *,
                mapped: str | None = None) -> tuple[dict | None, str, JSONResponse | None]:
-    """完整鉴权：密钥 → 全局 IP 管控 → 密钥约束 → 限流。返回 `(key, ip, error)`。
-
-    mapped：`model` 经「模型映射」后的名字，版本归属判它（issue #47，
-    见 `keysvc.validate` 的说明）。与 `gateway._authorize` 同名同义。
-
-    ⚠️ 这套检查与 `gateway._authorize` **必须保持同序同项**——同一把密钥在两个
-    协议下得出不同结论是最难查的一类问题。之所以没直接复用：本层要遍历**多个
-    候选令牌**（客户端可能同时带着别的服务的凭据），而 `_authorize` 只接单个 token。
-    改任一侧时请同步另一侧。
-
-    之所以抽成函数：`count_tokens` 早先只挑了个能解析的密钥就放行，
-    把停用/过期/配额/限流**全漏了**——重复实现的两份逻辑一旦漂移，漏的就是安全项。
-    """
+    """Keep Anthropic candidate selection; share the complete gateway policy."""
     ip = iputil.client_ip(request)
-    ua = request.headers.get('user-agent')
-    path = request.url.path
-
     key, token = _resolve_key(request)
     if not token:
         logger.warning('未取到令牌，收到的请求头: %s', _header_names(request))
@@ -258,63 +242,12 @@ def _authorize(request: Request, model: str | None, *,
         )
         return None, ip, _err('API Key 无效', 401, 'authentication_error')
 
-    # 供记账用（IP 拦截早于下面的映射归一化，这里先算一份）
-    _mapped_for_log = gateway._map_model(model) if mapped is None else mapped
-
-    sec = get_security_config()
-    if sec.get('enabled'):
-        rules = [
-            {'kind': r['kind'], 'cidr': r['cidr']}
-            for r in db.query('SELECT kind, cidr FROM ip_rules')
-        ]
-        if not iputil.evaluate(ip, rules, sec.get('mode', 'blacklist')):
-            gateway._log_ip(ip, path, True, ua, 'ip_blocked')
-            gateway._record(key, ip, model or '', _mapped_for_log or '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
-            return None, ip, _err(f'来源 IP {ip} 被安全策略拦截', 403, 'permission_error')
-
-    # 注意：`blocked=False` 的这一行现在默认**不写库**（审计日志只留拦截，
-    # 见 gateway._log_ip 的说明）——保留调用是为了 WB_AUDIT_ALL_ACCESS=1 时
-    # 与 gateway 行为一致，不多一条分叉。
-    gateway._log_ip(ip, path, False, ua)
-
-    # 映射只算一次：拒绝路径也要用它记账（口径见 gateway._authorize 的说明——
-    # 日志的 realm 按实际要用的那个名字归档，别名不带前缀，按请求名记会归错栏）。
-    mapped = gateway._map_model(model) if mapped is None else mapped
-
-    # model 为 None 时按「模型发现类请求」处理：跳过版本与模型白名单
-    # （没有 model 就无从判定版本），但停用/过期/配额/IP 这些照常校验。
-    from .. import platformpolicy
-    try:
-        selected_platform = platformpolicy.bind_request(request, model)
-    except platformpolicy.PlatformConflict as exc:
-        return key, ip, gateway._oai_error(str(exc), 400, 'invalid_request_error', exc.code)
-    reason = keysvc.validate(key, ip, model, is_model_list=(model is None),
-                             mapped_model=mapped,
-                             # K01-S1：与 gateway._authorize 同口径，按入口决定的
-                             # 生效平台校验迁移旧 key 的平台范围（空 = workbuddy）。
-                             platform=selected_platform)
-    if reason:
-        # 与 gateway._authorize 同口径：状态码来自 keysvc，不再一律 403
-        # （403 会被客户端显示成「API 密钥无效」，掩盖真实原因）。
-        status = getattr(reason, 'status', 403)
-        gateway._record(key, ip, model or '', mapped or '', status, 0, 0, 0, ua, reason, False)
-        # 也记进安全页的入站日志：走 /v1/messages 的客户端被拒时，此前在
-        # 「IP 访问日志」里**完全看不到**（只有 gateway 那条路记），两套协议
-        # 的审计口径不一致。原因码复用 gateway 的归类，避免两处写法漂移。
-        gateway._log_ip(ip, path, True, ua, gateway._key_reject_code(reason, model is None))
-        return None, ip, _err(reason, status, getattr(reason, 'err_type', 'permission_error'))
-
-    state=observability.current.get()
-    if state: state.key_id=int(key["id"])
-    if model is not None and not observability.admit_key(key):
-        return None,ip,_err("密钥并发容量已满",429,"rate_limit_error")
-    limited, _count = gateway._rate_limited(key)
-    if limited:
-        msg = f'请求过于频繁（{gateway.RATE_WINDOW}s 内超过 {gateway.RATE_MAX_PER_MIN} 次）'
-        gateway._record(key, ip, model or '', mapped or '', 429, 0, 0, 0, ua, msg, False)
-        gateway._log_ip(ip, path, True, ua, 'rate_limited')
-        return None, ip, _err(msg, 429, 'rate_limit_error')
-
+    key, ip, error = gateway._authorize_key(request, key, ip, model,
+                                          is_model_list=(model is None), mapped=mapped)
+    if error is not None:
+        value = json.loads(error.body).get('error') or {}
+        return key, ip, _err(value.get('message', '请求被拒绝'), error.status_code,
+                             value.get('type', 'permission_error'), code=value.get('code'))
     return key, ip, None
 
 

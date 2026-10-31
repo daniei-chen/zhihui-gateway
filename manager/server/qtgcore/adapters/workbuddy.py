@@ -455,6 +455,13 @@ class WorkBuddyAdapter(BaseAdapter):
     async def accounts(self) -> Dict[str, Any]:
         return await self.overview()
 
+    async def diagnostic_pool(self) -> Dict[str, Any]:
+        # Observe the loaded pool, not credentials or historical check-in rows.
+        value = await self._json("GET", "/status", required=True)
+        if not isinstance(value, dict) or not isinstance(value.get("accounts"), list):
+            raise ValueError("invalid_workbuddy_pool_contract")
+        return {"accounts": value["accounts"], "scope": "engine_loaded_pool"}
+
     # ---------------- 用量 ----------------
     # ---------------- 用量统计（照抄 workbuddy manager 的口径） ----------------
     def _stats_agg(self, conn, where: str, args: tuple, realm: str):

@@ -47,6 +47,7 @@ const STUB = {
   'settings.tabUsers': '用户', 'settings.tabTokens': '令牌', 'settings.tabSystem': '系统',
   'settings.tabBackup': '数据备份',
   'settings.tabChangelog': '更新日志', 'settings.tabAbout': '关于',
+  'settings.tabSteward': '管家', 'settings.tabAlerts': '预警',
 };
 const t = (key) => STUB[key] ?? key;
 

@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="166" height="44" viewBox="0 0 166 44" role="img" aria-labelledby="title desc">
-<title id="title">0.0.2 发布说明</title><desc id="desc">0.0.2 发布说明</desc>
+<title id="title">0.0.3 发布说明</title><desc id="desc">0.0.3 发布说明</desc>
 <defs>
   <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#f2f7ff"/></linearGradient>
   <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9ebeff"/><stop offset=".58" stop-color="#6c8df6"/><stop offset="1" stop-color="#5472eb"/></linearGradient>
   <radialGradient id="halo"><stop stop-color="#dceaff" stop-opacity=".95"/><stop offset="1" stop-color="#eaf3ff" stop-opacity="0"/></radialGradient>
 </defs>
 <style>@media(prefers-reduced-motion:reduce){.travel{display:none}}</style>
-<rect x="1" y="1" width="164" height="42" rx="15" fill="#f6f9ff" stroke="#dce6fc"/><text x="83.0" y="27" fill="#415678" font-family="'Bahnschrift', 'DIN Alternate', 'Microsoft YaHei', 'PingFang SC', sans-serif" font-size="14" font-weight="600" text-anchor="middle">0.0.2 发布说明</text>
+<rect x="1" y="1" width="164" height="42" rx="15" fill="#f6f9ff" stroke="#dce6fc"/><text x="83.0" y="27" fill="#415678" font-family="'Bahnschrift', 'DIN Alternate', 'Microsoft YaHei', 'PingFang SC', sans-serif" font-size="14" font-weight="600" text-anchor="middle">0.0.3 发布说明</text>
 </svg>

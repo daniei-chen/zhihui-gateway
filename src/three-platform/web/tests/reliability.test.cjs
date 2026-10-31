@@ -206,6 +206,38 @@ function asyncHook() {
   return {harness, useAsyncAll};
 }
 
+test('pausing a completed scope neither refetches nor replaces its form source on resume', async () => {
+  const {harness, useAsyncAll} = asyncHook();
+  let enabled = false, calls = 0;
+  const render = () => harness.render(() => useAsyncAll({cfg: async () => ({version: ++calls})}, [], [], {enabled}));
+  render(); harness.effects(); await flush();
+  assert.equal(calls, 0);
+  enabled = true; render(); harness.effects(); await flush();
+  const cfg = render().values.cfg;
+  assert.equal(calls, 1);
+  enabled = false; render(); harness.effects(); await flush();
+  enabled = true; render(); harness.effects(); await flush();
+  assert.equal(calls, 1);
+  assert.equal(render().values.cfg, cfg);
+});
+
+test('pausing an in-flight scope rejects late writes and resumes a replacement', async () => {
+  const {harness, useAsyncAll} = asyncHook();
+  let enabled = true;
+  const requests = [];
+  const render = () => harness.render(() => useAsyncAll({cfg: () => {
+    const work = deferred(); requests.push(work); return work.promise;
+  }}, [], [], {enabled}));
+  render(); harness.effects(); await flush();
+  enabled = false; render(); harness.effects(); await flush();
+  requests[0].resolve('old'); await flush();
+  assert.equal(render().values.cfg, undefined);
+  enabled = true; render(); harness.effects(); await flush();
+  assert.equal(requests.length, 2);
+  requests[1].resolve('new'); await flush();
+  assert.equal(render().values.cfg, 'new');
+});
+
 test('slow initial success is not starved by repeated background refreshes', async () => {
   const {harness, useAsyncAll} = asyncHook();
   const work = deferred();

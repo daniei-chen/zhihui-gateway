@@ -1,0 +1,43 @@
+[Unit]
+Description=Zhihui Steward independent readiness watchdog
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/workbuddy-manager/releases/current
+ExecStartPre=/usr/bin/python3 -I -S -B -X pycache_prefix=/opt/zhihui-release/python-cache /opt/zhihui-release/bin/trusted_bootstrap.py --root /opt/workbuddy-manager/releases/current
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/zhihui-gateway/steward-watchdog/worker
+ExecStart=/usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all /opt/workbuddy-manager/venv/bin/python -I -B /opt/workbuddy-manager/releases/current/deploy/steward_watchdog.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+StateDirectory=zhihui-gateway/steward-watchdog
+StateDirectoryMode=0711
+TimeoutStartSec=240
+MemoryMax=192M
+CPUQuota=15%
+TasksMax=16
+NoNewPrivileges=yes
+# Only the fixed startup verifier/directory/drop-uid commands run with these.
+# setpriv removes every capability and supplementary group before Python starts.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_CHOWN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_CHOWN CAP_DAC_OVERRIDE
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/zhihui-gateway/steward-watchdog
+# SQLite mode=ro may update existing WAL shared-memory read marks; no SQL writes.
+ReadWritePaths=-/opt/workbuddy-manager/data/manager.db-shm
+ReadOnlyPaths=/opt/workbuddy-manager/data
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/opt/workbuddy2api -/opt/qoder-hub -/opt/trae-work -/root -/opt/workbuddy-manager/data/users.json -/opt/workbuddy-manager/.env -/etc/wb-gateway-alert.json

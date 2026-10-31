@@ -43,13 +43,17 @@ _TOKENISH = re.compile(r'\b(wbt_|wbk_|sk-|ghp_|Bearer\s+)[A-Za-z0-9_\-\.]{8,}')
 _LONG_B64 = re.compile(r'\b[A-Za-z0-9_\-]{40,}\b')
 
 
-def redact(text: str) -> str:
+def redact(text: str, *, limit: int = 500) -> str:
     """把 detail 里可能的凭据抹掉。宁可多抹，不可漏。"""
     s = str(text or '')
     s = _URL_USERINFO.sub('***:***@', s)
     s = _TOKENISH.sub(lambda m: m.group(1) + '***', s)
     s = _LONG_B64.sub('***', s)
-    return s[:500]
+    s = re.sub(r'(?i)(["\x27](?:password|passwd|api[_-]?key|authcode|access[_-]?token|refresh[_-]?token|cookie|secret)["\x27]\s*:\s*)'
+               r'("(?:[^"\\]|\\.)*"|\x27(?:[^\x27\\]|\\.)*\x27)', r'\1"***"', s)
+    s = re.sub(r'(?i)\b(password|passwd|api[_-]?key|authcode|access[_-]?token|refresh[_-]?token|cookie|secret)'
+               r'(\s*[=:]\s*)[^\s,;"\x27<>]+', r'\1\2***', s)
+    return s[:max(0, min(20000, limit))]
 
 
 def _settings() -> dict[str, Any]:

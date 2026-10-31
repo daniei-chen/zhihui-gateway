@@ -188,7 +188,11 @@ class ChangelogOrderTest(unittest.TestCase):
     def test_versions_are_newest_first(self) -> None:
         heads = self._headings()
         product = json.loads((self.ROOT_CHANGELOG.parent / 'server/product-release.json').read_bytes())
-        self.assertEqual(heads, [product['version']], '只展示智汇自己的发版记录')
+        self.assertEqual(heads[0], product['version'], '最新产品版本必须排在第一位')
+        self.assertEqual(len(heads), len(set(heads)), '产品版本不能重复')
+        for heading in heads:
+            self.assertRegex(heading, r'^0\.\d+\.\d+$', '不混入继承组件或内部构建版本')
+            self.assertGreaterEqual(self._key(heading), (0, 0, 2), '只展示智汇自己的发版记录')
         self.assertEqual(self.ROOT_CHANGELOG.read_bytes(),
                          (self.ROOT_CHANGELOG.parent / 'server/CHANGELOG.md').read_bytes())
         released = [h for h in heads if h not in ('未发布', 'Unreleased')]
@@ -267,7 +271,9 @@ class ChangelogIsUserFacingTest(unittest.TestCase):
         """先确认切段有效，否则下面几条会在空集合上「通过」。"""
         secs = self._sections()
         product = json.loads((Path(__file__).resolve().parents[1] / 'product-release.json').read_bytes())
-        self.assertEqual([v for v, _ in secs], [product['version']])
+        self.assertEqual(secs[0][0], product['version'])
+        self.assertGreaterEqual(len(secs), 2, '新发版不能丢弃既有的智汇产品记录')
+        self.assertEqual(secs[-1][0], '0.0.2', '保留智汇产品的首个版本')
         self.assertTrue(all(body.strip() for _, body in secs), '产品日志不能空转')
 
     def test_no_content_before_the_first_version_heading(self) -> None:

@@ -21,7 +21,7 @@ from .stdio_utf8 import force_utf8_stdio
 from .routers import (
     accounts, anthropic, auth, engine, gateway, keys, logs, models, playground,
     pgsync as pgsync_router, read_api, redpackets, responses,
-    security as security_router, proxies, settings, stats, system, tokens, upstreams,
+    security as security_router, proxies, settings, stats, system, tokens, upstreams, steward,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
 from .routers import budgets
@@ -182,8 +182,18 @@ async def lifespan(app: FastAPI):
         instance_runtime = InstanceRuntime()
         await instance_runtime.start()
         app.state.instance_runtime = instance_runtime
+        from .steward_runtime import StewardRuntime
+        steward_instance = StewardRuntime(_qtg_rt)
+        app.state.steward = steward_instance
+        try:
+            await steward_instance.start()
+        except Exception:
+            await steward_instance.close()
+            logger.error('steward startup failed; status is unavailable, gateway remains serving')
         yield
     finally:
+        if getattr(app.state, 'steward', None) is not None:
+            await app.state.steward.close()
         # D-008：先停签到调度，再关 runtime —— 顺序反了会出现"runtime 已关、
         # 调度还在签到"的窗口。
         _qct = getattr(app.state, 'qtg_checkin_task', None)
@@ -357,6 +367,16 @@ app.include_router(read_api.router)
 # Manager 读 QTG 的引擎运行态；缺口在任一侧都必须是显式错误，不许回退直读对端库。
 app.include_router(engine.router)
 app.include_router(playground.router)
+app.include_router(steward.router)
+
+
+@app.get('/readyz', include_in_schema=False)
+def public_ready():
+    from . import operational
+    ready = operational.public_readiness()
+    return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
+
+
 app.include_router(gateway.router)
 # Anthropic Messages API 兼容层（/v1/messages）——给只认该协议的客户端用
 app.include_router(anthropic.router)

@@ -60,7 +60,9 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   fetchers: AsyncFetchers<T>,
   deps: readonly unknown[] = [],
   refreshDeps: readonly unknown[] = [],
+  options: {enabled?: boolean} = {},
 ): AsyncAllState<T> {
+  const enabled = options.enabled !== false;
   const [values, setValues] = useState<Partial<T>>({});
   const [errors, setErrors] = useState<Partial<Record<keyof T, unknown>>>({});
   const [pending, setPending] = useState(true);
@@ -83,8 +85,11 @@ export function useAsyncAll<T extends Record<string, unknown>>(
    */
   const ref = useRef(fetchers);
   ref.current = fetchers;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   const run = useCallback((mode: FetchMode, background = false): Promise<boolean> => {
+    if (!enabledRef.current) return Promise.resolve(true);
     if (background && active.current?.sequence === seq.current) return active.current.promise;
     const mine = ++seq.current;
     if (mode === 'initial') {
@@ -138,6 +143,7 @@ export function useAsyncAll<T extends Record<string, unknown>>(
    * （纯函数，可单独测）。
    */
   const prints = useRef<DepPrints>({context: null, query: refreshKey});
+  const interrupted = useRef(false);
 
   useEffect(() => () => {
     // Invalidate unmounted scopes, including React Strict Mode's effect replay.
@@ -147,13 +153,23 @@ export function useAsyncAll<T extends Record<string, unknown>>(
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      interrupted.current ||= active.current !== null;
+      seq.current += 1;
+      active.current = null;
+      setPending(false);
+      return;
+    }
     const next: DepPrints = {context: depsKey, query: refreshKey};
-    const mode = depMode(prints.current, next);
+    // Pausing a completed scope must not reload it and erase unsaved form edits.
+    // An interrupted request still needs replacement when the scope resumes.
+    const mode = depMode(prints.current, next, interrupted.current);
+    interrupted.current = false;
     prints.current = next;
     // 首屏这次不需要知道成败（成败已由 isInitialLoading / isInitialFailed 表达），
     // 显式 void 掉，表明不是漏写了 await。
     if (mode) void run(mode);
-  }, [depsKey, refreshKey, run]);
+  }, [depsKey, refreshKey, enabled, run]);
 
   const reload = useCallback(() => run('refresh'), [run]);
   const refresh = useCallback(() => run('refresh', true), [run]);

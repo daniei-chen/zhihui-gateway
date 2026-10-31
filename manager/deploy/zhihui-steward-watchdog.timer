@@ -1,0 +1,13 @@
+[Unit]
+Description=Zhihui Steward independent readiness checks
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=60s
+RandomizedDelaySec=5s
+AccuracySec=5s
+Unit=zhihui-steward-watchdog.service
+Persistent=yes
+
+[Install]
+WantedBy=timers.target

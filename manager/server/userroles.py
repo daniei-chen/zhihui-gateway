@@ -45,6 +45,7 @@ PANEL_READ_ROUTES = frozenset({
     '/api/system/config', '/api/system/configuration', '/api/system/drain',
     '/api/operations/health', '/api/budgets/unresolved', '/api/playground/models',
     '/api/engine/overview',
+    '/api/steward/status', '/api/steward/alerts', '/api/steward/settings',
 })
 PANEL_READ_PATTERNS = (
     r'/api/stats/(?:summary|outcomes|daily|hourly|credits|by-model|by-key|upstream|credit-reconcile)',

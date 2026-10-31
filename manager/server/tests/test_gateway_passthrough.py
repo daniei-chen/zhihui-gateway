@@ -129,6 +129,9 @@ class GatewayPassthroughTest(unittest.TestCase):
         """
         # 例外：协议转换层（不是转发热路径）
         allow = {'routers/anthropic.py', 'routers/responses.py', 'observability.py',
+                 # The metered steward is a tool-calling CLIENT, not a proxy
+                 # transformer. Its two-round/tool budget has dedicated tests.
+                 'steward_ai.py',
                  # These three expose model capability metadata; they do not
                  # process or rewrite generation payloads or SSE deltas.
                  'qtgcore/models.py', 'qtgcore/service.py', 'qtgcore/routers/compat_fixes.py'}
@@ -144,6 +147,13 @@ class GatewayPassthroughTest(unittest.TestCase):
             if 'tool_calls' in f.read_text(encoding='utf-8'):
                 hits.append(str(f.relative_to(root)))
         self.assertEqual(hits, [], f'以下文件开始处理 tool_calls：{hits}')
+
+    def test_steward_is_not_imported_into_proxy_forwarding(self) -> None:
+        import ast
+        tree = ast.parse(Path(gateway.__file__).read_text(encoding='utf-8'))
+        imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertFalse(any('steward' in (getattr(node, 'module', '') or '')
+                            or any('steward' in alias.name for alias in node.names) for node in imports))
 
 
 if __name__ == '__main__':
