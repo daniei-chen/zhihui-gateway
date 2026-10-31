@@ -38,6 +38,7 @@ export interface StewardStatus {
   monitor: {at: number; collector: string} | null;
   can_chat: boolean;
   read_only_tools: boolean;
+  allowed_tools: string[];
 }
 
 export interface StewardIncident {
@@ -61,7 +62,10 @@ export interface StewardSettings {
   capabilities: StewardStatus['capabilities'];
 }
 
-export interface ConversationMessage {role: 'user' | 'assistant'; content: string}
+export interface ConversationMessage {
+  role: 'user' | 'assistant'; content: string;
+  evidence?: {model: string; tools: string[]; observed_at: number};
+}
 
 export const stewardApi = {
   status: () => http.get<StewardStatus>('/api/steward/status').then(r => r.data),

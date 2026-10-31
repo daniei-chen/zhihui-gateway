@@ -2123,7 +2123,7 @@
     "dedup": "継続中の障害をまとめ、復旧を別途通知します。",
     "enableAlerts": "メール通知を有効化",
     "recipients": "通知先メール",
-    "recipientsHint": "最大10件。改行またはカンマ区切り。匿名化した運用情報を送信します。",
+    "recipientsHint": "ダイアログで1件ずつ、最大10件まで追加できます。メールは匿名化した運用情報のみを含みます。",
     "recipientCount": "通知先 {n} 件。アドレスはスーパー管理者のみ閲覧可能です。",
     "model": "使用モデル",
     "modelHint": "既存の DeepSeek 経路を使用。専用キーのモデル権限と日次上限は有効です。",
@@ -2171,6 +2171,46 @@
       "cancelled": "中止",
       "failed": "分析未完了",
       "unknown": "要照合"
-    }
+    },
+    "abilitiesTitle": "管家が確認できること",
+    "abilitiesIntro": "現在のバックエンドで有効な読み取り専用ツールの証拠を使います。サーバーを自動操作する機能ではありません。",
+    "abilitiesBoundary": "状態の説明、確認すべき証拠の提示、次の対応の提案が可能です。設定変更、再起動、アカウント追加・削除、報酬受取、認証情報の参照、証拠のない精算はできません。",
+    "chatWelcome": "状況を理解して、次へ。",
+    "chatWelcomeHint": "質問を選ぶか、発生している状況を入力してください。",
+    "latest": "最新のメッセージへ",
+    "chatFailureHint": "質問を入力欄に戻しました。未完了のリクエストにも使用量が生じる場合があるため、繰り返し送信しないでください。",
+    "addRecipient": "メールを追加",
+    "addRecipientHint": "アドレスを1件ずつ追加し、通知設定を保存すると反映されます。",
+    "recipientAddress": "メールアドレス",
+    "confirmRecipient": "一覧に追加",
+    "removeRecipient": "{email} を削除",
+    "noRecipients": "通知先は未登録です",
+    "unsaved": "未保存の変更があります。旧通知先への送信を防ぐため、テスト前に保存してください。",
+    "coverageTitle": "継続的に確認する範囲",
+    "coverageHint": "リソース、呼出品質、3プラットフォーム、未確認予算、台帳、バックアップ、証明書。通知の要否をAIには委ねません。",
+    "openCount": "要確認のイベント",
+    "pendingCount": "送信待ちメール",
+    "unknownCount": "結果不明の送信",
+    "monitorState": "収集状態",
+    "monitorFresh": "証拠を更新済み",
+    "monitorUnknown": "確認が必要",
+    "recipientError": {
+      "invalid": "カンマ、表示名、改行を使わず、有効なアドレスを1件入力してください。",
+      "duplicate": "このアドレスは登録済みです。",
+      "limit": "通知先は最大10件です。"
+    },
+    "tools": {
+      "gateway_summary": "リソースと動作概要",
+      "platform_pools": "3プラットフォームのアカウント集計",
+      "recent_failure_classes": "最近のエラー分類",
+      "release_and_backup": "バージョン・証明書・バックアップ",
+      "security_summary": "匿名化した安全統計",
+      "task_schedules": "タスクと更新計画",
+      "configuration_limits": "アプリ制限とDB状態"
+    },
+    "allEvents": "すべて",
+    "evidenceTime": "根拠の取得時刻 {time}",
+    "noMatchingEvents": "この条件に一致するイベントはありません。",
+    "savedRefreshFailed": "設定は保存されましたが、状態の更新に失敗しました。再保存せず、後で更新してください。"
   }
 }

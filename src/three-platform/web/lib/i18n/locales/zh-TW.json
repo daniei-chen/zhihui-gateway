@@ -2123,7 +2123,7 @@
     "dedup": "持續故障合併提醒，恢復時另行通知。",
     "enableAlerts": "啟用郵件預警",
     "recipients": "通知信箱",
-    "recipientsHint": "最多 10 個；以換行或逗號分隔。郵件會寄送已去識別化的執行資訊。",
+    "recipientsHint": "最多 10 個信箱，透過對話框逐一新增；郵件只包含去識別化運行資訊。",
     "recipientCount": "已設定 {n} 個信箱；地址僅超級管理員可見。",
     "model": "管家核心",
     "modelHint": "沿用閘道的 DeepSeek 模型。專用金鑰的模型、每日 Token 與積分限制仍會生效。",
@@ -2171,6 +2171,46 @@
       "cancelled": "已取消",
       "failed": "研判未完成",
       "unknown": "結果待核對"
-    }
+    },
+    "abilitiesTitle": "管家能協助查看什麼？",
+    "abilitiesIntro": "由目前後端開放的唯讀工具提供證據，不是接管伺服器的自動代理。",
+    "abilitiesBoundary": "可以解釋狀態、定位待核對證據並建議下一步；不能修改設定、重新啟動、增刪帳號、代領積分、讀取憑證或無證據結清帳務。",
+    "chatWelcome": "先看清，再向前。",
+    "chatWelcomeHint": "選一個問題開始，或告訴管家你遇到的情況。",
+    "latest": "回到最新訊息",
+    "chatFailureHint": "問題已放回輸入框。未完成的模型請求可能仍有用量，請勿反覆重送。",
+    "addRecipient": "新增信箱",
+    "addRecipientHint": "每次新增一個信箱。儲存預警設定後才會生效。",
+    "recipientAddress": "電子郵件地址",
+    "confirmRecipient": "加入清單",
+    "removeRecipient": "移除 {email}",
+    "noRecipients": "尚未新增通知信箱",
+    "unsaved": "有尚未儲存的變更。儲存後再發送測試郵件，避免寄到舊信箱。",
+    "coverageTitle": "持續照看的範圍",
+    "coverageHint": "資源、呼叫品質、三平台探針、待核對預算、帳本、備份與憑證；AI 不決定是否告警。",
+    "openCount": "待關注事件",
+    "pendingCount": "待投遞郵件",
+    "unknownCount": "投遞結果待核對",
+    "monitorState": "採集狀態",
+    "monitorFresh": "證據已更新",
+    "monitorUnknown": "狀態待核實",
+    "recipientError": {
+      "invalid": "請輸入單一有效信箱，不使用逗號、顯示名稱或換行。",
+      "duplicate": "此信箱已在清單中。",
+      "limit": "最多新增 10 個通知信箱。"
+    },
+    "tools": {
+      "gateway_summary": "網關資源與運行概覽",
+      "platform_pools": "三平台帳號池彙總",
+      "recent_failure_classes": "近期失敗分類",
+      "release_and_backup": "版本、憑證與備份證據",
+      "security_summary": "去識別化安全統計",
+      "task_schedules": "任務與續期計畫",
+      "configuration_limits": "應用限額與資料庫狀態"
+    },
+    "allEvents": "全部事件",
+    "evidenceTime": "依據採集於 {time}",
+    "noMatchingEvents": "目前篩選沒有事件。",
+    "savedRefreshFailed": "設定已儲存，但狀態重新整理失敗；無需重複儲存，請稍後重新整理。"
   }
 }

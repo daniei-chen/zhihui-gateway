@@ -2150,7 +2150,7 @@
     "dedup": "Group persistent faults and send recovery notices.",
     "enableAlerts": "Enable email alerts",
     "recipients": "Notification emails",
-    "recipientsHint": "Up to 10 addresses, separated by commas or newlines. Redacted operating evidence will be sent.",
+    "recipientsHint": "Up to 10 addresses, added individually in the dialog. Emails contain sanitized operational information only.",
     "recipientCount": "{n} addresses configured; only super administrators see addresses.",
     "model": "Steward model",
     "modelHint": "Uses the existing DeepSeek gateway model. Dedicated key permissions and daily budgets still apply.",
@@ -2198,6 +2198,46 @@
       "cancelled": "Cancelled",
       "failed": "Analysis unavailable",
       "unknown": "Needs verification"
-    }
+    },
+    "abilitiesTitle": "What can your steward inspect?",
+    "abilitiesIntro": "Evidence comes from the read-only tools available on the current backend, not an autonomous server operator.",
+    "abilitiesBoundary": "Explains status, highlights evidence to verify, and suggests next steps. Cannot change settings, restart services, add or delete accounts, claim rewards, read credentials, or clear unproven billing.",
+    "chatWelcome": "Understand first. Move forward.",
+    "chatWelcomeHint": "Choose a question or describe what you are seeing.",
+    "latest": "Latest message",
+    "chatFailureHint": "Your question is back in the input. An incomplete model request may still incur usage; avoid repeated submissions.",
+    "addRecipient": "Add email",
+    "addRecipientHint": "Add one address at a time, then save alert settings to apply it.",
+    "recipientAddress": "Email address",
+    "confirmRecipient": "Add to list",
+    "removeRecipient": "Remove {email}",
+    "noRecipients": "No notification addresses added",
+    "unsaved": "Unsaved changes. Save before testing so the email does not go to old recipients.",
+    "coverageTitle": "Continuously watched",
+    "coverageHint": "Resources, request quality, three-platform probes, uncertain budgets, ledger, backup, and certificates. AI does not decide whether to alert.",
+    "openCount": "Open incidents",
+    "pendingCount": "Pending emails",
+    "unknownCount": "Uncertain deliveries",
+    "monitorState": "Collection status",
+    "monitorFresh": "Evidence updated",
+    "monitorUnknown": "Needs verification",
+    "recipientError": {
+      "invalid": "Enter one valid email without commas, display names, or line breaks.",
+      "duplicate": "This address is already on the list.",
+      "limit": "You can add up to 10 notification addresses."
+    },
+    "tools": {
+      "gateway_summary": "Gateway resources and overview",
+      "platform_pools": "Three-platform pool totals",
+      "recent_failure_classes": "Recent failure categories",
+      "release_and_backup": "Release, certificate, and backup evidence",
+      "security_summary": "Sanitized security totals",
+      "task_schedules": "Task and renewal schedules",
+      "configuration_limits": "Application limits and database status"
+    },
+    "allEvents": "All events",
+    "evidenceTime": "Evidence observed at {time}",
+    "noMatchingEvents": "No events match this filter.",
+    "savedRefreshFailed": "Settings saved, but status refresh failed. Do not save again; refresh later."
   }
 }

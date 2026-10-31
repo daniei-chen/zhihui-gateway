@@ -7,7 +7,7 @@ import time
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .. import db, security, steward_ai, steward_config, steward_runtime, steward_store
 from ..iputil import client_ip
@@ -22,7 +22,8 @@ _last_call = OrderedDict()
 def status(user: dict = Depends(security.require_session_reader)):
     return {**steward_runtime.snapshot(), 'capabilities': steward_config.capabilities(),
             'monitor': db.get_setting(steward_runtime.HEARTBEAT_KEY), 'read_only_tools': True,
-            'can_chat': user['role'] == 'admin', 'write_tools_available': False}
+            'can_chat': user['role'] == 'admin', 'write_tools_available': False,
+            'allowed_tools': [tool['function']['name'] for tool in steward_ai.TOOLS]}
 
 
 @router.get('/alerts')
@@ -76,7 +77,13 @@ def test_mail(request: Request, user: dict = Depends(security.require_session_ad
 class Message(BaseModel):
     model_config = ConfigDict(extra='forbid')
     role: Literal['user', 'assistant']
-    content: str = Field(min_length=1, max_length=2000)
+    content: str = Field(min_length=1, max_length=6000)
+
+    @model_validator(mode='after')
+    def role_bound_length(self):
+        if self.role == 'user' and len(self.content) > 2000:
+            raise ValueError('User messages must not exceed 2000 characters')
+        return self
 
 
 class Chat(BaseModel):
@@ -121,6 +128,10 @@ async def chat(body: Chat, request: Request, user: dict = Depends(security.requi
         return result
     except HTTPException:
         raise
+    except steward_ai.ModelBusy:
+        _last_call.pop(user['username'], None)
+        raise HTTPException(429, '管家正在处理另一项研判，本次未调用模型，请稍后再试',
+                            headers={'Retry-After': '3'}) from None
     except Exception:
         raise HTTPException(502, 'DeepSeek 研判暂不可用；规则预警不受影响，请勿将未完成分析当作诊断结论') from None
     finally:

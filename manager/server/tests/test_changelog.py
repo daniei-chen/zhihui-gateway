@@ -347,7 +347,10 @@ class ChangelogIsUserFacingTest(unittest.TestCase):
     def test_released_versions_have_sections(self) -> None:
         """每个已发布段落都要有分类标题（否则页面渲染成一片裸文本）。"""
         blocks = re.split(r'^## \[[\d.]+\] - \d{4}-\d{2}-\d{2}$', self.text, flags=re.M)[1:]
-        self.assertEqual(len(blocks), 1, '本产品从当前版本开始记录')
+        headings = re.findall(r'^## \[([\d.]+)\] - \d{4}-\d{2}-\d{2}$', self.text, re.M)
+        self.assertTrue(headings, '必须保留智汇自己的发布记录')
+        self.assertEqual(headings, [row['version'] for row in changelog.parse_changelog(self.text)],
+                         '每个已发布产品版本都必须有日期和可解析的段落')
         for i, block in enumerate(blocks):
             self.assertIn('###', block, f'第 {i + 1} 个版本段落没有分类标题')
 

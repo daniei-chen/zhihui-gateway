@@ -215,6 +215,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(steward_snapshot.certificate_fact(2000000)['status'], 'stale')
 
     def test_rule_mail_does_not_wait_for_analysis_and_recovery_cancels_stale_followup(self):
+        selected = steward_config.save({'enabled': True, 'ai_analysis': True, 'recipients': ['fixture@example.com']})
         self.signal(analyze=True)
         item = steward_store.claim_analysis('model-owner')
         rule_mail = steward_store.claim('mail-owner')
@@ -222,21 +223,73 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn('analysis', json.loads(rule_mail['payload']))
         steward_store.finish(rule_mail, {'status': 'accepted'})
         self.signal(False, analyze=True)
-        steward_store.finish_analysis(item, 'outdated conclusion', recipients=('fixture@example.com',))
+        steward_store.finish_analysis(item, 'outdated conclusion', revision=selected.revision,
+                                      recipients=('fixture@example.com',))
         self.assertEqual(steward_store.analyses()[-1]['status'], 'cancelled')
         self.assertFalse(any(row['event'] == 'analysis-firing' for row in steward_store.deliveries()))
 
     def test_analysis_separate_delivery_owner_cas_and_rule_priority(self):
+        selected = steward_config.save({'enabled': True, 'ai_analysis': True,
+                                       'recipients': ['fixture@example.com', 'other@example.com']})
         self.signal(analyze=True)
         original = steward_store.claim('mail')
         steward_store.finish(original, {'status': 'accepted'})
         analysis = steward_store.claim_analysis('model')
-        steward_store.finish_analysis(analysis, '可能原因，不是根因', recipients=('fixture@example.com',))
+        steward_store.finish_analysis(analysis, '可能原因，不是根因', revision=selected.revision,
+                                      recipients=('fixture@example.com',))
         with self.assertRaises(RuntimeError):
-            steward_store.finish_analysis(analysis, 'duplicate', recipients=('other@example.com',))
+            steward_store.finish_analysis(analysis, 'duplicate', revision=selected.revision,
+                                          recipients=('other@example.com',))
         steward_store.observe('new-fault', True, 'critical', 'new', 'fixture', recipients=('fixture@example.com',))
         self.assertEqual(steward_store.claim('mail')['event'], 'firing')
         self.assertEqual(steward_store.claim('mail')['event'], 'analysis-firing')
+
+    def test_escalation_invalidates_running_and_queued_warning_analysis(self):
+        selected = steward_config.save({'enabled': True, 'ai_analysis': True, 'recipients': ['fixture@example.com']})
+        self.signal(analyze=True)
+        running = steward_store.claim_analysis('model')
+        self.signal(severity='critical', analyze=True)
+        # A later lower measurement must not resurrect this old warning job.
+        self.signal(severity='warning', analyze=True)
+        self.assertFalse(steward_store.analysis_is_current(running))
+        steward_store.finish_analysis(running, 'outdated warning', revision=selected.revision,
+                                      recipients=selected.recipients)
+        self.assertEqual(db.query_one('SELECT status FROM steward_analysis WHERE id=?', (running['id'],))['status'],
+                         'cancelled')
+        self.assertFalse(any(row['event'] == 'analysis-firing' for row in steward_store.deliveries()))
+        # A completed warning already waiting for SMTP is also superseded.
+        steward_store.observe('other', True, 'warning', 'fixture', 'fixture',
+                              recipients=selected.recipients, analyze=True)
+        # The prior escalation job is no longer the current severity; finish it
+        # before claiming the unrelated warning fixture.
+        item = steward_store.claim_analysis('model')
+        steward_store.finish_analysis(item, None, revision=selected.revision)
+        item = steward_store.claim_analysis('model')
+        steward_store.finish_analysis(item, 'warning', revision=selected.revision, recipients=selected.recipients)
+        steward_store.observe('other', True, 'critical', 'fixture', 'fixture',
+                              recipients=selected.recipients, analyze=True)
+        self.assertTrue(all(row['status'] == 'cancelled' for row in steward_store.deliveries()
+                            if row['event'] == 'analysis-firing'))
+
+    def test_policy_change_cannot_attach_old_answer_to_new_or_removed_recipient(self):
+        selected = steward_config.save({'enabled': True, 'ai_analysis': True, 'recipients': ['fixture@example.com']})
+        self.signal(analyze=True)
+        item = steward_store.claim_analysis('model')
+        steward_config.save({**selected.model_dump(), 'recipients': ['replacement@example.com']})
+        steward_store.finish_analysis(item, 'old private analysis', revision=selected.revision,
+                                      recipients=('replacement@example.com', 'fixture@example.com'))
+        self.assertEqual(steward_store.analyses()[0]['status'], 'cancelled')
+        self.assertFalse(any(row['event'].startswith('analysis-') for row in steward_store.deliveries()))
+
+    def test_no_dispatch_deferral_preserves_job_and_owner_fence(self):
+        self.signal(analyze=True)
+        item = steward_store.claim_analysis('old')
+        steward_store.defer_analysis(item)
+        self.assertEqual(steward_store.analyses()[0]['status'], 'pending')
+        replacement = steward_store.claim_analysis('new')
+        with self.assertRaises(RuntimeError):
+            steward_store.defer_analysis(item)
+        self.assertEqual(db.query_one('SELECT owner FROM steward_analysis WHERE id=?', (replacement['id'],))['owner'], 'new')
 
     def test_already_enqueued_recipient_does_not_overflow_full_queue(self):
         self.signal()
@@ -457,6 +510,47 @@ class RuntimeSafetyTests(unittest.IsolatedAsyncioTestCase):
         db.connect()
         steward_store.ensure_schema()
 
+    def setup_analysis(self):
+        selected = steward_config.save({'enabled': True, 'ai_analysis': True, 'recipients': ['fixture@example.com']})
+        db.set_setting(steward_runtime.SNAPSHOT_KEY, snapshot())
+        steward_store.observe('fixture', True, 'warning', 'fixture', 'fixture',
+                              recipients=selected.recipients, analyze=True)
+        original = steward_store.claim('rule-mail')
+        steward_store.finish(original, {'status': 'accepted'})
+        return selected, steward_runtime.StewardRuntime(None)
+
+    async def test_model_busy_defers_without_losing_analysis_or_replaying_an_unknown(self):
+        _, instance = self.setup_analysis()
+        with patch.object(steward_ai, 'answer', AsyncMock(side_effect=steward_ai.ModelBusy('busy'))) as answer:
+            await instance.analyze_once()
+        self.assertEqual(answer.call_count, 1)
+        self.assertEqual(steward_store.analyses()[0]['status'], 'pending')
+        with patch.object(steward_ai, 'answer', AsyncMock(side_effect=RuntimeError('dispatch outcome unknown'))) as answer:
+            await instance.analyze_once()
+            await instance.analyze_once()
+        self.assertEqual(answer.call_count, 1)
+        self.assertEqual(steward_store.analyses()[0]['status'], 'failed')
+
+    async def test_changed_policy_after_model_return_never_queues_old_analysis(self):
+        selected, instance = self.setup_analysis()
+        async def completed(*args, **kwargs):
+            steward_config.save({**selected.model_dump(), 'latency_warning_ms': 31000})
+            return {'answer': 'outdated configuration analysis'}
+        with patch.object(steward_ai, 'answer', side_effect=completed):
+            await instance.analyze_once()
+        self.assertEqual(steward_store.analyses()[0]['status'], 'cancelled')
+        self.assertFalse(any(row['event'].startswith('analysis-') for row in steward_store.deliveries()))
+
+    async def test_completed_analysis_cancelled_before_smtp_after_ai_disabled(self):
+        selected, instance = self.setup_analysis()
+        item = steward_store.claim_analysis('model')
+        steward_store.finish_analysis(item, 'analysis', revision=selected.revision, recipients=selected.recipients)
+        steward_config.save({**selected.model_dump(), 'ai_analysis': False})
+        with patch.object(steward_mail, 'send', side_effect=AssertionError('superseded mail sent')) as send:
+            await instance.deliver_once()
+        send.assert_not_called()
+        self.assertEqual(steward_store.deliveries()[0]['status'], 'cancelled')
+
     async def test_blocking_write_finishes_before_cancellation_releases_owner(self):
         entered, release = threading.Event(), threading.Event()
         finished = []
@@ -629,6 +723,34 @@ class RouteTests(unittest.TestCase):
             response = self.client.post('/api/steward/chat', json={'question': 'hi'})
         self.assertEqual(response.status_code, 503, response.text)
         call.assert_not_called()
+        self.assertFalse(steward._chat_active)
+
+    def test_status_declares_exact_read_only_tools_and_history_matches_answer_limit(self):
+        response = self.client.get('/api/steward/status')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['allowed_tools'], [tool['function']['name'] for tool in steward_ai.TOOLS])
+        self.assertFalse(response.json()['write_tools_available'])
+        steward._last_call.clear()
+        db.set_setting(steward_runtime.SNAPSHOT_KEY, snapshot())
+        with patch.object(steward_config, 'capabilities', return_value={'model_configured': True}), \
+                patch.object(steward_ai, 'answer', AsyncMock(return_value={'answer': 'fixture'})) as model:
+            response = self.client.post('/api/steward/chat', json={'question': 'continue',
+                'history': [{'role': 'assistant', 'content': 'a' * 6000}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(model.call_args.kwargs['history'][0]['content']), 6000)
+        for role, length in [('user', 2001), ('assistant', 6001)]:
+            response = self.client.post('/api/steward/chat', json={'question': 'continue',
+                'history': [{'role': role, 'content': 'a' * length}]})
+            self.assertEqual(response.status_code, 422)
+
+    def test_model_busy_returns_no_dispatch_retry_hint_and_releases_chat_slot(self):
+        steward._last_call.clear()
+        db.set_setting(steward_runtime.SNAPSHOT_KEY, snapshot())
+        with patch.object(steward_config, 'capabilities', return_value={'model_configured': True}), \
+                patch.object(steward_ai, 'answer', AsyncMock(side_effect=steward_ai.ModelBusy('busy'))):
+            response = self.client.post('/api/steward/chat', json={'question': 'fixture'})
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers['Retry-After'], '3')
         self.assertFalse(steward._chat_active)
 
     def test_real_machine_tokens_cannot_access_human_steward_endpoints(self):

@@ -1876,7 +1876,7 @@
     "dedup": "持续故障合并提醒，恢复单独通知。",
     "enableAlerts": "启用邮件预警",
     "recipients": "通知邮箱",
-    "recipientsHint": "最多 10 个；换行或逗号分隔。邮件将发送脱敏的运行信息。",
+    "recipientsHint": "最多 10 个邮箱；通过弹窗逐个添加。邮件仅包含脱敏运行信息。",
     "recipientCount": "已设置 {n} 个邮箱；地址仅超级管理员可见。",
     "model": "管家内核",
     "modelHint": "沿用网关的 DeepSeek 模型。专用密钥的模型、每日 Token 和积分限制仍生效。",
@@ -1924,6 +1924,46 @@
       "cancelled": "已取消",
       "failed": "研判未完成",
       "unknown": "结果待核对"
-    }
+    },
+    "abilitiesTitle": "管家能帮你看什么？",
+    "abilitiesIntro": "由当前后端开放的只读工具提供证据，不是接管服务器的自动代理。",
+    "abilitiesBoundary": "可以解释状态、定位需要核对的证据并建议下一步；不能修改配置、重启、添加或删除账号、代领积分、读取凭据或无证据结清账务。",
+    "chatWelcome": "先看清，再向前。",
+    "chatWelcomeHint": "选一个问题开始，或告诉管家你遇到的情况。",
+    "latest": "回到最新消息",
+    "chatFailureHint": "问题已放回输入框。未完成的模型请求可能仍有用量，请勿反复重发。",
+    "addRecipient": "添加邮箱",
+    "addRecipientHint": "每次添加一个邮箱。添加后保存预警设置才会生效。",
+    "recipientAddress": "邮箱地址",
+    "confirmRecipient": "添加到列表",
+    "removeRecipient": "移除 {email}",
+    "noRecipients": "尚未添加通知邮箱",
+    "unsaved": "有未保存的更改。保存后再发送测试邮件，避免发到旧邮箱。",
+    "coverageTitle": "持续照看的范围",
+    "coverageHint": "资源、调用质量、三平台探针、预算待核对、账本、备份与证书；AI 不决定是否报警。",
+    "openCount": "待关注事件",
+    "pendingCount": "待投递邮件",
+    "unknownCount": "投递结果待核对",
+    "monitorState": "采集状态",
+    "monitorFresh": "证据已更新",
+    "monitorUnknown": "状态待核实",
+    "recipientError": {
+      "invalid": "请输入单个有效邮箱，不使用逗号、显示名或换行。",
+      "duplicate": "这个邮箱已经在列表中。",
+      "limit": "最多添加 10 个通知邮箱。"
+    },
+    "tools": {
+      "gateway_summary": "网关资源与运行概览",
+      "platform_pools": "三平台号池汇总",
+      "recent_failure_classes": "近期失败分类",
+      "release_and_backup": "版本、证书与备份证据",
+      "security_summary": "脱敏安全统计",
+      "task_schedules": "任务与续期计划",
+      "configuration_limits": "应用限额与数据库状态"
+    },
+    "allEvents": "全部事件",
+    "evidenceTime": "依据采集于 {time}",
+    "noMatchingEvents": "当前筛选没有事件。",
+    "savedRefreshFailed": "设置已保存，但状态刷新失败；无需重复保存，请稍后刷新。"
   }
 }

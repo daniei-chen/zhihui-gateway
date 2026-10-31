@@ -122,7 +122,9 @@ class StewardRuntime:
             return False
         try:
             selected = await joined_thread(steward_config.policy)
-            if item['recipient'] not in selected.recipients or (not selected.enabled and not item['event'].startswith('test-')):
+            current = await joined_thread(steward_store.analysis_delivery_is_current, item, selected)
+            if (item['recipient'] not in selected.recipients
+                    or (not selected.enabled and not item['event'].startswith('test-')) or not current):
                 result = {'status': 'cancelled', 'code': 'recipient_or_policy_changed'}
             else:
                 payload = json.loads(item['payload'])
@@ -154,29 +156,31 @@ class StewardRuntime:
         item = await joined_thread(steward_store.claim_analysis, self.owner)
         if item is None:
             return
-        answer, recipients, code = None, (), 'analysis_disabled_or_stale'
+        answer, recipients, code, revision = None, (), 'analysis_disabled_or_stale', None
         try:
             selected = await joined_thread(steward_config.policy)
+            revision = selected.revision
             evidence = await joined_thread(snapshot)
             if selected.enabled and selected.ai_analysis and evidence['available'] and not evidence['stale']:
                 payload = json.loads(item['payload'])
                 def permitted():
                     current = steward_config.policy()
-                    incident = db.query_one('SELECT state FROM steward_incidents WHERE id=?', (item['incident_id'],))
                     if (not current.enabled or not current.ai_analysis or current.revision != selected.revision
-                            or snapshot()['stale'] or incident is None
-                            or (incident['state'] == 'resolved') != (item['event'] == 'recovered')):
+                            or snapshot()['stale'] or not steward_store.analysis_is_current(item)):
                         raise RuntimeError('steward_analysis_superseded')
                 result = await steward_ai.answer('分析这个状态变化，说明事实、影响、可能原因和下一步：' +
                     payload['title'] + '；' + payload['detail'] + '；事件类型：' + payload['event'],
                     evidence['snapshot'], model=selected.model, before_dispatch=permitted)
                 answer, code = result['answer'], ''
-            selected = await joined_thread(steward_config.policy)
             recipients = selected.recipients if selected.enabled and selected.ai_analysis else ()
+        except steward_ai.ModelBusy:
+            await joined_thread(steward_store.defer_analysis, item)
+            return
         except Exception:
             code = 'analysis_unavailable'
             log.warning('steward analysis unavailable; rule delivery continues independently')
-        await joined_thread(steward_store.finish_analysis, item, answer, recipients=recipients, code=code)
+        await joined_thread(steward_store.finish_analysis, item, answer, revision=revision,
+                            recipients=recipients, code=code)
 
     async def analyze(self):
         while True:
