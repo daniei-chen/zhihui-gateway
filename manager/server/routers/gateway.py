@@ -2089,7 +2089,11 @@ async def _prepare_forward_async(key, body, *, request=None):
                                   'invalid_request_error', 'key_configuration_changed')
         if not isinstance(result, JSONResponse):
             from .. import budget
-            budget.forwarded()
+            try:
+                budget.forwarded()
+            except budget.BudgetRejected as error:
+                observability.mark_error(error.code)
+                return _oai_error(str(error), 429, 'insufficient_quota', error.code)
         return result
     except asyncio.CancelledError:
         cancelled.set()
