@@ -1,7 +1,12 @@
 #!/opt/workbuddy-manager/venv/bin/python
 """Private consistent snapshots with optional authenticated encrypted offsite publication."""
+import sys
+
+# Cron can execute this file without the guarded Manager launcher.
+sys.dont_write_bytecode = True
+
 from pathlib import Path
-import fcntl,hashlib,io,json,os,sqlite3,stat,sys,tarfile,tempfile,time,subprocess
+import fcntl,hashlib,io,json,os,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 BASE=Path('/root/backups/workbuddy-daily')
 MANAGER=Path('/opt/workbuddy-manager')

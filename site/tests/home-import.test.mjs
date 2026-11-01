@@ -7,6 +7,14 @@ import {createPreviewServer, siteRoot, homeCsp, loginCsp, sceneCsp} from '../too
 
 const manifest = JSON.parse(fs.readFileSync(path.join(siteRoot, 'home-import.json'), 'utf8'));
 const prefix = manifest.asset_prefix;
+test('hero CJK spacing is scoped and preserves the approved copy and brand placement', () => {
+  const css = fs.readFileSync(path.join(siteRoot, 'home', prefix.slice('/home-assets/'.length), 'styles/color-release.css'), 'utf8');
+  assert.match(css, /#hero-title\s*\{[^}]*letter-spacing:\s*\.015em\s*;[^}]*font-kerning:\s*none\s*;/);
+  assert.match(css, /#hero-title\s+\.zh23-phrase\s*\{\s*white-space:\s*nowrap\s*;/);
+  const html = fs.readFileSync(path.join(siteRoot, 'home/index.html'), 'utf8');
+  assert.match(html, /id="hero-title"[^>]*><span class="muted"><span class="zh23-phrase">让灵感出发，<\/span><span class="zh23-phrase">让工作向前。<\/span>/);
+  assert.equal((html.match(/class="hero-signature-mark"/g) || []).length, 1);
+});
 test('hero arrival never hides essential content on the first paint', () => {
   const cssPath = 'home/' + prefix.slice('/home-assets/'.length) + 'styles/motion.css';
   const css = fs.readFileSync(path.join(siteRoot, cssPath), 'utf8');
