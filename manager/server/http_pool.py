@@ -248,11 +248,32 @@ class LeaseTransport(httpx.AsyncBaseTransport):
         self.closed = False
 
     async def handle_async_request(self, request):
-        entry = await self.pool.acquire(self.key, self.factory, self.limit,
-                                        request.extensions.get('timeout', {}).get('pool'),
-                                        lambda: self.closed)
+        from . import requestperf
+        trace = requestperf.current()
+        if trace is not None:
+            original = request.extensions.get('trace')
+            began = {}
+            async def timing(event, info):
+                # Ignore trace info: it may contain request headers and socket data.
+                stage, _, action = event.rpartition('.')
+                label = {'connect_tcp': 'connect', 'start_tls': 'tls',
+                         'send_request_headers': 'request_send', 'send_request_body': 'request_send',
+                         'receive_response_headers': 'headers_wait'}.get(stage.rsplit('.', 1)[-1])
+                if label is not None:
+                    if action == 'started':
+                        began[stage] = time.monotonic()
+                    elif action in ('complete', 'failed') and stage in began:
+                        trace.add(label, time.monotonic() - began.pop(stage))
+                if original is not None:
+                    await original(event, info)
+            request.extensions['trace'] = timing
+        with requestperf.measure('transport_slot_wait', trace):
+            entry = await self.pool.acquire(self.key, self.factory, self.limit,
+                                            request.extensions.get('timeout', {}).get('pool'),
+                                            lambda: self.closed)
         try:
-            response = await entry.transport.handle_async_request(request)
+            with requestperf.measure('transport_headers', trace):
+                response = await entry.transport.handle_async_request(request)
             if response.is_stream_consumed:
                 # Mock/custom transports can return an already buffered body.
                 await response.aclose()

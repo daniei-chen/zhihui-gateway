@@ -1029,7 +1029,7 @@ async def messages(request: Request):
                     'api_error', code=detail.get('code'))
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
-    wire = gateway._prepare_forward(key,payload)
+    wire = await gateway._prepare_forward_async(key,payload, request=request)
     if isinstance(wire, JSONResponse):
         error = json.loads(wire.body).get('error') or {}
         error_type = error.get('type', 'api_error')
@@ -1219,6 +1219,7 @@ async def messages(request: Request):
                         yield event
                     if audit.saw_useful and first_token_ms is None:
                         first_token_ms=int((time.time()-started)*1000)
+                        gateway.requestperf.mark('first_useful')
                 if audit.error:
                     error_text=audit.error
                 if error_text:
@@ -1231,6 +1232,7 @@ async def messages(request: Request):
                     yield event
                 if audit.saw_useful and first_token_ms is None:
                     first_token_ms=int((time.time()-started)*1000)
+                    gateway.requestperf.mark('first_useful')
             if not error_text:
                 error_text=audit.error or (None if audit.completed else '上游流提前结束：未收到可信终止事件')
         except (asyncio.CancelledError,GeneratorExit):

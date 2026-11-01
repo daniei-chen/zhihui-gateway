@@ -21,7 +21,6 @@ import {CreditFlowTile} from '@/components/dashboard/CreditFlowTile';
 import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
-import {useAuth} from '@/lib/auth-context';
 import {collectScopedExpiries} from '@/lib/dashboard-credits';
 import {getExpiryDailyGroup, groupExpiriesByDay} from '@/lib/display-prefs';
 import {accountApi, statsApi, upstreamApi, upstreamsApi} from '@/lib/api';
@@ -97,8 +96,8 @@ const EMPTY_FLOW: CreditsFlow = {
   daily: [],
 };
 
-/** `refreshCredits` 的返回体形状（扇出后要逐项相加，类型从 api 上取） */
-type CreditsResponse = Awaited<ReturnType<typeof accountApi.refreshCredits>>;
+/** Balances are local/engine snapshots; this read never starts billing work. */
+type CreditsResponse = Awaited<ReturnType<typeof accountApi.cachedCredits>>;
 
 /**
  * 取回**全部分组**的账号与池状态。
@@ -167,10 +166,9 @@ async function loadPoolSnapshot(): Promise<GroupSlice[]> {
 }
 
 /**
- * 取回**全部分组**的实时积分。
+ * 取回全部分组已经登记的余额，不让页面加载触发逐账号账单查询。
  *
- * 与 `loadPoolSnapshot` 同因按分组扇出：`refresh-credits` 是**分组接口**，
- * 后端按该分组的账号目录逐个查腾讯，只调一次就只能刷到默认分组。
+ * 按账号分组取本地记录，不能只读取默认组，也不在首屏调用逐账号查询。
  *
  * 积分按 **uid** 归并——uid 是腾讯侧的账号标识，跨分组唯一，不像文件名那样会撞。
  *
@@ -182,7 +180,7 @@ async function loadGroupCredits(): Promise<CreditsResponse> {
   const {items} = await upstreamsApi.list();
   const targets = accountGroups(items ?? []);
   const settled = await Promise.allSettled(
-    targets.map((g) => accountApi.refreshCredits(false, g.id ?? null)),
+    targets.map((g) => accountApi.cachedCredits(g.id ?? null)),
   );
   const ok = settled
     .filter((r): r is PromiseFulfilledResult<CreditsResponse> => r.status === 'fulfilled')
@@ -195,11 +193,11 @@ async function loadGroupCredits(): Promise<CreditsResponse> {
     credits: Object.assign({}, ...ok.map((r) => r.credits)),
     meta: Object.assign({}, ...ok.map((r) => r.meta)),
     failed: ok.flatMap((r) => r.failed ?? []),
+    provider_called: false,
   };
 }
 
 export default function DashboardPage() {
-  const {isAdmin} = useAuth();
   const {realm, label: realmName} = useRealm();
   const {label: platformName} = usePlatform();
   const t = useT();
@@ -220,8 +218,8 @@ export default function DashboardPage() {
     pool: () => loadPoolSnapshot(),
     summary: () => statsApi.summary(realm),
     daily: () => statsApi.daily(14, realm),
-    credits: () => isAdmin ? loadGroupCredits() : Promise.resolve(undefined),
-  }, [realm, isAdmin], [], {progressive: true});
+    credits: () => loadGroupCredits(),
+  }, [realm], [], {progressive: true});
 
   /**
    * 积分收支的时段（当天 / 3 / 7 / 15 / 30 天）。
@@ -459,6 +457,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-4 md:gap-6" aria-busy={isRefreshing}>
       {header}
+      <p className="px-1 text-xs text-muted-foreground">{t('dashboard.balanceSnapshotNote')}</p>
 
       {/* 统计范围。**只在多于一个分组时才出现**：单分组时它只是句废话，
           而绝大多数部署就是单分组。有了它，用户才知道上面那些数是全池的，

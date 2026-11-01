@@ -22,7 +22,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from .. import manager_api
-from ..service import all_accounts, build_aggregate
+from ..service import all_accounts, build_aggregate, build_pool_snapshot
 # U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
 # 现在统一从 `_shared` 引入并**在此继续导出**。
 from ._shared import _rt
@@ -210,23 +210,19 @@ def _norm_models(raw: Dict[str, Any], platform: str) -> List[Dict[str, Any]]:
 
 
 
-async def _load_models(rt) -> Dict[str, Any]:
+async def _load_models(rt, platform: str | None = None) -> Dict[str, Any]:
     """取两个平台的上游模型（单项失败只记原因，不抛）。"""
     result: Dict[str, Any] = {"qoder": [], "trae": [], "workbuddy": [], "errors": []}
-    try:
-        result["qoder"] = _norm_models(await rt.qoder.models(), "qoder")
-    except Exception as exc:  # noqa: BLE001
-        result["errors"].append(f"qoder 模型接口失败：{str(exc)[:160]}")
-    try:
-        result["trae"] = _norm_models(await rt.trae.models(), "trae")
-    except Exception as exc:  # noqa: BLE001
-        result["errors"].append(f"trae 模型接口失败：{str(exc)[:160]}")
-    w = getattr(rt, "wb", None)
-    if w is not None:
+    for name, attribute in (('qoder', 'qoder'), ('trae', 'trae'), ('workbuddy', 'wb')):
+        if platform is not None and platform != name:
+            continue
+        adapter = getattr(rt, attribute, None)
+        if adapter is None:
+            continue
         try:
-            result["workbuddy"] = _norm_models(await w.models(), "workbuddy")
+            result[name] = _norm_models(await adapter.models(), name)
         except Exception as exc:  # noqa: BLE001
-            result["errors"].append(f"workbuddy 模型接口失败：{str(exc)[:160]}")
+            result["errors"].append(f"{name} 模型接口失败：{str(exc)[:160]}")
     return result
 
 
@@ -238,7 +234,7 @@ async def fixed_upstreams(request: Request) -> Dict[str, Any]:
     from pathlib import Path
 
     rt = _rt(request)
-    agg = await build_aggregate(rt)
+    agg = await build_pool_snapshot(rt, _platform(request))
     q, t = agg.qoder_accounts, agg.trae_accounts
 
     def row(idx: int, name: str, accounts, is_default: bool, base: str,
@@ -360,8 +356,9 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
     from .compat import _map_account
 
     rt = _rt(request)
-    agg = await build_aggregate(rt)
     upstream_id = _resolve_upstream_id(request, upstream_id)
+    chosen = UPSTREAM_IDS.get(upstream_id)
+    agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
     rows = _rows_of(agg, upstream_id)
     accounts = []
     for a in rows:
@@ -384,7 +381,9 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
 async def fixed_status(request: Request, upstream_id: Optional[int] = None) -> Dict[str, Any]:
     """池状态（`statusApi` 用）。结构对齐 `UpstreamStatus`。"""
     rt = _rt(request)
-    agg = await build_aggregate(rt)
+    upstream_id = _resolve_upstream_id(request, upstream_id)
+    chosen = UPSTREAM_IDS.get(upstream_id)
+    agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
     rows = _rows_of(agg, upstream_id)
     by_realm: Dict[str, Dict[str, int]] = {}
     for a in rows:
@@ -411,6 +410,18 @@ async def fixed_status(request: Request, upstream_id: Optional[int] = None) -> D
     }
 
 
+@router.get('/accounts/credits-cached')
+async def cached_pool_credits(request: Request) -> Dict[str, Any]:
+    # Registered before compat's catch-all /accounts/{file:path} route.
+    agg = await build_pool_snapshot(_rt(request), _platform(request))
+    rows = _rows_of(agg, _PLAT_TO_UPSTREAM[_platform(request)])
+    values = {a.uid: a.credits_remain for a in rows if a.credits_remain is not None}
+    return {'total': len(rows), 'succeeded': len(values), 'credits': values,
+            'meta': {uid: {'cached': True, 'cache_age': None, 'expiries': [],
+                           'source': 'engine_snapshot'} for uid in values},
+            'failed': [], 'provider_called': False}
+
+
 # ------------------------------------------------------------------ 模型（真数据）
 @router.get("/models")
 async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
@@ -420,7 +431,7 @@ async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict
         # 该版本下没有账号时不给模型列表：「有这些模型可用」是假象——
         # 上游 /v1/models 是按账号池整体返回的，不分版本。
         try:
-            _agg = await build_aggregate(rt)
+            _agg = await build_pool_snapshot(rt, plat)
         except Exception:  # noqa: BLE001
             _agg = None
         if _agg is not None:
@@ -436,7 +447,7 @@ async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict
                 return {"models": [], "source": "none", "count": 0,
                         "note": "该版本下没有账号"}
 
-    data = await _load_models(rt)
+    data = await _load_models(rt, plat)
     models = [
         {"id": r["id"], "name": r["name"],
          "context_length": r["context_length"],
@@ -470,7 +481,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
         # 该版本下没有账号时不该给出「这些模型可用」的假象：
         # Qoder / Trae 的 /v1/models 是按账号池整体返回的，不分版本。
         try:
-            _agg = await build_aggregate(rt)
+            _agg = await build_pool_snapshot(rt, plat)
         except Exception:  # noqa: BLE001
             _agg = None
         if _agg is not None:
@@ -491,7 +502,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
                                 "max_context": 0, "series": [], "unique_ids": 0},
                 }
 
-    data = await _load_models(rt)
+    data = await _load_models(rt, plat)
     models: List[Dict[str, Any]] = []
     for i, r in enumerate(data[plat]):
         models.append({

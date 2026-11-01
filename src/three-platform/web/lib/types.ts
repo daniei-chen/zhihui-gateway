@@ -922,6 +922,7 @@ export interface CreditExpiry {
 export interface CreditsMeta {
   cached: boolean;
   cache_age: number | null;
+  source?: 'cache' | 'registered' | 'engine_snapshot';
   message?: string;
   /** 各套餐到期时间，按到期时刻升序；只含仍有余额的套餐 */
   expiries?: CreditExpiry[];

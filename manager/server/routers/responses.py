@@ -1747,7 +1747,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                        'api_error', detail.get('code'))
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
-    wire = gateway._prepare_forward(key,payload)
+    wire = await gateway._prepare_forward_async(key,payload, request=request)
     if isinstance(wire, JSONResponse):
         return wire
     started = time.time()
@@ -1929,6 +1929,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                         yield event
                     if audit.saw_useful and first_token_ms is None:
                         first_token_ms=int((time.time()-started)*1000)
+                        gateway.requestperf.mark('first_useful')
                 if audit.error:
                     error_text=audit.error
                 if error_text:
@@ -1941,6 +1942,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                     yield event
                 if audit.saw_useful and first_token_ms is None:
                     first_token_ms=int((time.time()-started)*1000)
+                    gateway.requestperf.mark('first_useful')
             if not error_text:
                 error_text=audit.error or (None if audit.completed else '上游流提前结束：未收到可信终止事件')
         except (asyncio.CancelledError,GeneratorExit):

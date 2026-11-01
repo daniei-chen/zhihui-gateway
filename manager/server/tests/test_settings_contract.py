@@ -208,6 +208,7 @@ MATRIX = (
     ('GET', '/api/system/versions', 'current_user', 'ok', None),
     ('GET', '/api/system/changelog', 'current_user', 'ok', None),
     ('GET', '/api/system/internal-session-verify', 'current_user', 'loopback_403', None),
+    ('GET', '/api/system/performance', 'panel_reader', 'ok', None),
 )
 
 EXPECTED_GATE = {

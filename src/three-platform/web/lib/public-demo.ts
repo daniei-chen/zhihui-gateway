@@ -23,6 +23,8 @@ export const publicDemoAdapter: AxiosAdapter = async config => {
         global: {total: 1, healthy: 1, cooling: 0, disabled: 0}}},
     '/api/accounts': {accounts, total: 2, manageable: false, pool_available: true,
       upstream: {id: null, name: '界面演示', is_default: true}},
+    '/api/accounts/credits-cached': {total: 2, succeeded: 2,
+      credits: Object.fromEntries(accounts.map(a => [a.uid, a.credits])), meta: {}, failed: [], provider_called: false},
     '/api/stats/summary': {today_requests: amount, today_tokens: amount * 100, today_credit: 3.5,
       week_credit: 9.5, total_credit: 19.5, week_requests: amount, week_tokens: amount * 100,
       total_requests: amount, total_tokens: amount * 100, active_keys: 0, top_model: '示例模型',

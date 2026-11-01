@@ -203,6 +203,7 @@
     "unknown": "未知"
   },
   "dashboard": {
+    "balanceSnapshotNote": "餘額為已登記或引擎快照；需要即時值時，請至帳號頁重新整理積分。",
     "title": "儀表板",
     "description": "{platform} 帳號池健康度與今日呼叫總覽（每 30 秒自動重新整理）",
     "totalAccounts": "帳號總數",

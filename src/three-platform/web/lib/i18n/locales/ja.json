@@ -203,6 +203,7 @@
     "unknown": "不明"
   },
   "dashboard": {
+    "balanceSnapshotNote": "残高は記録済みまたはエンジンのスナップショットです。最新値はアカウント画面で更新してください。",
     "title": "ダッシュボード",
     "description": "{platform} のアカウントプール健全性と本日の利用状況（30 秒ごとに自動更新）",
     "totalAccounts": "アカウント総数",

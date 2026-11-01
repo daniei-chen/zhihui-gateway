@@ -41,6 +41,8 @@ function fixture(url, request) {
   }
   if (p === '/api/upstreams') return {items: [{id: null, name: 'Fixture', base_url: 'http://fixture.invalid', enabled: true, is_default: true, has_key: false, api_key_masked: '', auth_dir: '/fixture', note: '', container: '', bound_keys: 0}]};
   if (p === '/api/accounts/refresh-credits') return {credits: {}, meta: {}};
+  if (p === '/api/accounts/credits-cached') return {total: 2, succeeded: 2,
+    credits: Object.fromEntries(accounts.map(a => [a.uid, a.credits])), meta: {}, failed: [], provider_called: false};
   if (p === '/api/accounts') return {accounts, total: accounts.length, manageable: false, pool_available: true, upstream: {id: null, name: 'Fixture', is_default: true}};
   if (p === '/api/status') return {connected: true, total: 2, healthy: 2, cooling: 0, disabled: 0, in_flight_full: 0, accounts, realm_totals: {cn: {total: 1, healthy: 1, cooling: 0, disabled: 0, in_flight_full: 0}, global: {total: 1, healthy: 1, cooling: 0, disabled: 0, in_flight_full: 0}}};
   if (p === '/api/stats/summary') return {today_requests: amount, today_tokens: amount * 100, today_credit: 3.5, week_credit: 9.5, total_credit: 19.5, week_requests: amount, week_tokens: amount * 100, total_requests: amount, total_tokens: amount * 100, active_keys: 0, top_model: 'fixture-model', failures: {today_4xx: 1, today_5xx: 0, week_4xx: 1, week_5xx: 0}, usage_health: {ok: true}};

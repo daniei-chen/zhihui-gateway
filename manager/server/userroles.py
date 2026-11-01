@@ -29,7 +29,7 @@ ACCOUNT_ROUTES = frozenset({
 # endpoints closed until their response and side effects have been reviewed.
 PANEL_READ_ROUTES = frozenset({
     '/api/accounts', '/api/status', '/api/models', '/api/model-catalog',
-    '/api/accounts/credits-snapshot', '/api/accounts/refresh-plan',
+    '/api/accounts/credits-snapshot', '/api/accounts/credits-cached', '/api/accounts/refresh-plan',
     '/api/accounts/daily-plan', '/api/task-run', '/api/task-claim-schedule',
     '/api/checkin-logs', '/api/task-logs', '/api/logs', '/api/logs/outcomes',
     '/api/logs/attempts', '/api/logs/attempts/billing', '/api/logs/attempts/explain',
@@ -42,7 +42,7 @@ PANEL_READ_ROUTES = frozenset({
     '/api/users', '/api/tokens', '/api/upstream/reload-state',
     '/api/system/versions', '/api/system/check-update', '/api/system/update-status',
     '/api/system/update-package', '/api/system/changelog',
-    '/api/system/config', '/api/system/configuration', '/api/system/drain',
+    '/api/system/config', '/api/system/configuration', '/api/system/drain', '/api/system/performance',
     '/api/operations/health', '/api/budgets/unresolved', '/api/playground/models',
     '/api/engine/overview',
     '/api/steward/status', '/api/steward/alerts', '/api/steward/settings',

@@ -1292,6 +1292,36 @@ def credits_snapshot(user: dict = Depends(security.current_user)) -> dict:
     return payload
 
 
+@router.get('/accounts/credits-cached')
+def cached_group_credits(upstream_id: int | None = Query(None),
+                         user: dict = Depends(security.current_user)) -> dict:
+    """Immediate group-scoped balances; never contact a provider on page load."""
+    group = _group(upstream_id)
+    base_dir = _group_dir(group)
+    accounts = wb2api.list_auth_accounts(base_dir) if base_dir else []
+    snapshot = {row['uid']: row for row in creditsvc.snapshot_entries()['accounts']}
+    values, meta = {}, {}
+    now = int(time.time())
+    for account in accounts:
+        uid = str(account.get('uid') or '')
+        hit = creditsvc.cached_credits(uid)
+        if hit is not None:
+            ok, value, message, expiries = hit
+            if not ok:
+                continue
+            values[uid] = value
+            meta[uid] = {'cached': True, 'cache_age': creditsvc.cache_age(uid),
+                         'message': '', 'expiries': expiries, 'source': 'cache'}
+        elif uid in snapshot:
+            row = snapshot[uid]
+            values[uid] = row['credits']
+            meta[uid] = {'cached': True, 'cache_age': max(0, now - row['registered_at'])
+                         if row['registered_at'] is not None else None,
+                         'message': '', 'expiries': [], 'source': 'registered'}
+    return {'total': len(accounts), 'succeeded': len(values), 'credits': values,
+            'meta': meta, 'failed': [], 'snapshot_at': now, 'provider_called': False}
+
+
 @router.post('/accounts/refresh-credits')
 async def refresh_all_credits(
     force: bool = True,

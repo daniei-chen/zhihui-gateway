@@ -6,7 +6,7 @@ import hashlib
 import json
 import unittest
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from starlette.requests import Request
 
@@ -147,8 +147,8 @@ class SessionForwardingTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(gateway, '_upstream_for',
                 return_value=({'base_url': 'http://fixture.invalid'}, None)))
             stack.enter_context(patch.object(gateway, '_stamp_route'))
-            stack.enter_context(patch.object(gateway, '_prepare_forward',
-                side_effect=lambda key, payload: json.dumps(payload).encode()))
+            stack.enter_context(patch.object(gateway, '_prepare_forward_async', new_callable=AsyncMock,
+                side_effect=lambda key, payload, **kwargs: json.dumps(payload).encode()))
             stack.enter_context(patch.object(gateway, '_forwarding_identity', return_value='fixture'))
             stack.enter_context(patch.object(gateway, '_upstream_headers', return_value={}))
             stack.enter_context(patch.object(gateway, '_record',

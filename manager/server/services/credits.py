@@ -17,15 +17,27 @@ from __future__ import annotations
 
 import json
 import time
+import asyncio
+import hashlib
+import threading
+import weakref
 
-from .. import db
+from .. import db, config
 from . import tencent
+from functools import wraps
 
 # uid -> (查询时间戳, 是否成功, 积分值, 消息, 到期列表)
 # 到期列表跟着积分一起缓存：两者出自同一次账单请求，分开放会出现「余额是刚查的、
 # 到期时间还是上一分钟那次查询的」这种自相矛盾的展示。
 _cache: dict[str, tuple[float, bool, int | float | None, str, list[dict]]] = {}
 TTL_SECONDS = 60
+_cache_identity = {}
+_current_identity = {}
+_flights = {}
+_limits = weakref.WeakKeyDictionary()
+_generations = {}
+_all_generation = 0
+_state_lock = threading.RLock()
 
 # 余额快照持久化在 settings 表，重启后仍能继续比对
 _SNAP_KEY = 'credits_snapshot'
@@ -72,6 +84,15 @@ def _save_snapshot(snap: dict) -> None:
         pass
 
 
+def _atomic_balance(function):
+    @wraps(function)
+    def call(*args, **kwargs):
+        with db.transaction():
+            return function(*args, **kwargs)
+    return call
+
+
+@_atomic_balance
 def record_balance(uid: str, nickname: str, credits: int | float | None) -> int | None:
     """记录一次余额；较上次增加时写一条积分流水并返回增加量。
 
@@ -125,35 +146,82 @@ async def get_credits(
     真实查询成功且 record=True 时，顺带比对余额并记录积分变动流水。
     """
     uid = str(auth.get('uid') or '')
+    identity = hashlib.sha256(json.dumps(auth, sort_keys=True, ensure_ascii=True,
+                                         separators=(',', ':'), default=str).encode()).hexdigest()
+    # Credentials/realm changes cannot reuse a previous authorization's balance.
+    with _state_lock:
+        if uid and _current_identity.get(uid) != identity:
+            _cache.pop(uid, None)
+            _current_identity[uid] = identity
+            _generations[uid] = _generations.get(uid, 0) + 1
+        generation = (_all_generation, _generations.get(uid, 0))
     if uid and not force:
         hit = cached_credits(uid)
         if hit is not None:
-            ok, credits, message, expiries = hit
-            return ok, credits, f'{message}（缓存）', True, cache_age(uid), expiries
-
-    ok, credits, message, expiries = await tencent.fetch_credits(auth)
-    if uid:
-        # 仅缓存成功结果：失败往往是临时网络问题，不该被缓存住
-        if ok:
-            _cache[uid] = (time.time(), ok, credits, message, expiries)
-        else:
-            _cache.pop(uid, None)
-
-    if ok and record:
-        try:
-            record_balance(uid, nickname, credits)
-        except Exception:  # noqa: BLE001
-            pass
-
-    return ok, credits, message, False, None, expiries
+            ok, value, message, expiries = hit
+            return ok, value, f'{message}（缓存）', True, cache_age(uid), expiries
+    loop = asyncio.get_running_loop()
+    key = (loop, uid, identity, generation, record)
+    task = _flights.get(key) if uid else None
+    if task is None:
+        if loop not in _limits:
+            _limits[loop] = asyncio.Semaphore(config.CREDITS_CONCURRENCY)
+        async def fetch():
+            async with _limits[loop]:
+                if generation != (_all_generation, _generations.get(uid, 0)):
+                    return False, None, '余额在排队期间已变更，请刷新后重试', False, None, []
+                ok, value, message, expiries = await tencent.fetch_credits(auth)
+                def publish():
+                    # Global order is DB then credit state; never hold a credit
+                    # lock while waiting for a DB lock owned by an API thread.
+                    with db.transaction(), _state_lock:
+                        if generation != (_all_generation, _generations.get(uid, 0)):
+                            return False
+                        if uid:
+                            if ok:
+                                _cache[uid] = (time.time(), ok, value, message, expiries)
+                                _cache_identity[uid] = identity
+                            else:
+                                _cache.pop(uid, None)
+                                _cache_identity.pop(uid, None)
+                        if ok and record:
+                            try:
+                                record_balance(uid, nickname, value)
+                            except Exception:
+                                pass
+                        return True
+                from .asyncwork import joined_thread
+                if not await joined_thread(publish):
+                    return False, None, '余额在查询期间已变更，请刷新后重试', False, None, []
+                return ok, value, message, False, None, expiries
+        task = asyncio.create_task(fetch())
+        if uid:
+            _flights[key] = task
+            def done(completed):
+                if _flights.get(key) is completed:
+                    _flights.pop(key, None)
+                if not completed.cancelled():
+                    completed.exception()
+            task.add_done_callback(done)
+    from .asyncwork import joined_task
+    return await joined_task(task)
 
 
 def invalidate(uid: str | None = None) -> None:
     """清除缓存（uid 为空则全清）。签到等会改变余额的操作后调用。"""
-    if uid:
-        _cache.pop(uid, None)
-    else:
-        _cache.clear()
+    global _all_generation
+    with _state_lock:
+        if uid:
+            _cache.pop(uid, None)
+            _cache_identity.pop(uid, None)
+            _current_identity.pop(uid, None)
+            _generations[uid] = _generations.get(uid, 0) + 1
+        else:
+            _cache.clear()
+            _cache_identity.clear()
+            _current_identity.clear()
+            _all_generation += 1
+            _generations.clear()
 
 def _snapshot_value(raw: object) -> int | None:
     """快照条目的数值。新形态是 {'credits': n, 'at': ts}；升级前存的是纯数字。"""

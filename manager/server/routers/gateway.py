@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
-from .. import observability
+from .. import observability, requestperf
 from ..requestbody import (BodyReadTimeout, BodyReadWindow, BodyEncodingError,
                           BodySizeExceeded, body_frames, content_encoding)
 from ..services import modelcatalog, modelmap, proxyroutes
@@ -446,7 +446,9 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
         return value, invalid
     try:
         from ..services.asyncwork import joined_thread
-        body, invalid = await joined_thread(parse)
+        from .. import requestperf
+        with requestperf.measure('json_parse'):
+            body, invalid = await joined_thread(parse)
     except Exception:  # noqa: BLE001
         return None, _oai_error('请求体不是合法 JSON', 400)
     if not isinstance(body, dict):
@@ -853,6 +855,7 @@ def normalize_chat_images(body: object) -> int:
     return changed
 
 
+@requestperf.timed('settlement')
 def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None, effort: str | None = None, session_key: str | None = None) -> None:
     pt,ct=observability.usage_int(pt),observability.usage_int(ct)
     if credit is None:
@@ -1931,8 +1934,9 @@ def _forwarding_identity(key,upstream):
     token=upstreamsvc.forward_api_key(upstream)
     return str(key.get('id'))+'|'+str(upstream.get('base_url'))+'|'+hashlib.sha256(token.encode()).hexdigest()
 
-def _prepare_forward(key,body):
+def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forwarded=False):
     from .. import budget, ledger, wirebody
+    from .. import requestperf
     # K27：Anthropic / Responses 两个入口自己解析上游（不在本文件），所以它们
     # 路径上没有 `_chat` 的精确归因。这里补一个**粗归因**（平台 + 密钥绑定上游
     # 的 id，没有 host），保证三条协议都有 actual_platform/upstream_ref 可查；
@@ -1944,8 +1948,11 @@ def _prepare_forward(key,body):
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128),
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128))
     try:
-        wire = wirebody.encode(body, max_forward_body_bytes(),
-                               reserve=getattr(state, 'reserve_wire_body', None))
+        reserve = reserve if reserve is not None else getattr(state, 'reserve_wire_body', None)
+        with requestperf.measure('json_encode'):
+            wire = wirebody.encode(body, max_forward_body_bytes(), reserve=reserve)
+        if check_cancelled is not None:
+            check_cancelled()
         # U05（2026-10-28）：`budget.prepare` 会在 token 配额不足时**收缩**输出
         # 上限（`body[field] = min(output, remaining - estimated_input)`），但那条
         # 路径不产生任何客户端可见信号 —— 客户端以为额度是 max_tokens，实际拿到
@@ -1957,10 +1964,13 @@ def _prepare_forward(key,body):
             if 'max_completion_tokens' in body:
                 limit_field = 'max_completion_tokens'
             limit_before = body.get(limit_field)
-        budget.prepare(key,body,encoded_body=wire)
+        with requestperf.measure('budget_prepare'):
+            budget.prepare(key,body,encoded_body=wire)
         if body.get(limit_field) != limit_before:
-            wire = wirebody.encode(body, max_forward_body_bytes(),
-                                   reserve=getattr(state, 'reserve_wire_body', None))
+            with requestperf.measure('json_encode'):
+                wire = wirebody.encode(body, max_forward_body_bytes(), reserve=reserve)
+        if check_cancelled is not None:
+            check_cancelled()
         if isinstance(body, dict):
             observability.record_max_tokens_contract(
                 observability.current.get(), limit_field, limit_before,
@@ -1980,7 +1990,8 @@ def _prepare_forward(key,body):
             changed=state.resolved_model != getattr(state,'requested_model',None)
             state.transform=json.dumps({'protocol_bridge':state.protocol if state.protocol in ('anthropic','responses') else None,'model_alias':changed},separators=(',',':'))
             ledger.forwarding(state,'prepared')
-        budget.forwarded()
+        if not defer_forwarded:
+            budget.forwarded()
     except wirebody.TooLarge:
         observability.mark_error('gateway.request.forward_too_large')
         return _oai_error('协议转换后的请求体超过转发上限，请精简上下文或附件；'
@@ -2000,7 +2011,94 @@ def _prepare_forward(key,body):
         # credit_quota_exhausted / ledger_backpressure …），直接沿用。
         observability.mark_error(getattr(exc, 'code', None))
         return _oai_error(str(exc),429,'insufficient_quota',exc.code)
+    if state and getattr(state, 'performance', None):
+        state.performance.size('forward_bytes', len(wire))
     return wire
+
+
+async def _prepare_forward_async(key, body, *, request=None):
+    """Keep blocking JSON/SQLite work off the loop; admission stays loop-owned."""
+    from concurrent.futures import Future
+    import threading
+    from .. import requestperf
+    from ..services.asyncwork import joined_task
+    loop = asyncio.get_running_loop()
+    state = observability.current.get()
+    original_reserve = getattr(state, 'reserve_wire_body', None)
+    cancelled = threading.Event()
+    reserved = 0
+
+    def check_cancelled():
+        if cancelled.is_set():
+            raise asyncio.CancelledError()
+
+    def reserve(size):
+        nonlocal reserved
+        check_cancelled()
+        if original_reserve is None or size <= reserved:
+            return
+        # The encoder flushes exact blocks, not one callback per JSON token.
+        result = Future()
+        def apply():
+            try:
+                check_cancelled()
+                original_reserve(size)
+            except BaseException as error:
+                result.set_exception(error)
+            else:
+                result.set_result(None)
+        loop.call_soon_threadsafe(apply)
+        result.result()
+        reserved = size
+
+    def work():
+        with requestperf.measure('forward_prepare'):
+            result = _prepare_forward(key, body, reserve=reserve, check_cancelled=check_cancelled,
+                                      defer_forwarded=True)
+        requestperf.mark('forward_prepared')
+        return result
+
+    task = asyncio.create_task(asyncio.to_thread(work))
+    try:
+        result = await asyncio.shield(task)
+        if request is not None and not isinstance(result, JSONResponse):
+            # A key can be revoked/rotated while blocking preparation is running.
+            # Recheck without consuming a second rate/concurrency allowance.
+            if state is not None and state.protocol == 'anthropic':
+                from .anthropic import _resolve_key
+                fresh, _ = _resolve_key(request)
+            else:
+                fresh = keysvc.resolve(_bearer(request))
+            if fresh is None or fresh['id'] != key['id']:
+                return _oai_error('API Key 已撤销或已更换', 401, 'authentication_error', 'invalid_api_key')
+            requested = getattr(state, 'requested_model', None) if state is not None else body.get('model')
+            try:
+                platform = platformpolicy.select(request.scope.get('zhihui.original_path', request.url.path),
+                                                  request.headers.get('x-qtg-platform', ''), requested)
+            except platformpolicy.PlatformConflict as error:
+                return _oai_error(str(error), 400, 'invalid_request_error', error.code)
+            ip = iputil.client_ip(request)
+            reason = keysvc.validate(fresh, ip, requested, mapped_model=body.get('model'), platform=platform)
+            if reason:
+                observability.mark_error(reason.code)
+                return _oai_error(reason, reason.status, reason.err_type, reason.code)
+            if _global_ip_blocked(ip):
+                return _oai_error('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
+            if fresh.get('upstream_id') != key.get('upstream_id'):
+                return _oai_error('密钥路由在准备期间已变更，请重试', 409,
+                                  'invalid_request_error', 'key_configuration_changed')
+        if not isinstance(result, JSONResponse):
+            from .. import budget
+            budget.forwarded()
+        return result
+    except asyncio.CancelledError:
+        cancelled.set()
+        # Never release body bytes or key/budget ownership while a worker lives.
+        try:
+            await joined_task(task)
+        except BaseException:
+            pass
+        raise
 
 async def _chat(request: Request, upstream_path: str):
     body, err = await _read_json_body(request)
@@ -2066,7 +2164,7 @@ async def _chat(request: Request, upstream_path: str):
                     _defused, observability.current.get().request_id
                     if observability.current.get() else None, actual_platform)
     url = f'{upstream["base_url"]}{upstream_path}'
-    wire = _prepare_forward(key,body)
+    wire = await _prepare_forward_async(key,body, request=request)
     if isinstance(wire, JSONResponse):
         return wire
     started = time.time()
@@ -2258,6 +2356,8 @@ async def _chat(request: Request, upstream_path: str):
                     audit.feed(chunk)
                     if audit.saw_useful and first_token_ms is None:
                         first_token_ms=int((time.time()-started)*1000)
+                        from .. import requestperf
+                        requestperf.mark('first_useful')
                 yield chunk
             if status_code < 400:
                 audit.finish()

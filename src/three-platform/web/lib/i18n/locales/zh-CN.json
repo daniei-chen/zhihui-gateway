@@ -392,6 +392,7 @@
     "expiryTipNote": "按到期时间排列，倒计时只显示最近一笔；到期后未用完的积分会作废。"
   },
   "dashboard": {
+    "balanceSnapshotNote": "余额为已登记或引擎快照；需要实时值时，请到账号页刷新积分。",
     "title": "仪表盘",
     "description": "{platform} 账号池健康度与今日调用总览（每 30 秒自动刷新）",
     "totalAccounts": "账号总数",

@@ -301,10 +301,14 @@ class Trae2Adapter(BaseAdapter):
         aiwork 的 `accounts_list` 字段名与它**完全同源**
         （user_id / remaining_credits / total_credits / credits_expire_at /
         checked_today / cooldown_until / refresh_token_fails …），无需转换。"""
-        r = await self._cmd("accounts_list", required=False)
-        rows = r.get("data") or []
+        r = await self._cmd("accounts_list", required=True)
+        if r.get('ok') is False or 'data' not in r:
+            raise UpstreamError('Trae 账号列表暂不可用')
+        rows = r.get("data")
         if isinstance(rows, dict):
             rows = [rows]
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise UpstreamError('Trae 账号列表格式无效')
         return {"accounts": rows, "checkin": self._checkin_rows()}
 
     async def diagnostic_pool(self) -> Dict[str, Any]:

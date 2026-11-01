@@ -449,6 +449,45 @@ async def build_aggregate(rt: Any, *, force: bool = False,
         raise UpstreamError(f"聚合上游数据失败: {str(exc)[:200]}") from exc
 
 
+async def build_pool_snapshot(rt: Any, platform: str, *, force: bool = False) -> Aggregate:
+    """Read only the selected pool; unrelated analytics never gate account pages."""
+    if platform not in ('qoder', 'trae', 'workbuddy'):
+        raise ValueError('known pool platform required')
+    from ..services.scope import fixed
+    scope = fixed(platform=platform, authority='upstream')
+    async def build():
+        agg = Aggregate()
+        adapter = getattr(rt, {'qoder': 'qoder', 'trae': 'trae', 'workbuddy': 'wb'}[platform], None)
+        if adapter is None:
+            raise UpstreamError('当前平台未启用')
+        # Account data is required. A healthy /health cannot turn a failed list
+        # into an authoritative empty pool. Health failures are visible separately.
+        account_call = adapter.accounts() if platform == 'qoder' else adapter.overview()
+        calls = [account_call, _safe(adapter.health(), {}, None, '')]
+        if platform == 'trae':
+            calls.append(_safe(adapter.settings(), {}, agg.errors, 'trae.settings'))
+        values = await asyncio.gather(*calls)
+        raw, health = values[:2]
+        if not isinstance(raw, dict) or not isinstance(raw.get('accounts'), list):
+            raise UpstreamError('当前平台账号列表暂不可用')
+        mapper, field = {'qoder': (map_qoder_account, 'qoder'), 'trae': (map_trae_account, 'trae'),
+                         'workbuddy': (map_wb_account, 'wb')}[platform]
+        setattr(agg, field + '_raw', raw)
+        if any(not isinstance(row, dict) for row in raw['accounts']):
+            raise UpstreamError('当前平台账号列表格式无效')
+        setattr(agg, field + '_accounts', [mapper(row) for row in raw['accounts']])
+        if platform == 'trae':
+            agg.trae_settings = values[2]
+        agg.health = [HealthStatus(name=platform, url=str(getattr(adapter, 'base_url', '')),
+                                  up=bool((health or {}).get('up')),
+                                  latency_ms=(health or {}).get('latency_ms'),
+                                  error=str((health or {}).get('last_error') or '')[:200])]
+        _apply_pool_flags(agg)
+        return agg
+    return await cache.get_or_set(scope.cache_key('aggregate-pool'), rt.settings.cache_overview_sec,
+                                  build, force=force)
+
+
 def _apply_pool_flags(agg: Aggregate) -> None:
     """把上游真实的「在池」状态写到账号上。
 

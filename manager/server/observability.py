@@ -179,6 +179,7 @@ class RequestAudit:
     error_stage: str | None = None
     account: str | None = None
     first_byte_ms: int | None = None
+    performance: object | None = None
     recorded: bool = False
     key_slot: int | None = None
     key_id: int | None = None
@@ -758,6 +759,9 @@ class RequestAuditMiddleware:
         scope_state["client_request_id"] = state.client_request_id
         tracked = path.startswith(("/v1/", "/v2/", "/api/", "/qoder/v1/", "/trae/v1/")) or path in ("/responses", "/messages")
         inference=state.protocol!='http' and state.method=='POST'
+        from . import requestperf
+        if inference:
+            state.performance = requestperf.Trace(state.started)
         admitted=False; large=False; received=0; reserved=0
         inbound_retained=0; wire_reserved=0
         reading_body=False
@@ -814,6 +818,7 @@ class RequestAuditMiddleware:
             return message
         async def send_audited(message):
             if message["type"] == "http.response.start":
+                requestperf.mark('response_headers')
                 state.http_status = message["status"]
                 message = dict(message)
                 # 先剥掉下游路由可能自带的同名头，再由本中间件唯一负责写入。
@@ -854,8 +859,9 @@ class RequestAuditMiddleware:
                     return
                 self.preauth_active += 1
                 try:
-                    auth_error = await joined_thread(gateway.preauthorize_body, Request(scope),
-                                                     anthropic=protocol == 'anthropic')
+                    with requestperf.measure('preauthorization'):
+                        auth_error = await joined_thread(gateway.preauthorize_body, Request(scope),
+                                                         anthropic=protocol == 'anthropic')
                 finally:
                     self.preauth_active -= 1
             if inference and auth_error is None:
@@ -882,10 +888,13 @@ class RequestAuditMiddleware:
                     chunks=[]
                     body_window=BodyReadWindow()
                     encoding=content_encoding(scope.get('headers', []))
-                    async for message in body_frames(receive, encoding, per_request_limit,
-                                                     window=body_window, reserve=reserve_input):
-                        if message.get('body') or not message.get('more_body',False):
-                            chunks.append(message)
+                    with requestperf.measure('body_receive'):
+                        async for message in body_frames(receive, encoding, per_request_limit,
+                                                         window=body_window, reserve=reserve_input):
+                            if message.get('body') or not message.get('more_body',False):
+                                chunks.append(message)
+                    requestperf.mark('body_received')
+                    state.performance.size('received_bytes', received)
                     reading_body=False
                     inbound_retained=received
                     if encoding == 'gzip':
@@ -999,14 +1008,23 @@ class RequestAuditMiddleware:
             finally:
                 from . import budget
                 try:
-                    budget.finish(state)
+                    with requestperf.measure('finalize'):
+                        budget.finish(state)
                 except Exception:
                     log.exception("budget finalization failed request_id=%s",state.request_id)
-                release_key(state)
-                if admitted:
-                    self.active-=1
-                    self.inflight_body_bytes -= reserved
-                if large: self.large-=1
-                state.reserve_wire_body = None
-                current.reset(token)
+                try:
+                    # This telemetry is independent of billing and never contains bodies.
+                    from .services.asyncwork import joined_thread
+                    if admitted:
+                        await joined_thread(requestperf.record, state)
+                except Exception:
+                    log.warning('request performance persistence unavailable')
+                finally:
+                    release_key(state)
+                    if admitted:
+                        self.active-=1
+                        self.inflight_body_bytes -= reserved
+                    if large: self.large-=1
+                    state.reserve_wire_body = None
+                    current.reset(token)
 

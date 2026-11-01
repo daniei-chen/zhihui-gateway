@@ -458,6 +458,18 @@ test('all periodic page hooks use coalescing refresh, not explicit reload', () =
   }
 });
 
+test('dashboard reads group snapshots without billing POSTs and labels freshness', () => {
+  const source = fs.readFileSync(path.join(root, 'app/(main)/dashboard/page.tsx'), 'utf8');
+  assert.match(source, /accountApi\.cachedCredits\(g\.id \?\? null\)/);
+  assert.doesNotMatch(source, /accountApi\.refreshCredits\(/);
+  assert.doesNotMatch(source, /isAdmin\s*\?\s*loadGroupCredits/);
+  assert.match(source, /t\('dashboard\.balanceSnapshotNote'\)/);
+  for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+    const text = JSON.parse(fs.readFileSync(path.join(root, `lib/i18n/locales/${locale}.json`), 'utf8'));
+    assert.ok(text.dashboard.balanceSnapshotNote, locale);
+  }
+});
+
 test('backend error details remain authoritative and server diagnostics get localized context', () => {
   const {errText} = load('lib/api.ts', {
     axios: {default: {create: () => ({interceptors: {

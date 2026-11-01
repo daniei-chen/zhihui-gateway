@@ -198,6 +198,13 @@ class DrainIn(BaseModel):
     action: Literal['begin', 'resume'] = 'begin'
 
 
+@router.get('/performance')
+def performance_snapshot(user: dict = Depends(security.require_panel_reader)) -> dict:
+    from .. import db, requestperf, observability
+    return {'performance': requestperf.snapshot(), 'database': db.transaction_stats(),
+            'admission': observability.admission_snapshot()}
+
+
 @router.get('/drain')
 def drain_status(user: dict = Depends(security.require_panel_reader)) -> dict:
     return drain.snapshot()

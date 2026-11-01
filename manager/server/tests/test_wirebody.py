@@ -34,7 +34,9 @@ class EncodingTests(unittest.TestCase):
         sizes=[]
         wire=wirebody.encode({'text':'x'*150000},200000,reserve=sizes.append)
         self.assertEqual(sizes[-1],len(wire))
-        self.assertGreater(len(sizes),3)
+        self.assertGreaterEqual(len(sizes),3)
+        self.assertEqual(sizes[:-1], [65536, 131072])
+        self.assertTrue(all(b-a <= 65536 for a,b in zip([0]+sizes,sizes)))
         def unavailable(size):raise observability.CapacityError()
         with self.assertRaises(observability.CapacityError):
             wirebody.encode({'text':'x'},1024,reserve=unavailable)
@@ -259,6 +261,28 @@ class ProtocolWireTests(unittest.TestCase):
         effective=int(response.headers['x-manager-max-tokens-effective'])
         self.assertLess(effective,10000)
         self.assertEqual(sent[0]['max_tokens'],effective)
+
+    def test_key_rotated_during_encode_is_rejected_without_unknown_spending(self):
+        from server import wirebody, budget
+        original = wirebody.encode
+        rotated = False
+        def encode(*args, **kwargs):
+            nonlocal rotated
+            value = original(*args, **kwargs)
+            if not rotated:
+                self.db.execute('UPDATE api_keys SET key_hash=? WHERE id=(SELECT id FROM api_keys WHERE name=?)',
+                                ('0' * 64, 'wire-only-fixture'))
+                rotated = True
+            return value
+        with patch.object(wirebody, 'encode', side_effect=encode), \
+                patch.object(self.config, 'http_client', side_effect=AssertionError('provider invoked')):
+            response = self.client.post('/v1/chat/completions', json=self.payload('chat', False),
+                headers={'Authorization': 'Bearer ' + self.token})
+        self.assertEqual(response.status_code, 401)
+        rid = response.headers['x-request-id']
+        row = self.db.query_one('SELECT state,charged_tokens FROM budget_reservations WHERE request_id=?', (rid,))
+        self.assertEqual(row['state'], 'released')
+        self.assertEqual(row['charged_tokens'], 0)
 
     def test_successful_wire_is_the_validated_http_payload_for_each_protocol(self):
         import httpx

@@ -954,7 +954,9 @@ async def compat_refresh_tokens(request: Request) -> Dict[str, Any]:
 @router.post("/accounts/refresh-credits")
 async def compat_refresh_credits(request: Request, force: str = Query(default="true")) -> Dict[str, Any]:
     rt = _rt(request)
-    agg = await build_aggregate(rt, force=True)
+    from ..service import build_pool_snapshot
+    selected = platform_of(request)
+    agg = await build_pool_snapshot(rt, selected, force=force.lower() == 'true')
     plat, rows = _platform_rows(request, agg)
     credits: Dict[str, Optional[float]] = {}
     failed: List[str] = []

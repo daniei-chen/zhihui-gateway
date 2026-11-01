@@ -368,6 +368,10 @@ export const accountApi = {
     }>(`/api/accounts/${encodeURIComponent(file)}/credits`,
        upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 并发刷新所有账号的实时积分 */
+  cachedCredits: (upstreamId?: number | null) =>
+    get<{total: number; succeeded: number; credits: Record<string, number | null>;
+         meta: Record<string, CreditsMeta>; failed: string[]; provider_called: false}>(
+      '/api/accounts/credits-cached', upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 查询全部账号积分；force=false 时 60 秒内命中服务端缓存 */
   refreshCredits: (force = true, upstreamId?: number | null) =>
     post<{

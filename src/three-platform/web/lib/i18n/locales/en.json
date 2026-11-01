@@ -227,6 +227,7 @@
     "unknown": "Unknown"
   },
   "dashboard": {
+    "balanceSnapshotNote": "Balances are recorded or engine snapshots. Refresh credits on Accounts for current values.",
     "title": "Dashboard",
     "description": "{platform} account pool health and today usage at a glance (auto-refresh every 30s)",
     "totalAccounts": "Total accounts",
