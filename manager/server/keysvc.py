@@ -15,6 +15,7 @@ from .iputil import ip_matches
 TOKEN_PREFIX = 'sk-'
 LEGACY_TOKEN_PREFIX = 'wbk_'
 _TOKEN_SHAPE = re.compile(r'sk-[0-9a-f]{32}\Z')
+_PORTAL_TOKEN_SHAPE = re.compile(r'sk-portal-[0-9a-f]{32}\Z')
 
 
 class Rejection(str):
@@ -251,6 +252,7 @@ def create_key(
     daily_credit_quota: float = 0,
     assigned_to: str = '',
     _conn: sqlite3.Connection | None = None,
+    _portal: bool = False,
 ) -> dict:
     """创建一个密钥。返回含**明文 token** 的字典（库里只存哈希）。
 
@@ -269,7 +271,11 @@ def create_key(
     quota_credit = keylimits.validate('quota_credit', quota_credit)
     daily_token_quota = keylimits.validate('daily_token_quota', daily_token_quota)
     daily_credit_quota = keylimits.validate('daily_credit_quota', daily_credit_quota)
-    token = TOKEN_PREFIX + secrets.token_hex(16)
+    if type(_portal) is not bool or (_portal and _conn is None):
+        raise ValueError('portal credentials require an explicit transaction')
+    # The signed predecessor accepts only sk-<32 hex> / wbk_ / sk-qtg-.
+    # A distinct shape fails closed even if old code ignores source=portal-v1.
+    token = ('sk-portal-' if _portal else TOKEN_PREFIX) + secrets.token_hex(16)
     sql = ('INSERT INTO api_keys(name, key_hash, prefix, enabled, expires_at, max_ips, '
            'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, used_credit_units, '
            'created_at, upstream_id, platforms, daily_token_quota,daily_credit_quota,assigned_to) '
@@ -437,13 +443,16 @@ def resolve(token: str) -> dict | None:
         return None
     if token.startswith(legacymig.QTG_KEY_PREFIX):
         return _resolve_legacy_qtg(token)
-    if not (_TOKEN_SHAPE.fullmatch(token) or token.startswith(LEGACY_TOKEN_PREFIX)):
+    portal_shape = bool(_PORTAL_TOKEN_SHAPE.fullmatch(token))
+    if not (portal_shape or _TOKEN_SHAPE.fullmatch(token) or token.startswith(LEGACY_TOKEN_PREFIX)):
         return None
     rows = db.query('SELECT * FROM api_keys WHERE prefix = ?', (token[:12],))
     digest = _hash(token)
     for row in rows:
         if secrets.compare_digest(row['key_hash'], digest):
             key = _parse(row)
+            if portal_shape and key.get('source') != 'portal-v1':
+                return None
             if key.get('source') == 'portal-v1':
                 key['credential_hash'] = row['key_hash']
                 from . import portalpolicy

@@ -162,7 +162,7 @@ def create_key(body: dict = Body(...), user=Depends(current)):
     # Source provenance is committed with the key. An orphan is never an ordinary
     # unlimited manager key, even if portal-link creation or activation fails.
     with db.transaction() as conn:
-        made = keysvc.create_key(label.strip(), models=list(portalpolicy.MODELS), realm='cn', platforms=['workbuddy'], _conn=conn)
+        made = keysvc.create_key(label.strip(), models=list(portalpolicy.MODELS), realm='cn', platforms=['workbuddy'], _conn=conn, _portal=True)
         conn.execute('UPDATE api_keys SET source=?,enabled=0 WHERE id=?', (portalpolicy.SOURCE, made['id']))
     with store.transaction() as conn:
         fresh = conn.execute('SELECT sv,enabled FROM portal_users WHERE id=?', (user['id'],)).fetchone()

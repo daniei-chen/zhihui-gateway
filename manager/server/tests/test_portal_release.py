@@ -6,6 +6,23 @@ from server.tests import test_user_portal as fixtures
 
 
 class PortalReleaseTests(fixtures.PortalTests):
+    async def test_portal_credential_shape_is_rejected_by_signed_predecessor(self):
+        import re
+        from server import portalpolicy
+        made = (await self.call('POST', '/api/portal/keys', json={'label': 'rollback proof'})).json()
+        token = made['key']
+        self.assertRegex(token, r'^sk-portal-[0-9a-f]{32}$')
+        # Exact accepted shapes in the retained signed v0.0.3 resolver. Hash
+        # matching cannot be reached with this new credential, even if enabled.
+        self.assertFalse(re.fullmatch(r'sk-[0-9a-f]{32}', token))
+        self.assertFalse(token.startswith(('wbk_', 'sk-qtg-')))
+        with mock.patch.dict('os.environ', {'WB_PORTAL_PUBLIC_POOL_ENABLED': '1'}):
+            self.assertEqual(keysvc.resolve(token)['source'], portalpolicy.SOURCE)
+            db.execute("UPDATE api_keys SET source='manual' WHERE id=?", (made['id'],))
+            self.assertIsNone(keysvc.resolve(token))
+            db.execute('UPDATE api_keys SET source=? WHERE id=?', (portalpolicy.SOURCE, made['id']))
+            self.assertIsNotNone(keysvc.resolve(token))
+
     async def test_admin_password_reset_revokes_sessions_keys_and_clears_lock_not_balance(self):
         await self.bind()
         made = (await self.call('POST', '/api/portal/keys', json={'label': 'synthetic reset key'})).json()
