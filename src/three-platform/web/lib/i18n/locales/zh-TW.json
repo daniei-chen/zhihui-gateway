@@ -68,7 +68,8 @@
     "settings": "設定",
     "quickAdd": "快速新增",
     "profile": "個人資訊",
-    "redPackets": "紅包"
+    "redPackets": "紅包",
+    "members": "使用者工作台"
   },
   "login": {
     "subtitle": "{platform} 帳號池管理 · OpenAI 相容反向代理閘道",
@@ -672,6 +673,11 @@
     "platforms": "允許的平台",
     "platformsHelp": "選擇此金鑰可呼叫的平台。不選擇任何平台會阻止全部平台呼叫。",
     "platformPolicyInvalid": "平台策略無效，請修復後使用。",
+    "requestPolicyInvalid": "限制規則損壞，呼叫已阻止；請檢查並明確修復。",
+    "badgePolicyInvalid": "規則待修復",
+    "policyRepairWarning": "原有限制規則無法完整讀取。空白不代表原本無限制，請核對 IP、模型與額度後儲存。",
+    "policyRepairConfirm": "我已核對並明確確認目前限制規則。",
+    "invalidLimit": "額度須為有限非負數；Token 與 IP 數為整數，積分最多六位小數，明確填入 0 才表示不限。",
     "dailyTokens": "每日 Token 上限",
     "dailyCredit": "每日積分上限",
     "dailyHint": "0 為不限；依伺服器當地日期重設。積分依上游已回報消耗限制接單，單次請求可能超出剩餘額度；未知消耗待核對，並非硬性計費上限。",
@@ -840,7 +846,8 @@
     "reasonPlatformNotAllowed": "平台未授權",
     "reasonInvalidPlatform": "未知平台",
     "reasonInvalidKeyPolicy": "金鑰平台策略無效",
-    "lockoutDesc": "{action}會影響推理 API 的存取；規則設定錯誤時服務會中斷。控制台仍可存取，可在此恢復規則。"
+    "lockoutDesc": "{action}會影響推理 API 的存取；規則設定錯誤時服務會中斷。控制台仍可存取，可在此恢復規則。",
+    "reasonPortalPolicyDenied": "使用者工作台策略限制"
   },
   "models": {
     "title": "模型中心",
@@ -1522,6 +1529,9 @@
     "applyFailed": "上游重載失敗",
     "applyFailedHint": "設定已經寫入，但上游容器沒能重啟。請在主機上執行 docker compose restart wb2api 讓它生效。",
     "applyDismiss": "關閉提示",
+    "accountReloadObserving": "正在確認上游是否已收錄新增帳號",
+    "accountReloadAttention": "新增帳號的上游收錄尚未確認",
+    "accountReloadNoRestart": "帳號憑證由熱載入處理；本流程不會自動重啟上游或中斷其他工作階段。未確認時請核對帳號池與上游健康。",
     "jsonInvalid": "JSON 格式有誤，請檢查括號與逗號",
     "jsonNotObject": "需要是一個 JSON 物件，例如 { \"checkin_hours\": [9, 21] }",
     "modelMapSaved": "模型映射已儲存",
@@ -1910,7 +1920,9 @@
     "添加账号需要管理员或超级管理员本人会话": "新增帳號需要管理員或超級管理員本人工作階段",
     "管理员添加账号仅使用默认账号池和默认线路": "管理員僅能使用預設帳號池與預設線路新增帳號",
     "用户管理仅对超级管理员开放": "使用者管理僅對超級管理員開放",
-    "只有超级管理员本人可以分配密钥归属": "只有超級管理員本人可以分配金鑰歸屬"
+    "只有超级管理员本人可以分配密钥归属": "只有超級管理員本人可以分配金鑰歸屬",
+    "仅超级管理员admin本人会话可赠送积分": "僅超級管理員admin本人工作階段可贈送積分",
+    "用户端写操作需要同源请求": "使用者端寫入操作需要同源請求"
   },
   "redPacket": {
     "title": "紅包",

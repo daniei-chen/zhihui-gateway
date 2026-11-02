@@ -75,6 +75,21 @@ MANAGER_PORT = int(os.environ.get('WB_MANAGER_PORT') or 7864)
 MANAGER_REPO = 'daniei-chen/zhihui-gateway'
 
 
+def _managed_release() -> bool:
+    try:
+        (INSTALL_DIR / 'deploy/managed-release.json').lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _require_unmanaged_install() -> None:
+    if _managed_release():
+        raise RuntimeError('Managed release: use the verified deployment controller.')
+
+
 def upstream_health_url() -> str:
     """就绪探测用的上游健康检查地址（按部署形态取，不写死回环）。
 
@@ -787,6 +802,7 @@ def update_upstream(rep: Reporter) -> None:
     部署，包内 `upstream/` 都是唯一更新源。管理端与上游共用同一次下载与
     解压（`--target both` 不会下两遍）。
     """
+    _require_unmanaged_install()
     rep.step('同步随包上游')
 
     new_root, _info = _release_root(rep)
@@ -1463,6 +1479,7 @@ def _release_root(rep: Reporter, info: dict | None = None) -> tuple[Path, dict]:
     解压目录的生命周期到本次更新结束（`main()` 的 finally 回收）—— 因为
     `update_upstream` 与 `update_manager` 要共用这一份。
     """
+    _require_unmanaged_install()
     global _release_cache, _release_tmp
     if _release_cache is not None:
         return _release_cache
@@ -1549,6 +1566,7 @@ def swap_dir(incoming: Path, target: Path) -> None:
 
 
 def update_manager(rep: Reporter) -> None:
+    _require_unmanaged_install()
     rep.step('更新管理端')
 
     # 1) 取最新 Release 的元信息（不下载）。API 优先、失败回退 302 —— 见
@@ -1867,7 +1885,7 @@ def main() -> int:
     # 本地定制：受控维护版本（签名清单托管）不允许用本更新器自助升级 ——
     # 包内 server/web 与 deploy/managed-release.json 清单对不上会让 ExecStartPre
     # 直接拒绝启动。升级请走签名发布流程（tools/sign_release.py + 切换 releases/current）。
-    if (INSTALL_DIR / 'deploy' / 'managed-release.json').exists():
+    if _managed_release():
         print('Managed release: use the verified deployment controller.')
         return 1
     parser = argparse.ArgumentParser(description='WorkBuddy Manager 更新')

@@ -72,6 +72,16 @@ function fixture(url, request) {
     {name: 'no-measurement', key_id: 8, requests: 2, prompt_tokens: 300, completion_tokens: 100,
       credit: 0, cache_hit_rate: null, tokens_per_sec: null, throughput_samples: 0},
   ];
+  if (p === '/api/keys' && process.env.QA_ADMISSION_V004) return [
+    {id: 7, name: 'Synthetic damaged policy', prefix: 'sk-fixture', enabled: true, expires_at: null,
+      max_ips: 0, ip_allowlist: [], models: [], realm: 'cn', quota: 5000, used_tokens: 0,
+      quota_credit: 0, used_credit: 0, platforms: ['workbuddy'], platform_policy_valid: true,
+      request_policy_valid: false, request_policy_errors: ['ip_allowlist'], created_at: 1, last_used_at: null},
+    {id: 8, name: 'Synthetic valid policy', prefix: 'sk-example', enabled: true, expires_at: null,
+      max_ips: 0, ip_allowlist: [], models: [], realm: 'cn', quota: 5000, used_tokens: 0,
+      quota_credit: 0, used_credit: 0, platforms: ['workbuddy'], platform_policy_valid: true,
+      request_policy_valid: true, request_policy_errors: [], created_at: 1, last_used_at: null},
+  ];
   if (['/api/keys', '/api/tokens', '/api/red-packets', '/api/security/rules', '/api/security/logs'].includes(p)) return [];
   if (p === '/api/stats/upstream') return {available: false, detail: 'Fixture has no live upstream'};
   if (p === '/api/logs') return {items: [], total: 0, page: 1, size: 20};
@@ -106,7 +116,11 @@ function fixture(url, request) {
   if (p === '/api/proxy-routes') return {routes: [], pool: {enabled: false, strategy: 'round_robin', strategies: ['priority', 'round_robin', 'random', 'least_connections'], interval_seconds: 300, routes_total: 0, routes_enabled: 0}, default: '', schemes: ['http', 'https', 'socks5'], bound_total: 0};
   if (p === '/api/settings/proxy') return {global_proxy_enabled: false, http_proxy: '', update_proxy: '', http_configured: false, update_configured: false};
   if (p === '/api/proxy-routes/bindings') return {accounts: [], routes: []};
-  if (p === '/api/upstream/reload-state') return {pending: false, can_reload: false, groups: []};
+  if (p === '/api/upstream/reload-state') return {running: false, pending: false, last_at: 0,
+    last_ok: null, last_message: '', restart_count: 0, account_reload_scopes: process.env.QA_ADMISSION_V004 ? [
+      {upstream_id: null, phase: 'needs_attention', reason: 'upstream_unavailable', pending_count: 1,
+        observed_at: 1, restart_scheduled: false},
+    ] : []};
   if (p === '/api/keys/import-local/status') return {enabled: false, available: false, clients: []};
   if (p === '/api/claim/local-fixture') return {title: 'Local claim fixture', quota_kind: 'credit', shares: 1, left: 1, models: [], expires_at: 1900000000, expired: false, claimed: false, my_amount: null, my_key: null};
   unknown.add(p);

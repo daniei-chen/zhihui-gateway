@@ -632,6 +632,11 @@
     "platforms": "允许的平台",
     "platformsHelp": "选择此密钥可调用的平台。不选择任何平台会阻止全部平台调用。",
     "platformPolicyInvalid": "平台策略无效，请修复后使用。",
+    "requestPolicyInvalid": "限制规则损坏，调用已阻止；请检查并显式修复。",
+    "badgePolicyInvalid": "规则待修复",
+    "policyRepairWarning": "原有限制规则无法完整读取。空白不代表原来无限制，请重新核对 IP、模型和额度后保存。",
+    "policyRepairConfirm": "我已核对并明确确认当前限制规则。",
+    "invalidLimit": "额度请填写有限非负数；Token 和 IP 数为整数，积分最多六位小数，明确填写 0 才表示不限。",
     "dailyTokens": "每日 Token 上限",
     "dailyCredit": "每日积分上限",
     "dailyHint": "0 为不限；按服务器本地日历日重置。积分按上游已报告消耗限制接单，单次请求可能超出剩余额度；未知消耗待核对，不承诺硬计费封顶。",
@@ -783,7 +788,8 @@
     "settings": "设置",
     "quickAdd": "快速添加",
     "profile": "个人信息",
-    "redPackets": "红包"
+    "redPackets": "红包",
+    "members": "用户工作台"
   },
   "notFound": {
     "line1": "页面",
@@ -1070,7 +1076,8 @@
     "reasonPlatformNotAllowed": "平台未授权",
     "reasonInvalidPlatform": "未知平台",
     "reasonInvalidKeyPolicy": "密钥平台策略无效",
-    "lockoutDesc": "{action}会影响推理 API 的访问；误设规则时业务会中断。控制台仍可访问，可在此恢复规则。"
+    "lockoutDesc": "{action}会影响推理 API 的访问；误设规则时业务会中断。控制台仍可访问，可在此恢复规则。",
+    "reasonPortalPolicyDenied": "用户工作台策略限制"
   },
   "settings": {
     "title": "设置",
@@ -1167,6 +1174,9 @@
     "applyFailed": "上游重载失败",
     "applyFailedHint": "配置已经写入，但上游容器没能重启。请在宿主机执行 docker compose restart wb2api 使其生效。",
     "applyDismiss": "关闭提示",
+    "accountReloadObserving": "正在确认新增账号是否已被上游收录",
+    "accountReloadAttention": "新增账号的上游收录尚未确认",
+    "accountReloadNoRestart": "账号凭据已交由热加载处理；本流程不会自动重启上游或中断其他会话。未确认时请核对账号池与上游健康。",
     "jsonInvalid": "JSON 格式有误，请检查括号与逗号",
     "jsonNotObject": "需要是一个 JSON 对象，例如 { \"checkin_hours\": [9, 21] }",
     "modelMapSaved": "模型映射已保存",

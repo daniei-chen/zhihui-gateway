@@ -98,6 +98,14 @@
         "manager/server/security.py:206"
       ]
     },
+    "WB_PORTAL_PUBLIC_POOL_ENABLED": {
+      "type": "string",
+      "sensitive": false,
+      "default": "0",
+      "choices": ["0", "1"],
+      "description": "Opt-in customer DeepSeek public-pool candidate; disabled by default",
+      "consumers": ["manager/server/portalpolicy.py"]
+    },
     "WB_BACKGROUND_JOBS": {
       "type": "boolean",
       "sensitive": false,

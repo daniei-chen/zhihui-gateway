@@ -631,6 +631,8 @@ export function ManagementBar() {
       href: '/settings',
       groupKey: 'governance',
     },
+    ...(isAdmin ? [{title: t('nav.members'), icon: <Users {...IconOptions} />,
+      href: '/members', groupKey: 'governance'}] : []),
     {
       title: t('nav.quickAdd'),
       icon: <PlusCircle {...IconOptions} />,

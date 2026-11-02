@@ -68,7 +68,8 @@
     "settings": "Settings",
     "quickAdd": "Quick add",
     "profile": "Profile",
-    "redPackets": "Red packets"
+    "redPackets": "Red packets",
+    "members": "User workspace"
   },
   "login": {
     "subtitle": "{platform} account pool console · OpenAI-compatible gateway",
@@ -699,6 +700,11 @@
     "platforms": "Allowed platforms",
     "platformsHelp": "Select the platforms this key may call. Selecting none blocks all platforms.",
     "platformPolicyInvalid": "Platform policy is invalid; repair it before use.",
+    "requestPolicyInvalid": "Stored limits are invalid; calls are blocked until explicitly repaired.",
+    "badgePolicyInvalid": "Repair required",
+    "policyRepairWarning": "The previous limits could not be read completely. Empty fields do not mean they were unrestricted. Review IP, model and quota limits before saving.",
+    "policyRepairConfirm": "I have reviewed and explicitly confirm these limits.",
+    "invalidLimit": "Use finite non-negative limits. Tokens and IP counts must be integers; credits support six decimal places. Only explicit 0 means unlimited.",
     "dailyTokens": "Daily token limit",
     "dailyCredit": "Daily credit limit",
     "dailyHint": "0 means unlimited. Resets by server-local calendar day. Credit admission uses provider-reported spend; one request may exceed the remainder. Unknown spend needs review. This is not a hard billing cap.",
@@ -867,7 +873,8 @@
     "reasonPlatformNotAllowed": "Platform not allowed",
     "reasonInvalidPlatform": "Unknown platform",
     "reasonInvalidKeyPolicy": "Invalid key platform policy",
-    "lockoutDesc": "After {action}, incorrect rules may interrupt inference API traffic. The console remains accessible so you can restore the rules here."
+    "lockoutDesc": "After {action}, incorrect rules may interrupt inference API traffic. The console remains accessible so you can restore the rules here.",
+    "reasonPortalPolicyDenied": "User workspace policy denied"
   },
   "models": {
     "title": "Models",
@@ -1549,6 +1556,9 @@
     "applyFailed": "Upstream reload failed",
     "applyFailedHint": "The configuration was written, but the upstream container could not be restarted. Run docker compose restart wb2api on the host to apply it.",
     "applyDismiss": "Dismiss",
+    "accountReloadObserving": "Checking whether the upstream loaded the new account",
+    "accountReloadAttention": "Upstream loading of the new account is not confirmed",
+    "accountReloadNoRestart": "Account credentials are handled by hot loading. This flow never automatically restarts the upstream or interrupts other sessions. Check the pool and upstream health if unconfirmed.",
     "jsonInvalid": "Invalid JSON — check the braces and commas",
     "jsonNotObject": "It must be a JSON object, for example { \"checkin_hours\": [9, 21] }",
     "modelMapSaved": "Model mapping saved",
@@ -1937,7 +1947,9 @@
     "添加账号需要管理员或超级管理员本人会话": "Adding accounts requires an administrator or super administrator session.",
     "管理员添加账号仅使用默认账号池和默认线路": "Administrators can add accounts only to the default pool using the default route.",
     "用户管理仅对超级管理员开放": "User management is restricted to super administrators.",
-    "只有超级管理员本人可以分配密钥归属": "Only a super administrator session can assign key ownership."
+    "只有超级管理员本人可以分配密钥归属": "Only a super administrator session can assign key ownership.",
+    "仅超级管理员admin本人会话可赠送积分": "Only a human session for the super administrator admin can grant credits",
+    "用户端写操作需要同源请求": "User workspace changes require a same-origin request"
   },
   "redPacket": {
     "title": "Red packets",

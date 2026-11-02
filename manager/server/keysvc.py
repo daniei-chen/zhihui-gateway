@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
 import sqlite3
 import time
 
-from . import db, legacymig
+from . import db, keylimits, legacymig
 from .iputil import ip_matches
 
 TOKEN_PREFIX = 'sk-'
@@ -77,19 +78,8 @@ def _norm_upstream_id(value: object) -> int | None:
 
 
 def _norm_credit_quota(value: object) -> float:
-    """归一化积分额度。0 = 不限（与 token 额度同口径）。
-
-    脏数据一律吃掉成 0 而不是抛错：这个值来自管理端表单，格式问题不该让
-    保存整个失败；而**钳到 0 是安全的**——0 表示「不限」，不会把一把设了
-    负数的密钥悄悄放行成「已超限」（那会让线上调用突然全 429）。
-    """
-    try:
-        v = float(value if value not in (None, '') else 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if v != v or v in (float('inf'), float('-inf')):  # NaN / inf
-        return 0.0
-    return max(0.0, v)
+    """Reject invalid limits rather than widening them to unlimited."""
+    return float(keylimits.validate('quota_credit', value))
 
 
 def _bare_model(model: object) -> str:
@@ -126,33 +116,7 @@ def _norm_cidrs(items: object) -> list[str]:
 
 
 def _json_list(raw: object) -> list[str]:
-    """把库里存的 JSON 数组文本解析成列表；**解析不了按「该列未设置」处理**。
-
-    为什么必须容错：`ip_allowlist` / `models` 是 JSON 文本列，而读取它的
-    `_parse` 被**列表接口**用到——只要**任意一把**密钥的这两列存了非法 JSON
-    （历史版本写入过、手工改过库、写入被截断、JSON 编码变更），整个
-    `GET /api/keys` 就抛 JSONDecodeError → 500，界面上**一把密钥都看不到**。
-
-    而这会伪装成「创建失败」：新建密钥的 POST 本身是成功的（数据已入库），
-    紧接着前端刷新列表才炸——用户看到 500 以为没建成，再点一次就多一把重复的。
-    症状极具误导性（数据明明进去了），所以这里宁可少显示一个字段，
-    也绝不让一列坏数据拖垮整个列表。
-
-    **注意这里的方向**：解析失败按空列表返回，而 `validate` 里是
-    `if allow and ...` / `if key['models'] and ...` —— 空列表意味着**跳过该项
-    检查**（不限制 IP / 不限制模型）。也就是说坏数据会**放宽**该密钥，不是收紧。
-    这是有意的取舍，理由见下：
-
-      * 坏数据只可能来自**已经损坏的库**，而那种库在修复前整个密钥页都打不开，
-        管理员连删掉它的入口都没有——修好列表是当务之急；
-      * 「不限制」不等于「无保护」：密钥本身仍要过哈希校验、启停、有效期、
-        配额与限流；IP 与模型白名单是**附加**收紧项，不是唯一防线；
-      * 反向选择（坏数据一律拒绝）会让那把密钥的所有调用都失败，而管理员
-        看不到任何原因（列表都打不开），排查成本更高。
-
-    所以界面上会把「解析失败」当作空列表展示——管理员看到某把密钥的白名单
-    是空的，若记得自己设过，就知道要重新设置一次。
-    """
+    """Best-effort display only; enforcement uses _stored_request_policy."""
     if isinstance(raw, list):
         return [str(x) for x in raw if x]
     if not isinstance(raw, str) or not raw.strip():
@@ -166,14 +130,37 @@ def _json_list(raw: object) -> list[str]:
     return [str(x) for x in parsed if x]
 
 
+def _stored_request_policy(raw: object, *, networks=False) -> tuple[list[str], bool]:
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(parsed, list) or any(not isinstance(x, str) or not x.strip() for x in parsed):
+            return [], False
+        clean = [x.strip() for x in parsed]
+        if networks:
+            for value in clean:
+                ipaddress.ip_network(value, strict=False)
+        return clean, True
+    except (ValueError, TypeError, RecursionError):
+        return [], False
+
+
 def _parse(row, *, daily=None, day=None) -> dict:
     from . import platformpolicy
     from . import dailyquota
     platforms, policy_valid = platformpolicy.stored_policy(row['platforms'])
+    ip_rules, ip_valid = _stored_request_policy(row['ip_allowlist'], networks=True)
+    models, models_valid = _stored_request_policy(row['models'])
+    policy_errors = [name for name, valid in (('ip_allowlist', ip_valid), ('models', models_valid)) if not valid]
+    for name in keylimits.LIMITS:
+        try:
+            keylimits.validate(name, row[name])
+        except ValueError:
+            policy_errors.append(name)
     day = day or db.day_of()
     if daily is None:
         daily = dailyquota.snapshot(row['id'], day)
     return {
+        'source': row['source'],
         'assigned_to': row['assigned_to'],
         'daily_token_quota': row['daily_token_quota'],
         'daily_credit_quota': row['daily_credit_quota'],
@@ -182,14 +169,16 @@ def _parse(row, *, daily=None, day=None) -> dict:
         'daily_quota_day': day,
         'platforms': platforms,
         'platform_policy_valid': policy_valid,
+        'request_policy_valid': not policy_errors,
+        'request_policy_errors': policy_errors,
         'id': row['id'],
         'name': row['name'],
         'prefix': row['prefix'],
         'enabled': bool(row['enabled']),
         'expires_at': row['expires_at'],
         'max_ips': row['max_ips'],
-        'ip_allowlist': _json_list(row['ip_allowlist']),
-        'models': _json_list(row['models']),
+        'ip_allowlist': ip_rules,
+        'models': models,
         'realm': _norm_realm(row['realm']),
         # 绑定的上游接入点（多上游 / 分组隔离）。None = 默认上游 —— 见 upstreamsvc
         # 的模块注释：默认上游不是数据库里的某一行，所以这里保持 None 而不是补 0。
@@ -275,6 +264,11 @@ def create_key(
     """
     from . import platformpolicy
     policy = platformpolicy.normalize(platforms)
+    quota = keylimits.validate('quota', quota)
+    max_ips = keylimits.validate('max_ips', max_ips)
+    quota_credit = keylimits.validate('quota_credit', quota_credit)
+    daily_token_quota = keylimits.validate('daily_token_quota', daily_token_quota)
+    daily_credit_quota = keylimits.validate('daily_credit_quota', daily_credit_quota)
     token = TOKEN_PREFIX + secrets.token_hex(16)
     sql = ('INSERT INTO api_keys(name, key_hash, prefix, enabled, expires_at, max_ips, '
            'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, used_credit_units, '
@@ -310,6 +304,10 @@ def create_key(
 
 
 def update_key(key_id: int, patch: dict) -> dict | None:
+    patch = dict(patch)
+    for name in keylimits.LIMITS:
+        if name in patch:
+            patch[name] = keylimits.validate(name, patch[name])
     row = db.query_one('SELECT * FROM api_keys WHERE id = ?', (key_id,))
     if not row:
         return None
@@ -445,7 +443,13 @@ def resolve(token: str) -> dict | None:
     digest = _hash(token)
     for row in rows:
         if secrets.compare_digest(row['key_hash'], digest):
-            return _parse(row)
+            key = _parse(row)
+            if key.get('source') == 'portal-v1':
+                key['credential_hash'] = row['key_hash']
+                from . import portalpolicy
+                if portalpolicy.problem(key, listing=True):
+                    return None
+            return key
     return None
 
 
@@ -458,6 +462,9 @@ def model_allowed(key: dict, model: object) -> bool:
 
     白名单为空 = 不限制，一律放行。
     """
+    from . import portalpolicy
+    if portalpolicy.is_portal(key) and not portalpolicy.model_allowed(model):
+        return False
     allow = key.get('models') or []
     if not allow:
         return True
@@ -577,10 +584,16 @@ def validate(key: dict, ip: str, model: str | None,
     只用于校验 K01-S1 迁移旧 key 的 `legacy_platforms` 平台范围；`wbk_` key
     没有该字段，行为与从前完全一致。
     """
+    from . import portalpolicy
+    portal_problem = portalpolicy.problem(key, model, mapped_model, platform, listing=is_model_list)
+    if portal_problem:
+        return Rejection(portal_problem, 403, 'permission_error', 'portal_policy_denied')
     if not key['enabled']:
         return Rejection('密钥已停用', 403, 'permission_error', 'key_disabled')
     if key['expires_at'] and key['expires_at'] < time.time():
         return Rejection('密钥已过期', 403, 'permission_error', 'key_expired')
+    if key.get('request_policy_valid') is False:
+        return Rejection('密钥限制策略损坏，请管理员修复', 403, 'permission_error', 'invalid_key_policy')
     if key['quota'] and key['used_tokens'] >= key['quota']:
         # 配额用尽与认证无关，用 429 才对（403 会被客户端读成「密钥无效」：
         # 用户于是去查密钥、而不是去调额度，方向就被带偏了）。

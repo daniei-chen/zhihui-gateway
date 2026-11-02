@@ -637,6 +637,9 @@ def is_already_checkin_message(code: int, message: str = '') -> bool:
     return any(m in msg for m in _ALREADY_CHECKIN_MARKERS)
 
 
+portal_checkin_active = contextvars.ContextVar('portal_checkin_active', default=False)
+
+
 async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str]:
     """每日签到。10001 = 今日已签到，属正常幂等。
 
@@ -647,6 +650,17 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
     access_token 可传字符串（只有 Authorization）或完整 auth dict
     （额外带上 X-User-Id 等身份头——上游 billing 域一直这么做，见 BillingHeaders）。
     """
+    if isinstance(access_token, dict) and not portal_checkin_active.get():
+        from .. import portalstore, portalservice
+        # Every Manager caller, including the original total workbench, shares
+        # the same claim when handling a customer-owned UID.
+        if (config.DATA_DIR / 'user-portal.sqlite3').exists():
+            with portalstore.transaction() as conn:
+                account = conn.execute("SELECT id FROM portal_accounts WHERE provider_uid=? AND platform='workbuddy' AND realm='cn'", (str(access_token.get('uid') or ''),)).fetchone()
+            if account:
+                result = await portalservice.checkin(account['id'], 'manager-shared')
+                signed = result['state'] in ('confirmed', 'confirmed_uncredited')
+                return (10001 if result.get('already') else 0, result['message']) if signed else (-1, result['message'])
     if not supports_checkin(realm):
         return -2, '国际版无签到体系，已跳过'
     try:

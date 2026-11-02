@@ -34,7 +34,7 @@ def git(directory: Path, *arguments: str) -> str:
 def acquire(destination: Path, commit: str, tag: str | None = None) -> dict:
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('a full immutable commit SHA is required')
-    if tag is not None and not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
+    if tag is not None and not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[1-9][0-9]*)?', tag):
         raise ValueError('invalid product release tag')
     if destination.exists() or destination.is_symlink():
         raise ValueError('a new destination is required; existing source is never overwritten')
@@ -58,7 +58,7 @@ def acquire(destination: Path, commit: str, tag: str | None = None) -> dict:
     version = version_path.read_text(encoding='ascii').strip()
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
         raise ValueError('invalid product version')
-    if tag and tag != 'v' + version:
+    if tag and tag.split('-rc.', 1)[0] != 'v' + version:
         raise ValueError('tag and source product version differ')
     return {'repository': REPOSITORY, 'origin': ORIGIN, 'source_commit': actual,
             'version': version, 'tag': tag, 'production_modified': False,

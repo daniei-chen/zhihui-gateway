@@ -26,6 +26,7 @@ from .routers import (
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
 from .routers import budgets
 from .routers import qtg_panel
+from .routers import portal
 
 # 最早时刻把标准输出/错误钉成 UTF-8：Windows 中文区域默认按 cp936 编码，日志里
 # 一旦出现 emoji（账号昵称就可能带）就会抛 UnicodeEncodeError —— 与「成长任务」
@@ -97,6 +98,9 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
     monitor_task = asyncio.create_task(operational.monitor())
+    # Portal accounts use a separate store; the persisted opt-in is off by default.
+    from . import portalservice
+    portal_checkins = None
     # 弱口令巡检改后台线程（原 sitecustomize 猴子补丁收编进源码，2026-10-27）：
     # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
     # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
@@ -190,8 +194,16 @@ async def lifespan(app: FastAPI):
         except Exception:
             await steward_instance.close()
             logger.error('steward startup failed; status is unavailable, gateway remains serving')
+        if config.BACKGROUND_JOBS:
+            portal_checkins = asyncio.create_task(portalservice.automatic_loop())
         yield
     finally:
+        if portal_checkins is not None:
+            portal_checkins.cancel()
+            try:
+                await portal_checkins
+            except asyncio.CancelledError:
+                pass
         if getattr(app.state, 'steward', None) is not None:
             await app.state.steward.close()
         # D-008：先停签到调度，再关 runtime —— 顺序反了会出现"runtime 已关、
@@ -339,6 +351,8 @@ async def limit_api_body(request: Request, call_next):
 
 # ── 路由注册顺序很重要：先 API / 网关，最后挂静态文件 ──
 app.include_router(auth.router)
+app.include_router(portal.router)
+app.include_router(portal.admin_router)
 app.include_router(accounts.router)
 app.include_router(keys.router)
 # 红包：批量发放带额度的密钥（与密钥同属「分发」这件事，所以挨着放）

@@ -986,6 +986,12 @@ async def messages(request: Request):
     # max_tokens 在 Anthropic 协议里是**必填项**，缺失即 400（与 OpenAI 不同）
     if body.get('max_tokens') is None:
         return _err('缺少必填字段 max_tokens')
+    from .. import outputlimits
+    try:
+        outputlimits.inspect(body, 'anthropic')
+    except outputlimits.Invalid as exc:
+        observability.mark_error(exc.code)
+        return _err(str(exc), code=exc.code)
     # 越界的 max_tokens 会被上游包装成 503（见 gateway.clamp_max_tokens 的说明）。
     # 在必填性校验之后压回上限，转换层就能拿到已收敛的值。
     gateway.clamp_max_tokens(body)
@@ -1053,7 +1059,7 @@ async def messages(request: Request):
 
     if not stream:
         try:
-            async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream)) as client:
+            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))) as client:
                 resp = await deadline_mod.await_total(
                     client.post(url, content=wire,
                                 headers=gateway._upstream_headers(upstream)),

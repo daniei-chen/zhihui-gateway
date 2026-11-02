@@ -71,6 +71,7 @@ class Trae2Adapter(BaseAdapter):
         super().__init__(settings.aiwork_base, settings)
         self.cfg = settings
         self.authorization_generation = secrets.token_hex(16)
+        self._pool_write_lock = asyncio.Lock()
 
     # ---- 鉴权（admin token → 会话 Cookie，httpx 自己维护） ----
     def _credentials(self) -> str:
@@ -424,21 +425,45 @@ class Trae2Adapter(BaseAdapter):
         return await self._cmd("refresh_jwt", {"user_id": uid}, required=False) or {"ok": False}
 
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
-        """aiwork 没有「启用/禁用单个账号」，只有 `pool_set` 整体重写 enabled_uids，
-        所以这里读当前池 → 增删该 uid → 写回。"""
-        if not uid:
-            return {"ok": False, "error": "缺少 user_id"}
-        pool = await self._cmd("pool_list", required=False)
-        cur = list(((pool.get("data") or {}).get("enabled_uids") or []))
-        if enabled:
-            if uid not in cur:
-                cur.append(uid)
-        else:
-            cur = [u for u in cur if u != uid]
-        # aiwork 的 pool_set 只认 `uids`（不是它 pool_list 返回的那个键名）。
-        # 传错键名它照样回 ok:true，池子却不变 —— 2026-10-23 实测踩过，
-        # 表现是「点了启用界面说成功，数据面继续 503」。
-        return await self._cmd("pool_set", {"uids": cur}, required=False) or {"ok": False}
+        """Serialize Manager writes; engine-side CAS is still needed for other writers."""
+        if not isinstance(uid, str) or not uid or len(uid) > 256 or type(enabled) is not bool:
+            raise ValueError('invalid account mutation')
+        from ...services.asyncwork import joined_task
+        async with self._pool_write_lock:
+            current = self._confirmed_pool(await self._cmd('pool_list', required=True))
+            desired = list(current)
+            if enabled and uid not in desired:
+                desired.append(uid)
+            elif not enabled:
+                desired = [item for item in desired if item != uid]
+            if desired == current:
+                return {'ok': True, 'state': 'completed', 'changed': False}
+            # A cancelled waiter/read must not become a new mutation. Once the
+            # write starts, join its local completion before releasing ownership.
+            return await joined_task(asyncio.create_task(self._write_pool(desired)))
+
+    async def _write_pool(self, desired: List[str]) -> Dict[str, Any]:
+        result = await self._cmd('pool_set', {'uids': desired}, required=True, retry=False)
+        if result.get('ok') is not True:
+            return {'ok': False, 'state': 'unknown', 'error': '号池变更结果未确认，请核对；未自动重试'}
+        try:
+            observed = self._confirmed_pool(await self._cmd('pool_list', required=True))
+        except UpstreamError:
+            observed = None
+        if observed is None or set(observed) != set(desired):
+            return {'ok': False, 'state': 'unknown', 'error': '号池回读与变更不一致，请核对；未自动重试'}
+        return {'ok': True, 'state': 'completed', 'changed': True}
+
+    @staticmethod
+    def _confirmed_pool(value: Dict[str, Any]) -> List[str]:
+        data = value.get('data') if isinstance(value, dict) else None
+        uids = data.get('enabled_uids') if isinstance(data, dict) else None
+        if (not isinstance(value, dict) or value.get('ok') is not True
+                or not isinstance(uids, list) or len(uids) > 10000
+                or any(not isinstance(uid, str) or not uid or len(uid) > 256 for uid in uids)
+                or len(set(uids)) != len(uids)):
+            raise UpstreamError('Trae 号池读取未确认，未执行变更', code='invalid_trae_pool_contract')
+        return uids
 
     async def add_account(self, name: str, jwt: str) -> Dict[str, Any]:
         return await self._cmd(

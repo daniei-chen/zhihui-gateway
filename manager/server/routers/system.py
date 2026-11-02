@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Literal
@@ -263,6 +264,13 @@ _SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
 _CHUNK = 1024 * 1024
 
 
+def _require_legacy_package_writes() -> None:
+    try:
+        updater.require_legacy_package_writes()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get('/update-package')
 def get_update_package(user: dict = Depends(security.current_user)) -> dict:
     """已上传升级包的元信息（文件名 / 大小 / 摘要 / 包内版本 / 上传时间）。"""
@@ -278,6 +286,7 @@ async def upload_update_package(
 ) -> dict:
     """上传离线升级包（发布页下载的那个 .tar.gz）。
 
+    受控部署不接收或替换暂存包；以下兼容逻辑仅用于历史非受控安装。
     先写 `.part`、校验通过后再原子替换到最终位置：中途失败不会留下一个「看起来
     能用」的半截包。校验四件事——大小上限、能不能当 tar.gz 解开、包内有没有
     `.version`（不是本项目的包当场拒掉）、发布页 sha256。
@@ -287,6 +296,7 @@ async def upload_update_package(
     直接升级成「主机代码执行」。确实拿不到摘要的离线环境请显式设
     `WB_ALLOW_UNVERIFIED_PACKAGE=1`。
     """
+    _require_legacy_package_writes()
     want = (expected_sha256 or '').strip().lower()
     if want and not _SHA256_RE.match(want):
         raise HTTPException(status_code=400, detail='sha256 要填发布页上那串 64 位十六进制')
@@ -299,15 +309,17 @@ async def upload_update_package(
         )
 
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = updater.PACKAGE_FILE.with_suffix('.part')
+    fd, temporary = tempfile.mkstemp(prefix='update-upload-', suffix='.part', dir=config.DATA_DIR)
+    tmp_path = Path(temporary)
     digest = hashlib.sha256()
     size = 0
     try:
-        with open(tmp_path, 'wb') as fh:
+        with os.fdopen(fd, 'wb') as fh:
             while True:
                 chunk = await file.read(_CHUNK)
                 if not chunk:
                     break
+                _require_legacy_package_writes()
                 size += len(chunk)
                 if size > updater.PACKAGE_MAX_BYTES:
                     raise HTTPException(
@@ -324,9 +336,13 @@ async def upload_update_package(
     except Exception as exc:  # noqa: BLE001
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f'写入升级包失败：{exc}') from exc
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     actual = digest.hexdigest()
     try:
+        _require_legacy_package_writes()
         if size < 100_000:
             raise HTTPException(status_code=400, detail='文件太小，不像是发布包（下载可能中断了）')
         if want and actual != want:
@@ -347,11 +363,16 @@ async def upload_update_package(
                 detail='包里没有 .version —— 这不是本项目的发布包（发布页下载的是 '
                        'zhihui-gateway-vX.Y.Z.tar.gz）',
             )
-    except HTTPException:
+    except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
 
-    os.replace(tmp_path, updater.PACKAGE_FILE)
+    try:
+        _require_legacy_package_writes()
+        os.replace(tmp_path, updater.PACKAGE_FILE)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     try:
         os.chmod(updater.PACKAGE_FILE, 0o600)
     except OSError:
@@ -371,6 +392,7 @@ async def upload_update_package(
 @router.delete('/update-package')
 def delete_update_package(user: dict = Depends(security.require_session_admin)) -> dict:
     """删掉已上传的升级包（更新完成后界面会提示清理）。"""
+    _require_legacy_package_writes()
     updater.clear_package()
     security.audit(user, 'delete_update_package', '', '清掉离线升级包')
     return {'ok': True}
@@ -413,7 +435,7 @@ async def versions(user: dict = Depends(security.current_user)) -> dict:
         'manager': updater.current_version(),
         'release_id': release_identity.current(),
         'product': updater.product.metadata(
-            config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file()),
+            config.ROOT, managed=updater.managed_release()),
         'upstream_connected': upstream_ok,
         'upstream_accounts': upstream_total,
         # 部署绝对路径只对管理员展示（2026-10-27 审计 P2-13：viewer 无需知晓）。

@@ -25,6 +25,7 @@ import {CopyButton} from '@/components/ui/copy-button';
 import {RichText} from '@/lib/i18n/rich-text';
 import {useT} from '@/lib/i18n/provider';
 import {Badge} from '@/components/ui/badge';
+import {parseKeyLimit} from '@/lib/key-limit-form';
 import {Input} from '@/components/ui/input';
 import {
   Select,
@@ -211,6 +212,7 @@ export default function KeysPage() {
    * 不能因为一次报错就把表单永久锁死。
    */
   const submitting = useRef(false);
+  const [repairConfirmed, setRepairConfirmed] = useState(false);
 
   // 提示出现时确保它在可视区内（见 unknownRef 的说明）
   useEffect(() => {
@@ -231,6 +233,7 @@ export default function KeysPage() {
   }
 
   function openCreate() {
+    setRepairConfirmed(false);
     setEditing(null);
     // 新建时默认跟随当前所在版本：在哪个版本的界面里建，就是哪个版本的密钥
     setForm({...emptyForm, realm, platforms: [platform]});
@@ -239,6 +242,7 @@ export default function KeysPage() {
   }
 
   function openEdit(k: ApiKey) {
+    setRepairConfirmed(false);
     setEditing(k);
     setForm({
       name: k.name,
@@ -269,19 +273,28 @@ export default function KeysPage() {
       notify.err(t('keys.nameRequired'));
       return;
     }
+    if (editing?.request_policy_valid === false && !repairConfirmed) {
+      notify.err(t('keys.policyRepairConfirm'));
+      return;
+    }
+    let limits;
+    try {
+      limits = {max_ips: parseKeyLimit(form.maxIps, false, true),
+        quota: parseKeyLimit(form.quota), quota_credit: parseKeyLimit(form.quotaCredit, true),
+        daily_token_quota: parseKeyLimit(form.dailyTokens), daily_credit_quota: parseKeyLimit(form.dailyCredit, true)};
+    } catch {
+      notify.err(t('keys.invalidLimit'));
+      return;
+    }
     submitting.current = true;
     setBusy(true);
     try {
       const days = Number(form.expiresDays) || 0;
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
-        max_ips: Number(form.maxIps) || 0,
+        ...limits,
         ip_allowlist: toLines(form.ipAllowlist),
         models: toLines(form.models),
-        quota: Number(form.quota) || 0,
-        quota_credit: Number(form.quotaCredit) || 0,
-        daily_token_quota: Number(form.dailyTokens) || 0,
-        daily_credit_quota: Number(form.dailyCredit) || 0,
         assigned_to: form.assignedTo.trim(),
         platforms: form.platforms,
         // '' 是有意义的取值（不限制版本），必须照传——后端以它区分
@@ -642,11 +655,14 @@ export default function KeysPage() {
                       </div>
                     ) : null}
                     {k.assigned_to && <div className="mt-1 text-[11px] text-muted-foreground">{t('keys.assignedTo')}: {k.assigned_to}</div>}
+                    {k.request_policy_valid === false && <div className="mt-1 text-xs text-destructive">{t('keys.requestPolicyInvalid')}</div>}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{k.prefix}…</TableCell>
                   <TableCell>
                     {!k.enabled ? (
                       <Badge variant="secondary" className="rounded-full text-muted-foreground">{t('keys.badgeDisabled')}</Badge>
+                    ) : k.request_policy_valid === false || k.platform_policy_valid === false ? (
+                      <Badge variant="destructive" className="rounded-full">{t('keys.badgePolicyInvalid')}</Badge>
                     ) : expired ? (
                       <Badge variant="destructive" className="rounded-full">{t('keys.badgeExpired')}</Badge>
                     ) : overQuota ? (
@@ -678,10 +694,10 @@ export default function KeysPage() {
                     {k.expires_at ? fmtDateTime(k.expires_at) : t('keys.neverExpires')}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
-                    {k.max_ips ? t('keys.ipLimit', {n: k.max_ips}) : t('keys.ipUnlimited')} /{' '}
+                    {k.request_policy_valid === false ? t('keys.badgePolicyInvalid') : <>{k.max_ips ? t('keys.ipLimit', {n: k.max_ips}) : t('keys.ipUnlimited')} /{' '}
                     {k.models?.length
                       ? t('keys.modelsCount', {count: k.models.length, n: k.models.length})
-                      : t('keys.modelsAll')}
+                      : t('keys.modelsAll')}</>}
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">
                     {(() => {
@@ -819,6 +835,15 @@ export default function KeysPage() {
           </DialogHeader>
           <DialogBody className="max-h-[min(70vh,560px)]">
             <div className="space-y-4 px-6 pb-2">
+              {editing?.request_policy_valid === false && (
+                <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs">
+                  <p role="alert">{t('keys.policyRepairWarning')}</p>
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" checked={repairConfirmed} onChange={event => setRepairConfirmed(event.currentTarget.checked)} />
+                    <span>{t('keys.policyRepairConfirm')}</span>
+                  </label>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="key-name" className="text-[11px] text-muted-foreground">{t('keys.name')}</Label>
                 <Input id="key-name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder={t('keys.namePlaceholder')} />

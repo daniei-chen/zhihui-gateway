@@ -114,6 +114,7 @@ const REASON_KEYS: Record<string, string> = {
   platform_not_allowed: 'security.reasonPlatformNotAllowed',
   invalid_platform: 'security.reasonInvalidPlatform',
   invalid_key_policy: 'security.reasonInvalidKeyPolicy',
+  portal_policy_denied: 'security.reasonPortalPolicyDenied',
 };
 
 function reasonText(t: (key: string, params?: Record<string, string>) => string, code: string): string {

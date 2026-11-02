@@ -11,7 +11,7 @@ import os
 import time
 from datetime import date, timedelta
 from decimal import Decimal
-from . import db, observability, budgetowner, ledger, config
+from . import db, observability, budgetowner, ledger, config, outputlimits
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS budget_reservations (
@@ -32,9 +32,10 @@ CREATE TABLE IF NOT EXISTS budget_adjustments (
 '''
 
 class BudgetRejected(Exception):
-    def __init__(self, message, code='budget_unavailable'):
+    def __init__(self, message, code='budget_unavailable', *, status=429):
         super().__init__(message)
         self.code = code
+        self.status = status
 
 #: U27（2026-10-28）：`initialize()` 的**进程级一次性标志**。
 #:
@@ -120,6 +121,7 @@ def _owned(row, state):
     return row['owner'] == budgetowner.identity() and row['fence'] == getattr(state, 'budget_fence', None)
 
 def prepare(key, body, *, encoded_body=None):
+    _, _, requested = outputlimits.inspect(body)
     state = observability.current.get()
     if state is None: return
     state.key_id = int(key['id'])
@@ -167,15 +169,27 @@ def prepare(key, body, *, encoded_body=None):
         q, used = int(fresh['quota']), int(fresh['used_tokens'])
         qc = ledger.units(fresh['quota_credit'])
         uc = fresh['used_credit_units'] if fresh['used_credit_units'] is not None else ledger.units(fresh['used_credit'])
+        total_held = 0
+        if q or qc:
+            # Concurrency ages out; uncertain spending does not. Already charged
+            # tokens are in used_tokens and must not be held a second time.
+            outstanding_total = db.query_one(
+                'SELECT COALESCE(SUM(MAX(0,reserved_tokens-charged_tokens)),0) AS held,'
+                "COALESCE(SUM(CASE WHEN state='unknown' AND reserved_tokens<=0 "
+                'THEN 1 ELSE 0 END),0) AS missing_estimate,'
+                "COALESCE(SUM(CASE WHEN state='unknown' THEN 1 ELSE 0 END),0) AS unknown_count "
+                "FROM budget_reservations WHERE key_id=? AND state IN ('reserved','forwarded','unknown')",
+                (key['id'],))
+            total_held = int(outstanding_total['held'])
+            if q and outstanding_total['missing_estimate']:
+                raise BudgetRejected('存在缺少 Token 预估的待核对请求，请先核对', 'total_token_unconfirmed')
+            if qc and outstanding_total['unknown_count']:
+                raise BudgetRejected('存在未确认积分消耗，请先核对后继续', 'credit_quota_unconfirmed')
         # Conservative byte estimate, with framing headroom; images use extra room.
         encoded = (encoded_body if isinstance(encoded_body, bytes) else
                    json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
         estimated_input = len(encoded) + 2048
         if b'"image_url"' in encoded: estimated_input += 32768
-        output_field = 'max_completion_tokens' if 'max_completion_tokens' in body else 'max_tokens'
-        requested = body.get(output_field)
-        if requested is not None and (isinstance(requested,bool) or not isinstance(requested,int) or requested <= 0):
-            raise BudgetRejected('max_tokens 必须为正整数', 'invalid_max_tokens')
         output = requested or 4096
         if fresh['daily_token_quota'] or fresh['daily_credit_quota']:
             from . import dailyquota
@@ -198,18 +212,18 @@ def prepare(key, body, *, encoded_body=None):
                 if remaining_daily <= estimated_input:
                     raise BudgetRejected('今日 Token 额度不足，次日按服务器时区重置', 'daily_token_quota_exhausted')
                 output = min(output, remaining_daily - estimated_input)
-                body[output_field] = output
+                outputlimits.apply(body, output)
             if fresh['daily_credit_quota']:
                 if any(r['state'] == 'unknown' for r in outstanding):
                     raise BudgetRejected('今日有未确认积分消耗，请先核对后继续', 'daily_credit_unconfirmed')
                 if int(daily['credit_units']) >= ledger.units(fresh['daily_credit_quota']):
                     raise BudgetRejected('今日积分额度已用尽，次日按服务器时区重置', 'daily_credit_quota_exhausted')
         if q:
-            remaining = q - used
+            remaining = q - used - total_held
             if remaining <= estimated_input:
                 raise BudgetRejected('剩余 token 预算不足以覆盖当前输入估算', 'insufficient_quota')
             output = min(output, remaining - estimated_input)
-            body[output_field] = output
+            outputlimits.apply(body, output)
         # C-008 修复（2026-10-27 审计 S1）：预估 token 量必须**无条件**记录。
         # 此前只在密钥设了 token 配额时才赋值，无配额密钥恒写 0 —— 实测全表
         # SUM(reserved_tokens)=0（63,805 行），于是崩溃或未结算时 unknown 行没有任何
@@ -229,10 +243,16 @@ def prepare(key, body, *, encoded_body=None):
                    (rid,key['id'],now,'reserved',tokens,credit,now,budgetowner.identity(),1,now+60))
     state.budget_reserved = True
     state.budget_fence = 1
+    from . import portalpolicy, portalwallet
+    if portalpolicy.is_portal(key):
+        db.execute(portalwallet.RECEIPTS)
+        portalwallet.reserve(key)
 
 def forwarded():
     state = observability.current.get()
     if state and state.budget_reserved:
+        from . import portalwallet
+        portalwallet.forwarded(state)
         with db.transaction() as conn:
             changed = conn.execute("UPDATE budget_reservations SET state='forwarded',updated_at=? WHERE request_id=? AND state='reserved' AND owner=? AND fence=?", (int(time.time()),state.request_id,budgetowner.identity(),state.budget_fence)).rowcount
             if changed != 1:
@@ -242,6 +262,8 @@ def settle(usage, pt, ct, credit):
     """Runs in the same transaction as request log and key usage updates."""
     state = observability.current.get()
     if state is None or not state.budget_reserved: return
+    from . import portalwallet
+    portalwallet.receipt(state, usage, credit)
     row = db.query_one('SELECT state,owner,fence FROM budget_reservations WHERE request_id=?', (state.request_id,))
     if row is None or row['state'] in ('settled','released'): return
     if not _owned(row, state):
@@ -254,6 +276,8 @@ def settle(usage, pt, ct, credit):
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
 
 def finish(state):
+    from . import portalwallet
+    portalwallet.finish(state)
     if not state.budget_reserved: return
     db.execute("UPDATE budget_reservations SET state=CASE WHEN state='reserved' THEN 'released' ELSE 'unknown' END,updated_at=? "
                "WHERE request_id=? AND owner=? AND fence=? AND state IN ('reserved','forwarded')", (int(time.time()),state.request_id,budgetowner.identity(),state.budget_fence))

@@ -84,6 +84,7 @@ def generate(service, folder):
             extras[name]={'minimum':1}
         extras['WB_SESSION_DAYS']['normalize_minimum']=1
         extras['WB_ALLOW_UNVERIFIED_PACKAGE']={'type':'boolean','boolean_dialect':'manager','default':False}
+        extras['WB_PORTAL_PUBLIC_POOL_ENABLED']={'type':'string','choices':['0','1'],'default':'0'}
         # 告警投递配置（notify.py）。文件缺失即 disabled，默认值就是默认路径本身。
         # 必须登记：本变量直接经 os.environ 读取，未登记会让设置它的实例启动即被
         # unknown_variable 拒绝（N33）。

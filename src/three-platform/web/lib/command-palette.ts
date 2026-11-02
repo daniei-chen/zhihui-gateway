@@ -72,6 +72,7 @@ export type NavSeed = {
   keywords: string;
   /** 限定所在平台（缺省 = 三平台通用）；写了就是白名单 */
   platforms?: readonly string[];
+  adminOnly?: boolean;
 };
 
 /**
@@ -104,6 +105,8 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
    keywords: 'security ip allow deny 安全 白名单'},
   {href: '/settings', labelKey: 'nav.settings', groupKey: 'nav.groupGovernance',
    keywords: 'settings config 设置 配置'},
+  {href: '/members', labelKey: 'nav.members', groupKey: 'nav.groupGovernance',
+   keywords: 'members users credits 用户 工作台 积分', adminOnly: true},
   {href: '/settings/upstream', labelKey: 'settings.tabUpstream', groupKey: 'nav.settings',
    keywords: 'upstream upstash 上游 配置'},
   {href: '/settings/proxy', labelKey: 'settings.tabProxy', groupKey: 'nav.settings',
@@ -154,8 +157,8 @@ export function navCommands(
  * 有签到 / 猫猫旅行 / 开学季 / 夜猫这些上游任务，Qoder 与 Trae 点进去只会是空的，
  * 所以那几条不该出现在它们的命令面板里。
  */
-export function navSeedsFor(platform: string, seeds: readonly NavSeed[] = NAV_COMMANDS): NavSeed[] {
-  return seeds.filter((s) => !s.platforms || s.platforms.includes(platform));
+export function navSeedsFor(platform: string, seeds: readonly NavSeed[] = NAV_COMMANDS, isAdmin = false): NavSeed[] {
+  return seeds.filter((s) => (!s.platforms || s.platforms.includes(platform)) && (!s.adminOnly || isAdmin));
 }
 
 /** 去掉分隔符并小写：`Red-Packets` / `red packets` / `redpackets` 视为同一个词。 */

@@ -1707,6 +1707,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
     if auth_err:
         return auth_err
 
+    from .. import outputlimits
+    try:
+        outputlimits.inspect(body, 'responses')
+    except outputlimits.Invalid as exc:
+        observability.mark_error(exc.code)
+        return _failed(str(exc), 400, 'invalid_request_error', exc.code)
+
     # 越界的 max_output_tokens 会被上游包装成 503（见 gateway.clamp_max_tokens
     # 的说明）；转换前压回上限，to_chat_request 拿到的就是已收敛的值。
     gateway.clamp_max_tokens(body)
@@ -1762,7 +1769,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
 
     if not stream:
         try:
-            async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream)) as client:
+            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))) as client:
                 resp = await deadline_mod.await_total(
                     client.post(url, content=wire,
                                 headers=gateway._upstream_headers(upstream)),

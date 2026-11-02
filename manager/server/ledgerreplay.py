@@ -296,6 +296,8 @@ def apply(entry: dict, receipt_id: str) -> str:
             # the canonical committed facts, never a stale receipt's replacements.
             canonical = dict(entry, facts={name: existing[name] for name in FACTS_FIELDS})
             _events(canonical)
+        from . import portalwallet
+        portalwallet.replay_receipt(entry, facts if existing is None else dict(existing))
         db.execute(
             'INSERT INTO ledger_receipts(receipt_id,request_id,attempt,applied_at,source,release_id) '
             'VALUES(?,?,?,?,?,?)',

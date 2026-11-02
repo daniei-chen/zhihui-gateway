@@ -81,7 +81,9 @@ class CorruptKeyDataTest(unittest.TestCase):
         row = keysvc.resolve(keysvc.create_key('probe')['key'])  # 触发一次解析路径
         self.assertIsInstance(row, dict)
         got = [x for x in keysvc.list_keys() if x['id'] == k['id']][0]
-        self.assertEqual(got['ip_allowlist'], [], '坏数据降级为空列表（不限制）')
+        self.assertEqual(got['ip_allowlist'], [], '列表仍可展示坏行，但不可把展示空值当作授权')
+        self.assertFalse(got['request_policy_valid'])
+        self.assertEqual(got['request_policy_errors'], ['ip_allowlist'])
 
     def test_various_malformed_shapes(self) -> None:
         """各种坏形态都不能炸：非 JSON、JSON 但不是数组、null、空、超长垃圾。"""
@@ -119,8 +121,8 @@ class CorruptKeyDataTest(unittest.TestCase):
         self._corrupt(k['id'], 'models', 'bad')
         row = keysvc.resolve(k['key'])
         self.assertIsNotNone(row, '密钥仍应能解析（用于鉴权）')
-        # 坏数据降级为空 = 不限制，因此这个来源 IP 与模型应被放行
-        self.assertIsNone(keysvc.validate(row, '9.9.9.9', 'other-model'))
+        rejection = keysvc.validate(row, '9.9.9.9', 'other-model')
+        self.assertEqual((rejection.status, rejection.code), (403, 'invalid_key_policy'))
 
 
 if __name__ == '__main__':

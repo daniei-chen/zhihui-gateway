@@ -514,18 +514,17 @@ def _platform_rows(request: Request, agg) -> tuple[str, list]:
 
 
 def _res_ok(res) -> bool:
-    """上游写操作的成败判断。
-
-    trae/aiwork 返回 `{"ok": bool}`，qoder2 返回 `{"ok": bool}` 或空 dict。
-    上游没明确表态时按「成功」处理，保持旧行为；一旦它说了 ok:false，
-    就必须如实返回失败——否则界面会显示一个没发生的成功。
-    """
+    """Only explicit, consistent terminal confirmation counts as success."""
     if not isinstance(res, dict):
         return False
-    if "ok" in res:
-        return bool(res["ok"])
-    if "success" in res:
-        return bool(res["success"])
+    markers = [res[name] for name in ('ok', 'success') if name in res]
+    if not markers or any(value is not True for value in markers):
+        return False
+    if 'pending' in res and res['pending'] is not False:
+        return False
+    for name in ('state', 'status'):
+        if name in res and res[name] not in ('completed', 'complete', 'success', 'succeeded', 'ok'):
+            return False
     return True
 
 
@@ -615,9 +614,10 @@ async def compat_account_refresh(request: Request, file: str) -> Dict[str, Any]:
     res = await adapter.refresh_account(uid)
     # 不能恒回 ok:true —— aiwork 的 `refresh_jwt` 在「JWT 还没到期」时会返回
     # ok:false + 原因，前端要能把这句原文显示出来（审计点名的「恒回 OK」问题）。
-    ok = bool(res.get("ok", True)) if isinstance(res, dict) else True
-    message = "已刷新" if ok else str((res or {}).get("error") or "上游未刷新")
-    return {"ok": ok, "message": message, "detail": res}
+    ok = _res_ok(res)
+    detail = res if isinstance(res, dict) else {}
+    message = "已刷新" if ok else str(detail.get("error") or "刷新结果未确认，请核对账号状态")
+    return {"ok": ok, "message": message, "detail": detail}
 
 
 
@@ -627,17 +627,20 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
     platform, uid = _split_file(file)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
-    disabled = bool(body.get("disabled"))
+    except (ValueError, UnicodeError):
+        raise HTTPException(status_code=400, detail="请求体必须是包含 disabled 布尔值的 JSON 对象") from None
+    if not isinstance(body, dict) or type(body.get('disabled')) is not bool:
+        raise HTTPException(status_code=400, detail="disabled 必须显式为 true 或 false")
+    disabled = body['disabled']
     adapter = _adapter_for(rt, platform)
     if adapter is None:
         return {"success": False, "disabled": not disabled,
                 "message": f"{platform} 平台未启用（QTG_WB_ENGINE=off）"}
     res = await adapter.set_account(uid, not disabled)
     if not _res_ok(res):
-        msg = str((res or {}).get("error") or (res or {}).get("message")
-                  or "上游未接受这次变更")
+        detail = res if isinstance(res, dict) else {}
+        msg = str(detail.get("error") or detail.get("message")
+                  or "变更结果未确认，请核对账号状态")
         return {"success": False, "disabled": not disabled, "message": msg}
     return {"success": True, "disabled": disabled}
 

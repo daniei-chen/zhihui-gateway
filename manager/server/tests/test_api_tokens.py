@@ -349,6 +349,16 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'PUT /api/steward/settings',
         'POST /api/steward/test-mail',
         'POST /api/steward/chat',
+        # Customer account and wallet effects require a human super-admin.
+        'POST /api/portal-admin/users',
+        'PATCH /api/portal-admin/users/{user_id}',
+        'POST /api/portal-admin/users/{owner_id}/bonus',
+        'POST /api/portal-admin/accounts/{account_id}/checkin',
+        'POST /api/portal-admin/accounts/{account_id}/reconcile-checkin',
+        'PUT /api/portal-admin/automatic-checkin',
+        'POST /api/portal-admin/checkin-all',
+        'POST /api/portal-admin/wallet-debts/{owner_id}/adjust',
+        'POST /api/portal-admin/wallet-pending/{request_id}/resolve',
     }
     # 写方法但只要求「已登录」——只读令牌也能调。必须逐个有理由。
     ANY_LOGGED_IN = {

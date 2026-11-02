@@ -27,6 +27,25 @@ class RepositorySourceTests(unittest.TestCase):
                 source.acquire(Path(temp), 'a' * 40)
             git.assert_not_called()
 
+    def test_release_candidate_tag_still_requires_exact_commit_and_product_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'rc-source'
+            def fake_git(directory, *args):
+                if args[0] == 'rev-parse':
+                    return 'a' * 40
+                if args[:2] == ('remote', 'get-url'):
+                    return source.ORIGIN
+                if 'checkout' in args:
+                    (directory / 'VERSION').write_text('0.0.4\n')
+                return ''
+            with patch.object(source, 'git', side_effect=fake_git):
+                result = source.acquire(target, 'a' * 40, 'v0.0.4-rc.1')
+            self.assertEqual(result['tag'], 'v0.0.4-rc.1')
+            self.assertTrue(result['source_only_not_a_trusted_installation'])
+        for tag in ('v0.0.4-rc.0', 'v0.0.4-rc.01', 'v0.0.4-beta', '../v0.0.4', 'v0.0.4-rc.1/path'):
+            with tempfile.TemporaryDirectory() as temp, self.assertRaises(ValueError):
+                source.acquire(Path(temp) / 'bad', 'a' * 40, tag)
+
     def test_ignores_git_url_rewrites_environment_helpers_and_hooks(self):
         with patch.dict(os.environ, {'GIT_CONFIG_COUNT': '1', 'GIT_DIR': 'untrusted', 'GIT_CONFIG_GLOBAL': 'untrusted'}), \
                 patch.object(source.subprocess, 'run') as run:

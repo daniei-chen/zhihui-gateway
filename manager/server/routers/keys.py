@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from pydantic import field_validator
 from typing import Literal
 
-from .. import config, db, keysvc, security, upstreamsvc
+from .. import config, db, keylimits, keysvc, security, upstreamsvc
 from ..services import keyexport, keyimport, modelcatalog, modelmap
 from ..iputil import client_ip
 
@@ -63,7 +63,14 @@ def _check_name(name: str | None) -> None:
         raise HTTPException(status_code=400, detail='密钥名称不能只有空格')
 
 
-class KeyIn(BaseModel):
+class KeyLimitsModel(BaseModel):
+    @field_validator(*keylimits.LIMITS, mode='before', check_fields=False)
+    @classmethod
+    def validate_limit(cls, value, info):
+        return keylimits.validate(info.field_name, value)
+
+
+class KeyIn(KeyLimitsModel):
     name: str = Field(min_length=1, max_length=64)
     # 绑定的上游（多上游 / 分组隔离）：null / 0 / 省略 = 默认上游。
     # 类型是 int 而不是 str：界面上是下拉选 id，存成整数才能在外键式查询里用。
@@ -85,7 +92,7 @@ class KeyIn(BaseModel):
     platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
 
 
-class KeyPatch(BaseModel):
+class KeyPatch(KeyLimitsModel):
     name: str | None = None
     # 显式传 null 是**允许**的：把密钥改回默认上游（与 realm 同口径）。
     upstream_id: int | None = None

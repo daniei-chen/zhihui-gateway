@@ -290,8 +290,10 @@ export function UpdatePanel() {
 
   const done = !!status && !status.running && status.ok !== null && !resultDismissed;
   const product = versions?.product ?? status?.product;
-  const managed = product?.managed === true;
-  const updatesBlocked = managed || product?.web_update_enabled === false;
+  const managed = versions?.product?.managed === true || status?.product?.managed === true;
+  const updatesBlocked = ![versions?.product, status?.product].every(
+    (identity) => identity?.managed === false && identity.web_update_enabled === true,
+  );
 
   return (
     <div className="space-y-4">
@@ -750,7 +752,8 @@ export function UpdatePanel() {
 
       {/* 离线升级包（issue #153）：内网 / 拿不到 GitHub 的机器，从别处下载发布包上传 */}
       {isAdmin && (
-        <div className="rounded-[20px] bg-muted p-4">
+        <fieldset disabled={updatesBlocked} className="rounded-[20px] bg-muted p-4"
+                  data-slot="offline-update-package">
           <div className="mb-1 flex flex-wrap items-center gap-2 text-sm font-medium">
             <Upload className="h-4 w-4" />
             {t('updatePanel.pkgTitle')}
@@ -761,7 +764,7 @@ export function UpdatePanel() {
             )}
           </div>
           <div className="mb-3 text-[11px] leading-4 text-muted-foreground">
-            <RichText text={t('updatePanel.pkgDesc')} />
+            <RichText text={t(updatesBlocked ? 'product.controlledDetail' : 'updatePanel.pkgDesc')} />
           </div>
 
           {pkg?.present ? (
@@ -830,7 +833,7 @@ export function UpdatePanel() {
               )}
             </div>
           )}
-        </div>
+        </fieldset>
       )}
 
       {/* 日志。**没有可看的内容时不渲染这块**（issue #105：一次失败会长期驻留，

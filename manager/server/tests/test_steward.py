@@ -344,7 +344,7 @@ class FakeSMTP:
 
 class MailTests(unittest.TestCase):
     settings = {'host': 'smtp.qq.com', 'port': 465, 'username': 'fixture@example.com', 'password': 'synthetic'}
-    event = {'title': '磁盘<script>alert(1)</script>', 'detail': 'password=synthetic-secret wbk_testlongsecretvalue',
+    event = {'title': '磁盘<script>alert(1)</script>', 'detail': 'password=synthetic-secret ' + 'wbk_' + 'testlongsecretvalue',
              'observed_at': 1700000000, 'severity': 'critical', 'event': 'firing'}
 
     def test_email_brand_escape_and_no_secret_or_remote_assets(self):

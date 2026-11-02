@@ -45,6 +45,22 @@ PACKAGE_META_KEY = 'update_package'
 PACKAGE_MAX_BYTES = 63 * 1024 * 1024
 
 
+def managed_release() -> bool:
+    """An unreadable, broken-link or malformed marker must not reopen writes."""
+    try:
+        (config.ROOT / 'deploy/managed-release.json').lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def require_legacy_package_writes() -> None:
+    if managed_release():
+        raise ValueError('当前为受控维护版本，离线包上传和删除已停用；请使用受信发布流程。')
+
+
 def _read_package_version(path: Path) -> str:
     """从发布包里读出 `.version`（只解那一个成员，不展开整包）。
 
@@ -91,11 +107,16 @@ def package_meta() -> dict:
             meta['size'] = PACKAGE_FILE.stat().st_size
         except OSError:
             meta['present'] = False
+    if managed_release():
+        # Presence and historical caller-supplied digests are not approval.
+        meta.update(upload_enabled=False, installable=False, publisher_verified=False,
+                    update_policy='trusted-publisher-required')
     return meta
 
 
 def record_package(*, name: str, size: int, sha256: str, version: str,
                    expected_sha256: str = '', uploaded_by: str = '') -> dict:
+    require_legacy_package_writes()
     meta = {
         'name': name,
         'size': int(size),
@@ -112,6 +133,7 @@ def record_package(*, name: str, size: int, sha256: str, version: str,
 
 def clear_package() -> None:
     """删掉升级包与记录（更新完成后、或用户手动清掉时调）。"""
+    require_legacy_package_writes()
     try:
         PACKAGE_FILE.unlink(missing_ok=True)
     except OSError:
@@ -273,7 +295,7 @@ def read_status() -> dict:
     status['version'] = current_version()
     from .. import release_identity
     status['release_id'] = release_identity.current()
-    status['product'] = product.metadata(config.ROOT, managed=(config.ROOT / 'deploy/managed-release.json').is_file())
+    status['product'] = product.metadata(config.ROOT, managed=managed_release())
     return status
 
 
@@ -540,7 +562,7 @@ def start_update(target: str, *, source: str = 'release') -> tuple[bool, str]:
     """
     # 本地定制：受控维护版本（签名清单托管）不允许网页自助更新，
     # 否则会覆盖本地修复、且新包与 managed-release 清单对不上导致服务起不来。
-    if (config.ROOT / 'deploy' / 'managed-release.json').exists():
+    if managed_release():
         return False, '当前为受控维护版本，请使用已验证的发布包升级；网页更新已暂停以保护本地修复。'
     if target not in ('manager', 'upstream', 'both'):
         return False, '参数不合法'

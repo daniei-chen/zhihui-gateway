@@ -19,6 +19,7 @@ import {
   NAV_COMMANDS,
   matchCommands,
   navCommands,
+  navSeedsFor,
 } from './command-palette.ts';
 import {SECTIONS, SECTION_NAV} from './section-nav.ts';
 import {SETTINGS_TABS, SETTINGS_TAB_LABEL_KEYS, settingsTabHref} from './settings-tabs.ts';
@@ -40,7 +41,7 @@ function check(name, got, want) {
 const STUB = {
   'nav.dashboard': '总览', 'nav.accounts': '账号', 'nav.tasks': '任务', 'nav.keys': '密钥',
   'nav.redPackets': '红包', 'nav.models': '模型', 'nav.playground': '测试台',
-  'nav.stats': '统计', 'nav.logs': '日志', 'nav.security': '安全', 'nav.settings': '设置',
+  'nav.stats': '统计', 'nav.logs': '日志', 'nav.security': '安全', 'nav.settings': '设置', 'nav.members': '用户工作台',
   'nav.groupOverview': '总览', 'nav.groupOps': '运营', 'nav.groupGovernance': '治理',
   'settings.tabUpstream': '上游配置', 'settings.tabProxy': '代理',
   'settings.tabModels': '模型映射',
@@ -89,7 +90,7 @@ check(
 // 剩下的是「只在底栏里出现、任何零依赖模块里都没有」的页面。这里写死它们，
 // 是为了让「多出来的那一项」变成失败；它们与底栏是否一致由 Python 守卫比对
 // （那边能从 ManagementBar.tsx 里解析出真实的 dockItems）。
-const DOCK_ONLY = ['/dashboard', '/stats', '/logs', '/security', '/settings'];
+const DOCK_ONLY = ['/dashboard', '/stats', '/logs', '/security', '/settings', '/members'];
 
 check(
   '不在 section-nav / settings-tabs 里的项，正好是那 5 个底栏专属页',
@@ -115,6 +116,8 @@ check(
 /* ── navCommands：翻译 ────────────────────────────────────────── */
 
 const nav = navCommands(t);
+check('普通管理员不展示用户管理入口', navSeedsFor('workbuddy').some(s => s.href === '/members'), false);
+check('超级管理员可搜索用户管理入口', navSeedsFor('workbuddy', undefined, true).some(s => s.href === '/members'), true);
 
 check('条目数与清单一致', nav.length, NAV_COMMANDS.length);
 

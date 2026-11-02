@@ -528,6 +528,11 @@ async def list_accounts(upstream_id: int | None = Query(None),
     # 逐账号记录（它只打一行汇总），所以首次进入面板时可能显示未签到，
     # 手动点一次拿到 10001 后就归位了 —— 这一点在界面上如实说明。
     done_today = db.checkin_done_since(_today_start())
+    if (config.DATA_DIR / 'user-portal.sqlite3').exists():
+        from .. import portalstore
+        with portalstore.transaction() as conn:
+            for row in conn.execute("SELECT a.provider_uid,c.confirmed_at FROM portal_accounts a JOIN portal_checkins c ON c.account_id=a.id WHERE c.day=? AND c.state IN ('confirmed','confirmed_uncredited')", (portalstore.day(),)):
+                done_today[row['provider_uid']] = row['confirmed_at']
     for a in accounts:
         uid = str(a.get('uid') or '')
         a['note'] = notes.get(uid, '')

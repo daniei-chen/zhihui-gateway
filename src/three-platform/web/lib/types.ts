@@ -435,6 +435,8 @@ export interface UpstreamEndpoint {
 export interface ApiKey {
   platforms?: Array<'workbuddy' | 'qoder' | 'trae'>;
   platform_policy_valid?: boolean;
+  request_policy_valid?: boolean;
+  request_policy_errors?: string[];
   id: number;
   name: string;
   prefix: string;
@@ -1256,6 +1258,17 @@ export interface ReloadState {
   last_ok: boolean | null;
   last_message: string;
   restart_count: number;
+  account_reload?: AccountReloadState;
+  account_reload_scopes?: AccountReloadState[];
+}
+
+export interface AccountReloadState {
+  upstream_id: number | null;
+  phase: 'observing' | 'confirmed' | 'needs_attention';
+  reason: string;
+  pending_count: number;
+  observed_at: number;
+  restart_scheduled: false;
 }
 
 export interface Page<T> {

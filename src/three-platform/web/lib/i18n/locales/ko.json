@@ -68,7 +68,8 @@
     "settings": "설정",
     "quickAdd": "빠른 추가",
     "profile": "프로필",
-    "redPackets": "빨간 봉투"
+    "redPackets": "빨간 봉투",
+    "members": "사용자 작업 공간"
   },
   "login": {
     "subtitle": "{platform} 계정 풀 관리 · OpenAI 호환 리버스 프록시 게이트웨이",
@@ -672,6 +673,11 @@
     "platforms": "허용 플랫폼",
     "platformsHelp": "이 키로 호출할 플랫폼을 선택하세요. 선택하지 않으면 모든 플랫폼 호출이 차단됩니다.",
     "platformPolicyInvalid": "플랫폼 정책이 잘못되었습니다. 수정 후 사용하세요.",
+    "requestPolicyInvalid": "저장된 제한이 손상되었습니다. 명시적으로 수정할 때까지 호출이 차단됩니다.",
+    "badgePolicyInvalid": "수정 필요",
+    "policyRepairWarning": "이전 제한을 완전히 읽을 수 없습니다. 빈 값은 무제한을 뜻하지 않습니다. IP, 모델, 할당량을 확인한 뒤 저장하세요.",
+    "policyRepairConfirm": "현재 제한을 검토했으며 명시적으로 확인합니다.",
+    "invalidLimit": "유한한 음이 아닌 값을 입력하세요. Token 및 IP 수는 정수, 크레딧은 소수 여섯 자리까지 지원합니다. 명시적인 0만 무제한입니다.",
     "dailyTokens": "일일 토큰 한도",
     "dailyCredit": "일일 크레딧 한도",
     "dailyHint": "0은 무제한이며 서버 현지 날짜 기준으로 갱신됩니다. 보고된 사용량으로 새 요청을 제한하며 한 요청이 잔액을 초과할 수 있습니다. 알 수 없는 소비는 확인이 필요합니다. 엄격한 과금 상한은 아닙니다.",
@@ -840,7 +846,8 @@
     "reasonPlatformNotAllowed": "플랫폼 접근 권한 없음",
     "reasonInvalidPlatform": "알 수 없는 플랫폼",
     "reasonInvalidKeyPolicy": "잘못된 키 플랫폼 정책",
-    "lockoutDesc": "{action} 후 규칙이 잘못되면 추론 API 통신이 중단될 수 있습니다. 콘솔은 계속 접속할 수 있으므로 여기서 규칙을 복원할 수 있습니다."
+    "lockoutDesc": "{action} 후 규칙이 잘못되면 추론 API 통신이 중단될 수 있습니다. 콘솔은 계속 접속할 수 있으므로 여기서 규칙을 복원할 수 있습니다.",
+    "reasonPortalPolicyDenied": "사용자 정책에 따라 거부됨"
   },
   "models": {
     "title": "모델",
@@ -1522,6 +1529,9 @@
     "applyFailed": "업스트림 다시 불러오기 실패",
     "applyFailedHint": "설정은 저장되었지만 업스트림 컨테이너를 재시작하지 못했습니다. 호스트에서 docker compose restart wb2api 를 실행해 적용하세요.",
     "applyDismiss": "닫기",
+    "accountReloadObserving": "업스트림이 새 계정을 불러왔는지 확인 중",
+    "accountReloadAttention": "새 계정의 업스트림 반영이 확인되지 않았습니다",
+    "accountReloadNoRestart": "인증 정보는 핫 로드로 처리됩니다. 이 흐름은 업스트림을 자동 재시작하거나 다른 세션을 중단하지 않습니다. 미확인 시 계정 풀과 업스트림 상태를 확인하세요.",
     "jsonInvalid": "JSON 형식이 올바르지 않습니다. 괄호와 쉼표를 확인하세요",
     "jsonNotObject": "JSON 객체여야 합니다. 예: { \"checkin_hours\": [9, 21] }",
     "modelMapSaved": "모델 매핑을 저장했습니다",
@@ -1910,7 +1920,9 @@
     "添加账号需要管理员或超级管理员本人会话": "계정 추가에는 관리자 또는 최고 관리자 본인의 세션이 필요합니다.",
     "管理员添加账号仅使用默认账号池和默认线路": "관리자는 기본 계정 풀과 기본 경로로만 계정을 추가할 수 있습니다.",
     "用户管理仅对超级管理员开放": "사용자 관리는 최고 관리자만 이용할 수 있습니다.",
-    "只有超级管理员本人可以分配密钥归属": "최고 관리자 본인의 세션에서만 키 소유자를 할당할 수 있습니다."
+    "只有超级管理员本人可以分配密钥归属": "최고 관리자 본인의 세션에서만 키 소유자를 할당할 수 있습니다.",
+    "仅超级管理员admin本人会话可赠送积分": "최고 관리자 admin의 본인 세션에서만 포인트를 지급할 수 있습니다",
+    "用户端写操作需要同源请求": "사용자 변경 작업에는 동일 출처 요청이 필요합니다"
   },
   "redPacket": {
     "title": "빨간 봉투",

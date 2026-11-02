@@ -252,17 +252,8 @@ def _mark_pre_stream_failure(exc):
 
 
 async def _close_pending_response(response, client, budgets):
-    import anyio
     from .. import deadline
-    try:
-        with anyio.move_on_after(deadline.close_timeout(budgets), shield=True):
-            try:
-                if response is not None:
-                    await response.aclose()
-            finally:
-                await client.aclose()
-    except Exception:
-        logger.exception('pre-stream cleanup failed')
+    await observability.close_stream(response, client, timeout=deadline.close_timeout(budgets))
 
 
 def _response_text(resp) -> str:
@@ -938,6 +929,7 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
             facts,
             config_hash=getattr(state,'config_hash',None) if state else None,
             budget={'reserved': bool(getattr(state,'budget_reserved',False)),
+                    'portal_owner': getattr(state,'portal_owner',None),
                     'fence': getattr(state,'budget_fence',None)},
             release_id=observability.RELEASE_ID)
         if ledgerreplay.spill(entry) is None:
@@ -1047,7 +1039,11 @@ def _authorize_key(request: Request, key: dict, ip: str, model: str | None,
             getattr(reason, 'code', 'forbidden'),
         )
 
-    if not is_model_list and not observability.admit_key(key):
+    # Counting keeps full key/model/IP/rate checks and body capacity, but never
+    # consumes the generation slot held by an in-progress answer on that key.
+    metadata_count = (request.scope.get('method') == 'POST'
+                      and request.scope.get('path', '') == '/v1/messages/count_tokens')
+    if not is_model_list and not metadata_count and not observability.admit_key(key):
         observability.mark_error('key_concurrency_exceeded')
         _record(key,ip,model or '',mapped or '',429,0,0,0,ua,'密钥并发容量已满',False)
         return None,ip,_oai_error('密钥并发容量已满，请等待当前请求结束',429,'rate_limit_error','key_concurrency_exceeded')
@@ -1780,6 +1776,13 @@ def _scope_models(payload: object, key: dict | None) -> object:
     不该因为我们认不出结构就去改动上游的响应。
     """
     key = key or {}
+    from .. import portalpolicy
+    if portalpolicy.is_portal(key):
+        if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+            return {'object': 'list', 'data': []}
+        return {**payload, 'data': [item for item in payload['data'] if isinstance(item, dict)
+            and portalpolicy.model_allowed(item.get('id'))
+            and portalpolicy.model_allowed(_map_model(item.get('id')))]}
     want = keysvc._norm_realm(key.get('realm'))
     allow = [str(x) for x in (key.get('models') or []) if str(x).strip()]
     if not want and not allow:
@@ -1935,7 +1938,7 @@ def _forwarding_identity(key,upstream):
     return str(key.get('id'))+'|'+str(upstream.get('base_url'))+'|'+hashlib.sha256(token.encode()).hexdigest()
 
 def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forwarded=False):
-    from .. import budget, ledger, wirebody
+    from .. import budget, ledger, outputlimits, wirebody
     from .. import requestperf
     # K27：Anthropic / Responses 两个入口自己解析上游（不在本文件），所以它们
     # 路径上没有 `_chat` 的精确归因。这里补一个**粗归因**（平台 + 密钥绑定上游
@@ -1948,6 +1951,7 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128),
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128))
     try:
+        limit_field, _, limit_before = outputlimits.inspect(body)
         reserve = reserve if reserve is not None else getattr(state, 'reserve_wire_body', None)
         with requestperf.measure('json_encode'):
             wire = wirebody.encode(body, max_forward_body_bytes(), reserve=reserve)
@@ -1958,12 +1962,6 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
         # 路径不产生任何客户端可见信号 —— 客户端以为额度是 max_tokens，实际拿到
         # 更小的值，表现为「回答莫名被截断」。记录收缩契约，并重新编码最终转发体，
         # 确保实际发送的字节与校验及配额调整一致。三条协议共用此处。
-        limit_field = 'max_tokens'
-        limit_before = None
-        if isinstance(body, dict):
-            if 'max_completion_tokens' in body:
-                limit_field = 'max_completion_tokens'
-            limit_before = body.get(limit_field)
         with requestperf.measure('budget_prepare'):
             budget.prepare(key,body,encoded_body=wire)
         if body.get(limit_field) != limit_before:
@@ -1992,6 +1990,9 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
             ledger.forwarding(state,'prepared')
         if not defer_forwarded:
             budget.forwarded()
+    except outputlimits.Invalid as exc:
+        observability.mark_error(exc.code)
+        return _oai_error(str(exc), 400, 'invalid_request_error', exc.code)
     except wirebody.TooLarge:
         observability.mark_error('gateway.request.forward_too_large')
         return _oai_error('协议转换后的请求体超过转发上限，请精简上下文或附件；'
@@ -2010,7 +2011,7 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
         # U21：预算拒绝的原因本身就是稳定码（budget_pending / insufficient_quota /
         # credit_quota_exhausted / ledger_backpressure …），直接沿用。
         observability.mark_error(getattr(exc, 'code', None))
-        return _oai_error(str(exc),429,'insufficient_quota',exc.code)
+        return _oai_error(str(exc),exc.status,'server_error' if exc.status >= 500 else 'insufficient_quota',exc.code)
     if state and getattr(state, 'performance', None):
         state.performance.size('forward_bytes', len(wire))
     return wire
@@ -2093,7 +2094,7 @@ async def _prepare_forward_async(key, body, *, request=None):
                 budget.forwarded()
             except budget.BudgetRejected as error:
                 observability.mark_error(error.code)
-                return _oai_error(str(error), 429, 'insufficient_quota', error.code)
+                return _oai_error(str(error), error.status, 'server_error' if error.status >= 500 else 'insufficient_quota', error.code)
         return result
     except asyncio.CancelledError:
         cancelled.set()
@@ -2128,6 +2129,13 @@ async def _chat(request: Request, upstream_path: str):
 
     if mapped:
         body['model'] = mapped
+
+    from .. import outputlimits
+    try:
+        outputlimits.inspect(body)
+    except outputlimits.Invalid as exc:
+        observability.mark_error(exc.code)
+        return _oai_error(str(exc), 400, 'invalid_request_error', exc.code)
 
     # 越界的 max_tokens 会被上游包装成 503（见 clamp_max_tokens 的说明），
     # 鉴权后、转发前压回上限。
@@ -2189,7 +2197,7 @@ async def _chat(request: Request, upstream_path: str):
             attempt = 1
             while True:
                 try:
-                    async with config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream)) as client:
+                    async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream))) as client:
                         resp = await deadline_mod.await_total(
                             client.post(url, content=wire, headers=_upstream_headers(upstream)),
                             request_deadline)

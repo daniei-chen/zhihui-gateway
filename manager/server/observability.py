@@ -651,18 +651,50 @@ def set_stream_state(observer, error=None, cancelled=False):
     else:
         state.terminal_state, state.error_stage = "protocol_incomplete", "protocol"
 
+def mark_cleanup_unconfirmed():
+    state = current.get()
+    if state is not None:
+        state.portal_cleanup_unconfirmed = True
+
+
+class AuditedClientContext:
+    """A failed client enter/exit must not become request-closure evidence."""
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        try:
+            return await self.client.__aenter__()
+        except BaseException:
+            mark_cleanup_unconfirmed()
+            raise
+
+    async def __aexit__(self, *exc_info):
+        try:
+            return await self.client.__aexit__(*exc_info)
+        except BaseException:
+            mark_cleanup_unconfirmed()
+            raise
+
+
 async def close_stream(response, client, *, timeout: float = 5.0):
     # Starlette uses level cancellation; shield cleanup and keep it bounded.
     # U13：窗口长度由 `deadline.Budgets.client_cancel_s` 传入（三条协议同一口径）；
     # 默认 5s 保持既有行为完全不变。
     try:
-        with anyio.move_on_after(float(timeout), shield=True):
+        with anyio.move_on_after(float(timeout), shield=True) as close_scope:
             try:
-                await response.aclose()
+                if response is not None:
+                    await response.aclose()
             finally:
                 await client.aclose()
-    except Exception:
-        state=current.get()
+        if close_scope.cancel_called:
+            mark_cleanup_unconfirmed()
+    except BaseException as exc:
+        mark_cleanup_unconfirmed()
+        if not isinstance(exc, Exception):
+            raise
+        state = current.get()
         log.exception('stream close failed request_id=%s',state.request_id if state else None)
 
 class ManagedStreamingResponse(StreamingResponse):
@@ -681,13 +713,22 @@ class ManagedStreamingResponse(StreamingResponse):
             raise
         finally:
             try:
-                with anyio.move_on_after(6,shield=True):
+                with anyio.move_on_after(6,shield=True) as iterator_scope:
                     close=getattr(self.body_iterator,'aclose',None)
                     if close: await close()
-            except Exception:
+                if iterator_scope.cancel_called:
+                    mark_cleanup_unconfirmed()
+            except BaseException as exc:
+                mark_cleanup_unconfirmed()
+                if not isinstance(exc, Exception):
+                    raise
                 log.exception('stream iterator cleanup failed')
             finally:
-                if self.cleanup: await self.cleanup()
+                try:
+                    if self.cleanup: await self.cleanup()
+                except BaseException:
+                    mark_cleanup_unconfirmed()
+                    raise
 
 def _env_int(name, default):
     """读环境变量里的正整数；缺失/非法一律回落默认值（不抛异常）。

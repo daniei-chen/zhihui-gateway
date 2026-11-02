@@ -52,7 +52,20 @@ export type ReloadStateLike = {
   /** 上游（docker / 脚本）的原样输出，失败时就是失败原因 */
   last_message: string;
   restart_count: number;
+  account_reload_scopes?: Array<{
+    upstream_id: number | null;
+    phase: 'observing' | 'confirmed' | 'needs_attention';
+    reason: string;
+    pending_count: number;
+    observed_at: number;
+    restart_scheduled: false;
+  }>;
 };
+
+export function accountReloadNotices(state: ReloadStateLike | null) {
+  return (state?.account_reload_scopes ?? []).filter(item =>
+    item.phase === 'observing' || item.phase === 'needs_attention');
+}
 
 export const RELOAD_PHASES = ['applying', 'ok', 'failed', 'idle'] as const;
 

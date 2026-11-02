@@ -194,8 +194,11 @@ class CreateKeyUnlimitedRealmUiTest(unittest.TestCase):
     """
 
     def _src(self) -> str:
-        return (Path(__file__).resolve().parents[2]
-                / 'web' / 'app' / '(main)' / 'keys' / 'page.tsx').read_text(encoding='utf-8')
+        manager = Path(__file__).resolve().parents[2]
+        web = manager / 'web'
+        if not (web / 'app').is_dir():
+            web = manager.parent / 'src' / 'three-platform' / 'web'
+        return (web / 'app' / '(main)' / 'keys' / 'page.tsx').read_text(encoding='utf-8')
 
     def test_create_dialog_offers_explicit_unlimited(self) -> None:
         src = self._src()

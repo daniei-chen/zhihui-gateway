@@ -185,7 +185,8 @@ class ProtocolWireTests(unittest.TestCase):
         self.config.DB_PATH,self.config.USERS_FILE,self.config.STATIC_DIR=self.original
 
     def payload(self,protocol,stream):
-        body={'model':'m','max_tokens':10,'stream':stream}
+        field = 'max_output_tokens' if protocol == 'responses' else 'max_tokens'
+        body={'model':'m',field:10,'stream':stream}
         if protocol=='responses':body['input']='hello'
         else:body['messages']=[{'role':'user','content':'hello'}]
         return body

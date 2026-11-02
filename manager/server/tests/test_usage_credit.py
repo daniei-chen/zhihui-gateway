@@ -153,12 +153,12 @@ class KeyCreditQuotaTest(unittest.TestCase):
         self.assertEqual(row['used_tokens'], 0)
         self.assertEqual(row['used_credit'], 0.0)
 
-    def test_dirty_quota_values_are_sanitized(self) -> None:
-        """脏数据归一化成 0（不限），且**不能让保存失败**。"""
+    def test_dirty_quota_values_are_rejected_not_changed_to_unlimited(self) -> None:
+        """Invalid credit limits must never silently become unlimited."""
         for bad in (-5, 'abc', None, float('nan'), float('inf'), ''):
             with self.subTest(bad=bad):
-                k = self._key(quota_credit=bad)
-                self.assertEqual(k['quota_credit'], 0.0, repr(bad))
+                with self.assertRaises(ValueError):
+                    self._key(quota_credit=bad)
 
     def test_gateway_records_credit_into_key(self) -> None:
         """网关记账要把 credit 传进 keysvc —— 这是整条链路的接线点。
