@@ -62,25 +62,13 @@ def require_legacy_package_writes() -> None:
 
 
 def _read_package_version(path: Path) -> str:
-    """从发布包里读出 `.version`（只解那一个成员，不展开整包）。
-
-    更新器（deploy/update.py）里有一份同样的实现 —— 这条刻意不共用：面板不该为了
-    读一个字符串去 import 那个脚本。`server/tests/test_update_package.py` 拿同一份
-    包断言两边读出来的版本号一致，防漂移。
-    """
-    import tarfile
-
+    from ..packagecheck import inspect_package
     try:
-        with tarfile.open(path, 'r:gz') as tf:
-            for member in tf:
-                name = member.name.replace('\\', '/')
-                if name.count('/') == 1 and name.endswith('/.version'):
-                    fh = tf.extractfile(member)
-                    return fh.read(64).decode('utf-8', 'replace').strip() if fh else ''
-    except (OSError, tarfile.TarError) as exc:
-        raise ValueError(
-            f'升级包读不了（{err_text(exc)}）—— 确认它是发布页面下载的 .tar.gz') from exc
-    return ''
+        return inspect_package(path)['version']
+    except ValueError as exc:
+        if str(exc) == '升级包缺少 .version':
+            return ''
+        raise
 
 
 def allow_unverified_package() -> bool:
