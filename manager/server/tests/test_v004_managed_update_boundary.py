@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import ExitStack, redirect_stdout
 import hashlib
 import importlib.util
@@ -381,17 +382,20 @@ class RetiredVerifierTest(unittest.TestCase):
             self.assertNotIn('VERIFIED', output.getvalue())
 
     def test_historically_accepted_signed_fixture_is_now_rejected(self):
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         verifier = load_script(ROOT / 'deploy/verify_signed_release.py', 'retired_verifier_fixture')
         with tempfile.TemporaryDirectory(prefix='retired-verifier-fixture-') as name:
             root = Path(name)
-            key = Ed25519PrivateKey.generate()
-            payload = b'inert-signed-text-not-bound-to-manifest'
-            (root / 'trust-release-pub.pem').write_bytes(key.public_key().public_bytes(
-                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+            # RFC 8032 section 7.1, TEST 2: public test vector, no private key
+            # or optional crypto package needed in the deployed test runtime.
+            payload = bytes.fromhex('72')
+            public = bytes.fromhex('3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c')
+            signature = bytes.fromhex('92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da0'
+                                      '85ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00')
+            encoded = base64.b64encode(bytes.fromhex('302a300506032b6570032100') + public)
+            (root / 'trust-release-pub.pem').write_bytes(
+                b'-----BEGIN PUBLIC KEY-----\n' + encoded + b'\n-----END PUBLIC KEY-----\n')
             (root / 'SIGNED-PAYLOAD.txt').write_bytes(payload)
-            (root / 'SIGNED-PAYLOAD.sig').write_bytes(key.sign(payload))
+            (root / 'SIGNED-PAYLOAD.sig').write_bytes(signature)
             body = b'inert-fixture-file'
             (root / 'MANIFEST.sha256').write_text(
                 hashlib.sha256(body).hexdigest() + '  server/main.py\n', encoding='ascii')
