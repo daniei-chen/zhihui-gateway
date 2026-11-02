@@ -337,7 +337,7 @@ class ComposeCommandTest(unittest.TestCase):
              mock.patch.object(m, 'enforce_local_bind', return_value=None):
             rep = _Rep()
             with self.assertRaises(RuntimeError) as ctx:
-                m.update_upstream(rep)
+                m.rebuild_upstream(rep)
             msg = str(ctx.exception)
             self.assertIn('compose', msg)
             self.assertIn('Dockerfile', msg, '应给出可执行的修法')

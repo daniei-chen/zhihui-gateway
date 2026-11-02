@@ -1605,6 +1605,7 @@ async def list_models(request: Request):
         # 能力字段兜底（issue #211）：随包上游的版本可能比面板旧 —— 补丁只在上游
         # 侧时，下游经面板拿到的清单仍缺字段，客户端会整条跳过模型。
         payload = _listing_compat_models(payload)
+        payload = _bare_cn_model_ids(payload)
         # Anthropic 客户端（Claude Code 等）也会调这个路径，但期望的结构不同
         if request.headers.get('anthropic-version'):
             payload = _as_anthropic_models(payload)
@@ -1802,6 +1803,27 @@ def _scope_models(payload: object, key: dict | None) -> object:
     # 别名：白名单可能写的是下游熟悉的别名，它不在清单里，要补进来
     scoped += _alias_entries(in_realm, allow)
     return {**payload, 'data': scoped}
+
+
+def _bare_cn_model_ids(payload: object) -> object:
+    """Normalize display IDs only after realm, whitelist and catalog filtering."""
+    if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+        return payload
+    result, positions = [], {}
+    for item in payload['data']:
+        if not isinstance(item, dict) or not isinstance(item.get('id'), str):
+            result.append(item)
+            continue
+        model = item['id']
+        normalized = model[3:] if (model.lower().startswith('cn:') and model[3:]
+                                   and ':' not in model[3:]) else model
+        entry = {**item, 'id': normalized}
+        if normalized not in positions:
+            positions[normalized] = len(result)
+            result.append(entry)
+        elif len(entry) > len(result[positions[normalized]]):
+            result[positions[normalized]] = entry
+    return {**payload, 'data': result}
 
 
 def _listing_compat_models(payload: object) -> object:

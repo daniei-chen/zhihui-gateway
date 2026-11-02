@@ -142,8 +142,13 @@ class _ToolBridge:
             if self.discovery and tool.get('defer_loading') and not loaded:
                 continue
             name = _tool_name(tool)
-            if kind == 'namespace':
-                children = tool.get('tools')
+            namespace = kind == 'namespace' or (kind in (None, '') and any(
+                isinstance(tool.get(field), list) for field in ('tools', 'children', 'functions')))
+            if namespace:
+                if len(path) >= 4:
+                    raise ToolSearchArgumentsError('Tool namespaces support at most four levels.')
+                children = next((tool[field] for field in ('tools', 'children', 'functions')
+                                 if isinstance(tool.get(field), list) and tool[field]), [])
                 if isinstance(children, list) and name:
                     self._walk(children, path + (name,), loaded=loaded)
                 continue

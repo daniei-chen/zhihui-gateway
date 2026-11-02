@@ -366,7 +366,7 @@ class ManagedWorkerBoundaryTest(unittest.TestCase):
 
 class RetiredVerifierTest(unittest.TestCase):
     def test_legacy_cli_never_reads_extracts_or_approves(self):
-        verifier = load_script(REPO / 'tools/verify_signed_release.py', 'retired_verifier')
+        verifier = load_script(ROOT / 'deploy/verify_signed_release.py', 'retired_verifier')
         for args in ([], ['--release', 'absent', '--archive', 'absent'], ['--help']):
             with self.subTest(args=args), mock.patch('sys.argv', ['verify_signed_release.py', *args]), \
                     mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('no file reads')), \
@@ -383,7 +383,7 @@ class RetiredVerifierTest(unittest.TestCase):
     def test_historically_accepted_signed_fixture_is_now_rejected(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        verifier = load_script(REPO / 'tools/verify_signed_release.py', 'retired_verifier_fixture')
+        verifier = load_script(ROOT / 'deploy/verify_signed_release.py', 'retired_verifier_fixture')
         with tempfile.TemporaryDirectory(prefix='retired-verifier-fixture-') as name:
             root = Path(name)
             key = Ed25519PrivateKey.generate()

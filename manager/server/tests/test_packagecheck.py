@@ -19,7 +19,7 @@ class PackageCheckTests(unittest.TestCase):
     def archive(self, extras=()):
         output = io.BytesIO()
         with tarfile.open(fileobj=output, mode='w') as archive:
-            for name, data, kind in [('release/.version', b'v0.0.5\n', tarfile.REGTYPE), *extras]:
+            for name, data, kind in [('release/.version', b'v0.0.4\n', tarfile.REGTYPE), *extras]:
                 member = tarfile.TarInfo(name); member.type = kind
                 member.size = len(data) if kind == tarfile.REGTYPE else 0
                 member.linkname = '../../outside'
@@ -32,7 +32,7 @@ class PackageCheckTests(unittest.TestCase):
 
     def test_complete_archive_is_not_publisher_approval_and_writes_no_members(self):
         result = self.check(self.archive([('release/server/main.py', b'not executed', tarfile.REGTYPE)]))
-        self.assertEqual(result['version'], 'v0.0.5')
+        self.assertEqual(result['version'], 'v0.0.4')
         self.assertFalse(result['publisher_verified'])
         self.assertEqual([p.name for p in self.root.iterdir()], ['input.gz'])
 

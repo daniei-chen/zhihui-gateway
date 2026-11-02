@@ -857,7 +857,7 @@ async def fetch_credits(auth: dict) -> tuple[bool, int | float | None, str, list
 
         total = 0.0
         expiries: list[dict] = []
-        for item in accounts:
+        for item in _resource_package_rows(accounts):
             if not isinstance(item, dict):
                 continue
             # 逐个套餐钳负值**再**累加，与上游同序（其 `if r < 0 { r = 0 }` 在
@@ -1183,6 +1183,26 @@ def _extract_resource_accounts(data: object) -> list | None:
         else:
             return None
     return None
+
+
+def _resource_package_rows(accounts: list) -> list[dict]:
+    """Drop only identified subtotal views when coded package details exist."""
+    rows = [item for item in accounts if isinstance(item, dict)]
+
+    def coded(item):
+        code = item.get('PackageCode', item.get('packageCode'))
+        return not isinstance(code, bool) and isinstance(code, (str, int, float)) and str(code).strip() != ''
+
+    if not any(coded(item) for item in rows):
+        return rows
+    summaries = {'平台奖励积分', '套餐基础积分', '套餐赠送积分', '购买积分'}
+    fields = ('PackageName', 'packageName', 'Name', 'name', 'ProductCode', 'description')
+
+    def summary(item):
+        name = next((item[field] for field in fields if field in item), None)
+        return isinstance(name, str) and name in summaries
+
+    return [item for item in rows if coded(item) or not summary(item)]
 
 
 def _num(item: dict, key: str) -> float:
