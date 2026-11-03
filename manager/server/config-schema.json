@@ -336,6 +336,15 @@
       "minimum": 0,
       "unit": "concurrent_or_pending"
     },
+    "WB_GATEWAY_QUEUE_WAIT_MS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["manager/server/observability.py", "manager/server/fairadmission.py"],
+      "default": 1000,
+      "minimum": 0,
+      "maximum": 5000,
+      "unit": "milliseconds"
+    },
     "WB_GATEWAY_BODY_READ_TIMEOUT_S": {
       "type": "integer",
       "sensitive": false,
@@ -813,6 +822,16 @@
       "default_expression": "base",
       "unit": "seconds",
       "exclusive_minimum": 0
+    },
+    "WB_SSE_HEARTBEAT_SECONDS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["manager/server/sseheartbeat.py"],
+      "default": 15,
+      "minimum": 0,
+      "maximum": 60,
+      "unit": "seconds",
+      "description": "0 disables; otherwise values from 1 through 60 seconds are accepted."
     },
     "WB_TENCENT_TIMEOUT": {
       "type": "integer",

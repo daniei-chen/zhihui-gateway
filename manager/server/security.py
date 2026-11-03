@@ -1061,7 +1061,7 @@ def require_account_adder(request: Request,
 def require_recent_session_admin(request: Request, user: dict = Depends(require_session_admin)) -> dict:
     authenticated = user.get('_session_auth_at')
     if type(authenticated) is not int or not 0 <= time.time() - authenticated <= 900:
-        raise HTTPException(403, detail='财务核销需要15分钟内重新登录的管理员本人会话')
+        raise HTTPException(403, detail='此敏感操作需要15分钟内重新登录的管理员本人会话')
     return user
 
 

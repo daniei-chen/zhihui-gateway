@@ -1,0 +1,532 @@
+--- a/cmd/server/config.go
++++ b/cmd/server/config.go
+@@ -82,7 +82,8 @@
+ 		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与白名单
+ 		// 头组 X-IDE-Version 的取值）。空 = 内置默认（对齐官方 5.5.4 分发包）；
+ 		// 显式配置（如升级后的桌面包版本）则随配置走。
+-		ClientVersion string `json:"client_version"`
++		ClientVersion   string `json:"client_version"`
++		ProtocolProfile string `json:"protocol_profile"`
+ 		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认（对齐官方内置 CLI
+ 		// 2.137.1）；显式配置则随配置走。
+ 		CliVersion string `json:"cli_version"`
+@@ -268,6 +269,9 @@
+ }
+ 
+ func applyEnv(c *Config) {
++	if v := os.Getenv("WB2A_PROTOCOL_PROFILE"); v != "" {
++		c.Upstream.ProtocolProfile = v
++	}
+ 	if v := os.Getenv("WB2A_GZIP_BODY"); v != "" {
+ 		if b, err := strconv.ParseBool(v); err == nil {
+ 			c.Upstream.GzipBody = b
+@@ -362,6 +366,11 @@
+ }
+ 
+ func (c *Config) normalize() error {
++	switch c.Upstream.ProtocolProfile {
++	case "", "legacy-v1", "desktop-5.9.3":
++	default:
++		return fmt.Errorf("upstream.protocol_profile: unsupported profile")
++	}
+ 	if err := c.Ingress.Normalize(); err != nil {
+ 		return err
+ 	}
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -149,6 +149,7 @@
+ 	up.UserAgent = cfg.Upstream.UserAgent
+ 	// 版本段（upstream.client_version / cli_version）：空 = 各走内置默认。
+ 	up.ClientVersion = cfg.Upstream.ClientVersion
++	up.ProtocolProfile = cfg.Upstream.ProtocolProfile
+ 	up.CliVersion = cfg.Upstream.CliVersion
+ 	// 设备风控头（X-Device-Token）全局兜底 + 文件读取路径；空 = 不注入。
+ 	up.DeviceToken = cfg.Upstream.DeviceToken
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -260,6 +260,15 @@
+ // 不覆盖 id/object/created/owned_by 及调用方先前写好的基础字段；上游未下发的
+ // 字段（零值）整体省略——不编造。
+ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[string]any {
++	if mi.DefaultContextWindow > 0 {
++		entry["default_context_length"] = mi.DefaultContextWindow
++	}
++	if len(mi.ContextWindowOptions) > 0 {
++		entry["context_length_options"] = mi.ContextWindowOptions
++	}
++	if mi.ContextWindowConflict {
++		entry["context_window_conflict"] = true
++	}
+ 	if mi.Name != "" {
+ 		entry["name"] = mi.Name
+ 	}
+@@ -328,7 +337,7 @@
+ 		// 拉到后写 model.json 供下次命中）→ 1M 兜底 / max_output_tokens 省略。
+ 		// 上游零值不再透出假 131072（误导 Codex/ZCode 等按 context_length 提前
+ 		// 截断、白白丢上下文）。
+-		entry["context_length"] = upstream.ContextWindowListingV4(mi.ID, mi.ContextWindow, h.cfg.Upstream.HTTP)
++		applyContextCapacity(entry, upstream.ContextWindowListingV4(mi.ID, mi.ContextWindow, h.cfg.Upstream.HTTP), mi.ContextWindow)
+ 		if mo, ok := upstream.MaxOutputTokensListingV4(mi.ID, mi.MaxTokens, h.cfg.Upstream.HTTP); ok {
+ 			entry["max_output_tokens"] = mo
+ 		}
+@@ -380,7 +389,7 @@
+ 				entry = applyModelInfoFields(entry, mi)
+ 				remoteCtx, remoteOut = mi.ContextWindow, mi.MaxTokens
+ 			}
+-			entry["context_length"] = upstream.ContextWindowListingV4(id, remoteCtx, h.cfg.Upstream.HTTP)
++			applyContextCapacity(entry, upstream.ContextWindowListingV4(id, remoteCtx, h.cfg.Upstream.HTTP), remoteCtx)
+ 			if mo, ok := upstream.MaxOutputTokensListingV4(id, remoteOut, h.cfg.Upstream.HTTP); ok {
+ 				entry["max_output_tokens"] = mo
+ 			}
+--- a/internal/server/handler_context_length_test.go
++++ b/internal/server/handler_context_length_test.go
+@@ -48,8 +48,8 @@
+ 		t.Errorf("glm-5.2 max_output_tokens=%v want 131072 (knowledge table)", o)
+ 	}
+ 	// 3) 未知 → 1M 兜底；max_output_tokens 未知省略。
+-	if c := byID["cn:never-seen-model"]["context_length"]; c != int64(1000000) {
+-		t.Errorf("unknown context_length=%v want 1000000 (1M fallback)", c)
++	if c, present := byID["cn:never-seen-model"]["context_length"]; present {
++		t.Errorf("unknown context_length=%v must be omitted", c)
+ 	}
+ 	if _, ok := byID["cn:never-seen-model"]["max_output_tokens"]; ok {
+ 		t.Error("unknown model max_output_tokens must be omitted")
+@@ -128,8 +128,8 @@
+ 	if c := byID["global:gpt-5.6-luna"]["context_length"]; c != int64(1050000) {
+ 		t.Errorf("narrow gpt-5.6-luna context_length=%v want 1050000 (knowledge table, not 131072)", c)
+ 	}
+-	if c := byID["global:narrow-unknown"]["context_length"]; c != int64(1000000) {
+-		t.Errorf("narrow-unknown context_length=%v want 1000000 (unknown → 1M fallback)", c)
++	if c, present := byID["global:narrow-unknown"]["context_length"]; present {
++		t.Errorf("narrow-unknown context_length=%v must be omitted", c)
+ 	}
+ 	if _, ok := byID["global:narrow-unknown"]["max_output_tokens"]; ok {
+ 		t.Error("narrow-unknown max_output_tokens must be omitted")
+@@ -173,8 +173,8 @@
+ 			first, _ = m["context_length"].(int64)
+ 		}
+ 	}
+-	if first != 1000000 {
+-		t.Fatalf("first lookup context_length=%d want 1000000 (async fetch, immediate 1M)", first)
++	if first != 0 {
++		t.Fatalf("first lookup context_length=%d want unknown while fetching", first)
+ 	}
+ 
+ 	// 等异步拉取回流 model.json（有界轮询）。
+--- a/internal/server/handler_test.go
++++ b/internal/server/handler_test.go
+@@ -1404,8 +1404,8 @@
+ 	}
+ 	// 缺 maxInputTokens → 知识表/1M 兜底（其余字段保持真实）。
+ 	// dyn-zero-ctx 不在知识表 → 1M；绝不再透出假 131072。
+-	if zc, _ := zero["context_length"].(float64); zc != 1000000 {
+-		t.Errorf("zero-ctx context_length=%v want 1000000 (unknown → 1M fallback)", zc)
++	if zc, present := zero["context_length"]; present {
++		t.Errorf("zero-ctx context_length=%v must be omitted", zc)
+ 	}
+ 	if zo, _ := zero["max_output_tokens"].(float64); zo != 4096 {
+ 		t.Errorf("zero-ctx max_output_tokens=%v want 4096 (real value preserved)", zo)
+@@ -2457,7 +2457,7 @@
+ }
+ 
+ // TestStaleSnapshotBoundedByPickGate 粘性快照陈旧被 Pick 闸兜底的契约锚
+-//（pr134-watchlist-analysis.md #10）：
++// （pr134-watchlist-analysis.md #10）：
+ // session.ResolveForModel 在取任何锁之前拿 pool 可用性快照——若快照后、Pick 前
+ // 粘性号 A 被冷却（快照陈旧判 available），Session 层仍会返回 A 作为建议 uid；
+ // 但真正的可用性权威闸是 handler 的 Pool.PickByUIDForModel（锁内新鲜判定
+--- a/internal/server/model_capacity.go
++++ b/internal/server/model_capacity.go
+@@ -0,0 +1,15 @@
++package server
++
++// Zero is an unknown capability and must not be advertised as a guessed 1M.
++func applyContextCapacity(entry map[string]any, value, native int64) {
++	if value <= 0 {
++		entry["context_length_state"] = "unknown"
++		return
++	}
++	entry["context_length"] = value
++	if native > 0 {
++		entry["context_length_source"] = "provider"
++	} else {
++		entry["context_length_source"] = "catalog"
++	}
++}
+--- a/internal/server/v006_contracts_test.go
++++ b/internal/server/v006_contracts_test.go
+@@ -0,0 +1,15 @@
++package server
++
++import "testing"
++
++func TestV006UnknownCapacityIsOmitted(t *testing.T) {
++	row := map[string]any{}
++	applyContextCapacity(row, 0, 0)
++	if _, exists := row["context_length"]; exists || row["context_length_state"] != "unknown" {
++		t.Fatal(row)
++	}
++	applyContextCapacity(row, 128000, 128000)
++	if row["context_length"] != int64(128000) || row["context_length_source"] != "provider" {
++		t.Fatal(row)
++	}
++}
+--- a/internal/upstream/client.go
++++ b/internal/upstream/client.go
+@@ -799,7 +799,8 @@
+ 	// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` + B 段的
+ 	// X-IDE-Version）。空 = 内置默认 defaultClientVersion（对齐官方 5.5.4 分发包）。
+ 	// config upstream.client_version 覆盖。
+-	ClientVersion string
++	ClientVersion   string
++	ProtocolProfile string
+ 
+ 	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认 defaultCliVersion
+ 	// （对齐官方内置 CLI 2.137.1）。config upstream.cli_version 覆盖。
+@@ -1560,13 +1561,16 @@
+ // 实证，字段集与任务书 hy3 样本一致），故共用此结构；上游省略的字段保持零值，
+ // /v1/models 侧按「空值省略」透出（不编造）。
+ type ModelInfo struct {
+-	ID             string
+-	Name           string
+-	ContextWindow  int64    // = maxInputTokens
+-	MaxTokens      int64    // = maxOutputTokens
+-	Efforts        []string // reasoning.supportedEfforts（空=未知/固定档）
+-	DefaultEffort  string   // reasoning.defaultEffort（空=未声明，thinking.go 回退硬编码）
+-	SupportsImages bool     // 顶层 supportsImages（多模态能力，透出到 /v1/models）
++	DefaultContextWindow  int64
++	ContextWindowOptions  []int64
++	ContextWindowConflict bool
++	ID                    string
++	Name                  string
++	ContextWindow         int64    // = maxInputTokens
++	MaxTokens             int64    // = maxOutputTokens
++	Efforts               []string // reasoning.supportedEfforts（空=未知/固定档）
++	DefaultEffort         string   // reasoning.defaultEffort（空=未声明，thinking.go 回退硬编码）
++	SupportsImages        bool     // 顶层 supportsImages（多模态能力，透出到 /v1/models）
+ 
+ 	// 以下为模型目录全字段补齐（任务书 models-full-fields）：
+ 	Description       string   // descriptionZh 中文描述
+@@ -1586,21 +1590,22 @@
+ // FetchModels 与 global_models.go 的探测共用。iconUrl/descriptionEn/生成参数等
+ // 按「不透出」原则不解析（任务书 §不透出字段）。
+ type dynModelEntry struct {
+-	ID              string   `json:"id"`
+-	Name            string   `json:"name"`
+-	Description     string   `json:"descriptionZh"`
+-	Credits         string   `json:"credits"`
+-	Tags            []string `json:"tags"`
+-	Vendor          string   `json:"vendor"`
+-	IsDefault       bool     `json:"isDefault"`
+-	MaxInputTokens  int64    `json:"maxInputTokens"`
+-	MaxOutputTokens int64    `json:"maxOutputTokens"`
+-	MaxAllowedSize  int64    `json:"maxAllowedSize"`
+-	Disabled        bool     `json:"disabled"`
+-	SupportsImages  bool     `json:"supportsImages"`
+-	SupportsReason  bool     `json:"supportsReasoning"`
+-	SupportsTool    bool     `json:"supportsToolCall"`
+-	OnlyReasoning   bool     `json:"onlyReasoning"`
++	ContextWindow   *modelContextWindow `json:"contextWindow"`
++	ID              string              `json:"id"`
++	Name            string              `json:"name"`
++	Description     string              `json:"descriptionZh"`
++	Credits         string              `json:"credits"`
++	Tags            []string            `json:"tags"`
++	Vendor          string              `json:"vendor"`
++	IsDefault       bool                `json:"isDefault"`
++	MaxInputTokens  int64               `json:"maxInputTokens"`
++	MaxOutputTokens int64               `json:"maxOutputTokens"`
++	MaxAllowedSize  int64               `json:"maxAllowedSize"`
++	Disabled        bool                `json:"disabled"`
++	SupportsImages  bool                `json:"supportsImages"`
++	SupportsReason  bool                `json:"supportsReasoning"`
++	SupportsTool    bool                `json:"supportsToolCall"`
++	OnlyReasoning   bool                `json:"onlyReasoning"`
+ 	Reasoning       struct {
+ 		Effort           string   `json:"effort"`
+ 		Summary          string   `json:"summary"`
+@@ -1612,25 +1617,33 @@
+ // modelInfo 按解析条目构造 ModelInfo（dynEntry→ModelInfo 映射的单一事实来源，
+ // CN FetchModels 与 global 探测共用，杜绝两域映射漂移）。
+ func (m dynModelEntry) modelInfo() ModelInfo {
++	capacity := m.MaxInputTokens
++	if capacity <= 0 {
++		capacity = m.MaxAllowedSize
++	}
++	def, options, conflict := contextChoices(capacity, m.ContextWindow)
+ 	return ModelInfo{
+-		ID:                m.ID,
+-		Name:              m.Name,
+-		ContextWindow:     m.MaxInputTokens,
+-		MaxTokens:         m.MaxOutputTokens,
+-		Efforts:           m.Reasoning.SupportedEfforts,
+-		DefaultEffort:     m.Reasoning.DefaultEffort,
+-		SupportsImages:    m.SupportsImages,
+-		Description:       m.Description,
+-		Credits:           m.Credits,
+-		Tags:              m.Tags,
+-		Vendor:            m.Vendor,
+-		IsDefault:         m.IsDefault,
+-		SupportsReasoning: m.SupportsReason,
+-		SupportsToolCall:  m.SupportsTool,
+-		OnlyReasoning:     m.OnlyReasoning,
+-		MaxAllowedSize:    m.MaxAllowedSize,
+-		ReasoningEffort:   m.Reasoning.Effort,
+-		ReasoningSummary:  m.Reasoning.Summary,
++		DefaultContextWindow:  def,
++		ContextWindowOptions:  options,
++		ContextWindowConflict: conflict,
++		ID:                    m.ID,
++		Name:                  m.Name,
++		ContextWindow:         capacity,
++		MaxTokens:             m.MaxOutputTokens,
++		Efforts:               m.Reasoning.SupportedEfforts,
++		DefaultEffort:         m.Reasoning.DefaultEffort,
++		SupportsImages:        m.SupportsImages,
++		Description:           m.Description,
++		Credits:               m.Credits,
++		Tags:                  m.Tags,
++		Vendor:                m.Vendor,
++		IsDefault:             m.IsDefault,
++		SupportsReasoning:     m.SupportsReason,
++		SupportsToolCall:      m.SupportsTool,
++		OnlyReasoning:         m.OnlyReasoning,
++		MaxAllowedSize:        m.MaxAllowedSize,
++		ReasoningEffort:       m.Reasoning.Effort,
++		ReasoningSummary:      m.Reasoning.Summary,
+ 	}
+ }
+ 
+--- a/internal/upstream/context_catalog.go
++++ b/internal/upstream/context_catalog.go
+@@ -5,10 +5,8 @@
+ //   - 上游动态值（ModelInfo.ContextWindow/MaxTokens，即 maxInputTokens/maxOutputTokens）权威，优先；
+ //   - 本文件静态知识表（远端零值时补齐；model.json 缺失/损坏时的编译期兜底）；
+ //   - model.json 本地缓存（数据目录，含运行时 models.dev 按需补值，见 model_catalog.go）；
+-//   - models.dev 按需拉取（异步不阻塞；仍未知 → context_length 1M 兜底——宁可高估
+-//     不低估：高估代价是客户端不截断、上游报错可重试；低估代价是下游客户端
+-//     （Codex/ZCode/Claude Code 按 context_length 提前截断）白白丢上下文；
+-//     max_output_tokens 未知 → 省略字段（输出上限无合估算据，不编造））。
++//   - models.dev 按需拉取（异步不阻塞）；全链未知则返回 0，调用方省略能力值。
++//     不把未知输入窗口或输出上限编造成供应商声明。
+ //
+ // 知识表**一处定义、CN/global 两域共用**：context_length 是模型固有属性——fork
+ // 706412584 实测结论「两区是同一套 API 的两次部署」，同 id 上下文一致，无按 realm
+@@ -22,9 +20,8 @@
+ //     官方源如 moonshotai/zai 优先）。未收录或歧义大者不编造。
+ package upstream
+ 
+-// DefaultContextWindow 知识表也未收录的模型的 context_length 兜底：1M。
+-// 上游多数大窗口模型的实际量级；高估优于低估（见文件头）。
+-const DefaultContextWindow int64 = 1000000
++// DefaultContextWindow is unknown. Callers must omit nonpositive capacities.
++const DefaultContextWindow int64 = 0
+ 
+ // contextCap 一个模型的上下文能力（字段级兜底条目）。
+ // context 必为正（否则条目无意义，直接走 1M 兜底）；
+--- a/internal/upstream/context_catalog_test.go
++++ b/internal/upstream/context_catalog_test.go
+@@ -41,12 +41,12 @@
+ 
+ // TestContextWindowListingUnknownFallback1M 知识表也未收录 → 1M 兜底
+ // （宁可高估不低估：高估代价=客户端不截断、上游报错重试；低估代价=丢上下文）。
+-func TestContextWindowListingUnknownFallback1M(t *testing.T) {
+-	if got := ContextWindowListing("totally-unknown-model", 0); got != 1000000 {
+-		t.Errorf("unknown model: context_length=%d want 1000000 (1M fallback)", got)
++func TestContextWindowListingUnknownIsNotGuessed(t *testing.T) {
++	if got := ContextWindowListing("totally-unknown-model", 0); got != 0 {
++		t.Errorf("unknown model: context_length=%d want unknown", got)
+ 	}
+-	if got := ContextWindowListing("", 0); got != 1000000 {
+-		t.Errorf("empty model: context_length=%d want 1000000", got)
++	if got := ContextWindowListing("", 0); got != 0 {
++		t.Errorf("empty model: context_length=%d want unknown", got)
+ 	}
+ }
+ 
+--- a/internal/upstream/headers.go
++++ b/internal/upstream/headers.go
+@@ -65,11 +65,7 @@
+ // "request illegal" 风控。官方无任何 UA 随机化（step1 §4），故默认确定性。
+ // realm 判定委托 auth.Realm()（含全局开关逃生门）。
+ func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
+-	platform := "WorkBuddy"
+-	if a != nil && a.IsGlobal() {
+-		platform = "WorkBuddy AI"
+-	}
+-	return "WorkBuddy/" + c.clientVersion() + " " + platform + "/" + c.clientVersion() + " CLI/" + c.cliVersion()
++	return nativeClientUA(a, c.clientVersion(), c.cliVersion())
+ }
+ 
+ // userAgent 返回当前出站 UA（客户端出站路径：chat/refresh/FetchModels）。
+@@ -161,6 +157,7 @@
+ 	req.Header.Set("Referer", origin+"/")
+ 	// User-Agent 按账号 realm 切换品牌段（global → `WorkBuddy AI`，见 defaultWorkBuddyUAFor）。
+ 	req.Header.Set("User-Agent", c.userAgent(a))
++	c.injectProtocolProfile(req, a)
+ 	// X-CodeBuddy-Request: 1（官方客户端风控闸门头，所有 API 请求必带，D1）。
+ 	req.Header.Set("X-CodeBuddy-Request", "1")
+ 	// Accept-Language 按 realm 切（D5）：CN zh-CN，global en-US。官方客户端按账号域
+@@ -259,6 +256,7 @@
+ 	// 默认（ClientName 空）即伪造 WorkBuddy 桌面端头组（见 injectAttribution）；
+ 	// 显式 ClientName="SaaS" 还原旧行为（仅 X-Product="SaaS"）。
+ 	c.injectAttribution(req)
++	c.injectProtocolProfile(req, a)
+ 	// 客户端 IP 透传：仅当 PassthroughIP=true 且本次请求 clientIP 参数非空（见 handler 设置）。
+ 	// 缺省 false（反代安全边界：不把内网/代理 IP 暴露给上游）。
+ 	c.injectClientIP(req, clientIP)
+--- a/internal/upstream/model_context.go
++++ b/internal/upstream/model_context.go
+@@ -0,0 +1,42 @@
++package upstream
++
++import "sort"
++
++type modelContextWindow struct {
++	DefaultLength    int64   `json:"defaultLength"`
++	SupportedLengths []int64 `json:"supportedLengths"`
++}
++
++// A native default is a separate declaration, never inferred from the ceiling.
++func contextChoices(ceiling int64, window *modelContextWindow) (int64, []int64, bool) {
++	if window == nil {
++		return 0, nil, false
++	}
++	set := map[int64]bool{}
++	conflict := false
++	for i, value := range window.SupportedLengths {
++		if i >= 64 {
++			break
++		}
++		if value <= 0 {
++			continue
++		}
++		if ceiling > 0 && value > ceiling {
++			conflict = true
++			continue
++		}
++		set[value] = true
++	}
++	var options []int64
++	for value := range set {
++		options = append(options, value)
++	}
++	sort.Slice(options, func(i, j int) bool { return options[i] < options[j] })
++	def := window.DefaultLength
++	if def <= 0 {
++		def = 0
++	} else if ceiling > 0 && def > ceiling || len(options) > 0 && !set[def] {
++		def, conflict = 0, true
++	}
++	return def, options, conflict
++}
+--- a/internal/upstream/protocol_profile.go
++++ b/internal/upstream/protocol_profile.go
+@@ -0,0 +1,46 @@
++package upstream
++
++import (
++	"net/http"
++
++	"workbuddy2api/internal/auth"
++)
++
++func nativeClientUA(a *auth.Auth, client, cli string) string {
++	platform := "WorkBuddy"
++	if a != nil && a.IsGlobal() {
++		platform = "WorkBuddy AI"
++	}
++	return "WorkBuddy/" + client + " " + platform + "/" + client + " CLI/" + cli
++}
++
++// Protocol profiles change a coherent native-client header set. Custom relays
++// retain legacy headers. Explicit client/CLI/UA overrides retain precedence.
++// Desktop evidence: magpie-community/plugins 7ea*, WorkBuddy package snapshot.
++func (c *Client) injectProtocolProfile(req *http.Request, a *auth.Auth) {
++	if c.ProtocolProfile != "desktop-5.9.3" || req.URL == nil || req.URL.Scheme != "https" {
++		return
++	}
++	if port := req.URL.Port(); port != "" && port != "443" {
++		return
++	}
++	switch req.URL.Hostname() {
++	case "copilot.tencent.com", "www.workbuddy.ai":
++	default:
++		return
++	}
++	client, cli := c.ClientVersion, c.CliVersion
++	if client == "" {
++		client = "5.9.3"
++	}
++	if cli == "" {
++		cli = "2.165.0"
++	}
++	if c.UserAgent == "" {
++		req.Header.Set("User-Agent", nativeClientUA(a, client, cli))
++	}
++	if req.Header.Get("X-IDE-Version") != "" {
++		req.Header.Set("X-IDE-Version", client)
++	}
++	req.Header.Set("X-Agent-Runtime", "local-agent")
++}
+--- a/internal/upstream/v006_contracts_test.go
++++ b/internal/upstream/v006_contracts_test.go
+@@ -0,0 +1,58 @@
++package upstream
++
++import (
++	"encoding/json"
++	"net/http"
++	"reflect"
++	"strings"
++	"testing"
++	"workbuddy2api/internal/auth"
++)
++
++func TestV006NativeProfileScopeAndOverrides(t *testing.T) {
++	for _, tc := range []struct{ url, profile, ua, version, cli, want, runtime string }{
++		{"https://copilot.tencent.com/v3/config", "desktop-5.9.3", "", "", "", "CLI/2.165.0", "local-agent"},
++		{"https://www.workbuddy.ai/v3/config", "desktop-5.9.3", "", "", "", "WorkBuddy/5.9.3", "local-agent"},
++		{"https://copilot.tencent.com/chat", "desktop-5.9.3", "", "9.1", "42", "CLI/42", "local-agent"},
++		{"https://copilot.tencent.com/chat", "desktop-5.9.3", "custom-agent", "", "", "custom-agent", "local-agent"},
++		{"https://relay.example/chat", "desktop-5.9.3", "", "", "", "CLI/" + defaultCliVersion, ""},
++		{"https://copilot.tencent.com:8443/chat", "desktop-5.9.3", "", "", "", "CLI/" + defaultCliVersion, ""},
++		{"https://copilot.tencent.com/chat", "legacy-v1", "", "", "", "CLI/" + defaultCliVersion, ""},
++	} {
++		req, _ := http.NewRequest("GET", tc.url, nil)
++		c := &Client{ProtocolProfile: tc.profile, UserAgent: tc.ua, ClientVersion: tc.version, CliVersion: tc.cli}
++		c.CommonHeaders(req, &auth.Auth{UID: "profile-fixture"})
++		c.ChatHeaders(req, &auth.Auth{UID: "profile-fixture"}, "", ChatMeta{})
++		if tc.runtime != "" {
++			want := tc.version
++			if want == "" {
++				want = "5.9.3"
++			}
++			if req.Header.Get("X-IDE-Version") != want {
++				t.Fatal("profile contains inconsistent IDE and UA versions")
++			}
++		}
++		if !strings.Contains(req.UserAgent(), tc.want) || req.Header.Get("X-Agent-Runtime") != tc.runtime {
++			t.Errorf("profile contract for %s: %v", tc.url, req.Header)
++		}
++	}
++}
++
++func TestV006ContextChoicesAreNativeAndSeparate(t *testing.T) {
++	var m dynModelEntry
++	if err := json.Unmarshal([]byte(`{"id":"test","maxInputTokens":1000000,"contextWindow":{"defaultLength":300000,"supportedLengths":[1000000,300000,300000]}}`), &m); err != nil {
++		t.Fatal(err)
++	}
++	mi := m.modelInfo()
++	if mi.ContextWindow != 1000000 || mi.DefaultContextWindow != 300000 || !reflect.DeepEqual(mi.ContextWindowOptions, []int64{300000, 1000000}) || mi.ContextWindowConflict {
++		t.Fatalf("context %#v", mi)
++	}
++	m.ContextWindow.DefaultLength = 2000000
++	mi = m.modelInfo()
++	if mi.DefaultContextWindow != 0 || !mi.ContextWindowConflict {
++		t.Fatal("conflicting default must not be clamped into an invented default")
++	}
++	if ContextWindowListing("unregistered-v006-model", 0) != 0 {
++		t.Fatal("unknown context was guessed")
++	}
++}

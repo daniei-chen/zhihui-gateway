@@ -1,0 +1,153 @@
+{
+  "schema": "zhihui.production-verification.v2",
+  "production_version": "0.0.6",
+  "production_accepted": true,
+  "release_id": "v0.0.6+stable.20261104.2",
+  "manifest_sha256": "5defbc55a71d762aceaa3056919ccef20b7342c3a1fbc42ee7813233dfa91256",
+  "source_tree_sha256": "c06d480d3b4a7053e53751b59779b1249106d481a4963cb1bafecfe9380ad174",
+  "production_source_commit": null,
+  "source_kind": "production-snapshot-plus-reviewed-patch",
+  "source_tag_is_signed_runtime_package": false,
+  "engine": {
+    "image": "sha256:45c2bc0c31bb88f1b2a817f1221a5ad78486238c1c3b97df10d1b2aaa5c7bd57",
+    "elf_sha256": "e7edb6cb11e53ae457bcac2bd7f5c0681d97cf86f243b98d02ead99de29967b4",
+    "source_commitment": "04950cc00b68adcb74eba8e26fdd0a8ed7faa082cde29628e1345977540f0641",
+    "protocol_profile": "desktop-5.9.3",
+    "mounted_configuration_verified": true
+  },
+  "console": {
+    "build_id": "q8oDCYbRoQpsTvb2Mnvk7",
+    "writer_release_id": "v0.0.6+stable.20261104.2",
+    "public_html_and_assets_verified": true
+  },
+  "tests": {
+    "manager": {
+      "passed": 4322,
+      "failed": 0,
+      "frozen_skipped": 9,
+      "collected": 4331
+    },
+    "engine_linux": {
+      "passed": 1730,
+      "failed": 0,
+      "skipped": 0,
+      "packages": 18
+    },
+    "frontend": {
+      "passed": 116,
+      "failed": 0,
+      "typecheck": true,
+      "static_export": true
+    },
+    "controller_linux": {
+      "passed": 29,
+      "failed": 0
+    },
+    "mixed_load": {
+      "requests": 14,
+      "completed": 12,
+      "queued_cancellations": 2,
+      "body_fidelity": true,
+      "final_reservations": 0
+    }
+  },
+  "live_acceptance": {
+    "direct_checks_passed": 26,
+    "direct_checks_total": 26,
+    "bridge_checks_passed": 4,
+    "bridge_checks_total": 4,
+    "protocols": [
+      "Chat",
+      "Responses",
+      "Messages"
+    ],
+    "templates": [
+      "Codex",
+      "Claude"
+    ],
+    "bridge_paths": [
+      "/v1/responses",
+      "/backend-api/codex/responses"
+    ],
+    "simulated_tool_result_roundtrip": true,
+    "real_tools_executed": false,
+    "image_input_completed": true,
+    "compatibility_version": "workbuddy-prompts-20261103.1",
+    "claude_rule_ids_verified": 4,
+    "unsupported_semantics_provider_dispatches": 0,
+    "temporary_credentials_disabled": true,
+    "provider_pending": 0,
+    "provider_conflicts": 0,
+    "admission_idle": {
+      "workbuddy_gateway_inflight": 0.0,
+      "workbuddy_gateway_inflight_body_bytes": 0.0,
+      "workbuddy_gateway_key_slots": 0.0,
+      "workbuddy_gateway_queued": 0.0
+    }
+  },
+  "backup": {
+    "manifest_sha256": "c2c1c99b24dcfcda97afee66bf846fff9af36a8ae5fd90d5b0e870cb9e26d297",
+    "encrypted_sha256": "aa11a5a5f55fef183d97940b975057f17fb789b150f526b5342762280c5a2a65",
+    "restore_check": "ok",
+    "calls_enabled": false,
+    "offsite": false,
+    "business_data_restored": false,
+    "decryption_verified": true
+  },
+  "rollout": {
+    "coordinated_run_seconds": 124.888,
+    "finished_at": 1793729096,
+    "actual_http_maintenance_interval_independently_sampled": false,
+    "timers_restored": true,
+    "manager_unexpected_restarts": 0,
+    "connector_key_preserved": true,
+    "business_data_rollback": false
+  },
+  "rollback": {
+    "target": "v0.0.5+audit.20261103.2",
+    "production_preflight": "passed",
+    "isolated_contracts": "passed",
+    "production_reverse_cutover_performed": false,
+    "current_connector_key_retained": true,
+    "business_database_restore": false
+  },
+  "readiness": {
+    "loopback": {
+      "status": 200,
+      "ok": true,
+      "seconds": 0.004
+    },
+    "public_authenticated_tls": {
+      "status": 200,
+      "ok": true,
+      "seconds": 0.013
+    }
+  },
+  "checked_at": 1793729485,
+  "observation_seconds_since_cutover": 389,
+  "initial_acceptance_observations": [
+    {
+      "case": "nonstream Responses with 128 output budget",
+      "result": "did not satisfy completed/useful-output assertion; original body not retained",
+      "followup": "512 budget completed with useful output; initial receipt retained"
+    },
+    {
+      "case": "bridge image with 128 output budget",
+      "result": "response.incomplete / max_output_tokens",
+      "followup": "512 budget response.completed with useful output"
+    },
+    {
+      "case": "anonymous public readiness",
+      "result": "edge authentication returned 401 as configured",
+      "followup": "authenticated public TLS probe returned 200"
+    }
+  ],
+  "limitations": [
+    "International accounts have synthetic regression only; production checks used domestic accounts.",
+    "No real power-loss or complete fresh-host disaster restore was performed.",
+    "Short acceptance observation is not a long-term SLO guarantee.",
+    "Private signed runtime and public source tag have separate identities.",
+    "Unidentified non-native paths share the anonymous admission lane.",
+    "Advanced stateful Responses, media, new selling and subsidy operations are deferred."
+  ]
+}

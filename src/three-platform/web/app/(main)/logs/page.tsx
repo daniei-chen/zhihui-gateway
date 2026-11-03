@@ -551,6 +551,11 @@ export default function LogsPage() {
                 ['model', t('logs.rowModel'), detail.model || '—'],
                 ['mapped', t('logs.rowMappedModel'), detail.mapped_model || '—'],
                 ['status', t('logs.rowStatus'), String(detail.status)],
+                ['httpStatus', t('logs.rowHttpStatus'), detail.http_status == null ? '—' : String(detail.http_status)],
+                ['terminal', t('logs.rowTerminal'), detail.terminal_state || '—'],
+                ['recordedStatus', t('logs.rowRecordedStatus'), detail.recorded_status == null ? '—' : String(detail.recorded_status)],
+                ['compatibility', t('logs.rowCompatibility'), detail.compatibility_version || '—'],
+                ['compatibilityRules', t('logs.rowCompatibilityRules'), detail.compatibility_rules?.join(', ') || '—'],
                 [
                   'firstToken',
                   t('logs.rowFirstToken'),

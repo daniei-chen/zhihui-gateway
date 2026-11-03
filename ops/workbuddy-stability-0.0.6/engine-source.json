@@ -1,0 +1,22 @@
+{
+  "delta_base": "accepted 0.0.5 engine source",
+  "changed_go_files": [
+    "cmd/server/config.go",
+    "cmd/server/main.go",
+    "internal/server/handler.go",
+    "internal/server/handler_context_length_test.go",
+    "internal/server/handler_test.go",
+    "internal/server/model_capacity.go",
+    "internal/server/v006_contracts_test.go",
+    "internal/upstream/client.go",
+    "internal/upstream/context_catalog.go",
+    "internal/upstream/context_catalog_test.go",
+    "internal/upstream/headers.go",
+    "internal/upstream/model_context.go",
+    "internal/upstream/protocol_profile.go",
+    "internal/upstream/v006_contracts_test.go"
+  ],
+  "source_commitment": "04950cc00b68adcb74eba8e26fdd0a8ed7faa082cde29628e1345977540f0641",
+  "binary_sha256": "e7edb6cb11e53ae457bcac2bd7f5c0681d97cf86f243b98d02ead99de29967b4",
+  "private_runtime_files_included": false
+}

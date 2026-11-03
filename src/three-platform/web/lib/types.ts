@@ -638,6 +638,12 @@ export interface RequestLog {
   model: string | null;
   mapped_model: string | null;
   status: number;
+  recorded_status?: number | null;
+  http_status?: number | null;
+  terminal_state?: string | null;
+  error_stage?: string | null;
+  compatibility_version?: string | null;
+  compatibility_rules?: string[];
   prompt_tokens: number;
   completion_tokens: number;
   latency_ms: number;

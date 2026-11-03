@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 import httpx
+from ..modelcontext import optional_fields as context_fields
 from fastapi import HTTPException
 
 from .. import config
@@ -1087,7 +1088,9 @@ def _parse_model_payload(data: object, realm: Realm) -> tuple[dict[str, dict], l
         info[mid] = {
             'id': mid,
             'name': str(m.get('name') or '').strip(),
-            'context_length': _as_int(m.get('maxInputTokens')),
+            'context_length': _as_int(m.get('maxInputTokens')) or _as_int(m.get('maxAllowedSize')),
+            'context_length_source': 'provider',
+            **context_fields(_as_int(m.get('maxInputTokens')) or _as_int(m.get('maxAllowedSize')), m.get('contextWindow')),
             'max_output_tokens': _as_int(m.get('maxOutputTokens')),
             'disabled': bool(m.get('disabled')),
             'efforts': [str(x) for x in efforts if x] if isinstance(efforts, list) else [],

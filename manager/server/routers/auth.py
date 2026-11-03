@@ -24,9 +24,9 @@ def healthz() -> dict:
 @router.get('/readyz')
 def readyz():
     from .. import operational
-    result=operational.readiness()
+    ready = operational.public_readiness()
     # Public readiness intentionally returns one bit. Detailed health requires a user.
-    return JSONResponse({'ok':result['ok']},status_code=200 if result['ok'] else 503)
+    return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
 
 @router.get('/operations/health')
 def operations_health(user:dict=Depends(security.require_panel_reader)):

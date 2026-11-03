@@ -183,11 +183,20 @@ def _decorate(items: list[dict], realm: str = 'cn') -> list[dict]:
         # 默认档必须在支持列表内才有效（镜像上游的 containsEffort 校验）
         if eff_default and eff_default not in efforts:
             eff_default = ''
+        from ..modelcontext import optional_fields as context_fields
+        metadata = context_fields(m.get('context_length'), {
+            'defaultLength': m.get('default_context_length'),
+            'supportedLengths': m.get('context_length_options'),
+        })
+        if m.get('context_window_conflict'):
+            metadata['context_window_conflict'] = True
         out.append({
             'id': mid,
             **native_modality.describe(mid),
             'name': m.get('name') or '',
             'context_length': int(m.get('context_length') or 0),
+            'context_length_source': str(m.get('context_length_source') or 'unknown'),
+            **metadata,
             'max_output_tokens': int(m.get('max_output_tokens') or 0),
             'efforts': efforts,
             'series': series_of(mid),

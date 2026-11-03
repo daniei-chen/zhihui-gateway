@@ -45,6 +45,7 @@ FACTS_FIELDS = (
     'http_status', 'terminal_state', 'error_stage', 'release_id', 'usage_source',
     'usage_complete', 'first_byte_ms', 'platform', 'actual_platform',
     'upstream_ref', 'client_request_id', 'effort', 'channel', 'session_key',
+    'compatibility_version', 'compatibility_rules',
 )
 
 
@@ -108,12 +109,16 @@ def should_backpressure() -> bool:
 def build_entry(facts: dict, *, config_hash: str | None = None,
                 budget: dict | None = None, release_id: str | None = None) -> dict:
     """把一次记账事实包成回执条目；只保留白名单字段。"""
-    clean = {key: facts.get(key) for key in FACTS_FIELDS if key in facts}
+    # Keep v1 accounting facts consumable by 0.0.5 on a code-only rollback.
+    # That reader ignores the optional annex, but cannot accept new log kwargs.
+    diagnostic_fields = ('compatibility_version', 'compatibility_rules')
+    clean = {key: facts.get(key) for key in FACTS_FIELDS if key in facts and key not in diagnostic_fields}
     return {
         'schema': SCHEMA_VERSION,
         'spilled_at': int(time.time()),
         'attempts': 0,
         'facts': clean,
+        'diagnostics': {key: facts[key] for key in diagnostic_fields if facts.get(key) is not None},
         'config_hash': config_hash,
         'budget': budget or {},
         'release_id': release_id,
@@ -286,7 +291,11 @@ def apply(entry: dict, receipt_id: str) -> str:
         if existing is None:
             if request_id and db.query_one('SELECT 1 FROM usage_events WHERE request_id=?', (request_id,)):
                 raise ReplayConflict('immutable usage exists without its request log; review required')
-            db.add_request_log(**facts)
+            annex = entry.get('diagnostics')
+            diagnostics = {key: value for key, value in annex.items()
+                           if key in ('compatibility_version', 'compatibility_rules')
+                           and isinstance(value, str) and len(value) <= 4096} if isinstance(annex, dict) else {}
+            db.add_request_log(**dict(facts, **diagnostics))
             plan = _settle(entry)
             _touch(entry, plan)
             _events(entry, counted=bool(facts.get('key_id') and (plan['tokens'] or plan['credit_units'])))

@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "version": "workbuddy-prompts-20261103.1",
+  "platform": "workbuddy",
+  "roles": ["system", "developer"],
+  "rules": [
+    {
+      "id": "referenced-paths",
+      "match": "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root",
+      "replacement": "Tokens beginning with @ refer to file paths cited by the user. Relative paths are resolved against the workspace root",
+      "evidence": "Existing scoped compatibility contract"
+    },
+    {
+      "id": "codex-cli-identity",
+      "match": "You are a coding agent running in the Codex CLI",
+      "replacement": "You are a coding agent, running in the Codex CLI",
+      "evidence": "2026-11-03 bounded live comparison; workbuddy2api-hub PR 744"
+    },
+    {
+      "id": "claude-cli-identity",
+      "match": "You are Claude Code, Anthropic's official CLI for Claude",
+      "replacement": "You are Claude Code, Anthropic's official CLI tool for Claude",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-billing-metadata",
+      "match": "x-anthropic-billing-header",
+      "replacement": "x-anthropic-billing-hdr",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-feedback-template",
+      "match": "To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+      "replacement": "To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-branch-template",
+      "match": "Main branch (you will usually use this for PRs)",
+      "replacement": "Default branch (you will usually use this for PRs)",
+      "evidence": "2026-11-03 incident comparison"
+    }
+  ]
+}

@@ -851,7 +851,8 @@ def prometheus_metrics(request: Request):
     require_metrics(request)
     from fastapi.responses import PlainTextResponse
 
-    lines: list[str] = []
+    from .runtimemetrics import METRICS
+    lines: list[str] = METRICS.render()
 
     def _m(name: str, mtype: str, help_: str, value) -> None:
         if not any(x.startswith('# HELP ' + name + ' ') for x in lines):
@@ -859,61 +860,9 @@ def prometheus_metrics(request: Request):
             lines.append('# TYPE %s %s' % (name, mtype))
         lines.append('%s %s' % (name, value))
 
-    try:
-        row = db.query_one(
-            "SELECT COUNT(*) AS total,"
-            " SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errs,"
-            " SUM(CASE WHEN ts >= strftime('%s','now','-1 hour') THEN 1 ELSE 0 END) AS last_hour,"
-            " SUM(CASE WHEN ts >= strftime('%s','now','-1 hour') AND status >= 400 THEN 1 ELSE 0 END) AS err_hour"
-            " FROM request_logs")
-        d = dict(row) if row is not None else {}
-        _m('workbuddy_requests_total', 'counter', 'Total gateway requests recorded.', int(d.get('total') or 0))
-        _m('workbuddy_errors_total', 'counter', 'Total requests with status >= 400.', int(d.get('errs') or 0))
-        _m('workbuddy_requests_last_hour', 'gauge', 'Requests recorded in the last hour.', int(d.get('last_hour') or 0))
-        _m('workbuddy_errors_last_hour', 'gauge', 'Errors in the last hour.', int(d.get('err_hour') or 0))
-    except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics aggregate unavailable (%s)', type(exc).__name__)
-        lines.append('# metrics aggregate unavailable')
-
-    try:
-        rows = db.query(
-            "SELECT COALESCE(model,'') AS model, COUNT(*) AS c FROM request_logs"
-            " WHERE ts >= strftime('%s','now','-24 hour') GROUP BY model ORDER BY c DESC LIMIT 40")
-        block: list[str] = []
-        for r in rows:
-            rr = dict(r)
-            model = str(rr.get('model') or '').replace('\\', '\\\\').replace('\n', '\\n').replace('"', '\\"')
-            if not model:
-                continue
-            block.append('workbuddy_requests_24h_by_model{model="%s"} %d' % (model, int(rr.get('c') or 0)))
-        if block:
-            lines.append('# HELP workbuddy_requests_24h_by_model requests in last 24h by model')
-            lines.append('# TYPE workbuddy_requests_24h_by_model gauge')
-            lines.extend(block)
-    except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics model aggregate unavailable (%s)', type(exc).__name__)
-        lines.append('# metrics model aggregate unavailable')
-
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
     _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
        int(time.time() - _PROCESS_STARTED_AT))
-
-    # ── F3（2026-10-27）：延迟分位数 + 准入水位 + 拒绝面计数 ──────────────
-    try:
-        since = int(_time_now()) - 3600
-        rows = db.query(
-            'SELECT latency_ms FROM request_logs WHERE ts >= ? AND latency_ms > 0 '
-            'ORDER BY ts DESC LIMIT 20000', (since,))
-        lat = sorted(int(r['latency_ms']) for r in rows)
-        if lat:
-            def _pct(p):
-                return lat[min(len(lat) - 1, int(len(lat) * p))]
-            _m('workbuddy_latency_ms_p50_1h', 'gauge', 'P50 end-to-end latency, last 1h (ms).', _pct(0.50))
-            _m('workbuddy_latency_ms_p95_1h', 'gauge', 'P95 end-to-end latency, last 1h (ms).', _pct(0.95))
-            _m('workbuddy_latency_ms_p99_1h', 'gauge', 'P99 end-to-end latency, last 1h (ms).', _pct(0.99))
-            _m('workbuddy_latency_samples_1h', 'gauge', 'Latency samples in last 1h.', len(lat))
-    except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics latency percentiles unavailable (%s)', type(exc).__name__)
 
     try:
         from . import observability as _obs
@@ -926,20 +875,10 @@ def prometheus_metrics(request: Request):
             _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', snap['maximum_body_bytes'])
             _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', snap['capacity_rejections'])
             _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', snap['key_slots'])
+            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', snap['queued'])
+            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', snap['queue_timeouts'])
+            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', snap['queue_overflows'])
     except Exception as exc:                                    # noqa: BLE001
         logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
-
-    try:
-        row = db.query_one(
-            "SELECT SUM(CASE WHEN status=429 THEN 1 ELSE 0 END) c429,"
-            " SUM(CASE WHEN status=503 THEN 1 ELSE 0 END) c503,"
-            " SUM(CASE WHEN status>=500 AND status<600 THEN 1 ELSE 0 END) c5xx"
-            " FROM request_logs WHERE ts >= ?", (int(_time_now()) - 86400,))
-        d24 = dict(row) if row is not None else {}
-        _m('workbuddy_rejections_429_24h', 'counter', 'HTTP 429 responses in last 24h (rate/key/budget gates).', int(d24.get('c429') or 0))
-        _m('workbuddy_rejections_503_24h', 'counter', 'HTTP 503 responses in last 24h (capacity/upstream).', int(d24.get('c503') or 0))
-        _m('workbuddy_errors_5xx_24h', 'counter', 'All 5xx responses in last 24h.', int(d24.get('c5xx') or 0))
-    except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics rejection counters unavailable (%s)', type(exc).__name__)
 
     return PlainTextResponse('\n'.join(lines) + '\n', media_type='text/plain; version=0.0.4')

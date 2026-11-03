@@ -107,7 +107,8 @@ os._exit(23)
             result = subprocess.run([sys.executable, '-B', '-c', program, str(database)], timeout=15)
             self.assertEqual(result.returncode, 23)
             import sqlite3
-            with sqlite3.connect(database) as connection:
+            from contextlib import closing
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute('SELECT COUNT(*),SUM(amount) FROM receipts').fetchone(), (100, 34650))
                 self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 

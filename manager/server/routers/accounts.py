@@ -114,7 +114,7 @@ def _uploaded_entries(raw: object) -> list[object]:
 def export_accounts(
     request: Request,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.require_session_admin),
+    user: dict = Depends(security.require_recent_session_admin),
 ) -> StreamingResponse:
     """Export one JSON file per account from the selected group."""
     group = _group(upstream_id)

@@ -179,6 +179,8 @@ class RequestAudit:
     error_stage: str | None = None
     account: str | None = None
     first_byte_ms: int | None = None
+    first_token_ms: int | None = None
+    metrics_model: str | None = None
     performance: object | None = None
     recorded: bool = False
     key_slot: int | None = None
@@ -204,6 +206,8 @@ class RequestAudit:
     error_code: str | None = None
     #: 码的来源：`upstream`（上游业务码）/ `gateway`（网关分类）/ `client`（取消）。
     error_source: str | None = None
+    compatibility_version: str | None = None
+    compatibility_rules: tuple[str, ...] = ()
 
 current: contextvars.ContextVar[RequestAudit | None] = contextvars.ContextVar("wb_request_audit", default=None)
 _key_slots={}
@@ -432,7 +436,10 @@ def admission_snapshot() -> dict | None:
             'inflight_body_bytes': int(getattr(inst, 'inflight_body_bytes', 0)),
             'maximum_body_bytes': int(getattr(inst, 'maximum_body_bytes', 0)),
             'capacity_rejections': int(getattr(inst, 'capacity_rejections', 0)),
-            'key_slots': len(_key_slots)}
+            'key_slots': len(_key_slots),
+            'queued': int(getattr(getattr(inst, 'fair_gate', None), 'pending', 0)),
+            'queue_timeouts': int(getattr(getattr(inst, 'fair_gate', None), 'timeouts', 0)),
+            'queue_overflows': int(getattr(getattr(inst, 'fair_gate', None), 'overflows', 0))}
 
 class CapacityError(Exception): pass
 class BodyLimitError(Exception): pass
@@ -702,6 +709,9 @@ class ManagedStreamingResponse(StreamingResponse):
     def __init__(self,*args,cleanup=None,**kwargs):
         self.cleanup=cleanup
         super().__init__(*args,**kwargs)
+        if self.media_type == 'text/event-stream':
+            from .sseheartbeat import comments
+            self.body_iterator = comments(self.body_iterator)
 
     async def __call__(self,scope,receive,send):
         try:
@@ -753,6 +763,9 @@ class RequestAuditMiddleware:
     """Pure ASGI wrapper; mutable context survives streaming tasks and is reset per request."""
     def __init__(self, app):
         self.app = app
+        from .fairadmission import FairGate, wait_seconds
+        self.fair_gate = FairGate()
+        self.queue_wait = wait_seconds(os.environ.get('WB_GATEWAY_QUEUE_WAIT_MS'))
         # One worker: bounded admission before body allocation, no unbounded queue.
         # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
         self.active=0; self.large=0; self.preauth_active=0
@@ -812,6 +825,20 @@ class RequestAuditMiddleware:
         try: declared=max(0,int(headers.get(b'content-length',b'0')))
         except ValueError: declared=0
         initial_reservation = max(declared, self.minimum_body_bytes)
+        def reserve_capacity():
+            nonlocal admitted, reserved, large
+            if (self.active >= self.maximum
+                    or declared > 1024*1024 and self.large >= self.large_maximum
+                    or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+                return False
+            self.active += 1
+            admitted = True
+            reserved = initial_reservation
+            self.inflight_body_bytes += reserved
+            if declared > 1024*1024:
+                self.large += 1
+                large = True
+            return True
         def capacity_rejected():
             if state.error_stage != 'admission':
                 self.capacity_rejections += 1
@@ -876,6 +903,9 @@ class RequestAuditMiddleware:
             capacity_rejected()
             await reject_response(JSONResponse({'error':{'message':'网关处理容量已满，请稍后重试','type':'server_error','code':'gateway_capacity_exceeded'}},
                                                status_code=503, headers={'Retry-After':'1'}))
+        async def acquire_capacity():
+            with requestperf.measure('admission_wait'):
+                return await self.fair_gate.acquire(state.key_id, reserve_capacity, self.queue_wait)
         async def reject_response(response):
             if protocol == 'anthropic':
                 payload=json.loads(response.body)
@@ -913,15 +943,10 @@ class RequestAuditMiddleware:
             elif inference and declared > per_request_limit:
                 state.terminal_state,state.error_stage='rejected','validation'
                 await reject_response(gateway._payload_too_large(per_request_limit))
-            elif inference and (self.active>=self.maximum or declared>1024*1024 and self.large>=self.large_maximum
-                              or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+            elif inference and not await acquire_capacity():
                 await reject_capacity()
             else:
                 if inference:
-                    self.active+=1; admitted=True
-                    reserved = initial_reservation
-                    self.inflight_body_bytes += reserved
-                    if declared>1024*1024: self.large+=1; large=True
                     # Validate and reserve the JSON body before entering FastAPI.
                     # Otherwise its body parser can turn a receive-side capacity
                     # exception into HTTP 500 before this wrapper can reject it.
@@ -982,6 +1007,19 @@ class RequestAuditMiddleware:
                 state.terminal_state, state.error_stage = "interrupted", "application"
             raise
         finally:
+            if tracked:
+                try:
+                    from .runtimemetrics import METRICS
+                    status = state.http_status or 500
+                    terminal = state.terminal_state or ('rejected' if 400 <= status < 500 else
+                               'application_error' if status >= 500 else 'completed')
+                    METRICS.observe(protocol=protocol, traffic=traffic_class(path),
+                        http_status=status, terminal=terminal,
+                        latency_ms=(time.monotonic()-state.started)*1000,
+                        first_token_ms=state.first_token_ms, model=state.metrics_model,
+                        rules=state.compatibility_rules)
+                except Exception:
+                    log.warning('bounded request metrics unavailable')
             try:
                 if tracked:
                     from . import db
@@ -1071,6 +1109,7 @@ class RequestAuditMiddleware:
                         self.active-=1
                         self.inflight_body_bytes -= reserved
                     if large: self.large-=1
+                    self.fair_gate.notify()
                     state.reserve_wire_body = None
                     current.reset(token)
 

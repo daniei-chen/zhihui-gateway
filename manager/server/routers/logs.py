@@ -1,11 +1,12 @@
 """请求日志查询。"""
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import db, keysvc, observability, security
+from .. import db, keysvc, logview, observability, security
 
 router = APIRouter(prefix='/api/logs', tags=['logs'])
 
@@ -91,7 +92,13 @@ def list_logs(
             'ip': r['ip'],
             'model': r['model'],
             'mapped_model': r['mapped_model'],
-            'status': r['status'],
+            'status': logview.displayed_status(r),
+            'recorded_status': r['status'],
+            'http_status': r['http_status'],
+            'terminal_state': r['terminal_state'],
+            'error_stage': r['error_stage'],
+            'compatibility_version': r['compatibility_version'],
+            'compatibility_rules': logview.compatibility_rules(r['compatibility_rules']),
             'realm': r['realm'] or 'cn',
             'prompt_tokens': r['prompt_tokens'],
             'completion_tokens': r['completion_tokens'],

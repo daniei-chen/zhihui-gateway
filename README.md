@@ -2,8 +2,8 @@
 
 <a href="https://zhihui.kaogong.art/">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile.svg" />
-    <img src="docs/images/readme/cover.svg" width="100%" alt="智汇网关 0.0.5 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.6.svg" />
+    <img src="docs/images/readme/cover-v0.0.6.svg" width="100%" alt="智汇网关 0.0.6 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -14,40 +14,40 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5"><img src="docs/images/readme/button-release-v0.0.5.svg" width="166" height="44" alt="查看 0.0.5 正式发布与验收" /></a>
+<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.6"><img src="docs/images/readme/button-release-v0.0.6.svg" width="166" height="44" alt="查看 0.0.6 正式发布与验收" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#005--让每次调用更可信) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#006--自用稳定版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 0.0.5 · 让每次调用更可信
+## 0.0.6 · 自用稳定版
 
-少一点“好像成功”，多一份可以核对的依据。
+把每天使用的链路磨稳，把每一次失败说清楚。
 
-<a href="docs/RELEASE-0.0.5.md">
+<a href="docs/RELEASE-0.0.6.md">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile.svg" />
-    <img src="docs/images/readme/release.svg" width="100%" alt="0.0.5 修复重点：输入保真、不确定不重放、双账本可恢复。Linux 验收：Manager 4301、引擎1727、发布合同33项通过；这些是本次测试记录，不是长期稳定性承诺。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.6.svg" />
+    <img src="docs/images/readme/release-v0.0.6.svg" width="100%" alt="0.0.6：Codex 与 Claude 系统模板兼容、SSE 心跳、有界公平等待、准确状态与诊断。固定 Linux 构建：Manager 4322、引擎 1730、切换合同 29 项通过；不是实时状态或长期稳定性承诺。" />
   </picture>
 </a>
 
-| 输入不走样 | 失败不掩盖 | 费用有凭据 |
+| 客户端兼容 | 流式与容量 | 看清每次调用 |
 | :--- | :--- | :--- |
-| 三协议共用系统兼容策略，用户内容与工具参数不改写。 | 已发送但结果未知不自动重放；上游拒绝仍是失败。 | 调用独立留痕，主账本 WAL/FULL，双账本配对隔离恢复。 |
+| 六条已验证模板规则随版交付；仅处理 WorkBuddy 的 system/developer。 | SSE 注释心跳、有界等待、按密钥轮转；排队取消及时释放。 | 真实 HTTP 状态、兼容包版本与命中 ID；有界指标和上下文来源。 |
 
-**已经上线验收：** Chat / Responses / Messages、喜鹊两条 Responses 入口、图片输入与工具结果回合通过；内部连接密钥完成轮换，客户密钥和供应商账号授权不变。
+**WorkBuddy × Codex / Claude 的特定系统模板兼容已内置。** 针对“普通 API 正常，编码客户端带完整系统上下文却返回 11128”的已复现问题，使用最小措辞或标点调整。新部署自带六条规则，已有自定义规则继续优先；用户、助手、工具参数与结果、图片和其他平台原文保留。可即时关闭，不吞掉供应商拒绝。[原因、规则、排查与验证 →](docs/WORKBUDDY-CODEX-COMPAT.md)
 
-**WorkBuddy × Codex 的 11128 已复现问题已修复。** 针对“普通 API 正常，Codex 经喜鹊带系统提示词时报渠道错误”的特定模板，现网采用仅作用于 system/developer 的最小标点兼容，保留用户、工具与图片原文。[原因、配置与验证 →](docs/WORKBUDDY-CODEX-COMPAT.md) 新部署需配置对应规则；不是全部风控错误的通用绕过。
+**保留现有钱包、权限和历史账本。** 延续 0.0.5 的输入保真、不确定不重放、内部密钥轮换及双账本恢复修复；本轮补充原生协议配置、近期本人认证、恢复和发布验收。新增售卖、补贴运营、媒体及高级有状态 Responses 暂缓。
 
-[完整更新日志](CHANGELOG.md) · [发布说明与限制](docs/RELEASE-0.0.5.md) · [机器可读验收](ops/workbuddy-remediation-0.0.5/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5)
+[发布说明与参数](docs/RELEASE-0.0.6.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.6/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.6)
 
 > [!NOTE]
-> 测试数字来自本次固定构建的 Linux 验收，不是 CI 徽章、在线监控或“全部问题已解决”的承诺。9 项既有冻结跳过保留，真实断电、长期 SLO 与异地灾备仍需独立验证。
+> 数字来自固定构建的隔离验收；前端另有 116 项测试通过。9 项既有冻结跳过保留。国内账号做现网验证，国际账号仅合成回归；真实断电、长期 SLO 和完整新主机灾难恢复仍未验证。公开标签源码与现网签名制品分别记录身份。
 
 <br />
 
@@ -170,7 +170,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.5 验收](docs/RELEASE-0.0.5.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.6 验收](docs/RELEASE-0.0.6.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 

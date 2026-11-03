@@ -765,57 +765,14 @@ _DEFAULT_DEFUSE_RULES = (
 
 
 def defuse_prompt_fingerprint(body: object, *, platform: str = 'workbuddy') -> int:
-    """Apply the WorkBuddy system-prompt compatibility rule only.
-
-    User text, assistant replies, tool results and non-text blocks are immutable.
-    Set the boolean setting prompt_compat_enabled=false to disable this adapter.
-
-    注意：这里**故意不缓存**设置项。2026-10-28 试过加 60 秒缓存以减少热路径查库，
-    但 `test_prompt_integrity.test_boolean_switch_disables_adapter` 要求
-    「关掉开关立即生效」，缓存会让关停延迟最多 60 秒 —— 一个安全开关不该有这个延迟。
-    两次 `get_setting` 是本地 SQLite 点查（微秒级），不值得用正确性去换。
-    """
-    if platform != 'workbuddy' or not isinstance(body, dict):
-        return 0
-    msgs = body.get('messages')
-    if not isinstance(msgs, list):
-        return 0
-    rules = _DEFAULT_DEFUSE_RULES
-    try:
-        if db.get_setting('prompt_compat_enabled') is False:
-            return 0
-        extra = db.get_setting('prompt_defuse_rules') or []
-        if isinstance(extra, list):
-            pairs = tuple((r[0], r[1]) for r in extra[:64]
-                          if isinstance(r, (list, tuple)) and len(r) == 2
-                          and isinstance(r[0], str) and isinstance(r[1], str)
-                          and 0 < len(r[0]) <= 4096 and len(r[1]) <= 8192)
-            if pairs:
-                rules = pairs + _DEFAULT_DEFUSE_RULES
-    except Exception:  # noqa: BLE001  规则表坏了不影响默认规则
-        pass
-    changed = 0
-
-    def _fix_text(text: str) -> str:
-        nonlocal changed
-        for pat, rep in rules:
-            if pat in text:
-                text = text.replace(pat, rep)
-                changed += 1
-        return text
-
-    for msg in msgs:
-        if not isinstance(msg, dict) or msg.get('role') not in ('system', 'developer'):
-            continue
-        content = msg.get('content')
-        if isinstance(content, str):
-            msg['content'] = _fix_text(content)
-        elif isinstance(content, list):
-            for part in content:
-                if (isinstance(part, dict) and part.get('type') in ('text', 'input_text')
-                        and isinstance(part.get('text'), str)):
-                    part['text'] = _fix_text(part['text'])
-    return changed
+    """Use the signed, versioned bundle; the hot disable switch is never cached."""
+    from .. import promptcompat
+    applied = promptcompat.apply(body, platform=platform, get_setting=db.get_setting)
+    state = observability.current.get()
+    if state is not None and applied.version:
+        state.compatibility_version = applied.version
+        state.compatibility_rules = applied.rules
+    return applied.changes
 
 
 def normalize_chat_images(body: object) -> int:
@@ -858,12 +815,15 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
     terminal = state.terminal_state if state else None
     if stream and terminal == 'client_cancelled':
         status = 499
-    elif stream and terminal in ('upstream_error','transport_error','protocol_incomplete'):
+    elif (stream and terminal in ('upstream_error','transport_error','protocol_incomplete')
+          and not 400 <= http_status < 500):
         status = 502
     if terminal is None:
         terminal = 'rejected' if 400 <= status < 500 else 'upstream_error' if status >= 500 else 'completed'
     if state:
         state.terminal_state = terminal
+        state.first_token_ms = first_token
+        state.metrics_model = mapped or model
     # U01（2026-10-28）：先把「要记的事实」算成纯数据。它不依赖事务，所以事务
     # 失败时可以直接落 spool；重放写的是同一组列（见 db.add_request_log 的列元组）。
     model_clean = db._clean(model, 128)
@@ -886,6 +846,8 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         'method': state.method if state else None,
         'protocol': state.protocol if state else None,
         'http_status': http_status, 'terminal_state': terminal,
+        'compatibility_version': getattr(state, 'compatibility_version', None),
+        'compatibility_rules': json.dumps(getattr(state, 'compatibility_rules', ())) if state else None,
         'error_stage': state.error_stage if state else None,
         'release_id': observability.RELEASE_ID,
         'account': state.account if state else None,

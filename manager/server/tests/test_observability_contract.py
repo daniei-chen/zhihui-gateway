@@ -450,7 +450,10 @@ class ReadinessBasisTest(unittest.TestCase):
 
     def test_public_readyz_still_returns_one_bit(self) -> None:
         client = TestClient(main.app)
-        response = client.get('/api/readyz')
+        # A public probe reads the existing monitor result; it cannot establish
+        # health by performing a write on behalf of each unauthenticated caller.
+        with mock.patch.object(operational, '_cached_readiness', {'at':time.monotonic(), 'ok':True}):
+            response = client.get('/api/readyz')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'ok': True},
                          '公开就绪端点只回一位，细节走 /api/operations/health')

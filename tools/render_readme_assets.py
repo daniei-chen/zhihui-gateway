@@ -195,38 +195,40 @@ def release(mobile=False):
     width, height = (640, 786) if mobile else (1280, 368)
     body = rect(1, 1, width - 2, height - 2, 28, 'url(#paper)')
     body += text(36, 44, f'{VERSION} / RELEASE NOTES', 13, BLUE, 600, letter_spacing='1.5')
-    body += text(36, 88, '让每次调用，更可信。', 30 if mobile else 33, INK, 700)
+    body += text(36, 88, '自用，更稳一点。', 30 if mobile else 33, INK, 700)
     if not mobile:
         body += rect(1011, 29, 231, 34, 17, '#eff8f5', '#cee8dc')
         body += dot(1031, 46, 3, '#29896a')
-        body += text(1043, 51, '2026.11.03 / 已验收', 13, '#36745f', 600)
-    items = [('01', '输入保真', '系统兼容有范围', '用户与工具内容不改写'),
-             ('02', '不盲目重放', '发送后状态未知', '保留失败，不重复请求'),
-             ('03', '双账本可恢复', '配对快照与隔离恢复', '不将旧余额直接启用')]
+        body += text(1043, 51, '2026.11.04 / 已验收', 13, '#36745f', 600)
+    items = [('01', '客户端兼容', 'Codex / Claude 规则随版交付', '只处理系统与开发者文本'),
+             ('02', '流式更稳', '注释心跳与有界等待', '及时取消，不盲目重放'),
+             ('03', '诊断有据', '真实状态与规则命中', '有界指标与上下文来源')]
     for index, (number, title, first, second) in enumerate(items):
         x, y = (36, 125 + index * 166) if mobile else (36 + index * 414, 126)
         body += rect(x, y, 568 if mobile else 382, 146 if mobile else 130, 18, '#ffffff', '#e0e8f5')
         body += text(x + 22, y + 32, number, 12, BLUE, 600, letter_spacing='1')
-        body += text(x + 65, y + 37, title, 25 if mobile else 24, INK, 600)
-        body += text(x + 65, y + 76, first, 20 if mobile else 18, MUTED)
-        body += text(x + 65, y + 105, second, 20 if mobile else 18, MUTED)
+        body += text(x + 65, y + 37, title, 28 if mobile else 24, INK, 600)
+        body += text(x + 65, y + 76, first, 24 if mobile else 18, MUTED)
+        body += text(x + 65, y + 105, second, 24 if mobile else 18, MUTED)
     baseline = 659 if mobile else 292
     body += path(f'M36 {baseline} H{width - 36}', LINE, 1)
-    metrics = [('4,301', 'Manager'), ('1,727', '引擎'), ('33', '发布合同')]
+    metrics = [('4,322', 'Manager'), ('1,730', '引擎'), ('29', '切换合同')]
     for index, (value, label) in enumerate(metrics):
         x = 36 + index * (201 if mobile else 395)
-        body += text(x, baseline + 42, value, 26 if mobile else 25, INK, 700)
-        body += text(x + (0 if mobile else 105), baseline + (70 if mobile else 41), label + '通过', 14 if mobile else 16, MUTED)
+        body += text(x, baseline + 42, value, 30 if mobile else 25, INK, 700)
+        body += text(x + (0 if mobile else 105), baseline + (70 if mobile else 41), label + '通过', 22 if mobile else 16, MUTED)
     return canvas(width, height, f'智汇 {VERSION} 发布与验收',
-                  '输入保真、不确定不重放、双账本隔离恢复。数字是本次 Linux 验收记录，不是实时状态或长期保证。', body)
+                  '客户端兼容、流式与容量、准确诊断。数字是本次 Linux 验收记录，不是实时状态或长期保证。', body)
 
 
 def assets():
     return {
         'cover.svg': hero(), 'cover-mobile.svg': hero(True),
+        f'cover-v{VERSION}.svg': hero(), f'cover-mobile-v{VERSION}.svg': hero(True),
         'capabilities.svg': capabilities(), 'capabilities-mobile.svg': capabilities(True),
         'routing.svg': routing(), 'routing-mobile.svg': routing(True),
         'release.svg': release(), 'release-mobile.svg': release(True),
+        f'release-v{VERSION}.svg': release(), f'release-mobile-v{VERSION}.svg': release(True),
         'button-home.svg': button('走进智汇 ↗', 144, True),
         'button-release.svg': button(f'{VERSION} 发布说明', 166),
         f'button-release-v{VERSION}.svg': button(f'{VERSION} 发布说明', 166),

@@ -1371,7 +1371,7 @@ def add_request_log(**fields: object) -> None:
              # RV01：调用方关联 ID（X-Request-ID，校验过）。可空：NULL = 未提供/不合法，
              # 且**绝不**用服务端 request_id 回填。它不是主键，只用于跨系统相关性。
              'client_request_id',
-             'effort','channel','session_key')
+             'effort','channel','session_key','compatibility_version','compatibility_rules')
     if not fields.get('platform'):
         try:
             from .routers import gateway as _gw
@@ -1929,6 +1929,8 @@ _MIGRATIONS += (
     ('request_logs','usage_source','TEXT'),
     ('request_logs','usage_complete','INTEGER'),
     ('request_logs','first_byte_ms','INTEGER'),
+    ('request_logs','compatibility_version','TEXT'),
+    ('request_logs','compatibility_rules','TEXT'),
 )
 SCHEMA += '''
 CREATE TABLE IF NOT EXISTS request_outcomes(

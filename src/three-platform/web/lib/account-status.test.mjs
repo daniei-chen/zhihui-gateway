@@ -318,4 +318,4 @@ check(
 );
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;
