@@ -25,6 +25,7 @@ MAX_FILE = 512 * 1024 * 1024
 MAX_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_FILES = 20000
 FIXED = {'manager.db', 'user-portal.sqlite3', 'users.json'}
+PAIR_FORMAT = 'portal-paired-online-v2'
 
 
 def _regular(path):
@@ -150,9 +151,23 @@ def _check_pair(root):
                 "JOIN portal_spends s ON s.request_id=a.request_id WHERE a.grant_id=g.id AND s.state IN ('reserved','forwarded','unknown')),0) > amount_units LIMIT 1").fetchone()
             if bad:
                 raise ValueError('可用积分与冻结重复计数，拒绝恢复')
+        settlements = {row['request_id']: row for row in portal.execute('SELECT * FROM portal_settlements')}
+        receipts = main.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='portal_spend_receipts'").fetchone()
+        if receipts:
+            for receipt in main.execute('SELECT request_id,owner_id,payload FROM portal_spend_receipts'):
+                settlement = settlements.get(receipt['request_id'])
+                amount = json.loads(receipt['payload']).get('amount_units')
+                if settlement and (settlement['owner_id'] != receipt['owner_id']
+                                   or amount is not None and amount != settlement['supplier_units']):
+                    raise ValueError('双账本费用回执与结算不一致，禁止恢复放行')
+        for settlement in settlements.values():
+            receipt = main.execute('SELECT owner_id,payload FROM portal_spend_receipts WHERE request_id=?', (settlement['request_id'],)).fetchone() if receipts else None
+            resolution = portal.execute('SELECT amount_units FROM portal_spend_resolutions WHERE request_id=?', (settlement['request_id'],)).fetchone()
+            if not receipt and not resolution:
+                raise ValueError('钱包已结算但主账本缺少费用证据，禁止恢复放行')
 
 
-def _copy_database(source, destination):
+def _copy_database(source, destination, *, verify=True):
     # Use a separate reader: backup() on a BEGIN IMMEDIATE connection can wait
     # forever. The caller's write lock prevents new commits while this copies.
     with closing(_sqlite(source)) as reader:
@@ -160,7 +175,8 @@ def _copy_database(source, destination):
             reader.backup(target)
             target.execute('PRAGMA journal_mode=DELETE')
     os.chmod(destination, 0o600)
-    _check_database(destination)
+    if verify:
+        _check_database(destination)
     with destination.open('r+b') as handle:
         os.fsync(handle.fileno())
 
@@ -254,6 +270,52 @@ def create_snapshot(*, main_db, portal_db, users, auths, isolated, spool, destin
         'manifest_sha256': _digest(destination / 'manifest.json')}
 
 
+def create_paired_snapshot(*, main_db, portal_db, users, auths, isolated, spool, destination):
+    paths = [_absolute(Path(path)) for path in (main_db, portal_db, users, auths, isolated, spool, destination)]
+    main_db, portal_db, users, auths, isolated, spool, destination = paths
+    if destination.exists() or any(destination == path or destination.is_relative_to(path) or path.is_relative_to(destination) for path in paths[:-1]):
+        raise ValueError('配对快照必须使用不重叠的新目录')
+    for directory in (auths, isolated, spool):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    before_sources = _source_files(users, auths, isolated, spool)
+    used_marker = portal_db.parent / '.spool-used'
+    if used_marker.exists() or used_marker.is_symlink():
+        before_sources['.spool-used'] = used_marker
+    before = {name: _digest(path) for name, path in before_sources.items()}
+    started = time.monotonic()
+    with ExitStack() as stack:
+        for path in (main_db, portal_db):
+            connection = stack.enter_context(closing(_sqlite(path, writable=True)))
+            connection.execute('PRAGMA busy_timeout=1000')
+            connection.execute('BEGIN IMMEDIATE')
+        destination.mkdir(mode=0o700)
+        _copy_database(main_db, destination / 'manager.db', verify=False)
+        _copy_database(portal_db, destination / 'user-portal.sqlite3', verify=False)
+        for name, path in before_sources.items():
+            _write(destination / name, path.read_bytes())
+        after_sources = _source_files(users, auths, isolated, spool)
+        if used_marker.exists() or used_marker.is_symlink():
+            after_sources['.spool-used'] = used_marker
+        after = {name: _digest(path) for name, path in after_sources.items()}
+        if before != after:
+            raise ValueError('配对快照期间凭据或回执变化，快照未完成')
+    locked_seconds = round(time.monotonic() - started, 3)
+    for name in ('manager.db', 'user-portal.sqlite3'):
+        _check_database(destination / name)
+    _check_pair(destination)
+    files = _inventory(destination)
+    if any(files[name]['sha256'] != digest for name, digest in before.items()):
+        raise ValueError('复制文件摘要不一致，配对快照未完成')
+    manifest = {'format': FORMAT, 'snapshot_id': secrets.token_hex(16), 'created_at': int(time.time()),
+                'offline_operator_confirmed': False, 'consistency': PAIR_FORMAT,
+                'activation_quarantined': True, 'locked_seconds': locked_seconds, 'files': files}
+    _write(destination / 'manifest.json', (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode())
+    return {'snapshot_id': manifest['snapshot_id'], 'file_count': len(files), 'complete': True,
+            'consistency': PAIR_FORMAT, 'activation_quarantined': True,
+            'locked_seconds': locked_seconds,
+            'manifest_sha256': _digest(destination / 'manifest.json')}
+
+
 def verify_snapshot(source, manifest_sha256):
     source = _absolute(source)
     _directory(source)
@@ -263,7 +325,8 @@ def verify_snapshot(source, manifest_sha256):
             or _digest(source / 'manifest.json') != manifest_sha256):
         raise ValueError('清单摘要与独立保存的快照回执不匹配，拒绝恢复')
     manifest = json.loads((source / 'manifest.json').read_text(encoding='utf-8'))
-    if manifest.get('format') != FORMAT or manifest.get('offline_operator_confirmed') is not True:
+    paired = manifest.get('consistency') == PAIR_FORMAT and manifest.get('activation_quarantined') is True
+    if manifest.get('format') != FORMAT or not (manifest.get('offline_operator_confirmed') is True or paired):
         raise ValueError('快照格式或离线声明无效')
     files = manifest.get('files')
     if not isinstance(files, dict) or not FIXED.issubset(files) or not files or any(not _allowed(name) for name in files):
@@ -298,6 +361,7 @@ def restore_quarantine(source, destination, manifest_sha256):
         conn.execute("UPDATE portal_spends SET state='unknown' WHERE state IN ('reserved','forwarded')")
         conn.execute("INSERT OR REPLACE INTO portal_settings VALUES('restore_quarantine','true')")
         conn.execute("INSERT OR REPLACE INTO portal_settings VALUES('automatic_checkin','false')")
+        conn.execute("DELETE FROM portal_settings WHERE key='billing_policy'")
         conn.execute('UPDATE portal_users SET sv=sv+1')
         conn.execute("DELETE FROM portal_settings WHERE key='session_secret'")
         conn.execute("UPDATE portal_auth_sessions SET state='cancelled' WHERE state IN ('waiting','processing')")

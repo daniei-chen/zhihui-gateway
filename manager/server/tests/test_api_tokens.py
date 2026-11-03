@@ -279,6 +279,7 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
 
     # 服务级 / 不可逆 / 能提权或抹痕迹的动作，只对**会话**开放。
     SESSION_ONLY = {
+        'POST /api/budgets/{request_id}/resolve',
         'POST /api/auth/start',  # Authorization can persist provider credentials.
         'POST /api/auth/review',  # Owner-bound evidence; human admin session only.
         'POST /api/auth/finish',

@@ -9,6 +9,7 @@ class Resolution(BaseModel):
     tokens: int = Field(ge=0)
     credit: float = Field(ge=0,allow_inf_nan=False)
     reason: str = Field(min_length=1,max_length=500)
+    evidence: str = Field(min_length=8,max_length=500)
 
 @router.get('/unresolved')
 def unresolved(user=Depends(security.require_panel_reader)):
@@ -24,8 +25,12 @@ def unresolved(user=Depends(security.require_panel_reader)):
     return budget.unresolved_summary()
 
 @router.post('/{request_id}/resolve')
-def resolve(request_id:str,body:Resolution,user=Depends(security.require_admin)):
+def resolve(request_id:str,body:Resolution,user=Depends(security.require_recent_session_admin)):
     try:
-        return {'changed':budget.resolve(request_id,body.tokens,body.credit,user['username'],body.reason)}
+        if len(body.reason.strip()) < 8 or len(body.evidence.strip()) < 8:
+            raise ValueError('核销原因和凭证说明至少8字符')
+        with security.authorization_guard(user):
+            return {'changed':budget.resolve(request_id,body.tokens,body.credit,user['username'],body.reason,
+                                             human_evidence=body.evidence)}
     except ValueError as exc:
         raise HTTPException(409,detail=str(exc)) from None

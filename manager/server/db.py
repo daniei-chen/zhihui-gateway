@@ -575,7 +575,7 @@ def _connect_locked() -> sqlite3.Connection:
             _conn = sqlite3.connect(str(config.DB_PATH), check_same_thread=False)
             _conn.row_factory = sqlite3.Row
             _conn.execute('PRAGMA journal_mode=WAL')
-            _conn.execute('PRAGMA synchronous=NORMAL')
+            _conn.execute('PRAGMA synchronous=FULL')
             # U27（2026-10-28）：把等待预算**显式化**。这个值原先来自
             # `sqlite3.connect(timeout=5.0)` 的驱动默认（实测 `PRAGMA busy_timeout`
             # 就是 5000），代码里看不到、也没人记录命中 —— 于是「某请求等了 4.9 秒」
@@ -1943,6 +1943,14 @@ from .requestperf import SCHEMA as _PERFORMANCE_SCHEMA
 SCHEMA += _PERFORMANCE_SCHEMA
 from .ledger import SCHEMA as _LEDGER_SCHEMA
 SCHEMA += _LEDGER_SCHEMA
+from .providerevents import SCHEMA as _PROVIDER_EVENTS_SCHEMA
+SCHEMA += _PROVIDER_EVENTS_SCHEMA
+SCHEMA += '''CREATE TABLE IF NOT EXISTS request_lifetime_ends_v2(
+ request_id TEXT PRIMARY KEY,key_id INTEGER NOT NULL,owner TEXT NOT NULL,ended_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_resolution_evidence_v2(
+ request_id TEXT PRIMARY KEY,actor TEXT NOT NULL,reason TEXT NOT NULL,evidence TEXT NOT NULL,created_at INTEGER NOT NULL
+);'''
 # K01-S1：QTG 旧 key 迁移台账（legacy_qtg_keys）。DDL 由 legacymig 维护——
 # 与 ledger 的用法同一模式：表的所有者写建表语句，db 只在初始化路径里执行，
 # 避免两处 DDL 各写一遍然后漂移（CREATE TABLE IF NOT EXISTS 可重复执行）。

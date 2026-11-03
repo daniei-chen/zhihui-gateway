@@ -1,8 +1,8 @@
 {
-  "schema": "zhihui.writer-release",
-  "version": 1,
-  "release_id": "v0.0.4+portal.20261102.2",
-  "role_policy": 2,
+  "account_admin_routes": "account-add-only-default-deny",
   "key_daily_usage": 1,
-  "account_admin_routes": "account-add-only-default-deny"
+  "release_id": "v0.0.5+audit.20261103.1",
+  "role_policy": 2,
+  "schema": "zhihui.writer-release",
+  "version": 1
 }

@@ -1,5 +1,5 @@
 /* Shared public-home visual language; preserve application and Dock behavior. */
-html:has(#main-content) {
+html:is(:has(#main-content), :has(.user-portal)) {
   --zh-paper: #fdfefe;
   --zh-ice: #f6f9fd;
   --zh-blue: #3683fc;
@@ -13,7 +13,7 @@ html:has(#main-content) {
     var(--font-noto-sans-sc), "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
-html:not(.dark):has(#main-content) {
+html:not(.dark):is(:has(#main-content), :has(.user-portal)) {
   --background: #ffffff;
   --foreground: var(--zh-ink);
   --card: #ffffff;
@@ -39,12 +39,12 @@ html:not(.dark):has(#main-content) {
   --chart-expense: #cf8b32;
 }
 
-html:has(#main-content) body {
+html:is(:has(#main-content), :has(.user-portal)) body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
-html:not(.dark):has(#main-content) body {
+html:not(.dark):is(:has(#main-content), :has(.user-portal)) body {
   background-color: var(--zh-paper);
   background-image:
     radial-gradient(ellipse 34% 700px at 0 58%, #eaf7f3 0, transparent 100%),

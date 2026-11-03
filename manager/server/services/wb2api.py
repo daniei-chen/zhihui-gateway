@@ -1928,6 +1928,12 @@ def save_upstream_config(patch: dict) -> dict:
     """
     from ..upstreamschema import validate
     validate(patch)
+    if isinstance(patch.get('schedule'), dict) and patch['schedule'].get('checkin_enabled') is True:
+        from .. import portalstore
+        if (config.DATA_DIR / 'user-portal.sqlite3').exists():
+            with portalstore.transaction() as conn:
+                if conn.execute('SELECT 1 FROM portal_pool_links LIMIT 1').fetchone():
+                    raise ValueError('已有用户账号贡献公共池，请使用总台共享签到；不能重新启用引擎独立签到')
     path = config.UPSTREAM_CONFIG
     if not path.is_file():
         raise FileNotFoundError(f'未找到上游配置文件 {path}，已取消保存')

@@ -2,10 +2,10 @@ import Link from 'next/link';
 import {useId} from 'react';
 import {PRODUCT_NAME} from '@/lib/product';
 
-export function BrandHome() {
+export function BrandHome({href = '/dashboard'}: {href?: string} = {}) {
   const gradient = useId();
   return (
-    <Link href="/dashboard" className="zh-console-brand" data-slot="console-brand">
+    <Link href={href} className="zh-console-brand" data-slot="console-brand">
       <svg aria-hidden="true" className="zh-console-brand-mark" viewBox="0 0 40 40" fill="none">
         <defs><linearGradient id={gradient} x1="6" y1="5" x2="34" y2="35" gradientUnits="userSpaceOnUse">
           <stop stopColor="#7391FA" /><stop offset="1" stopColor="#4D6CEB" />

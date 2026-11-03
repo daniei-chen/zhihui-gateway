@@ -123,6 +123,8 @@ def attempt(value):
     import re
     from . import db
     if not isinstance(value,dict) or value.get('event')!='workbuddy_attempt':return False
+    if value.get('dispatch_id'):
+        return False
     rid=value.get('request_id');number=value.get('attempt');phase=value.get('phase')
     phases={'selected','capacity_lost','refresh_failed','refresh_write_failed','upstream_headers','stream_terminal','aggregate_terminal'}
     if not isinstance(rid,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}',rid):return False
@@ -268,6 +270,17 @@ def derive_attempt_billing(request_id: str) -> list[dict]:
       · 其余（到达上游但无终态事件、请求级无 usage、或同一请求有多个 attempt
         到达上游而无法归属）→ `unknown` / `absent`。
     """
+    from . import providerevents
+    actual = providerevents.report(request_id)
+    if actual['dispatch_count'] or actual['attempt_count']:
+        identities = sorted({(event['dispatch_id'], event['rotation'], event['provider_attempt']) for event in actual['events']})
+        if not identities:
+            identities = [(None, None, None)] * actual['dispatch_count']
+        return [{'attempt': number, 'billing_fact': BILLING_UNKNOWN, 'billing_source': BILLING_SOURCE_ABSENT,
+                 'evidence': '实际供应商调用已独立留痕；缺少每次调用的供应商费用回执，不归属金额',
+                 'phases': [], 'reached_upstream': None,
+                 'provider_identity': {'dispatch_id': identity[0], 'rotation': identity[1], 'provider_attempt': identity[2]}}
+                for number, identity in enumerate(identities, 1)]
     phases = _attempt_phases(request_id)
     if not phases:
         return []
@@ -355,7 +368,7 @@ def attempt_billing_report(request_id: str) -> dict:
     per-attempt 回执与关联 ID —— 任何 per-attempt 金额都是编造的。要拿到
     per-attempt 费用，先把 `PER_ATTEMPT_BILLING_REQUIREMENTS` 补齐。
     """
-    from . import db
+    from . import db, providerevents
     attempts = derive_attempt_billing(request_id)
     recorded = {int(r['attempt']): r for r in db.query(
         'SELECT attempt,billing_fact,billing_source,evidence,ts '
@@ -373,7 +386,9 @@ def attempt_billing_report(request_id: str) -> dict:
     return {
         'request_id': request_id,
         'attempt_count': len(attempts),
-        'attempt_count_source': 'pool_attempt_events' if attempts else 'absent',
+        'attempt_count_source': ('provider_attempt_events_v2' if any(item.get('provider_identity') for item in attempts)
+                                 else 'pool_attempt_events' if attempts else 'absent'),
+        'provider_evidence': providerevents.report(request_id),
         'attempts': [{k: item[k] for k in
                       ('attempt', 'billing_fact', 'billing_source', 'evidence',
                        'reached_upstream')} for item in attempts],
@@ -478,7 +493,7 @@ def attempt_timeline(request_id: str) -> dict:
     刻意**不做**的事：不把"最后一个 phase"说成"失败原因"（那只是记录到的最后一个
     事件，是否失败以 `request.terminal_state` 为准）；不补 0、不推算缺失的 attempt。
     """
-    from . import db
+    from . import db, providerevents
     events = db.query(
         'SELECT attempt,phase,ts,account_uid,resolved_model,realm,status,config_hash '
         'FROM attempt_events WHERE request_id=? ORDER BY attempt,ts,phase',
@@ -538,6 +553,7 @@ def attempt_timeline(request_id: str) -> dict:
 
     return {
         'request_id': request_id,
+        'provider_evidence': providerevents.report(request_id),
         'explainable': False,
         'reason': EXPLAIN_REASON,
         'boundary': {key: list(value) for key, value in EXPLAIN_BOUNDARY.items()},

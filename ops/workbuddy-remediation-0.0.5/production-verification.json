@@ -1,0 +1,178 @@
+{
+  "actual_production_rollback_executed": false,
+  "backup": {
+    "full_recovery_real_decryption_verified": true,
+    "local_only": true,
+    "offsite_uploaded": false,
+    "online_pair_lock_seconds": 1.675,
+    "paired_quarantine_restore": true,
+    "real_decryption_verified": true
+  },
+  "bridge_checks": [
+    {
+      "case": 0,
+      "completed": true,
+      "failed": false,
+      "incomplete_details": null,
+      "passed": true,
+      "path": "/v1/responses",
+      "response_sha256": "e7e6b94c609485ce7dbf1b458c9b0e78a206f4cad0134bf921ff9c9d3e97c303",
+      "seconds": 1.844,
+      "status": 200,
+      "terminal_type": "response.completed"
+    },
+    {
+      "case": 1,
+      "completed": true,
+      "failed": false,
+      "incomplete_details": null,
+      "passed": true,
+      "path": "/backend-api/codex/responses",
+      "response_sha256": "577b294f00fa6767bb3b917aa91bde70b91cd620535afc45fa941a2c03db2815",
+      "seconds": 1.547,
+      "status": 200,
+      "terminal_type": "response.completed"
+    },
+    {
+      "case": 2,
+      "completed": true,
+      "failed": false,
+      "incomplete_details": null,
+      "passed": true,
+      "path": "/v1/responses",
+      "response_sha256": "9831c98340fa00d8fabbc3868d3332094f4365892442356f7efff36371853a59",
+      "seconds": 1.531,
+      "status": 200,
+      "terminal_type": "response.completed"
+    },
+    {
+      "case": 3,
+      "completed": true,
+      "failed": false,
+      "incomplete_details": null,
+      "passed": true,
+      "path": "/v1/responses",
+      "response_sha256": "eb6071a02add45a77090f87d1ad455bc91c0c51a01250adeeae610df0996f0e7",
+      "seconds": 2.985,
+      "status": 200,
+      "terminal_type": "response.completed"
+    }
+  ],
+  "code_rollback_restores_business_data": false,
+  "engine_elf_sha256": "4ea171d5120d3c45e5243e1c4c49d2fc32136424293cdf39f53574fdfd798ae1",
+  "engine_gate": {
+    "failed": 0,
+    "linux_packages": 18,
+    "passed": 1727
+  },
+  "engine_image_sha256": "sha256:5fa32a4be950ab3e9c30986e55fd535759336720074b125ad868e01d84a271ae",
+  "frontend_preserved": true,
+  "frontend_rebuilt": false,
+  "limitations": [
+    "No physical power-loss test or long-term SLO certification.",
+    "Provider per-attempt billing and cancellation are not inferred from local send/header events.",
+    "Responses unsupported strict/serial/history/background semantics fail explicitly before forwarding.",
+    "Historical unknown financial rows remain unchanged; no zero-cost reconstruction.",
+    "Public tag commit is a source publication record, not the deployed signature or fabricated build commit.",
+    "Existing weak administrator password warning and P2 items remain separately actionable."
+  ],
+  "live_checks": [
+    {
+      "check": "chat_codex_prefix",
+      "error_code": null,
+      "passed": true,
+      "request_id": "0fe26960c6cb4f16b07d9a08572f58bd",
+      "seconds": 1.218,
+      "status": 200
+    },
+    {
+      "check": "responses_codex_prefix",
+      "error_code": null,
+      "passed": true,
+      "request_id": "39127752cc244b09a6c2e8ecdc0a376b",
+      "seconds": 1.905,
+      "status": 200
+    },
+    {
+      "check": "messages_codex_prefix",
+      "error_code": null,
+      "passed": true,
+      "request_id": "e4383bd727da4f18ab5ba37753bc871c",
+      "seconds": 1.43,
+      "status": 200
+    },
+    {
+      "check": "unsupported_previous_response_id",
+      "error_code": "unsupported_previous_response_id",
+      "passed": true,
+      "status": 400
+    },
+    {
+      "check": "unsupported_background",
+      "error_code": "unsupported_background",
+      "passed": true,
+      "status": 400
+    },
+    {
+      "check": "unsupported_parallel_tool_calls",
+      "error_code": "unsupported_parallel_tool_calls",
+      "passed": true,
+      "status": 400
+    },
+    {
+      "check": "unsupported_strict_tools",
+      "error_code": "unsupported_strict_tools",
+      "passed": true,
+      "status": 400
+    },
+    {
+      "check": "admin_api_token_cannot_resolve",
+      "passed": true,
+      "status": 403
+    },
+    {
+      "check": "stale_human_session_cannot_resolve",
+      "passed": true,
+      "status": 403
+    },
+    {
+      "check": "accepted_product_identity",
+      "passed": true,
+      "status": 200
+    }
+  ],
+  "maintenance": {
+    "engine_and_manager_seconds": 119.345,
+    "version_only_seconds": 46.387,
+    "zero_downtime_claimed": false
+  },
+  "manager_gate": {
+    "existing_skipped": 9,
+    "failed": 0,
+    "linux_passed": 4301,
+    "subtests": 3011
+  },
+  "manifest_sha256": "11adf9e2fa478d7b60404c66e8c2fca9fa7a63105a7db03f37cc1a889a8327f0",
+  "observed_at": 1793705561,
+  "product": "智汇网关",
+  "production_accepted": true,
+  "production_version": "0.0.5",
+  "provider_evidence_conflicts": 0,
+  "publisher_contracts": {
+    "failed": 0,
+    "passed": 33,
+    "synthetic": true
+  },
+  "release_id": "v0.0.5+audit.20261103.1",
+  "rotation": {
+    "customer_keys_rotated": false,
+    "internal_only": true,
+    "new_key_http": 200,
+    "old_key_http": 401,
+    "supplier_credentials_rotated": false
+  },
+  "schema": 1,
+  "source_commit": null,
+  "source_kind": "verified-production-snapshot-plus-reviewed-patch",
+  "tested_source_tree_sha256": "d0542c5bd1e3d76c31b954b1300c6c95874868c0aa2bf512e70cb80a81f88c75"
+}

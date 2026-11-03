@@ -728,6 +728,7 @@ def _cookie_identity(request: Request, cfg: dict) -> dict:
         # 与上面那条分开报，是为了让用户知道「不是我密码/权限变了，是太久没用」。
         raise HTTPException(status_code=401, detail='登录已超时（长时间未操作），请重新登录')
     user = {'username': username, 'role': row.get('role', 'viewer'),
+            '_session_auth_at': obj.get('orig'),
             '_authorization_binding': _authorization_fingerprint(cfg, row)}
     # 续期请求交给中间件写 cookie（这里**不产生副作用**：current_user 只解析身份，
     # 被 FastAPI 依赖注入在任意接口上调用，若在这里写响应会耦合不必要的层）。
@@ -1055,6 +1056,13 @@ def require_account_adder(request: Request,
             or user.get('scope') or user.get('role') not in userroles.HUMAN_ROLES):
         raise HTTPException(status_code=403, detail='添加账号需要管理员或超级管理员本人会话')
     return authorization_owner(user)
+
+
+def require_recent_session_admin(request: Request, user: dict = Depends(require_session_admin)) -> dict:
+    authenticated = user.get('_session_auth_at')
+    if type(authenticated) is not int or not 0 <= time.time() - authenticated <= 900:
+        raise HTTPException(403, detail='财务核销需要15分钟内重新登录的管理员本人会话')
+    return user
 
 
 def _authorization_fingerprint(cfg: dict, row: dict) -> str:

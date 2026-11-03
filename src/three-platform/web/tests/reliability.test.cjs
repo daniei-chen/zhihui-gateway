@@ -560,3 +560,583 @@ test('evidence frame hides retained data on 403/501 but labels a failed refresh 
   assert.doesNotMatch(render(501), /RETAINED_FIXTURE_DATA/); assert.match(render(501), /operations.unavailable/);
   assert.match(render(500), /RETAINED_FIXTURE_DATA/); assert.match(render(500), /operations.stale/);
 });
+
+function descendants(node) {
+  if (node === null || node === undefined || typeof node !== 'object') return [];
+  if (Array.isArray(node)) return node.flatMap(descendants);
+  return [node, ...descendants(node.props?.children)];
+}
+
+function createMemberFixture(fetch, saved = async () => {}) {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  class PortalError extends Error { constructor(status, message) {super(message); this.status = status;} }
+  const components = Object.fromEntries(['Dialog', 'DialogBody', 'DialogContent', 'DialogDescription', 'DialogHeader', 'DialogTitle'].map(name => [name, name]));
+  const icons = Object.fromEntries(['Check', 'Eye', 'EyeOff', 'ShieldCheck', 'Sparkles', 'UserPlus'].map(name => [name, name]));
+  const {default: Create} = load('app/(main)/members/CreateMemberDialog.tsx', {
+    react: {...h.react, useId: () => 'create-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': icons, '@/components/animate-ui/radix/dialog': components,
+    '@/lib/portal-api': {PortalError, portalFetch: fetch},
+    '@/lib/portal-members': load('lib/portal-members.ts', {}),
+    globals: {crypto: {getRandomValues(bytes) {bytes.fill(7); return bytes;}}},
+  });
+  let closed = 0;
+  const render = () => h.render(() => Create({close() {closed++;}, saved}));
+  const nodes = () => descendants(render());
+  const input = suffix => nodes().find(node => node.type === 'input' && node.props.id.endsWith(suffix));
+  const form = () => nodes().find(node => node.type === 'form');
+  return {render, nodes, input, form, PortalError, closed: () => closed};
+}
+
+test('create user keeps raw password and guards immediate duplicate submissions', async () => {
+  const pending = deferred(), calls = [];
+  let refreshed = 0;
+  const f = createMemberFixture((path, options) => {calls.push({path, options}); return pending.promise;}, async () => {refreshed++;});
+  f.input('username').props.onChange({target: {value: 'local-user'}});
+  f.input('password').props.onChange({target: {value: '  raw  8'}});
+  const submit = f.form().props.onSubmit;
+  submit({preventDefault() {}}); submit({preventDefault() {}});
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {username: 'local-user', password: '  raw  8'});
+  assert.equal(f.input('password').props.disabled, true);
+  pending.resolve({id: 'synthetic', username: 'local-user'});
+  await flush();
+  assert.equal(refreshed, 1);
+  assert.match(JSON.stringify(f.render()), /用户已开通/);
+  assert.doesNotMatch(JSON.stringify(f.render()), /  raw  8/);
+  assert.equal(f.nodes().filter(node => node.type === 'input').length, 0);
+});
+
+test('eight-character weak passwords show exact server reason instead of fake length error', async () => {
+  let f;
+  f = createMemberFixture(async () => {throw new f.PortalError(400, '密码过于常见，请换一个');});
+  f.input('username').props.onChange({target: {value: 'local-user'}});
+  f.input('password').props.onChange({target: {value: '12345678'}});
+  f.form().props.onSubmit({preventDefault() {}});
+  await flush();
+  assert.match(JSON.stringify(f.render()), /密码过于常见，请换一个/);
+  assert.equal(f.input('password').props['aria-invalid'], true);
+  assert.equal(f.input('password').props.value, '12345678');
+  f.input('password').props.onChange({target: {value: '07392641'}});
+  assert.equal(f.input('password').props['aria-invalid'], false);
+  assert.doesNotMatch(JSON.stringify(f.render()), /密码过于常见，请换一个/);
+});
+
+test('creation remains successful when following user-list refresh fails', async () => {
+  let calls = 0;
+  const f = createMemberFixture(async () => {calls++; return {id: 'new', username: 'local-user'};}, async () => {throw new Error('refresh failed');});
+  f.input('username').props.onChange({target: {value: 'local-user'}});
+  f.input('password').props.onChange({target: {value: 'D7x!p9Q2'}});
+  f.form().props.onSubmit({preventDefault() {}});
+  await flush();
+  assert.equal(calls, 1);
+  assert.match(JSON.stringify(f.render()), /用户创建成功，但列表刷新失败/);
+  assert.doesNotMatch(JSON.stringify(f.render()), /确认开通用户/);
+});
+
+test('creation cannot dismiss while the request is pending', async () => {
+  const pending = deferred();
+  const f = createMemberFixture(() => pending.promise);
+  f.input('username').props.onChange({target: {value: 'local-user'}});
+  f.input('password').props.onChange({target: {value: 'D7x!p9Q2'}});
+  f.form().props.onSubmit({preventDefault() {}});
+  let prevented = 0;
+  const content = f.nodes().find(node => node.type === 'DialogContent');
+  content.props.onEscapeKeyDown({preventDefault() {prevented++;}});
+  content.props.onInteractOutside({preventDefault() {prevented++;}});
+  f.render().props.onOpenChange(false);
+  assert.equal(prevented, 2); assert.equal(f.closed(), 0);
+  pending.resolve({id: 'new', username: 'local-user'}); await flush();
+  f.render().props.onOpenChange(false); assert.equal(f.closed(), 1);
+});
+
+test('creation confirmation waits for its refresh before allowing completion', async () => {
+  const refresh = deferred();
+  const f = createMemberFixture(async () => ({id: 'new', username: 'local-user'}), () => refresh.promise);
+  f.input('username').props.onChange({target: {value: 'local-user'}});
+  f.input('password').props.onChange({target: {value: 'D7x!p9Q2'}});
+  f.form().props.onSubmit({preventDefault() {}}); await flush();
+  const finish = () => f.nodes().find(node => node.type === 'button' && node.props.children === '完成');
+  assert.equal(finish().props.disabled, true);
+  refresh.resolve(); await flush(); assert.equal(finish().props.disabled, false);
+});
+
+test('animated dialog keeps Radix lifecycle handlers off the motion DOM element', () => {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  const {DialogContent} = load('components/animate-ui/radix/dialog.tsx', {
+    react: {...h.react, useContext: () => ({isOpen: true})},
+    'react/jsx-runtime': {jsx, jsxs: jsx}, 'radix-ui': {Dialog: {Content: 'primitive-content'}},
+    'lucide-react': {X: 'icon'}, 'motion/react': {AnimatePresence: 'presence', motion: {div: 'motion-div'}},
+    '@/lib/utils': {cn: (...values) => values.filter(Boolean).join(' ')}, '@/components/ui/scroll-area': {ScrollArea: 'scroll'},
+  });
+  const handlers = Object.fromEntries(['onOpenAutoFocus', 'onCloseAutoFocus', 'onEscapeKeyDown',
+    'onPointerDownOutside', 'onFocusOutside', 'onInteractOutside'].map(key => [key, () => {}]));
+  const tree = h.render(() => DialogContent({...handlers, className: 'test-dialog', 'aria-label': 'test', children: 'content'}));
+  const nodes = descendants(tree);
+  const primitive = nodes.find(node => node.type === 'primitive-content');
+  const motion = descendants(primitive).find(node => node.type === 'motion-div');
+  for (const [key, handler] of Object.entries(handlers)) {
+    assert.equal(primitive.props[key], handler, key);
+    assert.equal(motion.props[key], undefined, key);
+  }
+  assert.equal(motion.props['aria-label'], 'test');
+  assert.match(motion.props.className, /test-dialog/);
+});
+
+test('controlled dialogs stay open when the owner rejects dismissal', () => {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  let requested;
+  const {Dialog} = load('components/animate-ui/radix/dialog.tsx', {
+    react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'radix-ui': {Dialog: {Root: 'primitive-root'}},
+    'lucide-react': {}, 'motion/react': {}, '@/lib/utils': {}, '@/components/ui/scroll-area': {},
+  });
+  const render = () => h.render(() => Dialog({open: true, onOpenChange: value => {requested = value;}, children: null}));
+  render(); h.effects();
+  render().props.children.props.onOpenChange(false);
+  assert.equal(requested, false);
+  assert.equal(render().props.value.isOpen, true);
+});
+
+test('uncontrolled dialogs still track their own open and close requests', () => {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  const {Dialog} = load('components/animate-ui/radix/dialog.tsx', {
+    react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'radix-ui': {Dialog: {Root: 'primitive-root'}},
+    'lucide-react': {}, 'motion/react': {}, '@/lib/utils': {}, '@/components/ui/scroll-area': {},
+  });
+  const render = () => h.render(() => Dialog({defaultOpen: false, children: null}));
+  assert.equal(render().props.value.isOpen, false);
+  render().props.children.props.onOpenChange(true); assert.equal(render().props.value.isOpen, true);
+  render().props.children.props.onOpenChange(false); assert.equal(render().props.value.isOpen, false);
+});
+
+function passwordMemberFixture(fetch, saved = async () => {}) {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  const components = Object.fromEntries(['Dialog', 'DialogBody', 'DialogContent', 'DialogDescription', 'DialogHeader', 'DialogTitle'].map(name => [name, name]));
+  const {default: Password} = load('app/(main)/members/PasswordDialog.tsx', {
+    react: {...h.react, useId: () => 'reset-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    '@/components/animate-ui/radix/dialog': components,
+    '@/lib/portal-api': {portalFetch: fetch}, '@/lib/portal-members': load('lib/portal-members.ts', {}),
+  });
+  let closed = 0;
+  const render = () => h.render(() => Password({user: {id: 'local-user', username: 'local-user'}, close() {closed++;}, saved}));
+  const nodes = () => descendants(render());
+  const inputs = () => nodes().filter(node => node.type === 'input');
+  const prepare = password => {
+    inputs()[0].props.onChange({target: {value: password}});
+    inputs()[1].props.onChange({target: {value: password}});
+    inputs()[2].props.onChange({target: {checked: true}});
+  };
+  const form = () => nodes().find(node => node.type === 'form');
+  return {render, nodes, inputs, prepare, form, closed: () => closed};
+}
+
+test('password reset stays successful and clears secrets when the list refresh fails', async () => {
+  const calls = [];
+  const f = passwordMemberFixture(async (path, options) => {calls.push({path, options});}, async () => {throw new Error('offline');});
+  f.prepare('  raw  8'); f.form().props.onSubmit({preventDefault() {}}); await flush();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {password: '  raw  8'});
+  assert.match(JSON.stringify(f.render()), /密码已重置，但列表刷新失败/);
+  assert.doesNotMatch(JSON.stringify(f.render()), /  raw  8|确认重置密码/);
+  assert.equal(f.inputs().length, 0);
+  f.form().props.onSubmit({preventDefault() {}}); await flush(); assert.equal(calls.length, 1);
+});
+
+test('password reset shows authoritative rejection and cannot dismiss or submit twice while pending', async () => {
+  const pending = deferred(); let calls = 0;
+  const f = passwordMemberFixture(() => {calls++; return pending.promise;});
+  f.prepare('12345678');
+  const submit = f.form().props.onSubmit;
+  submit({preventDefault() {}}); submit({preventDefault() {}});
+  assert.equal(calls, 1);
+  let prevented = 0;
+  const content = f.nodes().find(node => node.type === 'DialogContent');
+  content.props.onEscapeKeyDown({preventDefault() {prevented++;}});
+  content.props.onInteractOutside({preventDefault() {prevented++;}});
+  f.render().props.onOpenChange(false);
+  assert.equal(prevented, 2); assert.equal(f.closed(), 0);
+  pending.reject(new Error('密码过于常见，请换一个')); await flush();
+  assert.match(JSON.stringify(f.render()), /密码过于常见，请换一个/);
+  assert.equal(f.inputs()[0].props['aria-invalid'], true);
+  assert.equal(f.inputs()[0].props.value, '12345678');
+  f.inputs()[0].props.onChange({target: {value: 'D7x!p9Q2'}});
+  assert.doesNotMatch(JSON.stringify(f.render()), /密码过于常见，请换一个/);
+});
+
+function portalLoginFixture(login) {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  const {default: Login} = load('app/portal/PortalLogin.tsx', {
+    react: {...h.react, useId: () => 'login-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': Object.fromEntries(['ArrowUpRight','CalendarCheck','Eye','EyeOff','ScanLine','ShieldCheck'].map(name => [name,name])),
+    '@/components/ui/button': {Button: 'button'}, '@/components/ui/input': {Input: 'input'}, '@/components/ui/label': {Label: 'label'},
+  });
+  const render = () => h.render(() => Login({login}));
+  const form = () => descendants(render()).find(node => node.type === 'form');
+  return {render, form};
+}
+
+test('portal login uses actual autofilled form values, preserves password and submits once', async () => {
+  const pending=deferred(), calls=[]; let cleared=0;
+  const f=portalLoginFixture((...args) => {calls.push(args); return pending.promise;});
+  const form={elements:{namedItem: name => ({value:name === 'username' ? ' local-demo ' : '  raw  8'})},reset(){cleared++;}};
+  const event={preventDefault(){},currentTarget:form};
+  const submit=f.form().props.onSubmit;
+  submit(event); submit(event); assert.equal(calls.length,1);
+  assert.deepEqual(calls[0],['local-demo','  raw  8']);
+  pending.resolve(); await flush(); assert.equal(cleared,1);
+});
+
+test('portal login exposes errors, does not erase rejected input, and rejects empty submissions locally', async () => {
+  const f=portalLoginFixture(async () => {throw new Error('用户名或密码错误');});
+  let cleared=0;
+  const form={elements:{namedItem:()=>({value:''})},reset(){cleared++;}};
+  const event={preventDefault(){},currentTarget:form};
+  f.form().props.onSubmit(event); await flush(); assert.match(JSON.stringify(f.render()),/请填写用户名和密码/);
+  form.elements.namedItem=()=>({value:'synthetic'});
+  f.form().props.onSubmit(event); await flush(); assert.match(JSON.stringify(f.render()),/用户名或密码错误/);
+  assert.equal(cleared,0);
+  for(const input of descendants(f.render()).filter(node=>node.type==='input')) assert.equal(input.props['aria-invalid'],true);
+});
+
+test('portal reuses console brand and stat components with accessible tabs and truthful dispatch state', () => {
+  const page=fs.readFileSync(path.join(root,'app/portal/page.tsx'),'utf8');
+  assert.match(page,/<BrandHome href="\/portal"/);
+  assert.match(page,/<StatCard/); assert.match(page,/<TabsList aria-label="用户工作台页面"/);
+  assert.match(page,/data.dispatch_enabled/); assert.match(page,/data.pool_enabled/);
+  assert.doesNotMatch(page,/本地候选|portal-mark|Your accounts\. Your credits\./);
+  const login=fs.readFileSync(path.join(root,'app/portal/PortalLogin.tsx'),'utf8');
+  assert.doesNotMatch(login,/localStorage|sessionStorage|console\.|maxLength/);
+});
+
+function portalPageFixture(fetch) {
+  const h = hookHarness();
+  const timers = new Map(); let timerId = 0;
+  const jsx = (type, props) => ({type, props});
+  class PortalError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const api = {portalFetch: fetch, PortalError, points: String, portalTime: String, canCheckin: () => false, checkinLabel: String};
+  const globals = {AbortController, URL, document: {hidden: false, activeElement: null, getElementById: () => null, addEventListener() {}, removeEventListener() {}},
+    window: {setInterval(fn) {timers.set(++timerId, fn); return timerId;}, clearInterval(id) {timers.delete(id);}}};
+  const workspace = load('lib/use-portal-workspace.ts', {react: h.react,
+    './portal-api': api, './use-heartbeat': {useHeartbeat() {}}, globals});
+  const {default: Portal} = load('app/portal/page.tsx', {
+    react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'qrcode.react': {QRCodeSVG: 'qr'},
+    'lucide-react': {}, '@/lib/portal-api': api, './portal.css': {},
+    './PortalKeys': {default: 'keys'}, './PortalLogin': {default: 'login'}, './PortalRequests': {default: 'requests'},
+    '@/lib/use-portal-workspace': workspace, '@/lib/portal-display': {checkinSummary: () => ({total: 0,ready: 0,pending: 0,confirmed: 0})},
+    '@/components/common/layout/BrandHome': {BrandHome: 'brand'}, '@/components/common/layout/StatCard': {StatCard: 'stat'},
+    '@/components/ui/tabs': Object.fromEntries(['Tabs','TabsContent','TabsList','TabsTrigger'].map(name => [name,name])),
+    globals,
+  });
+  const render = () => h.render(() => {const outer = Portal(); return outer.type(outer.props);});
+  return {h, render, PortalError, timers};
+}
+
+test('portal overview does not fetch inactive request history or depend on its availability', async () => {
+  const calls = [];
+  const f = portalPageFixture(async path => {
+    calls.push(path);
+    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
+    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    throw new Error('history unavailable');
+  });
+  f.render(); f.h.effects(); await flush();
+  assert.equal(calls.some(path => path.startsWith('portal/requests')), false);
+  assert.match(JSON.stringify(f.render()), /fixture/);
+});
+
+test('unreachable portal session is a retryable connection state, not a sign-in form', async () => {
+  const f = portalPageFixture(async () => {throw new Error('synthetic offline');});
+  f.render(); f.h.effects(); await flush();
+  assert.equal(descendants(f.render()).some(node => node.type === 'login'), false);
+  assert.match(JSON.stringify(f.render()), /重新连接/);
+});
+
+function workspaceFixture(fetch) {
+  const h = hookHarness(); let heartbeat;
+  class PortalError extends Error {constructor(status, message) {super(message); this.status = status;}}
+  const {usePortalWorkspace} = load('lib/use-portal-workspace.ts', {
+    react: h.react, './portal-api': {PortalError, portalFetch: fetch},
+    './use-heartbeat': {useHeartbeat(fn) {heartbeat = fn;}}, globals: {AbortController},
+  });
+  const render = () => h.render(usePortalWorkspace);
+  return {h, render, PortalError, heartbeat: () => heartbeat()};
+}
+
+test('workspace partial failure retains confirmed identity and never marks network errors as anonymous', async () => {
+  let attempt = 0;
+  const f = workspaceFixture(async path => {
+    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
+    if (++attempt === 1) throw new Error('overview offline');
+    return {balance_units: 55};
+  });
+  f.render(); f.h.effects(); await flush();
+  let state = f.render(); assert.equal(state.me.id, 'fixture'); assert.equal(state.anonymous, false);
+  assert.equal(state.data, null); assert.equal(state.pending, false); assert.match(state.error, /overview offline/);
+  await state.reload(); state = f.render(); assert.equal(state.data.balance_units, 55); assert.equal(state.error, '');
+});
+
+test('workspace background reads coalesce, mutation reload supersedes old work, and reset rejects late data', async () => {
+  const reads = [], calls = [];
+  const f = workspaceFixture(path => {
+    calls.push(path);
+    if (path === 'portal/me') return Promise.resolve({id: 'fixture', username: 'fixture'});
+    const pending = deferred(); reads.push(pending); return pending.promise;
+  });
+  f.render(); f.h.effects(); await flush();
+  const background = f.heartbeat(); await flush(); assert.equal(reads.length, 1);
+  const reload = f.render().reload(); await flush(); assert.equal(reads.length, 2);
+  reads[1].resolve({balance_units: 99}); await reload;
+  reads[0].resolve({balance_units: 1}); await background; await flush();
+  assert.equal(f.render().data.balance_units, 99);
+  const last = f.render().reload(); await flush(); f.render().reset(); reads[2].resolve({balance_units: 100}); await last;
+  assert.equal(f.render().me, null); assert.equal(f.render().data, null); assert.equal(f.render().anonymous, true);
+  assert.equal(calls.some(path => path.startsWith('portal/requests')), false);
+});
+
+test('workspace authorization revocation clears retained state and aborts unmounted reads', async () => {
+  let rejected = false, f;
+  f = workspaceFixture(async path => {
+    if (rejected) throw new f.PortalError(403, 'session revoked');
+    return path === 'portal/me' ? {id: 'fixture', username: 'fixture'} : {balance_units: 99};
+  });
+  f.render(); f.h.effects(); await flush(); assert.equal(f.render().data.balance_units, 99);
+  rejected = true; await f.render().reload();
+  assert.equal(f.render().anonymous, true); assert.equal(f.render().data, null); assert.match(f.render().error, /revoked/);
+  const waiting = deferred(); let signal;
+  const other = workspaceFixture((path, options) => {signal = options.signal; return waiting.promise;});
+  other.render(); other.h.effects(); await flush(); other.h.unmount();
+  assert.equal(signal.aborted, true); waiting.resolve({id: 'late'}); await flush(); assert.equal(other.render().me, null);
+});
+
+test('workspace login form remains mounted during anonymous background refresh and connect clears it deliberately', async () => {
+  let f, authenticated = false;
+  const pending = deferred();
+  f = workspaceFixture(async path => {
+    if (!authenticated) throw new f.PortalError(401,'anonymous');
+    if (path === 'portal/me') return pending.promise;
+    return {balance_units:9};
+  });
+  f.render(); f.h.effects(); await flush(); assert.equal(f.render().anonymous,true);
+  authenticated=true;
+  const work=f.heartbeat(); await flush();
+  assert.equal(f.render().anonymous,true); assert.equal(f.render().pending,true);
+  const connect=f.render().connect(); await flush(); assert.equal(f.render().anonymous,false);
+  pending.resolve({id:'fixture',username:'fixture'}); await work;await connect;
+  assert.equal(f.render().me.id,'fixture');assert.equal(f.render().data.balance_units,9);
+});
+
+test('workspace Strict Mode replay aborts first read and accepts replacement', async () => {
+  const calls=[];
+  const f=workspaceFixture((path,options)=>{
+    const work=deferred(); calls.push({path,signal:options.signal,work});return work.promise;
+  });
+  f.render();f.h.effects();await flush();f.h.replayEffects();await flush();
+  assert.equal(calls.length,2);assert.equal(calls[0].signal.aborted,true);
+  calls[0].work.resolve({id:'old'});calls[1].work.resolve({id:'new'});await flush();
+  assert.equal(calls[2].path,'portal/overview');calls[2].work.resolve({balance_units:22});await flush();
+  assert.equal(f.render().me.id,'new');assert.equal(f.render().data.balance_units,22);
+});
+
+function requestFixture(fetch) {
+  const h = hookHarness();
+  const jsx = (type, props) => ({type, props});
+  let revoked = 0, heartbeat;
+  const unauthorized = () => {revoked++;};
+  class PortalError extends Error {constructor(status, message) {super(message); this.status = status;}}
+  const {default: Requests} = load('app/portal/PortalRequests.tsx', {
+    react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'lucide-react': {History:'icon',RefreshCw:'icon',ChevronLeft:'icon',ChevronRight:'icon'},
+    '@/lib/portal-api': {portalFetch: fetch, PortalError, portalTime: String},
+    '@/lib/portal-display': {requestCredit: value => value === null ? '待核实' : String(value),requestLatency:String,
+      requestTokens:(a,b)=>String(a+b),requestStatus:()=>({tone:'success',label:'成功'})},
+    '@/lib/use-heartbeat': {useHeartbeat(fn) {heartbeat = fn;}}, globals: {AbortController},
+  });
+  const render = () => h.render(() => Requests({onUnauthorized: unauthorized}));
+  const button = name => descendants(render()).find(node => node.type === 'button' && node.props.children === name);
+  return {h, render, button, PortalError, revoked: () => revoked, heartbeat: () => heartbeat()};
+}
+
+test('request history stays page-bound, exposes load errors and retries without touching overview', async () => {
+  const calls = []; let fail = false;
+  const f = requestFixture(async path => {
+    calls.push(path); if (fail) throw new Error('history offline');
+    return {page: path.endsWith('2') ? 2 : 1, total: 35, items: [{ts: 1, model: path.endsWith('2') ? 'page-two' : 'page-one',status:200,prompt_tokens:3,completion_tokens:4,latency_ms:20,credit:null}]};
+  });
+  f.render(); f.h.effects(); await flush(); assert.match(JSON.stringify(f.render()), /page-one/);
+  f.button('下一页').props.onClick(); f.render(); f.h.effects(); await flush();
+  assert.match(JSON.stringify(f.render()), /page-two/); assert.doesNotMatch(JSON.stringify(f.render()), /page-one/);
+  assert.equal(f.button('下一页').props.disabled, true);
+  fail = true; await f.heartbeat();
+  assert.match(JSON.stringify(f.render()), /history offline/); assert.match(JSON.stringify(f.render()), /上次读取/);
+  fail = false; f.button('重试记录').props.onClick(); await flush(); assert.doesNotMatch(JSON.stringify(f.render()), /history offline/);
+  assert.equal(calls.every(path => path.startsWith('portal/requests?page=')), true);
+});
+
+test('request history never renders a previous page under failed new-page or authorization state', async () => {
+  let f, revoked = false;
+  f = requestFixture(async path => {
+    if (revoked) throw new f.PortalError(401, 'expired');
+    if (path.endsWith('2')) throw new Error('page two unavailable');
+    return {page:1,total:35,items:[{ts:1,model:'private-page-one',status:200,prompt_tokens:0,completion_tokens:0,latency_ms:0,credit:0}]};
+  });
+  f.render(); f.h.effects(); await flush(); f.button('下一页').props.onClick(); f.render(); f.h.effects(); await flush();
+  assert.match(JSON.stringify(f.render()), /page two unavailable/); assert.doesNotMatch(JSON.stringify(f.render()), /private-page-one/);
+  revoked = true; await f.heartbeat(); assert.equal(f.revoked(), 1); assert.doesNotMatch(JSON.stringify(f.render()), /private-page-one/);
+});
+
+function portalKeyFixture(fetch) {
+  const h = hookHarness(); const jsx = (type, props) => ({type, props}); let revoked = 0;
+  class PortalError extends Error {constructor(status, message) {super(message); this.status = status;}}
+  const unauthorized = () => {revoked++;};
+  const {default: Keys} = load('app/portal/PortalKeys.tsx', {react: h.react, 'react/jsx-runtime': {jsx,jsxs:jsx},
+    '@/lib/base-path':{BASE_PATH:''},'@/lib/portal-api':{portalFetch:fetch,PortalError,portalTime:String},
+    '@/components/animate-ui/radix/dialog':Object.fromEntries(['Dialog','DialogBody','DialogContent','DialogDescription','DialogHeader','DialogTitle'].map(name=>[name,name])),
+    globals:{AbortController,window:{location:{origin:'http://localhost'}}},
+  });
+  const render=()=>h.render(()=>Keys({onUnauthorized:unauthorized}));
+  return {h,render,PortalError,revoked:()=>revoked,form:()=>descendants(render()).find(node=>node.type==='form')};
+}
+
+test('portal key creation preserves one-time result and blocks duplicate creation if following list refresh fails', async () => {
+  let reads=0,writes=0;
+  const f=portalKeyFixture(async (path,options={})=>{
+    if(options.method==='POST'){writes++;return {id:7,key:'synthetic-one-time-value'};}
+    if(++reads>1)throw new Error('list offline'); return {items:[],allowed_models:['deepseek-fixture']};
+  });
+  f.render();f.h.effects();await flush(); f.form().props.onSubmit({preventDefault(){}});await flush();
+  const tree=JSON.stringify(f.render()); assert.match(tree,/synthetic-one-time-value/);assert.match(tree,/密钥已生成，但列表刷新失败/);
+  f.form().props.onSubmit({preventDefault(){}}); await flush(); assert.equal(writes,1);
+});
+
+test('revoked portal key sessions clear any one-time secret and prevent late initial responses', async () => {
+  let reads=0,f;
+  f=portalKeyFixture(async (path,options={})=>{
+    if(options.method==='POST')return {id:7,key:'synthetic-private-value'};
+    if(++reads>1)throw new f.PortalError(401,'revoked'); return {items:[],allowed_models:[]};
+  });
+  f.render();f.h.effects();await flush();f.form().props.onSubmit({preventDefault(){}});await flush();
+  assert.equal(f.revoked(),1);assert.doesNotMatch(JSON.stringify(f.render()),/synthetic-private-value/);
+});
+
+test('uncertain portal key creation requires a list read before another mutation', async () => {
+  let writes=0;
+  const f=portalKeyFixture(async (path,options={})=>{
+    if(options.method==='POST'){writes++;throw new Error('synthetic connection lost');}
+    return {items:[],allowed_models:[]};
+  });
+  f.render();f.h.effects();await flush();f.form().props.onSubmit({preventDefault(){}});await flush();
+  assert.match(JSON.stringify(f.render()),/操作结果待确认/);
+  f.form().props.onSubmit({preventDefault(){}});await flush();assert.equal(writes,1);
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='刷新列表').props.onClick();await flush();
+  f.form().props.onSubmit({preventDefault(){}});await flush();assert.equal(writes,2);
+});
+
+test('request page change aborts obsolete work and late response cannot replace the current page', async () => {
+  const reads=[];
+  const f=requestFixture((path,options)=>{
+    const work=deferred();reads.push({path,signal:options.signal,work});return work.promise;
+  });
+  f.render();f.h.effects();await flush();
+  reads[0].work.resolve({page:1,total:35,items:[{ts:1,model:'first',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await flush();
+  const old=f.heartbeat();await flush();f.button('下一页').props.onClick();f.render();f.h.effects();await flush();
+  assert.equal(reads[1].signal.aborted,true);
+  reads[2].work.resolve({page:2,total:35,items:[{ts:2,model:'current',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await flush();
+  reads[1].work.resolve({page:1,total:35,items:[{ts:1,model:'late-private',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await old;
+  assert.match(JSON.stringify(f.render()),/current/);assert.doesNotMatch(JSON.stringify(f.render()),/late-private/);
+  const pending=f.heartbeat();await flush();f.h.unmount();assert.equal(reads[3].signal.aborted,true);reads[3].work.resolve({page:2,total:0,items:[]});await pending;
+});
+
+test('successful portal key revocation remains disabled even if its follow-up list read fails', async () => {
+  let reads=0,deletes=0;
+  const f=portalKeyFixture(async (path,options={})=>{
+    if(options.method==='DELETE'){deletes++;return {ok:true};}
+    if(++reads>1)throw new Error('list unavailable');
+    return {items:[{id:7,label:'fixture',prefix:'synthetic',enabled:true,created_at:1}],allowed_models:[]};
+  });
+  f.render();f.h.effects();await flush();
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='撤销').props.onClick();
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='确认撤销').props.onClick();await flush();
+  assert.equal(deletes,1);assert.match(JSON.stringify(f.render()),/密钥已撤销，但列表刷新失败/);
+  assert.equal(descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='撤销').props.disabled,true);
+  assert.doesNotMatch(JSON.stringify(f.render()),/确认撤销/);
+});
+
+test('portal action authorization failure immediately clears private workspace instead of retaining it', async () => {
+  let f;
+  f = portalPageFixture(async path => {
+    if (path === 'portal/me') return {id: 'private-user', username: 'private-user'};
+    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    throw new f.PortalError(401, 'session expired');
+  });
+  f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
+  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号')).props.onClick();
+  await flush();
+  assert.equal(descendants(f.render()).some(node => node.type === 'login'), true);
+  assert.doesNotMatch(JSON.stringify(f.render()), /private-user/);
+});
+
+test('uncertain portal actions require a confirmed read before another submission', async () => {
+  let writes = 0;
+  const f = portalPageFixture(async path => {
+    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
+    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    writes++; throw new Error('synthetic connection lost');
+  });
+  f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
+  const add = () => descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号'));
+  add().props.onClick(); await flush(); add().props.onClick(); await flush();
+  assert.equal(writes, 1); assert.match(JSON.stringify(f.render()), /核对/);
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '重新读取').props.onClick(); await flush();
+  add().props.onClick(); await flush(); assert.equal(writes, 2);
+});
+
+test('scan polling pauses on failure, retries the same session only on demand, and cleans up on close', async () => {
+  let polls = 0, starts = 0, cancelled = 0;
+  const f = portalPageFixture(async path => {
+    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
+    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    if (path === 'portal/auth/start') {starts++; return {session: 'synthetic-session', auth_url: 'https://example.invalid', expires_in: 300};}
+    if (path === 'portal/auth/poll') {polls++; if (polls === 1) throw new Error('synthetic offline'); return {state: 'waiting'};}
+    if (path === 'portal/auth/cancel') {cancelled++; return {ok: true};}
+    throw new Error('unexpected operation');
+  });
+  f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
+  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号')).props.onClick();
+  await flush(); f.render(); f.h.effects();
+  const tick = [...f.timers.values()][0]; await tick();
+  assert.match(JSON.stringify(f.render()), /已暂停轮询/);
+  assert.equal(descendants(f.render()).some(node => node.props?.role === 'dialog'), true);
+  await tick(); assert.equal(polls, 1);
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '重试当前二维码').props.onClick();
+  await tick(); assert.equal(polls, 2); assert.equal(starts, 1);
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '关闭').props.onClick();
+  await flush(); f.render(); f.h.effects();
+  assert.equal(cancelled, 1); assert.equal(f.timers.size, 0);
+});
+
+test('key page distinguishes enabled key, model discovery and paid dispatch without exposing other users', async () => {
+  const f = portalKeyFixture(async () => ({items: [{id: 7, label: 'synthetic-owned', prefix: 'synthetic', enabled: true, created_at: 1}],
+    allowed_models: ['deepseek-fixture'], model_discovery_enabled: true, pool_enabled: false, dispatch_enabled: false,
+    dispatch_note: 'synthetic dispatch reason'}));
+  f.render(); f.h.effects(); await flush();
+  const view = JSON.stringify(f.render());
+  assert.match(view, /密钥已创建，不代表模型调用已开放/);
+  assert.match(view, /可读取模型目录/);
+  assert.match(view, /synthetic dispatch reason/);
+  assert.match(view, /已启用/);
+});
+
+test('approved key page states wallet cap and does not show the unpaid-activation warning', async () => {
+  const f = portalKeyFixture(async () => ({items: [], allowed_models: ['deepseek-fixture'],
+    model_discovery_enabled: true, pool_enabled: true, dispatch_enabled: true, dispatch_note: 'approved'}));
+  f.render(); f.h.effects(); await flush();
+  const view = JSON.stringify(f.render());
+  assert.doesNotMatch(view, /密钥已创建，不代表模型调用已开放/);
+  assert.match(view, /余额为零拒绝新请求/);
+  assert.match(view, /超出部分由平台承担/);
+  assert.match(view, /不扣未来签到/);
+});

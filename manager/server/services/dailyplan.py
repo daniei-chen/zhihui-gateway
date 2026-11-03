@@ -162,6 +162,9 @@ def _normalise(raw: object) -> dict:
                 plan[t]['hour'] = h
             if isinstance(v.get('last_run'), str):
                 plan[t]['last_run'] = v['last_run']
+            hours = v.get('hours')
+            if t == 'checkin' and isinstance(hours, list) and hours and all(type(item) is int and 0 <= item <= 23 for item in hours):
+                plan[t]['hours'] = sorted(set(hours))
     return plan
 
 
@@ -187,8 +190,16 @@ def set_plan(body: object) -> dict:
             raise TypeError(f'{t}.enabled 必须是布尔值')
         if isinstance(hour, bool) or not isinstance(hour, int) or not 0 <= hour <= 23:
             raise ValueError(f'{t}.hour 必须是 0-23 的整点')
+        changed_hour = hour != plan[t]['hour']
         plan[t]['enabled'] = enabled
         plan[t]['hour'] = hour
+        if t == 'checkin' and 'hours' in v:
+            hours = v['hours']
+            if not isinstance(hours, list) or not hours or not all(type(item) is int and 0 <= item <= 23 for item in hours):
+                raise ValueError('checkin.hours 必须为非空的 0-23 整点数组')
+            plan[t]['hours'] = sorted(set(hours))
+        elif t == 'checkin' and changed_hour:
+            plan[t].pop('hours', None)
     db.set_setting(_KEY, plan)
     return plan
 
@@ -212,7 +223,7 @@ def is_due(task: str, plan: dict | None = None, now: int | None = None) -> bool:
     if not cfg['enabled']:
         return False
     now = int(time.time()) if now is None else now
-    if time.localtime(now).tm_hour != cfg['hour']:
+    if time.localtime(now).tm_hour not in cfg.get('hours', [cfg['hour']]):
         return False
     return cfg['last_run'] != _stamp(now)
 

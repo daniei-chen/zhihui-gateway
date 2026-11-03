@@ -172,6 +172,29 @@ def verify_release_archive(archive):
     release_id=manifest.get('release_id') or manifest.get('version') or ''
     return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
 
+
+def verify_paired_archive(archive, destination, receipt):
+    from server.portalrecovery import _allowed, restore_quarantine
+    root = Path(destination) / 'pair-verification'
+    root.mkdir(mode=0o700)
+    for member in archive.getmembers():
+        if not member.name.startswith('paired-ledgers/') or member.isdir():
+            continue
+        name = member.name[len('paired-ledgers/'):]
+        if not member.isfile() or name != 'manifest.json' and not _allowed(name):
+            raise RuntimeError('unsafe paired recovery member')
+        path = root / name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open('xb') as output:
+            os.chmod(path, 0o600)
+            with archive.extractfile(member) as source:
+                import shutil
+                shutil.copyfileobj(source, output)
+    restored = restore_quarantine(root, Path(destination) / 'quarantine-verification', receipt['manifest_sha256'])
+    if restored.get('quarantined') is not True:
+        raise RuntimeError('paired recovery was not quarantined')
+    return {'restore_check': 'ok', 'quarantined': True, 'manifest_sha256': receipt['manifest_sha256']}
+
 def main():
     os.umask(0o077)
     BASE.mkdir(mode=0o700,parents=True,exist_ok=True); BASE.chmod(0o700)
@@ -185,12 +208,22 @@ def main():
     state_owners={}
     state_directories={}
     with tempfile.TemporaryDirectory(prefix='snapshot-',dir=BASE) as scratch:
+        pair = None
+        if (MANAGER/'data/user-portal.sqlite3').is_file():
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from server.portalrecovery import create_paired_snapshot
+            pair_root = Path(scratch)/'paired-ledgers'
+            pair = create_paired_snapshot(main_db=MANAGER/'data/manager.db', portal_db=MANAGER/'data/user-portal.sqlite3',
+                users=MANAGER/'data/users.json', auths=GATEWAY/'auths', isolated=MANAGER/'data/user-portal-auths',
+                spool=MANAGER/'data/ledger-spool', destination=pair_root)
         database=Path(scratch)/'manager.db'
         source=sqlite3.connect('file:'+str(MANAGER/'data/manager.db')+'?mode=ro',uri=True)
         dest=sqlite3.connect(database); source.backup(dest); source.close()
         if dest.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('database snapshot invalid')
         count=dest.execute('SELECT count(*) FROM request_logs').fetchone()[0]; dest.close()
         with tarfile.open(str(output)+'.tmp','w:gz') as archive:
+            if pair:
+                archive.add(pair_root, arcname='paired-ledgers')
             for path,name in [(GATEWAY/'auths','gateway/auths'),(GATEWAY/'data','gateway/data'),(MANAGER/'data','manager/data')]:
                 state_directories[name]=add_state_directory(archive,name,path)
             archive.add(database,arcname='manager/data/manager.db')
@@ -223,6 +256,8 @@ def main():
         os.replace(str(output)+'.tmp',output); output.chmod(0o600)
         with tarfile.open(output) as archive:
             release_check=verify_release_archive(archive)
+            if pair:
+                pair.update(verify_paired_archive(archive, scratch, pair))
             for name,owners in state_owners.items():
                 member=archive.getmember(name)
                 if (member.uid,member.gid)!=owners or member.mode!=0o600:
@@ -236,7 +271,7 @@ def main():
             if con.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('restore check failed')
             if con.execute('SELECT count(*) FROM request_logs').fetchone()[0]!=count: raise RuntimeError('restore row mismatch')
             con.close()
-        result={'path':str(output),'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
+        result={'path':str(output),'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
         # The local verified recovery remains available if publication fails.
         if Path('/root/backups/workbuddy-recovery/offsite.json').is_file():
             sys.path.insert(0,str(Path(__file__).resolve().parent))

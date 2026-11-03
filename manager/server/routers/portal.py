@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -129,10 +130,19 @@ def requests(page: int = 1, user=Depends(current)):
         return {'items': [], 'total': 0, 'page': page, 'dispatch_enabled': False}
     placeholders = ','.join('?' for _ in ids)
     count = db.query_one(f'SELECT COUNT(*) FROM request_logs WHERE key_id IN ({placeholders})', ids)[0]
-    rows = db.query(f'SELECT ts,model,status,prompt_tokens,completion_tokens,latency_ms,credit FROM request_logs '
+    rows = db.query(f'SELECT request_id,key_id,ts,model,status,prompt_tokens,completion_tokens,latency_ms,credit FROM request_logs '
                     f'WHERE key_id IN ({placeholders}) ORDER BY id DESC LIMIT 30 OFFSET ?', (*ids, (page - 1) * 30))
+    items = [dict(row) for row in rows]
+    with store.transaction() as conn:
+        for item in items:
+            spend = conn.execute('SELECT state,charged_units FROM portal_spends WHERE request_id=? AND owner_id=? AND key_id=?',
+                (item['request_id'], user['id'], item['key_id'])).fetchone()
+            if spend:
+                item['billing_state'] = spend['state']
+                item['credit'] = (spend['charged_units'] / store.SCALE if spend['state'] == 'settled' else
+                                  0 if spend['state'] == 'released' else None)
     from .. import portalbilling
-    return {'items': [dict(row) for row in rows], 'total': count, 'page': page, 'dispatch_enabled': portalpolicy.enabled() and portalbilling.dispatch_ready()}
+    return {'items': items, 'total': count, 'page': page, 'dispatch_enabled': portalpolicy.enabled() and portalbilling.dispatch_ready()}
 
 
 @router.get('/keys')
@@ -146,7 +156,18 @@ def keys(user=Depends(current)):
         if live and hmac.compare_digest(live['key_hash'], row['key_hash']):
             items.append({'id': row['key_id'], 'label': row['label'], 'prefix': live['prefix'], 'created_at': row['created_at'],
                 'enabled': bool(live['enabled'] and not row['revoked'] and row['owner_sv'] == user['sv'] and live['source'] == portalpolicy.SOURCE)})
-    return {'items': items, 'allowed_models': list(portalpolicy.MODELS), 'pool': 'public', 'max_ips': 0}
+    from .. import portalbilling
+    pooled = portalpolicy.enabled()
+    with store.transaction() as conn:
+        row = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
+        quarantined = bool(row and row[0] == 'true')
+        approved = portalbilling.dispatch_ready(conn)
+    return {'items': items, 'allowed_models': list(portalpolicy.MODELS), 'pool': 'public', 'max_ips': 0,
+            'model_discovery_enabled': not quarantined, 'pool_enabled': pooled and not quarantined,
+            'dispatch_enabled': pooled and not quarantined and approved,
+            'dispatch_note': '恢复副本隔离核对中，不可调用' if quarantined else
+                ('按调用密钥归属用户扣分，余额为零拒绝新请求；单次超出冻结余额由平台承担，不形成欠款。'
+                 if approved else portalbilling.MESSAGE) if pooled else '公共池调用尚未开启；密钥可以读取模型目录，但不能发起计费调用。'}
 
 
 @router.post('/keys')
@@ -191,20 +212,40 @@ def revoke_key(key_id: int, user=Depends(current)):
 @router.post('/auth/start')
 async def auth_start(user=Depends(current)):
     check_user(user)
-    with store.transaction() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM portal_auth_sessions WHERE owner_id=? AND expires_at>? AND state='waiting'", (user['id'], store.now())).fetchone()[0]
-        if count >= 2:
-            raise HTTPException(status_code=429, detail='请先完成或取消当前扫码')
-    with tencent.authorization_scope(lambda: check_user(user)):
-        result = await tencent.start_login('cn', '')
-    check_user(user)
     session = secrets.token_hex(24)
     with store.transaction() as conn:
-        current_user = conn.execute('SELECT enabled,sv FROM portal_users WHERE id=?', (user['id'],)).fetchone()
-        if not current_user or not current_user['enabled'] or current_user['sv'] != user['sv']:
-            raise HTTPException(status_code=401, detail='用户登录已失效')
-        conn.execute('INSERT INTO portal_auth_sessions(id,owner_id,owner_sv,upstream_state,expires_at) VALUES(?,?,?,?,?)',
-                     (session, user['id'], user['sv'], result['state'], store.now() + 300))
+        count = conn.execute("SELECT COUNT(*) FROM portal_auth_sessions WHERE owner_id=? AND expires_at>? AND state IN ('starting','waiting','processing')", (user['id'], store.now())).fetchone()[0]
+        if count >= 2:
+            raise HTTPException(status_code=429, detail='请先完成或取消当前扫码')
+        # Reserve capacity before awaiting the provider; concurrent tabs share it.
+        conn.execute("INSERT INTO portal_auth_sessions(id,owner_id,owner_sv,upstream_state,expires_at,state) VALUES(?,?,?,?,?,'starting')",
+                     (session, user['id'], user['sv'], '', store.now() + 300))
+    upstream = ''
+    try:
+        with tencent.authorization_scope(lambda: check_user(user)):
+            result = await tencent.start_login('cn', '')
+        upstream = result.get('state') if isinstance(result, dict) else ''
+        url = urlsplit(result.get('authUrl', '')) if isinstance(result, dict) else None
+        if (not isinstance(upstream, str) or not 1 <= len(upstream) <= 2048 or url is None
+                or url.scheme != 'https' or not url.hostname or url.username or url.password):
+            raise ValueError('invalid provider authorization response')
+        check_user(user)
+        with store.transaction() as conn:
+            current_user = conn.execute('SELECT enabled,sv FROM portal_users WHERE id=?', (user['id'],)).fetchone()
+            if not current_user or not current_user['enabled'] or current_user['sv'] != user['sv']:
+                raise HTTPException(status_code=401, detail='用户登录已失效')
+            changed = conn.execute("UPDATE portal_auth_sessions SET upstream_state=?,state='waiting' WHERE id=? AND state='starting' AND expires_at>?",
+                                   (upstream, session, store.now())).rowcount
+            if not changed:
+                raise HTTPException(status_code=409, detail='扫码准备已到期，请重新添加')
+    except BaseException as exc:
+        with store.transaction() as conn:
+            conn.execute("UPDATE portal_auth_sessions SET state='failed' WHERE id=? AND state='starting'", (session,))
+        if isinstance(upstream, str) and upstream:
+            tencent.drop_state(upstream)
+        if not isinstance(exc, Exception) or isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=502, detail='扫码准备暂时失败，请稍后重新添加；未更改账号或积分') from exc
     return {'session': session, 'auth_url': result['authUrl'], 'expires_in': 300}
 
 
@@ -214,11 +255,13 @@ def auth_cancel(body: dict = Body(...), user=Depends(current)):
     if not isinstance(session, str) or not re.fullmatch('[a-f0-9]{48}', session):
         raise HTTPException(status_code=404, detail='扫码会话不存在')
     with store.transaction() as conn:
-        row = conn.execute('SELECT * FROM portal_auth_sessions WHERE id=? AND owner_id=?', (session, user['id'])).fetchone()
+        row = conn.execute('SELECT * FROM portal_auth_sessions WHERE id=? AND owner_id=? AND owner_sv=?', (session, user['id'], user['sv'])).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail='扫码会话不存在')
         if row['state'] == 'processing':
             raise HTTPException(status_code=409, detail='授权正在核对，关闭窗口不代表已取消上游授权')
+        if row['state'] == 'complete':
+            return {'ok': True, 'state': 'complete'}
         conn.execute("UPDATE portal_auth_sessions SET state='cancelled' WHERE id=?", (session,))
     tencent.drop_state(row['upstream_state'])
     return {'ok': True}
@@ -233,33 +276,54 @@ async def auth_poll(body: dict = Body(...), user=Depends(current)):
         row = conn.execute('SELECT * FROM portal_auth_sessions WHERE id=? AND owner_id=? AND owner_sv=?', (session, user['id'], user['sv'])).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail='扫码会话不存在')
-        if row['expires_at'] <= store.now():
-            return {'state': 'expired'}
-        if row['state'] == 'cancelled':
-            return {'state': 'expired'}
         if row['state'] == 'complete':
             return {'state': 'complete', 'account_id': row['account_id']}
+        if row['state'] == 'failed':
+            return {'state': 'failed', 'message': '授权处理未完成，请先刷新账号列表核对，不自动重复导入'}
         if row['state'] == 'processing':
             return {'state': 'processing', 'message': '授权结果正在核对，不重复处理'}
+        if row['expires_at'] <= store.now() or row['state'] == 'cancelled':
+            return {'state': 'expired'}
+        if row['state'] == 'starting':
+            return {'state': 'waiting'}
         if row['last_poll'] > store.now() - 2:
             return {'state': 'waiting'}
         conn.execute("UPDATE portal_auth_sessions SET state='processing',last_poll=? WHERE id=?", (store.now(), session))
+    importing = False
     try:
         with tencent.authorization_scope(lambda: check_user(user)):
             result = await tencent.poll_login(row['upstream_state'], 'cn')
             check_user(user)
             if result.get('status') != 'ready':
+                expired = result.get('status') in ('invalid', 'expired', 'realm_mismatch')
                 with store.transaction() as conn:
-                    conn.execute("UPDATE portal_auth_sessions SET state='waiting' WHERE id=?", (session,))
-                return {'state': 'expired' if result.get('status') in ('invalid', 'expired') else 'waiting'}
+                    conn.execute("UPDATE portal_auth_sessions SET state=? WHERE id=? AND state='processing'",
+                                 ('cancelled' if expired else 'waiting', session))
+                if expired:
+                    tencent.drop_state(row['upstream_state'])
+                return {'state': 'expired' if expired else 'waiting'}
+            importing = True
             account = await service.import_ready(user, result)
         check_user(user)
         with store.transaction() as conn:
             conn.execute("UPDATE portal_auth_sessions SET state='complete',account_id=? WHERE id=?", (account['id'], session))
         tencent.drop_state(row['upstream_state'])
         return {'state': 'complete', **account}
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BaseException as exc:
+        # Provider reads may retry; an import may already have written credentials
+        # or grants, so never replay it automatically after an uncertain failure.
+        terminal = importing or isinstance(exc, HTTPException)
+        with store.transaction() as conn:
+            conn.execute("UPDATE portal_auth_sessions SET state=? WHERE id=? AND state='processing'",
+                         ('failed' if terminal else 'waiting', session))
+        if terminal:
+            tencent.drop_state(row['upstream_state'])
+        if not isinstance(exc, Exception) or isinstance(exc, HTTPException):
+            raise
+        if isinstance(exc, ValueError) and importing:
+            raise HTTPException(status_code=409, detail='账号绑定未完成，请核对归属、授权状态与初始积分；不会自动重复导入') from exc
+        raise HTTPException(status_code=502, detail='授权处理未完成，请先刷新账号列表核对，不自动重复导入' if importing
+                            else '扫码连接暂时失败，可以重试当前二维码；未导入账号') from exc
 
 
 @router.post('/accounts/{account_id}/checkin')
@@ -342,6 +406,12 @@ def wallet_history(page: int = 1, admin=Depends(security.require_session_admin))
     return portalwallet.history_page(page)
 
 
+@admin_router.get('/wallet-platform-costs')
+def wallet_platform_costs(page: int = 1, admin=Depends(security.require_session_admin)):
+    from .. import portalwallet
+    return portalwallet.platform_costs_page(page)
+
+
 @admin_router.post('/wallet-debts/{owner_id}/adjust')
 def wallet_adjust(owner_id: str, body: dict = Body(...), admin=Depends(security.require_session_admin)):
     from .. import portalwallet
@@ -382,12 +452,9 @@ async def reconcile_checkin(account_id: str, user=Depends(current)):
 @router.post('/checkin-all')
 async def checkin_all(user=Depends(current)):
     with store.transaction() as conn:
-        ids = [row[0] for row in conn.execute("SELECT id FROM portal_accounts WHERE owner_id=? AND status='active' LIMIT 50", (user['id'],))]
-    results = []
-    for account_id in ids:
-        check_user(user)
-        results.append(await service.checkin(account_id, 'user-batch', user['id'], lambda: check_user(user)))
-    return {'results': results, 'message': '已处理本批账号，状态与总台共享；未知结果不重复发起'}
+        ids = [row[0] for row in conn.execute("SELECT id FROM portal_accounts WHERE owner_id=? AND status='active' ORDER BY created_at,id LIMIT 100", (user['id'],))]
+    results = await service.checkin_many(ids, 'user-batch', user['id'], lambda: check_user(user))
+    return {'results': results, 'count': len(results), 'message': service.batch_message(results)}
 
 
 @admin_router.post('/users')
@@ -395,8 +462,7 @@ async def create_user(body: dict = Body(...), admin=Depends(security.require_ses
     name, password = body.get('username'), body.get('password')
     if not isinstance(name, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{3,40}', name):
         raise HTTPException(status_code=400, detail='用户名需为3至40位字母、数字、下划线或短横线')
-    if not isinstance(password, str) or len(password) > 128 or security.managed_user_password_problem(password, name):
-        raise HTTPException(status_code=400, detail='用户密码至少8位，最多128位')
+    validate_portal_password(password, name)
     hashed = await joined_thread(security.make_hash, password)
     with security.authorization_guard(admin), store.transaction() as conn:
         require_writable(conn)
@@ -405,6 +471,16 @@ async def create_user(body: dict = Body(...), admin=Depends(security.require_ses
         user_id = secrets.token_hex(16)
         conn.execute('INSERT INTO portal_users(id,username,pwd_hash,created_at) VALUES(?,?,?,?)', (user_id, name, hashed, store.now()))
     return {'id': user_id, 'username': name}
+
+
+def validate_portal_password(password, username=''):
+    if not isinstance(password, str):
+        raise HTTPException(status_code=400, detail='用户登录密码必须是字符串')
+    if len(password) > 128:
+        raise HTTPException(status_code=400, detail='用户登录密码最多 128 位')
+    problem = security.managed_user_password_problem(password, username)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
 
 
 @admin_router.post('/accounts/{account_id}/checkin')
@@ -424,16 +500,16 @@ async def update_user(user_id: str, body: dict = Body(...), admin=Depends(securi
     if 'enabled' in body and type(body['enabled']) is not bool:
         raise HTTPException(status_code=400, detail='enabled 必须为布尔值')
     password = body.get('password')
-    if 'password' in body and (not isinstance(password, str) or len(password) > 128 or security.managed_user_password_problem(password)):
-        raise HTTPException(status_code=400, detail='用户密码至少8位，最多128位')
+    if 'password' in body:
+        validate_portal_password(password)
     hashed = await joined_thread(security.make_hash, password) if password is not None else None
     with security.authorization_guard(admin), store.transaction() as conn:
         require_writable(conn)
         row = conn.execute('SELECT * FROM portal_users WHERE id=?', (user_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail='用户不存在')
-        if password is not None and security.managed_user_password_problem(password, row['username']):
-            raise HTTPException(status_code=400, detail='密码过于简单，请勿使用用户名或用户名加数字')
+        if password is not None:
+            validate_portal_password(password, row['username'])
         conn.execute('UPDATE portal_users SET enabled=?,pwd_hash=?,sv=sv+1 WHERE id=?',
                      (int(body.get('enabled', row['enabled'])), hashed or row['pwd_hash'], user_id))
         if hashed:
@@ -465,9 +541,6 @@ def automatic_checkin(body: dict = Body(...), admin=Depends(security.require_ses
 @admin_router.post('/checkin-all')
 async def admin_checkin_all(admin=Depends(security.require_session_admin)):
     with store.transaction() as conn:
-        ids = [row[0] for row in conn.execute("SELECT a.id FROM portal_accounts a JOIN portal_users u ON u.id=a.owner_id WHERE u.enabled=1 AND a.status='active' LIMIT 100")]
-    results = []
-    for account_id in ids:
-        security.authorization_owner(admin)
-        results.append(await service.checkin(account_id, 'admin-batch', authorize=lambda: security.authorization_owner(admin)))
-    return {'count': len(results), 'message': '已处理本批用户账号，已签到与未知状态不会重复发起'}
+        ids = [row[0] for row in conn.execute("SELECT a.id FROM portal_accounts a JOIN portal_users u ON u.id=a.owner_id WHERE u.enabled=1 AND a.status='active' ORDER BY a.created_at,a.id LIMIT 100")]
+    results = await service.checkin_many(ids, 'admin-batch', authorize=lambda: security.authorization_owner(admin))
+    return {'count': len(results), 'results': results, 'message': service.batch_message(results)}

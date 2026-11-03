@@ -36,11 +36,12 @@ export default function WalletOperations({onChanged}: {onChanged: () => Promise<
       }
     } finally { if (!signal?.aborted && generation === seq.current) setLoading(false); }
   }, [pages]);
+  const invalidate = useCallback(() => {seq.current++;}, []);
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
-    return () => { controller.abort(); seq.current++; };
-  }, [load]);
+    void Promise.resolve().then(() => {if (!controller.signal.aborted) return load(controller.signal);});
+    return () => { controller.abort(); invalidate(); };
+  }, [load, invalidate]);
   async function changed(message: string) {
     setTarget(null); setNotice(message);
     await Promise.all([load(), onChanged()]);
@@ -67,7 +68,8 @@ export default function WalletOperations({onChanged}: {onChanged: () => Promise<
           <button className="portal-button" disabled={loading || !row.can_resolve} onClick={() => setTarget({kind: 'resolve', row})}>核对费用</button></article>)}
         {!loading && !data.pending.items.length && <p className="portal-empty">本页没有待核对请求。</p>}{pagination('pending')}
       </div>
-      <div className="portal-panel"><h3>用户欠额 <span className="portal-badge pending">{data.debts.total}</span></h3>
+      <div className="portal-panel"><h3>历史用户欠额 <span className="portal-badge pending">{data.debts.total}</span></h3>
+        <p className="portal-small">新计费规则不产生用户欠款：单次费用超出冻结余额的部分由平台承担，在处置记录中单独留账。</p>
         <p className="portal-small">抵扣只使用该用户已入池、未冻结且未过期的积分；豁免只减少欠额，不增加积分。剩余欠额或未知请求仍会阻止新调用。</p>
         {data.debts.items.map(row => <article className="portal-account" key={row.owner_id}><div><strong>{row.username}</strong>
           <p className="portal-small">欠额 {exactCredit(row.amount_units)} · 可用于抵扣 {exactCredit(row.repayable_units)} · 用户{row.enabled ? '已启用' : '已停用'}</p></div>
@@ -75,7 +77,7 @@ export default function WalletOperations({onChanged}: {onChanged: () => Promise<
             <button className="portal-button" disabled={loading} onClick={() => setTarget({kind: 'waive', row})}>登记豁免</button></div></article>)}
         {!loading && !data.debts.items.length && <p className="portal-empty">本页没有未处理欠额。</p>}{pagination('debts')}
       </div>
-      <div className="portal-panel"><h3>处置记录</h3><p className="portal-small">只追加、不覆盖：操作者、金额、原欠额及处理后欠额、原因与凭证说明。</p>
+      <div className="portal-panel"><h3>处置记录</h3><p className="portal-small">只追加、不覆盖：人工处置与平台承担超额分别留账；平台承担不扣用户积分。</p>
         {data.history.items.map(row => <article className="portal-account" key={`${row.kind}:${row.id}`}><div className="portal-ops-detail">
           <strong>{row.username} · {operationLabel(row.kind)} · {exactCredit(row.amount_units)} 积分</strong>
           <p className="portal-small">{portalTime(row.created_at)} · 操作者 {row.actor}{row.before_units !== null && row.after_units !== null ? ` · 欠额 ${exactCredit(row.before_units)} → ${exactCredit(row.after_units)}` : ''}</p>

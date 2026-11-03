@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import logging
 import threading
 import time
+import uuid
 from contextvars import ContextVar
 
 import httpx
@@ -1159,6 +1160,10 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         # 本函数，因此不需要各处重复改（也不要各写一套而漂移）。
         headers['X-Request-ID'] = state.client_request_id or state.request_id
         headers['X-Manager-Request-ID'] = state.request_id
+        dispatch_id = uuid.uuid4().hex
+        db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)', (dispatch_id, state.request_id, int(time.time())))
+        headers['X-Manager-Dispatch-ID'] = dispatch_id
+        headers['X-WB-Compatibility'] = 'manager-scoped-v1'
         if getattr(state,'config_hash',None):
             headers['X-WB-Config-Hash'] = state.config_hash
         if state.key_id is not None:
@@ -1344,7 +1349,7 @@ def key_usage(request: Request):
     # 这一行经 `_record` 顺带把「最近使用」与「来源 IP」留痕——与模型列表页、
     # 面板 API 令牌一致；但 token / 积分消耗**一分不记**（记账口径只认真实调用）。
     _record(key, ip, '', '', 200, 0, 0, 0, ua, None, False)
-    return {
+    result = {
         'object': 'key.usage',
         'key': {
             'name': key.get('name') or '',
@@ -1362,6 +1367,25 @@ def key_usage(request: Request):
         'snapshot_at': now,
         'data_source': 'panel-recorded',
     }
+    from .. import portalpolicy
+    if portalpolicy.is_portal(key):
+        from .. import portalstore
+        try:
+            with portalstore.transaction() as conn:
+                owner = portalpolicy.identity(key, conn)
+        except Exception:
+            return _oai_error('用户密钥授权已失效，请重新登录核对', 401, 'authentication_error', 'invalid_api_key')
+        wallet = portalstore.overview(owner)
+        with portalstore.transaction() as conn:
+            charged = conn.execute("SELECT COALESCE(SUM(charged_units),0) FROM portal_spends WHERE owner_id=? AND key_id=? AND state='settled'",
+                                   (owner, key['id'])).fetchone()[0]
+        result['credits'] = {'used': charged / portalstore.SCALE, 'limit': None,
+                             'remaining': wallet['callable_units'] / wallet['scale'],
+                             'shared_wallet': True, 'unlimited': False}
+        result['portal'] = {name: wallet[name] for name in ('balance_units', 'callable_units', 'pending_pool_units',
+            'held_units', 'debt_units', 'scale', 'pool_enabled', 'dispatch_enabled', 'dispatch_note')}
+        result['portal']['model_discovery_enabled'] = True
+    return result
 
 
 # ── 模型列表 ─────────────────────────────────────────────
@@ -1596,6 +1620,17 @@ async def list_models(request: Request):
             resp = await client.get(f'{upstream["base_url"]}/v1/models',
                                     headers=_upstream_headers(upstream))
         latency = int((time.time() - started) * 1000)
+        from .. import portalpolicy
+        if portalpolicy.is_portal(key):
+            try:
+                catalog = resp.json()
+            except ValueError:
+                catalog = None
+            if (resp.status_code != 200 or not isinstance(catalog, dict) or catalog.get('error')
+                    or not isinstance(catalog.get('data'), list)):
+                _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), '用户模型目录上游不可用', False)
+                return _oai_error('上游模型目录暂不可用，请联系管理员检查公共池连接；不是用户密钥无效',
+                                  502, 'api_error', 'portal_model_catalog_unavailable')
         _record(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
         payload = _scope_models(resp.json(), key)
         # 目录收缩（issue #239）：上游模型表可能仍列着腾讯已经下架的 id，
@@ -1606,6 +1641,10 @@ async def list_models(request: Request):
         # 侧时，下游经面板拿到的清单仍缺字段，客户端会整条跳过模型。
         payload = _listing_compat_models(payload)
         payload = _bare_cn_model_ids(payload)
+        if portalpolicy.is_portal(key):
+            fresh = keysvc.resolve(_bearer(request))
+            if fresh is None or fresh['id'] != key['id']:
+                return _oai_error('用户密钥授权已失效，请重新登录核对', 401, 'authentication_error', 'invalid_api_key')
         # Anthropic 客户端（Claude Code 等）也会调这个路径，但期望的结构不同
         if request.headers.get('anthropic-version'):
             payload = _as_anthropic_models(payload)
@@ -1973,6 +2012,8 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128),
                      db._clean(body.get('model') if isinstance(body, dict) else None, 128))
     try:
+        platform = getattr(state, 'actual_platform', None) if state is not None else None
+        defuse_prompt_fingerprint(body, platform=platform or 'workbuddy')
         limit_field, _, limit_before = outputlimits.inspect(body)
         reserve = reserve if reserve is not None else getattr(state, 'reserve_wire_body', None)
         with requestperf.measure('json_encode'):
@@ -2192,11 +2233,6 @@ async def _chat(request: Request, upstream_path: str):
     actual_platform = metering.route_attribution(
         entry_platform=forced_platform.get(), requested_model=requested_model,
         resolved_model=mapped or requested_model, upstream=upstream)['actual_platform']
-    _defused = defuse_prompt_fingerprint(body, platform=actual_platform)
-    if _defused:
-        logger.info('system prompt compatibility applied: count=%d request_id=%s platform=%s',
-                    _defused, observability.current.get().request_id
-                    if observability.current.get() else None, actual_platform)
     url = f'{upstream["base_url"]}{upstream_path}'
     wire = await _prepare_forward_async(key,body, request=request)
     if isinstance(wire, JSONResponse):

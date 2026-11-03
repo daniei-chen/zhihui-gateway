@@ -1,8 +1,8 @@
 """User-wide conservative reservations and main-ledger settlement outbox.
 
 No local supplier price table exists. One user request holds the entire currently
-available wallet, across all keys. This prevents concurrent overspend, not supplier
-overbilling: an actual overrun becomes debt and blocks subsequent dispatch. Unknown
+available wallet, across all keys. New approved requests cap user charges at this
+hold; supplier overruns are platform costs, never user debt or future grants. Unknown
 charges never age out. Separate SQLite databases do NOT form one transaction;
 committed main-ledger receipts are replayed idempotently into the wallet.
 """
@@ -45,9 +45,10 @@ def reserve(key):
             held = sum(row['remaining_units'] for row in rows)
             if not held:
                 reject('额度已用尽，请联系管理员赠送额度', 'portal_wallet_empty')
-            portalbilling.require_verified_cap()
+            portalbilling.require_approved_policy(conn)
             conn.execute("INSERT INTO portal_spends VALUES(?,?,?,?,? ,?,?,NULL,NULL)",
                 (state.request_id, owner, key['id'], budgetowner.identity(), 'reserved', store.now(), held))
+            conn.execute('INSERT INTO portal_spend_policies VALUES(?,?)', (state.request_id, portalbilling.POLICY))
             for row in rows:
                 table, allocations = ('portal_bonus_grants', 'portal_bonus_allocations') if row['kind'] == 'bonus' else ('portal_grants', 'portal_allocations')
                 conn.execute(f'INSERT INTO {allocations} VALUES(?,?,?)', (state.request_id, row['id'], row['remaining_units']))
@@ -59,21 +60,27 @@ def reserve(key):
 
 
 def forwarded(state):
+    from .budget import BudgetRejected
     if not getattr(state, 'portal_owner', None):
         return
-    portalbilling.require_verified_cap()
     try:
         with store.transaction() as conn:
+            portalbilling.require_approved_policy(conn)
             # Recheck owner generation and revocation at the durable send boundary.
             owner = policy.identity({'id': state.key_id, 'credential_hash': getattr(state, 'portal_credential_hash', '')}, conn)
             if owner != state.portal_owner:
                 reject('用户积分归属发生变化')
             if not policy.enabled():
                 reject('用户公共池调用已关闭')
+            approved = conn.execute('SELECT policy FROM portal_spend_policies WHERE request_id=?', (state.request_id,)).fetchone()
+            if not approved or approved[0] != portalbilling.POLICY:
+                reject('请求计费规则未核实，未发送请求')
             changed = conn.execute("UPDATE portal_spends SET state='forwarded' WHERE request_id=? AND owner_id=? AND worker=? AND state='reserved'",
                 (state.request_id, state.portal_owner, budgetowner.identity())).rowcount
             if changed != 1:
                 reject('用户积分预留归属已变更')
+    except BudgetRejected:
+        raise
     except Exception:
         reject('用户积分发送许可不可用，未发送请求')
 
@@ -118,12 +125,28 @@ def replay_receipt(entry, facts):
 
 
 def _release(conn, row, charge):
+    if type(charge) is not int or not 0 <= charge <= 10**15:
+        raise ValueError('settlement amount invalid')
+    policy = conn.execute('SELECT policy FROM portal_spend_policies WHERE request_id=?', (row['request_id'],)).fetchone()
+    capped = bool(policy and policy[0] == portalbilling.POLICY)
+    if policy and not capped:
+        raise ValueError('unrecognized persisted billing policy')
+    supplier = charge
+    if capped:
+        charge = min(charge, row['held_units'])
     left = charge
     allocations = conn.execute("SELECT g.id,g.account_id,g.expires_at,a.amount_units AS held,'account' AS kind "
         'FROM portal_allocations a JOIN portal_grants g ON g.id=a.grant_id WHERE a.request_id=? '
         "UNION ALL SELECT g.id,NULL AS account_id,g.expires_at,a.amount_units AS held,'bonus' AS kind "
         'FROM portal_bonus_allocations a JOIN portal_bonus_grants g ON g.id=a.grant_id WHERE a.request_id=? '
         'ORDER BY expires_at,id,kind', (row['request_id'], row['request_id'])).fetchall()
+    if capped and (sum(grant['held'] for grant in allocations) != row['held_units']
+                   or any(type(grant['held']) is not int or grant['held'] < 0 for grant in allocations)):
+        raise ValueError('wallet allocations do not match frozen balance')
+    if capped and conn.execute("SELECT 1 FROM portal_allocations a JOIN portal_grants g ON g.id=a.grant_id WHERE a.request_id=? AND g.owner_id!=? "
+            "UNION ALL SELECT 1 FROM portal_bonus_allocations a JOIN portal_bonus_grants g ON g.id=a.grant_id WHERE a.request_id=? AND g.owner_id!=? LIMIT 1",
+            (row['request_id'], row['owner_id'], row['request_id'], row['owner_id'])).fetchone():
+        raise ValueError('wallet allocation owner mismatch')
     for grant in allocations:
         spent = min(left, grant['held'])
         left -= spent
@@ -139,6 +162,11 @@ def _release(conn, row, charge):
     if charge:
         conn.execute('INSERT OR IGNORE INTO portal_events(owner_id,kind,amount_units,ts,source_ref) VALUES(?,?,?,?,?)',
             (row['owner_id'], 'usage', -charge, store.now(), 'spend:' + row['request_id']))
+    if capped:
+        conn.execute('INSERT INTO portal_settlements VALUES(?,?,?,?,?,?,?,?,?)',
+            (row['request_id'], row['owner_id'], row['key_id'], portalbilling.POLICY, row['held_units'],
+             supplier, charge, supplier - charge, store.now()))
+    return charge
 
 
 def apply(request_id):
@@ -157,8 +185,8 @@ def apply(request_id):
                 raise ValueError('settlement owner mismatch')
             amount = json.loads(receipt['payload'])['amount_units']
             if type(amount) is int and amount >= 0:
-                _release(conn, row, amount)
-                conn.execute("UPDATE portal_spends SET state='settled',charged_units=?,settled_at=? WHERE request_id=?", (amount, store.now(), request_id))
+                charged = _release(conn, row, amount)
+                conn.execute("UPDATE portal_spends SET state='settled',charged_units=?,settled_at=? WHERE request_id=?", (charged, store.now(), request_id))
             else:
                 conn.execute("UPDATE portal_spends SET state='unknown' WHERE request_id=?", (request_id,))
         elif row['state'] == 'forwarded':
@@ -239,9 +267,9 @@ def resolve_unknown(request_id, amount, actor, reason, evidence):
             if not request_ended(conn, row) and budgetowner.alive(row['worker']) is not False:
                 # Lease age or an unreadable owner lock never proves termination.
                 raise ValueError('请求尚无可信结束凭证且所属进程未确认退出，不能凭超时解冻')
-            _release(conn, row, charge)
+            charged = _release(conn, row, charge)
             conn.execute('INSERT INTO portal_spend_resolutions VALUES(?,?,?,?,?,?)', (request_id, charge, actor, reason.strip(), evidence.strip(), store.now()))
-            conn.execute("UPDATE portal_spends SET state='settled',charged_units=?,settled_at=? WHERE request_id=?", (charge, store.now(), request_id))
+            conn.execute("UPDATE portal_spends SET state='settled',charged_units=?,settled_at=? WHERE request_id=?", (charged, store.now(), request_id))
 
 
 def _require_evidence(reason, evidence):
@@ -384,11 +412,25 @@ def history_page(page=1):
         UNION ALL SELECT a.id,a.owner_id,u.username,a.kind,a.amount_units,a.before_units,a.after_units,a.actor,a.reason,a.evidence,a.created_at,NULL AS expires_at
         FROM portal_debt_actions a JOIN portal_users u ON u.id=a.owner_id
         UNION ALL SELECT b.id,b.owner_id,u.username,'bonus',b.amount_units,NULL,NULL,b.actor,b.reason,'',b.received_at,b.expires_at
-        FROM portal_bonus_grants b JOIN portal_users u ON u.id=b.owner_id"""
+        FROM portal_bonus_grants b JOIN portal_users u ON u.id=b.owner_id
+        UNION ALL SELECT s.request_id,s.owner_id,u.username,'platform_overrun',s.platform_units,NULL,NULL,
+            'system','单次费用超出已冻结余额，差额由平台承担，不形成用户欠款',s.request_id,s.created_at,NULL
+        FROM portal_settlements s JOIN portal_users u ON u.id=s.owner_id WHERE s.platform_units>0"""
     with store.transaction() as conn:
         total = conn.execute('SELECT COUNT(*) FROM (' + union + ')').fetchone()[0]
         rows = [dict(row) for row in conn.execute('SELECT * FROM (' + union + ') ORDER BY created_at DESC,id DESC,kind DESC LIMIT 30 OFFSET ?', ((page - 1) * 30,))]
     return {'items': rows, 'total': total, 'page': page, 'page_size': 30}
+
+
+def platform_costs_page(page=1):
+    page = max(1, min(10000, page))
+    with store.transaction() as conn:
+        total = conn.execute('SELECT COUNT(*) FROM portal_settlements WHERE platform_units>0').fetchone()[0]
+        rows = [dict(row) for row in conn.execute('SELECT s.*,u.username FROM portal_settlements s '
+            'JOIN portal_users u ON u.id=s.owner_id WHERE s.platform_units>0 '
+            'ORDER BY s.created_at DESC,s.request_id DESC LIMIT 30 OFFSET ?', ((page - 1) * 30,))]
+        units = conn.execute('SELECT COALESCE(SUM(platform_units),0) FROM portal_settlements').fetchone()[0]
+    return {'items': rows, 'total': total, 'page': page, 'page_size': 30, 'platform_units': units}
 
 
 def grant_bonus(owner_id, action_id, amount, valid_days, actor, reason):

@@ -1,19 +1,29 @@
-"""Fail closed until the actual provider path enforces a verifiable hard cap.
+"""Explicit operator approval of a user-wallet cap, not a supplier-price cap.
 
-No current WorkBuddy contract bounds credit charged for an arbitrary request.
-max_tokens, a balance snapshot, a timeout, and cancelling SSE are not such a
-contract. There is intentionally no environment/config/UI bypass here. Offline
-accounting fixtures may mock this guard; that does not establish a real cap.
+The platform absorbs supplier costs above the request's frozen user balance.
+Approval is persisted during controlled deployment; environment switches and
+creating a key cannot silently approve this financial policy.
 """
-
-MESSAGE = '单次积分费用上限尚未获得上游强制保障；为禁止透支，用户计费调用暂未开放，积分保留'
-CODE = 'portal_hard_cap_unverified'
-
-
-def dispatch_ready():
-    return False
+POLICY = 'wallet-cap-platform-absorbs-v1'
+MESSAGE = '计费调用尚未获准开放；用户积分保留，请联系管理员'
+CODE = 'portal_billing_not_approved'
 
 
-def require_verified_cap():
+def dispatch_ready(conn=None):
+    from . import portalstore as store
+    try:
+        if conn is None:
+            if not (store.config.DATA_DIR / 'user-portal.sqlite3').is_file():
+                return False
+            with store.transaction() as opened:
+                return dispatch_ready(opened)
+        row = conn.execute("SELECT value FROM portal_settings WHERE key='billing_policy'").fetchone()
+        return bool(row and row[0] == POLICY)
+    except Exception:
+        return False
+
+
+def require_approved_policy(conn=None):
     from .budget import BudgetRejected
-    raise BudgetRejected(MESSAGE, CODE, status=503)
+    if not dispatch_ready(conn):
+        raise BudgetRejected(MESSAGE, CODE, status=503)

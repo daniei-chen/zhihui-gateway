@@ -86,6 +86,7 @@ class _ToolBridge:
 
     def __init__(self, tools: object, inputs: object = None):
         self.chat_tools: list[dict] = []
+        self.parallel_tool_calls = True
         self.custom_names: set[str] = set()
         self._forward: dict[str, str] = {}
         self._reverse: dict[str, tuple[str, str, str | None]] = {}
@@ -154,6 +155,8 @@ class _ToolBridge:
                 continue
             if not name:
                 continue
+            if _tool_inner(tool).get('strict') is True:
+                raise StructuredOutputError('该上游未提供严格工具参数保证，不能接受 strict=true', 'unsupported_strict_tools')
             identity = path + (name,)
             if identity in self._seen:
                 continue
@@ -610,6 +613,13 @@ def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
                     bridge: _ToolBridge | None = None) -> dict:
     """Responses 请求体 → Chat Completions 请求体。"""
     bridge = bridge or _ToolBridge(body.get('tools'), body.get('input'))
+    for field in ('previous_response_id', 'conversation'):
+        if body.get(field) is not None:
+            raise StructuredOutputError('当前网关仅支持显式完整历史，不支持 ' + field, 'unsupported_' + field)
+    if body.get('background') is not None and body.get('background') is not False:
+        raise StructuredOutputError('当前网关不支持后台 Responses 任务', 'unsupported_background')
+    if body.get('parallel_tool_calls') is not None and body.get('parallel_tool_calls') is not True:
+        raise StructuredOutputError('当前上游不能保证串行工具调用', 'unsupported_parallel_tool_calls')
     bridge.authorize_search(body.get('tool_choice'))
     custom_tool_names = custom_tool_names if custom_tool_names is not None else bridge.custom_names
     # `stream` 必须**转告上游**：上游靠这个字段决定是回 SSE 还是回一次性 JSON。
@@ -1219,7 +1229,7 @@ def to_responses_object(
         'model': model,
         'output': output,
         'output_text': text if isinstance(text, str) else '',
-        'parallel_tool_calls': True,
+        'parallel_tool_calls': bridge.parallel_tool_calls,
         'error': None,
         'incomplete_details': incomplete,
         'usage': _usage_object(data.get('usage') or {}),

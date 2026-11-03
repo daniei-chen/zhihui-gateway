@@ -1,0 +1,651 @@
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -140,6 +140,7 @@
+ 	}
+ 	// 聊天 SSE 流中空闲上限（S3 空闲监控读取）。
+ 	up.IdleTimeout = time.Duration(cfg.Upstream.IdleTimeoutSeconds) * time.Second
++	up.AttemptTimeout = time.Duration(cfg.Upstream.AttemptTimeoutSeconds) * time.Second
+ 	// 聊天单次尝试看门狗（attempt_timeout_seconds，默认 60，本地定制）：上游
+ 	// 「收下连接不读不回」时在预算内切断尝试走轮换，不再吃满外层网关总预算。
+ 	up.SanitizeFingerprints = cfg.Features.SanitizeBlacklistFingerprints
+--- a/internal/server/attempt_audit.go
++++ b/internal/server/attempt_audit.go
+@@ -21,7 +21,7 @@
+     // ledger accepts only cn/global; empty or unknown collapses to cn (the default realm).
+     if realm != "global" { realm = "cn" }
+     raw,_ := json.Marshal(map[string]any{"event":"workbuddy_attempt","request_id":rid,
+-        "attempt":attempt,"account_uid":bound(uid),"resolved_model":bound(model),"realm":realm,
++        "dispatch_id":bound(r.Header.Get("X-Manager-Dispatch-ID")),"attempt":attempt,"account_uid":bound(uid),"resolved_model":bound(model),"realm":realm,
+         "phase":phase,"status":status,"config_hash":configHash})
+     log.Printf("%s",raw)
+ }
+--- a/internal/server/consecutive_degrade_test.go
++++ b/internal/server/consecutive_degrade_test.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"errors"
++	"net"
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"strings"
+@@ -84,7 +85,7 @@
+ 	up := &upstream.Client{
+ 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+ 			calls++
+-			return nil, errors.New("dial tcp: connection refused")
++			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+ 		})},
+ 		ChatBaseCN:    "https://fake.example",
+ 		BillingBaseCN: "https://fake.example",
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -581,14 +581,10 @@
+ 	//   - passthrough / append 非降级期：透传客户端原始 system（append 则再插一条网关 system）。
+ 	// 降级裁决：append 在降级期退化为 replace（Rewrite(Degraded)）——append 带
+ 	// 指纹原文重试是确定性再撞墙，replace 是一次性最小抢救（issue #129 设计 §4）。
+-	degradedApplied := false
+ 	if h.cfg.PromptMode == "custom" && h.cfg.PromptText != "" {
+ 		body = prompt.Rewrite(body, h.cfg.PromptText)
+-	} else if h.cfg.PromptMode == "append" && h.cfg.PromptText != "" && !h.degrade.Active() {
++	} else if h.cfg.PromptMode == "append" && h.cfg.PromptText != "" {
+ 		body = prompt.Append(body, h.cfg.PromptText)
+-	} else if (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && h.degrade.Active() {
+-		body = prompt.Rewrite(body, prompt.Degraded)
+-		degradedApplied = true
+ 	}
+ 
+ 	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
+@@ -621,7 +617,12 @@
+ 	//       也空走 NewMessageID 请求级（TurnRequestID 空键行为）——轮转内捕获
+ 	//       一次即共享。
+ 	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
+-	chatMeta := upstream.ChatMeta{ConversationID: session.ConversationIDForHeaders(body, sessKey)}
++	dispatchID := r.Header.Get("X-Manager-Dispatch-ID")
++	if !auditIdentity.MatchString(dispatchID) {
++		dispatchID = newAuditID()
++	}
++	r.Header.Set("X-Manager-Dispatch-ID", dispatchID)
++	chatMeta := upstream.ChatMeta{ConversationID: session.ConversationIDForHeaders(body, sessKey), ManagedCompatibility: r.Header.Get("X-WB-Compatibility") == "manager-scoped-v1"}
+ 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
+ 		chatMeta.ConversationRequestID = v
+ 	} else if turnKey != "" && sessKey != "" {
+@@ -712,6 +713,7 @@
+ 		}
+ 		// 传 r.Context()：客户端断连/请求取消立即中断在途上游调用并释放租约，
+ 		// 不再让"幽灵请求"占满账号在途名额直到 IdleTimeout。
++		chatMeta.AttemptObserver = providerObserver(r, dispatchID, i+1, acct.UID, bareModel, realm)
+ 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
+ 		auditAttempt(r, i+1, logfmt.Label(acct.UID, acct.Nickname), bareModel, realm, "upstream_headers", status)
+ 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
+@@ -723,6 +725,12 @@
+ 			status = uerr.Status
+ 		}
+ 		if uerr == nil && terr != nil {
++			if !upstream.DefinitelyUnsent(terr) || r.Context().Err() != nil {
++				fail(acct.UID)
++				st.status = http.StatusBadGateway
++				writeOpenAIError(w, http.StatusBadGateway, "upstream_transport_uncertain", "Upstream transport failed; processing and usage are unknown. Request was not replayed.")
++				return
++			}
+ 			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
+ 			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
+ 			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
+@@ -763,15 +771,6 @@
+ 			// 降级重试同样退化为 replace——原文在场只会确定性再撞 400）。
+ 			// 第二次仍被拦（用户内容本身触发审核）→ 回内容防火墙错误（见下分支）。
+ 			// 内容问题非账号问题：applyErrorPolicy 不罚账号（见 ErrContentBlocked 分支）。
+-			if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && !degradedApplied {
+-				h.degrade.Trigger()
+-				body = prompt.Rewrite(body, prompt.Degraded)
+-				degradedApplied = true
+-				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
+-				releaseHeld()
+-				log.Printf("WARN: [server] content-blocked (likely fingerprint false positive) -> degraded prompt retry")
+-				continue
+-			}
+ 			if kind == upstream.ErrContentBlocked {
+ 				// 内容命中网关内容防火墙：立即回客户端，**不轮转**——换任何账号都会撞同一
+ 				// 审核，轮转纯属浪费时间。不罚账号（ErrContentBlocked 分支无冷却/熔断/NoteError）。
+--- a/internal/server/handler_test.go
++++ b/internal/server/handler_test.go
+@@ -29,6 +29,13 @@
+ // 复位入口与 dynamicModelsCache 同理，避免跨测试缓存污染与测试末尾异步 goroutine
+ // 对 models.dev 发起真实网络请求。
+ func TestMain(m *testing.M) {
++	if os.Getenv("WB2A_AUDIT_DIR") == "" {
++		directory, failure := os.MkdirTemp("", "workbuddy-audit-tests-")
++		if failure != nil {
++			panic(failure)
++		}
++		os.Setenv("WB2A_AUDIT_DIR", directory)
++	}
+ 	chatLogEnabled = false
+ 	rotateBackoffBase = 0
+ 	upstream.ResetLookupChainForTest()
+@@ -1100,7 +1107,7 @@
+ 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+ 	up := &upstream.Client{
+ 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+-			return nil, errors.New("connection refused")
++			return nil, io.ErrUnexpectedEOF
+ 		})},
+ 		ChatBaseCN:    "https://fake.example",
+ 		BillingBaseCN: "https://fake.example",
+@@ -1109,7 +1116,7 @@
+ 	h := NewHandler(Config{Pool: p, Upstream: up})
+ 	rec := httptest.NewRecorder()
+ 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+-	if rec.Code != 503 {
++	if rec.Code != 502 {
+ 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+ 	}
+ 	st, _ := p.Status("u1")
+@@ -1966,18 +1973,8 @@
+ 		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[{"role":"system","content":"原始指纹"},{"role":"user","content":"hi"}]}`))
+ 	rec := httptest.NewRecorder()
+ 	h.ServeHTTP(rec, req)
+-	if rec.Code != 200 {
+-		t.Fatalf("code=%d body=%s (want 200 after degraded retry)", rec.Code, rec.Body)
+-	}
+-	if len(bodies) != 2 {
+-		t.Fatalf("want 2 upstream calls (first 400 + retry), got %d", len(bodies))
+-	}
+-	// 第二次出站 body 的 messages 头部 system 内容应为 Degraded 文本。
+-	if !strings.Contains(string(bodies[1]), prompt.Degraded) {
+-		t.Errorf("second body should contain Degraded prompt: %s", bodies[1])
+-	}
+-	if strings.Contains(string(bodies[1]), "原始指纹") {
+-		t.Errorf("second body should not contain original system: %s", bodies[1])
++	if rec.Code != 400 || len(bodies) != 1 || h.degrade.Active() {
++		t.Fatalf("refusal must remain one request without global degradation: status=%d calls=%d", rec.Code, len(bodies))
+ 	}
+ }
+ 
+@@ -1998,14 +1995,14 @@
+ 	rec := httptest.NewRecorder()
+ 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+ 		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[{"role":"system","content":"x"},{"role":"user","content":"hi"}]}`)))
+-	if rec.Code != 200 {
++	if rec.Code != 400 {
+ 		t.Fatalf("first req code=%d", rec.Code)
+ 	}
+ 	// 降级粘性：新请求 Active()=true，body 已被 Rewrite(Degraded)，上游首字节即 200。
+ 	// 但 fake 上游只对 firstCall 返回 400，之后都 200，无法区分"直达"与"重试"。
+ 	// 用 degrade.Active() 直接断言粘性生效。
+-	if !h.degrade.Active() {
+-		t.Fatal("degrade should be active after trigger")
++	if h.degrade.Active() {
++		t.Fatal("a refusal must never enable shared degradation")
+ 	}
+ }
+ 
+@@ -2097,8 +2094,8 @@
+ 	if rec.Code != 400 {
+ 		t.Fatalf("code=%d want 400 body=%s", rec.Code, rec.Body)
+ 	}
+-	if calls != 2 {
+-		t.Errorf("want exactly 2 upstream calls (first 400 + one degraded retry, then stop), got %d", calls)
++	if calls != 1 {
++		t.Errorf("content refusal must stop after one call, got %d", calls)
+ 	}
+ 	body := rec.Body.String()
+ 	if !assertJSONErrorCode(t, body, "content_blocked") {
+@@ -2228,18 +2225,18 @@
+ 	// 原始指纹串（逐字精确匹配）在出站 body 中应被改写：
+ 	// "official CLI for Claude." → "official CLI tool for Claude."
+ 	// "Main branch (" → "Default branch ("
+-	if strings.Contains(out, "official CLI for Claude.") {
+-		t.Errorf("identity fingerprint not rewritten by sanitize in user msg: %s", out)
+-	}
+-	if strings.Contains(out, "Main branch (you will usually use this for PRs)") {
+-		t.Errorf("branch fingerprint not rewritten by sanitize in user msg: %s", out)
++	if !strings.Contains(out, "official CLI for Claude.") {
++		t.Errorf("user identity content changed: %s", out)
++	}
++	if !strings.Contains(out, "Main branch (you will usually use this for PRs)") {
++		t.Errorf("user branch text changed: %s", out)
+ 	}
+ 	// 改写后的痕迹应在（证明 sanitize 层生效，不是"全删了"）。
+-	if !strings.Contains(out, "official CLI tool for Claude.") {
+-		t.Errorf("sanitized identity rewrite missing: %s", out)
+-	}
+-	if !strings.Contains(out, "Default branch (you will usually use this for PRs)") {
+-		t.Errorf("sanitized branch rewrite missing: %s", out)
++	if strings.Contains(out, "official CLI tool for Claude.") {
++		t.Errorf("unexpected user identity rewrite: %s", out)
++	}
++	if strings.Contains(out, "Default branch (you will usually use this for PRs)") {
++		t.Errorf("unexpected user branch rewrite: %s", out)
+ 	}
+ 	// 2) messages 头部恰好一条 system = 自有提示词（Rewrite 已删旧 system）。
+ 	var obj map[string]any
+@@ -2608,14 +2605,8 @@
+ 		t.Fatalf("want 1 upstream call (direct to Degraded), got %d", len(bodies))
+ 	}
+ 	out := string(bodies[0])
+-	if !strings.Contains(out, prompt.Degraded) {
+-		t.Errorf("body should contain Degraded: %s", out)
+-	}
+-	if strings.Contains(out, "原始指纹") {
+-		t.Errorf("original system must be REMOVED in degraded append (replace fallback): %s", out)
+-	}
+-	if strings.Contains(out, "网关人格") {
+-		t.Errorf("append PromptText should NOT be used in degraded window: %s", out)
++	if strings.Contains(out, prompt.Degraded) || !strings.Contains(out, "原始指纹") || !strings.Contains(out, "网关人格") {
++		t.Errorf("append must preserve policies despite obsolete gate state: %s", out)
+ 	}
+ }
+ 
+@@ -2637,25 +2628,16 @@
+ 		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[
+ 			{"role":"system","content":"原始指纹"},
+ 			{"role":"user","content":"hi"}]}`)))
+-	if rec.Code != 200 {
+-		t.Fatalf("code=%d body=%s (want 200 after degraded retry)", rec.Code, rec.Body)
+-	}
+-	if len(bodies) != 2 {
+-		t.Fatalf("want 2 upstream calls, got %d", len(bodies))
++	if rec.Code != 400 || len(bodies) != 1 {
++		t.Fatalf("append refusal must not replay: status=%d calls=%d", rec.Code, len(bodies))
+ 	}
+ 	// 首次出站是 append 语义（原始 system 在场 + GW 在场）。
+ 	if !strings.Contains(string(bodies[0]), "原始指纹") || !strings.Contains(string(bodies[0]), "网关人格") {
+ 		t.Errorf("first body should be append semantics: %s", bodies[0])
+ 	}
+ 	// 重试出站是 replace(Degraded)（原始 system 移除）。
+-	if !strings.Contains(string(bodies[1]), prompt.Degraded) {
+-		t.Errorf("retry body should contain Degraded: %s", bodies[1])
+-	}
+-	if strings.Contains(string(bodies[1]), "原始指纹") {
+-		t.Errorf("retry body should not contain original system: %s", bodies[1])
+-	}
+-	if !h.degrade.Active() {
+-		t.Error("degrade should be active after content-blocked trigger in append mode")
++	if h.degrade.Active() {
++		t.Error("append refusal must not affect another request")
+ 	}
+ }
+ 
+@@ -2685,8 +2667,8 @@
+ 	if !strings.Contains(body, "blocked by security policy") || !strings.Contains(body, "11128") {
+ 		t.Errorf("want upstream raw body passthrough: %s", body)
+ 	}
+-	if len(bodies) != 2 {
+-		t.Errorf("want 2 upstream calls (first + one degraded retry), got %d", len(bodies))
++	if len(bodies) != 1 {
++		t.Errorf("want one refusal without prompt replacement, got %d", len(bodies))
+ 	}
+ }
+ 
+--- a/internal/server/provider_audit.go
++++ b/internal/server/provider_audit.go
+@@ -0,0 +1,88 @@
++package server
++
++import (
++	"crypto/rand"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"os"
++	"path/filepath"
++	"regexp"
++	"runtime"
++	"time"
++)
++
++var auditIdentity = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
++
++func newAuditID() string {
++	var random [16]byte
++	if _, failure := rand.Read(random[:]); failure != nil {
++		panic(failure)
++	}
++	return hex.EncodeToString(random[:])
++}
++
++func providerObserver(request *http.Request, dispatch string, rotation int, account, model, realm string) func(int, string, int, string) error {
++	execution := request.Header.Get("X-Manager-Request-ID")
++	if execution == "" {
++		execution = request.Header.Get("X-Request-ID")
++	}
++	if !auditIdentity.MatchString(execution) {
++		execution = dispatch
++	}
++	return func(provider int, phase string, status int, path string) error {
++		root := os.Getenv("WB2A_AUDIT_DIR")
++		if root == "" {
++			root = "./data/provider-events-v2"
++		}
++		if failure := os.MkdirAll(root, 0o700); failure != nil {
++			return failure
++		}
++		metadata, failure := os.Lstat(root)
++		if failure != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && metadata.Mode().Perm()&0o022 != 0 {
++			return fmt.Errorf("unsafe provider evidence directory")
++		}
++		event := map[string]any{"event": "workbuddy_provider_attempt_v2", "request_id": execution,
++			"dispatch_id": dispatch, "rotation": rotation, "provider_attempt": provider,
++			"phase": phase, "status": status, "account_uid": account, "model": model,
++			"realm": realm, "path": path, "ts": time.Now().Unix()}
++		raw, failure := json.Marshal(event)
++		if failure != nil {
++			return failure
++		}
++		name := fmt.Sprintf("%s-%02d-%02d-%s.json", dispatch, rotation, provider, phase)
++		target := filepath.Join(root, name)
++		file, failure := os.CreateTemp(root, ".provider-*.tmp")
++		if failure != nil {
++			return failure
++		}
++		temporary := file.Name()
++		defer os.Remove(temporary)
++		if _, failure = file.Write(raw); failure == nil {
++			failure = file.Sync()
++		}
++		closed := file.Close()
++		if failure != nil {
++			return failure
++		}
++		if closed != nil {
++			return closed
++		}
++		if failure = os.Link(temporary, target); failure != nil {
++			return failure
++		}
++		if failure = os.Remove(temporary); failure != nil {
++			return failure
++		}
++		if runtime.GOOS == "windows" {
++			return nil
++		}
++		directory, failure := os.Open(root)
++		if failure != nil {
++			return failure
++		}
++		defer directory.Close()
++		return directory.Sync()
++	}
++}
+--- a/internal/server/remediation_contracts_test.go
++++ b/internal/server/remediation_contracts_test.go
+@@ -0,0 +1,87 @@
++package server
++
++import (
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"workbuddy2api/internal/auth"
++	"workbuddy2api/internal/upstream"
++)
++
++func TestRemediationToolNumericArgumentsStayValid(test *testing.T) {
++	raw := []byte(`{"model":"m","messages":[{"role":"user","content":" 11128 "},{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"connect","arguments":"{\"port\":11128}"}}]},{"role":"tool","tool_call_id":"call","content":"11128"}]}`)
++	prepared := upstream.PrepareBodyOpt(raw, true)
++	var value map[string]any
++	if failure := json.Unmarshal(prepared, &value); failure != nil {
++		test.Fatal(failure)
++	}
++	messages := value["messages"].([]any)
++	call := messages[1].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)
++	arguments := call["function"].(map[string]any)["arguments"].(string)
++	if arguments != `{"port":11128}` || !json.Valid([]byte(arguments)) || messages[0].(map[string]any)["content"] != " 11128 " {
++		test.Fatalf("business history changed: %s", prepared)
++	}
++}
++
++func TestRemediationAcceptedDisconnectIsNotReplayed(test *testing.T) {
++	accepted := 0
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
++		io.Copy(io.Discard, request.Body)
++		accepted++
++		return nil, io.ErrUnexpectedEOF
++	})}, ChatBaseCN: "https://fake.example"}
++	accounts := testPoolWith(&auth.Auth{UID: "first", AccessToken: "synthetic", ExpiresAt: 9999999999},
++		&auth.Auth{UID: "second", AccessToken: "synthetic", ExpiresAt: 9999999999})
++	handler := NewHandler(Config{Pool: accounts, Upstream: client})
++	recorder := httptest.NewRecorder()
++	handler.ServeHTTP(recorder, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)))
++	if accepted != 1 || recorder.Code != 502 || !strings.Contains(recorder.Body.String(), "upstream_transport_uncertain") {
++		test.Fatalf("uncertain request replayed: accepted=%d status=%d", accepted, recorder.Code)
++	}
++}
++
++func TestRemediationRefusalDoesNotChangeAnotherTenant(test *testing.T) {
++	var bodies [][]byte
++	client := newBodyCaptureUpstream(test, &bodies, func(call int, body string) (int, string, bool) {
++		if call == 1 {
++			return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
++		}
++		return 200, sseOK, true
++	})
++	handler := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999}), Upstream: client})
++	for _, policy := range []string{"tenant-A", "tenant-B"} {
++		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"system","content":"`+policy+`"},{"role":"user","content":"hi"}]}`)))
++	}
++	if len(bodies) != 2 || !strings.Contains(string(bodies[1]), "tenant-B") || handler.degrade.Active() {
++		test.Fatal("shared prompt degradation remains")
++	}
++}
++
++func TestRemediationProviderEventsHaveIndependentDispatches(test *testing.T) {
++	root := test.TempDir()
++	test.Setenv("WB2A_AUDIT_DIR", root)
++	for _, dispatch := range []string{"dispatch-one", "dispatch-two"} {
++		request := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++		request.Header.Set("X-Manager-Request-ID", "same-execution")
++		observer := providerObserver(request, dispatch, 1, "account", "model", "cn")
++		if failure := observer(1, "sending", 0, "/v2/chat/completions"); failure != nil {
++			test.Fatal(failure)
++		}
++	}
++	files, failure := os.ReadDir(root)
++	if failure != nil || len(files) != 2 {
++		test.Fatalf("independent evidence missing: %v", failure)
++	}
++	for _, file := range files {
++		raw, failure := os.ReadFile(filepath.Join(root, file.Name()))
++		if failure != nil || !json.Valid(raw) {
++			test.Fatal("invalid durable evidence")
++		}
++	}
++}
+--- a/internal/upstream/client.go
++++ b/internal/upstream/client.go
+@@ -755,6 +755,7 @@
+ 
+ 	// SanitizeFingerprints 出站请求体黑名单指纹脱敏开关（默认 true；false 完全还原）。
+ 	SanitizeFingerprints bool
++	AttemptTimeout       time.Duration
+ 
+ 	// GzipBody chat 请求体超过 gzipBodyThreshold 时用 gzip 压缩后再发上游
+ 	// （issue #297）。false 完全还原为不压缩（排障开关）。
+@@ -921,6 +922,10 @@
+ // conversationID 为网关解析出的会话标识（用于 prompt_cache_key 注入的会话段；
+ // body 里自带 conversation_id 时以 body 为准）。uid8 来自账号 UID，是跨账号硬隔离段。
+ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []byte {
++	return c.prepareBodyPolicy(body, realm, uid, conversationID, c.SanitizeFingerprints)
++}
++
++func (c *Client) prepareBodyPolicy(body []byte, realm, uid, conversationID string, sanitize bool) []byte {
+ 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
+ 	if realmKey(realm) == "global" {
+ 		// global 域降级源 = 远端探测桶（权威）∪ 产品静态兜底表（全局 21 名内档位如
+@@ -928,7 +933,7 @@
+ 		// （issue #84：往 WorkBuddy 上游发 low/max 非法，须降级到 high）。
+ 		efforts, defs = globalEffortMap(efforts, defs)
+ 	}
+-	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints, efforts, defs)
++	body = PrepareBodyOptWithEffortsAndDefault(body, sanitize, efforts, defs)
+ 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
+ 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
+ 	body = InjectPromptCacheKey(body, uid, conversationID)
+@@ -1232,7 +1237,7 @@
+ 	// ensureConsoleSystem 在 prepareBody 后统一套用全局脚本：首条消息非 system 时前置
+ 	// 兜底 system（防 console 域上游 code 11-128；#119 后 global 出站固定 /v2，
+ 	// 该兜底保留——上游对 /v2 是否需要 system 无实测反证，删了无回滚路径）。
+-	prepared := c.prepareBody(body, a.Realm(), a.UID, meta.ConversationID)
++	prepared := c.prepareBodyPolicy(body, a.Realm(), a.UID, meta.ConversationID, c.SanitizeFingerprints && !meta.ManagedCompatibility)
+ 	if c.globalOn(a) {
+ 		prepared = ensureConsoleSystem(prepared)
+ 	}
+@@ -1257,9 +1262,16 @@
+ 	channelRetried := false
+ 	var firstChannelBody []byte
+ 	firstChannelStatus := 0
++	providerAttempt := 0
+ 	for i := 0; i < len(paths); i++ {
+ 		path := paths[i]
+ 		url := c.chatBase(a) + path
++		providerAttempt++
++		if meta.AttemptObserver != nil {
++			if observeErr := meta.AttemptObserver(providerAttempt, "sending", 0, path); observeErr != nil {
++				return nil, 0, nil, fmt.Errorf("provider attempt evidence unavailable")
++			}
++		}
+ 		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(outBody))
+ 		if err != nil {
+ 			return nil, 0, nil, err
+@@ -1273,9 +1285,19 @@
+ 		// 从调用方 ctx 派生：保留取消传播（父 ctx 取消 → 本 ctx 取消），
+ 		// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
+ 		reqCtx, cancel := context.WithCancel(ctx)
++		var watchdog *time.Timer
++		if c.AttemptTimeout > 0 {
++			watchdog = time.AfterFunc(c.AttemptTimeout, cancel)
++		}
+ 		req = req.WithContext(reqCtx)
+ 		resp, err := chatClient.Do(req)
++		if watchdog != nil {
++			watchdog.Stop()
++		}
+ 		if err != nil {
++			if meta.AttemptObserver != nil {
++				_ = meta.AttemptObserver(providerAttempt, "transport_unknown", 0, path)
++			}
+ 			cancel()
+ 			log.Printf("ERR: [upstream] chat_stream acct=%s: transport error: %v", logfmt.Label(a.UID, a.Nickname), err)
+ 			// 传输层失败 → 清空共享连接池的空闲连接（连接层加固第 5 件）：
+@@ -1283,6 +1305,13 @@
+ 			// 实测：仅靠 IdleConnTimeout 等过期不够，主动清池才断根）。
+ 			roundTripCloseIdle(chatClient.Transport)
+ 			return nil, 0, nil, err
++		}
++		if meta.AttemptObserver != nil {
++			if observeErr := meta.AttemptObserver(providerAttempt, "headers", resp.StatusCode, path); observeErr != nil {
++				resp.Body.Close()
++				cancel()
++				return nil, 0, nil, fmt.Errorf("provider attempt evidence unavailable after send")
++			}
+ 		}
+ 		if resp.StatusCode >= 400 {
+ 			raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+--- a/internal/upstream/headers.go
++++ b/internal/upstream/headers.go
+@@ -207,6 +207,8 @@
+ // 复用同值；TraceID 透传入站值（空 = 回落 conversationRequestID）。
+ // messageID（消息级，每条独立）由 ChatHeaders 内部生成，无需外部可见。
+ type ChatMeta struct {
++	ManagedCompatibility  bool
++	AttemptObserver       func(int, string, int, string) error
+ 	ConversationID        string // X-Conversation-ID：body 提取的入站值，空则不发（透传优先，不伪造）
+ 	ConversationRequestID string // X-Conversation-Request-ID / X-Root-Request-ID：聚合主键，必发
+ 	TraceID               string // X-Trace-ID：入站透传值，空则回落 conversationRequestID
+--- a/internal/upstream/sanitize.go
++++ b/internal/upstream/sanitize.go
+@@ -153,7 +153,7 @@
+ 	}
+ 	// 兜底：键值形态已在上面整段删除，这里只剩裸键名（引用/示例文本形态）。
+ 	text = sanitizeBareHdrRe.ReplaceAllString(text, "x-anthropic-billing-hdr")
+-	return strings.TrimSpace(text)
++	return text
+ }
+ 
+ // hasFingerprint 特征预检：先走 strings.Contains 快速路径（零分配）；
+@@ -251,6 +251,10 @@
+ 		if !ok {
+ 			continue
+ 		}
++		role, _ := m["role"].(string)
++		if role != "system" && role != "developer" {
++			continue
++		}
+ 		// content 与 tool_calls 各自独立判断：content 可以为 null（工具调用轮），
+ 		// 早期版本在此 continue，导致这类消息的 tool_calls 完全不被净化。
+ 		if c, ok := m["content"]; ok {
+@@ -267,11 +271,6 @@
+ 				changed = true
+ 			}
+ 		}
+-		if tc, ok := m["tool_calls"]; ok {
+-			if sanitizeToolCalls(tc) {
+-				changed = true
+-			}
+-		}
+ 	}
+ 	return changed
+ }
+--- a/internal/upstream/sanitize_test.go
++++ b/internal/upstream/sanitize_test.go
+@@ -90,13 +90,13 @@
+ 			}},
+ 		}},
+ 	}
+-	if !sanitizeMessages(msgs) {
+-		t.Fatal("sanitizeMessages 未报告任何改动，tool_calls 被跳过")
++	if sanitizeMessages(msgs) {
++		t.Fatal("non-system tool history must remain exact")
+ 	}
+ 	fn := msgs[1].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
+ 	got := fn["arguments"].(string)
+-	if strings.Contains(got, "11128") {
+-		t.Errorf("tool_call arguments 未被净化: %q", got)
++	if got != `{"command":"echo 11128"}` {
++		t.Errorf("tool arguments changed: %q", got)
+ 	}
+ }
+ 
+@@ -408,12 +408,12 @@
+ 			"reasoning_content": "上文出现过 `x-anthropic-billing-header` 键名",
+ 		},
+ 	}
+-	if !sanitizeMessages(msgs) {
+-		t.Fatal("reasoning_content 中的指纹未被净化")
++	if sanitizeMessages(msgs) {
++		t.Fatal("assistant reasoning history must remain exact")
+ 	}
+ 	rc := msgs[0].(map[string]any)["reasoning_content"].(string)
+-	if strings.Contains(rc, "x-anthropic-billing-header") {
+-		t.Fatalf("reasoning_content 指纹残留: %q", rc)
++	if !strings.Contains(rc, "x-anthropic-billing-header") {
++		t.Fatalf("assistant reasoning changed: %q", rc)
+ 	}
+ }
+ 
+--- a/internal/upstream/send_safety.go
++++ b/internal/upstream/send_safety.go
+@@ -0,0 +1,15 @@
++package upstream
++
++import (
++	"errors"
++	"net"
++)
++
++func DefinitelyUnsent(failure error) bool {
++	var network *net.OpError
++	if errors.As(failure, &network) && network.Op == "dial" {
++		return true
++	}
++	var resolution *net.DNSError
++	return errors.As(failure, &resolution)
++}

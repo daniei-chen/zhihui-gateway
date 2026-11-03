@@ -19,9 +19,9 @@ class PublicPoolTests(fixtures.PortalTests):
     def setUp(self):
         super().setUp()
         self.addCleanup(budgetowner.close)
-        # Accounting-only synthetic fixtures deliberately bypass the hard-cap
-        # gate. Real gateway refusal is tested separately without this mock.
-        self.stack.enter_context(mock.patch('server.portalbilling.require_verified_cap'))
+        # Accounting fixtures bypass only operator approval. Real policy and
+        # gateway admission are tested separately without this mock.
+        self.stack.enter_context(mock.patch('server.portalbilling.require_approved_policy'))
 
     async def make_key(self, who='alice'):
         response = await self.call('POST', '/api/portal/keys', headers=self.headers(who), json={'label': 'synthetic key'})
@@ -181,7 +181,10 @@ class PublicPoolTests(fixtures.PortalTests):
 
     async def test_keys_plaintext_once_ownership_revoke_and_no_ip_restriction(self):
         made = await self.make_key()
-        self.assertIsNone(keysvc.resolve(made['key']))
+        discovered = keysvc.resolve(made['key'])
+        self.assertIsNotNone(discovered)
+        self.assertIsNone(keysvc.validate(discovered, '127.0.0.1', None, is_model_list=True))
+        self.assertEqual(keysvc.validate(discovered, '127.0.0.1', policy.MODELS[0]).code, 'portal_pool_disabled')
         with self.enabled():
             key = keysvc.resolve(made['key'])
             self.assertEqual(key['max_ips'], 0)
@@ -265,7 +268,7 @@ class PublicPoolTests(fixtures.PortalTests):
                                       ('protocol_incomplete', 1, {'prompt_tokens': 1, 'completion_tokens': 1})]:
             with self.enabled(), store.transaction() as conn:
                 conn.execute('DELETE FROM portal_request_ends')
-                conn.execute('DELETE FROM portal_allocations'); conn.execute('DELETE FROM portal_spends')
+                conn.execute('DELETE FROM portal_allocations'); conn.execute('DELETE FROM portal_spend_policies'); conn.execute('DELETE FROM portal_spends')
                 conn.execute('UPDATE portal_grants SET remaining_units=amount_units')
             db.execute('DELETE FROM portal_spend_receipts')
             with self.enabled():
@@ -305,7 +308,7 @@ class PublicPoolTests(fixtures.PortalTests):
             finally:
                 observability.current.reset(token)
 
-    async def test_overrun_records_debt_blocks_new_keys_and_does_not_touch_contributor(self):
+    async def test_approved_overrun_caps_charge_blocks_empty_wallet_and_does_not_touch_contributor(self):
         await self.pooled('alice', 'supplier-alice', 10)
         await self.pooled('bob', 'supplier-bob', 5)
         made = await self.make_key('bob'); db.execute(wallet.RECEIPTS)
@@ -318,7 +321,8 @@ class PublicPoolTests(fixtures.PortalTests):
                     wallet.receipt(state, {'prompt_tokens': 1, 'completion_tokens': 1}, 7)
                 wallet.finish(state)
                 self.assertEqual(store.overview('alice')['balance_units'], 10 * store.SCALE)
-                self.assertEqual(store.overview('bob')['debt_units'], 2 * store.SCALE)
+                self.assertEqual(store.overview('bob')['debt_units'], 0)
+                self.assertEqual(wallet.platform_costs_page()['platform_units'], 2 * store.SCALE)
                 with self.assertRaises(budget.BudgetRejected):
                     wallet.reserve(key)
             finally:

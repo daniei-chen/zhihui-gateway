@@ -280,6 +280,20 @@ def attempts(request_id: str, user: dict = Depends(security.current_user)) -> li
         (request_id,))]
 
 
+@router.get('/provider-attempts')
+def provider_attempts(request_id: str, user: dict = Depends(security.require_panel_reader)) -> dict:
+    from .. import providerevents
+    if not 0 < len(request_id) <= 128:
+        raise HTTPException(400, 'request_id 必填且不超过128字符')
+    return providerevents.report(request_id)
+
+
+@router.get('/provider-evidence-health')
+def provider_evidence_health(user: dict = Depends(security.require_panel_reader)) -> dict:
+    from .. import providerevents
+    return providerevents.health()
+
+
 @router.get('/attempts/billing')
 def attempts_billing(request_id: str, user: dict = Depends(security.current_user)) -> dict:
     """这次请求有几个 attempt、各自有没有计费证据（U04）。

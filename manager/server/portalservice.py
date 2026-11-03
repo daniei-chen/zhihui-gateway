@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import tempfile
 from contextlib import nullcontext
 
@@ -68,6 +69,10 @@ def load_credentials(account_id: str, *, _conn=None) -> dict:
         link = conn.execute('SELECT filename FROM portal_pool_links WHERE account_id=?', (account_id,)).fetchone()
         account = dict(store.require_account(conn, account_id)) if link else None
     if link:
+        if (not re.fullmatch(r'workbuddy-[0-9A-Za-z_-]{1,80}\.json', link['filename'])
+                or link['filename'] != f'workbuddy-{account["provider_uid"]}.json'
+                or config.AUTH_DIR.is_symlink()):
+            raise ValueError('公共池账号路径异常')
         path = config.AUTH_DIR / link['filename']
         if path.is_symlink():
             raise ValueError('公共池账号文件异常')
@@ -83,6 +88,21 @@ def load_credentials(account_id: str, *, _conn=None) -> dict:
     if path.is_symlink():
         raise ValueError('账号存储异常')
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def publication_credentials(account):
+    local = credential_dir() / (account['id'] + '.json')
+    info = local.lstat()
+    if not stat.S_ISREG(info.st_mode) or local.is_symlink() or info.st_nlink != 1 or info.st_size > 1024 * 1024:
+        raise ValueError('账号凭据文件异常')
+    auth = json.loads(local.read_text(encoding='utf-8'))
+    if (not isinstance(auth, dict) or str(auth.get('uid') or '') != account['provider_uid']
+            or auth.get('realm') != 'cn' or auth.get('enterprise_id')
+            or not isinstance(auth.get('access_token'), str) or not auth['access_token'].strip()
+            or (auth.get('expires_at') is not None and (type(auth['expires_at']) not in (int, float)
+                or not auth['expires_at'] > store.now() + 60))):
+        raise ValueError('账号身份或授权已变化，请核对后再入池')
+    return auth
 
 
 def promote(account_id):
@@ -102,12 +122,13 @@ def promote(account_id):
         store.require_not_quarantined(conn)
         account = dict(store.require_account(conn, account_id))
         owner = conn.execute('SELECT enabled FROM portal_users WHERE id=?', (account['owner_id'],)).fetchone()
-        if not owner or not owner[0] or account['initial_state'] != 'confirmed':
+        if not owner or not owner[0] or account['status'] != 'active' or account['initial_state'] != 'confirmed':
             raise ValueError('用户或初始积分尚未核实，未加入公共池')
         if not re.fullmatch(r'[0-9A-Za-z_-]{1,80}', account['provider_uid']):
             raise ValueError('账号身份无效')
         link = conn.execute('SELECT filename FROM portal_pool_links WHERE account_id=?', (account_id,)).fetchone()
         if link:
+            load_credentials(account_id, _conn=conn)
             return True
         if pool_files(account['provider_uid']):
             # Existing publication intents may recover their own file below.
@@ -118,18 +139,17 @@ def promote(account_id):
         conn.execute('INSERT OR IGNORE INTO portal_pool_intents VALUES(?,?,?,?)', (account_id, filename, secrets.token_hex(24), store.now()))
     with store.transaction() as conn:
         # Intent survives both file publication and a later SQL commit failure.
+        store.require_not_quarantined(conn)
         account = dict(store.require_account(conn, account_id))
         owner = conn.execute('SELECT enabled FROM portal_users WHERE id=?', (account['owner_id'],)).fetchone()
-        if not owner or not owner[0]:
-            raise ValueError('用户已停用，未发布账号')
+        if not owner or not owner[0] or account['status'] != 'active' or account['initial_state'] != 'confirmed':
+            raise ValueError('用户或账号状态已变化，未发布账号')
         intent = conn.execute('SELECT * FROM portal_pool_intents WHERE account_id=?', (account_id,)).fetchone()
-        local = credential_dir() / (account_id + '.json')
-        if local.is_symlink():
-            raise ValueError('账号存储异常')
-        auth = json.loads(local.read_text(encoding='utf-8'))
         base = config.AUTH_DIR
         base.mkdir(parents=True, exist_ok=True)
         filename = intent['filename']
+        if filename != f'workbuddy-{account["provider_uid"]}.json':
+            raise ValueError('公共池发布意图路径异常')
         target = base / filename
         if any(path != target for path in pool_files(account['provider_uid'])):
             raise ValueError('公共池其他文件已包含同一UID，未重复接入')
@@ -137,11 +157,15 @@ def promote(account_id):
             if target.is_symlink() or (base / (filename + '.disabled')).exists():
                 raise ValueError('公共池同一账号需管理员核对，未覆盖')
             raw = json.loads(target.read_text(encoding='utf-8'))
-            if (raw.get('portal_publication') != intent['marker']
-                    or str((raw.get('account') or {}).get('uid')) != account['provider_uid']):
+            acct = raw.get('account') if isinstance(raw, dict) else None
+            shared_auth = raw.get('auth') if isinstance(raw, dict) else None
+            if (not isinstance(acct, dict) or not isinstance(shared_auth, dict)
+                    or raw.get('portal_publication') != intent['marker'] or str(acct.get('uid')) != account['provider_uid']
+                    or acct.get('enterpriseId') or shared_auth.get('realm') != 'cn'):
                 raise ValueError('公共池已存在同一账号，未覆盖；请管理员核对')
             conn.execute('INSERT OR IGNORE INTO portal_pool_links VALUES(?,?,?)', (account_id, filename, store.now()))
             return True
+        auth = publication_credentials(account)
         payload = {'account': {'uid': account['provider_uid'], 'enterpriseId': '', 'nickname': auth.get('nickname', '')},
             'auth': {'accessToken': auth['access_token'], 'refreshToken': auth.get('refresh_token', ''),
                      'expiresAt': auth.get('expires_at'), 'domain': auth.get('domain', ''), 'realm': 'cn'},
@@ -162,6 +186,24 @@ def promote(account_id):
             Path(name).unlink(missing_ok=True)
     # The isolated original is no longer read/written after a pool link exists.
     return True
+
+
+def publish_confirmed_accounts():
+    """Recover only explicit customer-owned publication; never infer old pool ownership."""
+    if not portalpolicy.enabled():
+        return {'published': 0, 'pending': 0}
+    with store.transaction() as conn:
+        store.require_not_quarantined(conn)
+        accounts = [row[0] for row in conn.execute("SELECT a.id FROM portal_accounts a JOIN portal_users u ON u.id=a.owner_id "
+            "LEFT JOIN portal_pool_links p ON p.account_id=a.id WHERE u.enabled=1 AND a.status='active' "
+            "AND a.initial_state='confirmed' AND p.account_id IS NULL ORDER BY a.created_at,a.id LIMIT 1000")]
+    published = 0
+    for account_id in accounts:
+        try:
+            published += bool(promote(account_id))
+        except (ValueError, OSError):
+            logging.getLogger(__name__).warning('portal account publication pending; details withheld')
+    return {'published': published, 'pending': len(accounts) - published}
 
 
 async def import_ready(owner: dict, result: dict) -> dict:
@@ -314,14 +356,42 @@ async def reconcile_checkin(account_id, owner_id=None, authorize=None):
     auth = load_credentials(account_id)
     ok, total, _, expiries = await tencent.fetch_credits(auth)
     after = store.snapshot(ok, total, expiries)
+    if authorize:
+        authorize()
     before = {int(expiry): amount for expiry, amount in json.loads(row['baseline']).items()}
-    store.finish_checkin(account_id, store.day(), 0, before, after, row['started_at'])
+    store.finish_checkin(account_id, row['day'], 0, before, after, row['started_at'])
     return {'ok': True, 'message': '已重新核对签到到账记录；无法确认的金额仍不入账'}
+
+
+async def checkin_many(account_ids, actor, owner_id=None, authorize=None):
+    results = []
+    for account_id in account_ids:
+        if authorize:
+            authorize()
+        try:
+            result = await checkin(account_id, actor, owner_id, authorize)
+        except HTTPException:
+            raise
+        except Exception:
+            logging.getLogger(__name__).warning('portal batch account pending; details withheld')
+            result = {'state': 'pending', 'message': '该账号需核对；未自动重试，不影响其余账号'}
+        results.append({**result, 'account_id': account_id})
+    return results
+
+
+def batch_message(results):
+    confirmed = sum(row.get('state') == 'confirmed' for row in results)
+    return f'本批处理 {len(results)} 个账号，{confirmed} 个已核实签到，其余请查看账号状态；未知结果不重复发起'
 
 
 async def automatic_once():
     from . import portalwallet
+    from .services.asyncwork import joined_thread
     portalwallet.recover()
+    try:
+        await joined_thread(publish_confirmed_accounts)
+    except Exception:
+        logging.getLogger(__name__).warning('portal pool publication recovery paused; details withheld')
     if not store.automatic_enabled():
         return 0
     with store.transaction() as conn:
@@ -342,7 +412,7 @@ async def automatic_once():
         try:
             await checkin(account_id, 'automatic', authorize=authorized)
             completed += 1
-        except (ValueError, FileNotFoundError, HTTPException):
+        except Exception:
             logging.getLogger(__name__).warning('portal automatic check-in pending; no credentials logged')
     return completed
 

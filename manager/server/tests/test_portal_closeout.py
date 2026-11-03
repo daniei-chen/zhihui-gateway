@@ -1,4 +1,4 @@
-"""Hard send refusal, request closure proof and paired quarantine restore drills."""
+"""Unapproved send refusal, request closure proof and quarantine restore drills."""
 from contextlib import closing
 import hashlib
 import json
@@ -39,13 +39,13 @@ class PortalCloseoutTests(fixtures.PortalTests):
             try:
                 db.execute(wallet.RECEIPTS)
                 # Synthetic historical in-flight request, not real permission.
-                with mock.patch.object(portalbilling, 'require_verified_cap'):
+                with mock.patch.object(portalbilling, 'require_approved_policy'):
                     wallet.reserve(key); wallet.forwarded(state)
             finally:
                 observability.current.reset(token)
         return state
 
-    async def test_real_hard_cap_gate_all_protocols_never_reaches_provider(self):
+    async def test_unapproved_billing_all_protocols_never_reaches_provider(self):
         import httpx
         from fastapi import FastAPI
         from server import platformpolicy, portalpolicy
@@ -77,7 +77,7 @@ class PortalCloseoutTests(fixtures.PortalTests):
         with store.transaction() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM portal_spends').fetchone()[0], 0)
 
-    async def test_send_boundary_rechecks_hard_cap_and_preserves_unsent_balance(self):
+    async def test_send_boundary_rechecks_approval_and_preserves_unsent_balance(self):
         wallet.grant_bonus('alice', 'a' * 32, 100, 30, 'admin', REASON)
         made = await self.key()
         with mock.patch.dict('os.environ', {'WB_PORTAL_PUBLIC_POOL_ENABLED': '1'}):
@@ -85,7 +85,7 @@ class PortalCloseoutTests(fixtures.PortalTests):
             token = observability.current.set(state)
             try:
                 db.execute(wallet.RECEIPTS)
-                with mock.patch.object(portalbilling, 'require_verified_cap'):
+                with mock.patch.object(portalbilling, 'require_approved_policy'):
                     wallet.reserve(key)
                 with self.assertRaises(budget.BudgetRejected) as raised:
                     wallet.forwarded(state)
@@ -113,7 +113,7 @@ class PortalCloseoutTests(fixtures.PortalTests):
         def factory(*args, **kwargs):
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler)); clients.append(client); return client
         with mock.patch.dict('os.environ', {'WB_PORTAL_PUBLIC_POOL_ENABLED': '1'}), \
-                mock.patch.object(portalbilling, 'require_verified_cap'), \
+                mock.patch.object(portalbilling, 'require_approved_policy'), \
                 mock.patch.object(config, 'http_client', side_effect=factory), \
                 mock.patch.object(gateway, 'RATE_MAX_PER_MIN', 0), \
                 mock.patch('server.services.wb2api.load_upstream_config', return_value={}):
@@ -248,7 +248,7 @@ class PortalCloseoutTests(fixtures.PortalTests):
             return client
         try:
             with mock.patch.dict('os.environ', {'WB_PORTAL_PUBLIC_POOL_ENABLED': '1'}), \
-                    mock.patch.object(portalbilling, 'require_verified_cap'), \
+                    mock.patch.object(portalbilling, 'require_approved_policy'), \
                     mock.patch.object(config, 'http_client', side_effect=factory), \
                     mock.patch.object(gateway, 'RATE_MAX_PER_MIN', 0), \
                     mock.patch('server.services.wb2api.load_upstream_config', return_value={}):
@@ -331,12 +331,50 @@ class PortalCloseoutTests(fixtures.PortalTests):
             token = observability.current.set(state)
             try:
                 db.execute(wallet.RECEIPTS)
-                with mock.patch.object(portalbilling, 'require_verified_cap'):
+                with mock.patch.object(portalbilling, 'require_approved_policy'):
                     wallet.reserve(key); wallet.forwarded(state)
                 wallet.finish(state)
             finally:
                 observability.current.reset(token)
         return state
+
+    async def test_online_pair_blocks_both_ledgers_and_restores_only_quarantined(self):
+        args = await self.prepare_snapshot()
+        args.pop('offline_confirmed')
+        budgetowner.identity()
+        result = recovery.create_paired_snapshot(**args)
+        manifest = recovery.verify_snapshot(args['destination'], result['manifest_sha256'])
+        self.assertEqual(manifest['consistency'], recovery.PAIR_FORMAT)
+        self.assertFalse(manifest['offline_operator_confirmed'])
+        target = self.root / 'paired-online-restore'
+        restored = recovery.restore_quarantine(args['destination'], target, result['manifest_sha256'])
+        self.assertTrue(restored['quarantined'])
+        with closing(sqlite3.connect(target / 'user-portal.sqlite3')) as connection:
+            self.assertEqual(connection.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()[0], 'true')
+
+    async def test_pair_refuses_wallet_settlement_without_main_receipt(self):
+        args = await self.prepare_snapshot()
+        args.pop('offline_confirmed')
+        state = await self.make_snapshot_unknown()
+        with store.transaction() as connection:
+            connection.execute('INSERT INTO portal_settlements VALUES(?,?,?,?,?,?,?,?,?)',
+                (state.request_id, 'alice', 1, portalbilling.POLICY, 1, 1, 1, 0, NOW))
+        with self.assertRaises(ValueError):
+            recovery.create_paired_snapshot(**args)
+
+    async def test_pair_preserves_main_committed_wallet_pending_and_unknown(self):
+        args = await self.prepare_snapshot()
+        args.pop('offline_confirmed')
+        state = await self.make_snapshot_unknown()
+        db.execute('INSERT INTO portal_spend_receipts VALUES(?,?,?)', (state.request_id, 'alice', json.dumps({'amount_units': 0})))
+        result = recovery.create_paired_snapshot(**args)
+        target = self.root / 'pending-pair-restore'
+        recovery.restore_quarantine(args['destination'], target, result['manifest_sha256'])
+        with closing(sqlite3.connect(target / 'manager.db')) as connection:
+            self.assertEqual(json.loads(connection.execute('SELECT payload FROM portal_spend_receipts WHERE request_id=?', (state.request_id,)).fetchone()[0])['amount_units'], 0)
+        with closing(sqlite3.connect(target / 'user-portal.sqlite3')) as connection:
+            self.assertEqual(connection.execute('SELECT state FROM portal_spends WHERE request_id=?', (state.request_id,)).fetchone()[0], 'unknown')
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM portal_settlements').fetchone()[0], 0)
 
     async def test_snapshot_requires_offline_and_refuses_live_worker_existing_or_source_target(self):
         args = await self.prepare_snapshot()

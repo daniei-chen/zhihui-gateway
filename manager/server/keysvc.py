@@ -596,6 +596,8 @@ def validate(key: dict, ip: str, model: str | None,
     from . import portalpolicy
     portal_problem = portalpolicy.problem(key, model, mapped_model, platform, listing=is_model_list)
     if portal_problem:
+        if portalpolicy.is_portal(key) and not is_model_list and not portalpolicy.enabled() and portal_problem.startswith('用户公共池调用尚未启用'):
+            return Rejection(portal_problem, 503, 'service_unavailable', 'portal_pool_disabled')
         return Rejection(portal_problem, 403, 'permission_error', 'portal_policy_denied')
     if not key['enabled']:
         return Rejection('密钥已停用', 403, 'permission_error', 'key_disabled')

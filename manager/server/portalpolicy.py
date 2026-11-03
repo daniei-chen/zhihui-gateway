@@ -37,8 +37,6 @@ def identity(key, conn):
 def problem(key, model=None, mapped=None, platform='workbuddy', *, listing=False):
     if not is_portal(key):
         return None
-    if not enabled():
-        return '用户公共池调用尚未启用'
     if platform != 'workbuddy' or key.get('upstream_id') is not None:
         return '用户密钥仅限默认 WorkBuddy 国内公共池'
     try:
@@ -46,6 +44,8 @@ def problem(key, model=None, mapped=None, platform='workbuddy', *, listing=False
             identity(key, conn)
     except Exception:
         return '用户密钥归属或账本不可用，未放行调用'
+    if not listing and not enabled():
+        return '用户公共池调用尚未启用；密钥有效，可读取模型目录，暂不能发起计费调用'
     if not listing and (not model_allowed(model) or not model_allowed(mapped or model)):
         return '用户端仅允许 DeepSeek 国内模型，映射目标也必须在白名单内'
     return None

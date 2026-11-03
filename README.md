@@ -10,7 +10,7 @@
 <br />
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="走进智汇：访问产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="阅读 0.0.3 更新说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="阅读 0.0.5 更新说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="查看开发与部署入口" /></a>
 
 <br /><br />
@@ -36,10 +36,12 @@
 
 冰蓝、留白、轻盈的光路。首页、登录页与工作台，共享同一枚 Z。
 
-> [!WARNING]
-> `0.0.4` 正在执行受信发布验收，不能把源码版本号当作已上线证明。用户计费调用保持关闭，等待可核验的上游单次费用上限；功能、验收与切换状态见[发布记录](docs/RELEASE-0.0.4.md)。历史[0.0.4预发布](docs/RELEASE-0.0.4-RC.1.md)保留，不移动旧标签。
+> [!NOTE]
+> 当前版本与能力以 [0.0.5 发布说明](docs/RELEASE-0.0.5.md)及精确签名部署回执为准。历史 [0.0.4 发布记录](docs/RELEASE-0.0.4.md)与预发布标签保留，不将旧版限制或源码标签冒充当前运行状态。
 
 > [!IMPORTANT]
+> `0.0.5` 通过受信发布流程升级，包含调用保真、重试、协议、账本及恢复修复。详见[0.0.5 发布说明](docs/RELEASE-0.0.5.md)。历史发布回执保留，不把旧 commit 或自动源码包冒充现网签名制品。
+>
 > `0.0.3` 已受控上线：智汇管家与预警中心沿用现有工作台，DeepSeek 读取脱敏证据、调用有限只读工具；规则先通知，AI 再补充。已验证真实模型计量、工具调用与 SMTP 接受；邮件入箱和长期稳定性仍需独立确认。见[本次发布回执](docs/RELEASE-0.0.3.md)与[管家运行合同](docs/STEWARD.md)。WorkBuddy、Qoder、Trae 保持三平台，原版登录不改；Codex / ChatGPT 留待独立产品。
 
 [本轮集成与验收边界](docs/FOUR-GATEWAY-INTEGRATION.md) · [可编辑首页与复现](site/home-source/INTEGRATION.md)

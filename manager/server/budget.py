@@ -369,7 +369,7 @@ def _zero_usage_proof(row, key_id) -> bool:
 
 
 def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
-            expect_charged_zero=False, allow_negative=False):
+            expect_charged_zero=False, allow_negative=False, human_evidence=None):
     """把一条 unknown 预留核对结清（写 charged_* + 增量调整 + 审计）。
 
     ## N05（2026-10-28，P1）：扫描与结清之间必须重新核对
@@ -407,6 +407,20 @@ def resolve(request_id, tokens, credit, actor, reason, *, zero_only=False,
         if row is None: raise ValueError('预留不存在')
         if row['state']=='settled': return False
         if row['state']!='unknown': raise ValueError('仅允许核对 unknown 请求，进行中请求不可手动释放')
+        if human_evidence is not None:
+            from . import portalwallet
+            if not isinstance(human_evidence, str) or not 8 <= len(human_evidence.strip()) <= 500 or not 8 <= len(reason.strip()) <= 500:
+                raise ValueError('需要8至500字符的核对原因与凭证说明')
+            if portalwallet.replay_problem():
+                raise ValueError('费用回执通道尚未核实，不能人工覆盖')
+            ended = db.query_one('SELECT owner,key_id FROM request_lifetime_ends_v2 WHERE request_id=?', (request_id,))
+            if not (ended and ended['owner'] == row['owner'] and ended['key_id'] == row['key_id']) and budgetowner.alive(row['owner']) is not False:
+                raise ValueError('缺少可信请求结束证明，不能凭超时核销')
+            proofs = db.query("SELECT key_id,credit_units,prompt_tokens,completion_tokens FROM usage_events WHERE request_id=? AND event_type='usage' AND credit_units IS NOT NULL", (request_id,))
+            if proofs and (len(proofs) != 1 or proofs[0]['key_id'] != row['key_id'] or proofs[0]['credit_units'] != ledger.units(credit) or proofs[0]['prompt_tokens'] + proofs[0]['completion_tokens'] != tokens):
+                raise ValueError('人工金额与已提交供应商回执冲突')
+            db.execute('INSERT INTO budget_resolution_evidence_v2 VALUES(?,?,?,?,?)',
+                       (request_id, actor, reason.strip(), human_evidence.strip(), int(time.time())))
         # Recheck under BEGIN IMMEDIATE: a stale scan must never erase uncertain usage.
         if zero_only and any(row[field] or 0 for field in ('reserved_tokens', 'reserved_credit', 'charged_tokens', 'charged_credit')):
             return False

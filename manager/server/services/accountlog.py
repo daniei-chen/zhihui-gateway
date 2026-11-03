@@ -206,13 +206,17 @@ def parse_request_lines_with_mtime(lines: list[str], mtime: float | None) -> lis
 
 def _collect_once() -> int:
     """读一次上游日志并回填账号。返回回填条数（同步，供 to_thread 调用）。"""
+    from .. import providerevents
+    imported = providerevents.collect()
+    from .. import operational
+    operational.transition('provider_evidence', not providerevents.health()['ok'], 'provider evidence backlog or conflict requires review')
     lines, mtime = wb2api.read_container_logs(_TAIL, timestamps=True, with_mtime=True)
     if not lines:
-        return 0
+        return imported
     # Structured events provide exact request identity. Older table logs retain
     # their explicitly legacy correlation and never override exact attribution.
     from .. import ledger
-    exact=0
+    exact=imported
     for line in lines:
         start=line.find('{')
         if start<0 or len(line)>8192:continue
@@ -234,6 +238,8 @@ async def _loop() -> None:
             if filled:
                 logger.debug('回填账号 %d 条', filled)
         except Exception as exc:  # noqa: BLE001
+            from .. import operational
+            operational.transition('provider_evidence', True, 'provider evidence collection unavailable')
             # 采集失败只是这一轮没有数据，下一轮继续；不影响任何请求
             logger.warning('账号回填失败（不影响请求）: %s', exc)
         await asyncio.sleep(_POLL_SECONDS)

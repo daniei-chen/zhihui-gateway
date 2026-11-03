@@ -24,4 +24,4 @@ export function creditInputUnits(text: string): number | null {
   const result = Number(whole) * 1_000_000 + Number(fraction.padEnd(6, '0'));
   return Number.isSafeInteger(result) && result <= 1_000_000_000_000_000 ? result : null;
 }
-export const operationLabel = (kind: string) => ({resolve: '费用核对', repay: '积分抵欠额', waive: '管理员豁免', bonus: '管理员赠送积分'}[kind] || kind);
+export const operationLabel = (kind: string) => ({resolve: '费用核对', repay: '积分抵历史欠额', waive: '管理员豁免', bonus: '管理员赠送积分', platform_overrun: '平台承担超额（不扣用户）'}[kind] || kind);

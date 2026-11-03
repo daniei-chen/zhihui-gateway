@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS portal_spends(
  held_units INTEGER NOT NULL, charged_units INTEGER, settled_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS portal_spends_owner ON portal_spends(owner_id,state);
+CREATE TABLE IF NOT EXISTS portal_spend_policies(
+ request_id TEXT PRIMARY KEY REFERENCES portal_spends(request_id), policy TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS portal_spends_key_state ON portal_spends(owner_id,key_id,state);
+CREATE TABLE IF NOT EXISTS portal_settlements(
+ request_id TEXT PRIMARY KEY REFERENCES portal_spends(request_id), owner_id TEXT NOT NULL,
+ key_id INTEGER NOT NULL, policy TEXT NOT NULL, held_units INTEGER NOT NULL CHECK(held_units>=0),
+ supplier_units INTEGER NOT NULL CHECK(supplier_units>=0),
+ charged_units INTEGER NOT NULL CHECK(charged_units>=0 AND charged_units<=held_units),
+ platform_units INTEGER NOT NULL CHECK(platform_units>=0), created_at INTEGER NOT NULL,
+ CHECK(supplier_units=charged_units+platform_units)
+);
+CREATE TRIGGER IF NOT EXISTS portal_settlements_no_update BEFORE UPDATE ON portal_settlements
+ BEGIN SELECT RAISE(ABORT,'settlements are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS portal_settlements_no_delete BEFORE DELETE ON portal_settlements
+ BEGIN SELECT RAISE(ABORT,'settlements are immutable'); END;
 CREATE TABLE IF NOT EXISTS portal_allocations(
  request_id TEXT NOT NULL REFERENCES portal_spends(request_id),
  grant_id TEXT NOT NULL REFERENCES portal_grants(id), amount_units INTEGER NOT NULL,
@@ -380,10 +396,12 @@ def overview(owner_id: str) -> dict:
                 'pending_pool_units': unpooled,
                 'pool_enabled': portalpolicy.enabled() and not quarantined,
                 'restore_quarantined': quarantined,
-                'dispatch_enabled': portalpolicy.enabled() and not quarantined and portalbilling.dispatch_ready(),
+                'dispatch_enabled': portalpolicy.enabled() and not quarantined and portalbilling.dispatch_ready(conn),
                 'allowed_models': list(portalpolicy.MODELS),
                 'dispatch_note': '恢复副本处于隔离核对状态，历史余额不可直接启用调用。' if quarantined else
-                    portalbilling.MESSAGE if portalpolicy.enabled() else '公共池本地候选尚未启用，调用保持关闭。'}
+                    ('公共池统一调度，按调用者实际消耗扣分；余额为零拒绝新请求，不提供透支。'
+                     if portalbilling.dispatch_ready(conn) else portalbilling.MESSAGE)
+                    if portalpolicy.enabled() else '公共池调用尚未启用，调用保持关闭。'}
 
 
 def automatic_enabled() -> bool:

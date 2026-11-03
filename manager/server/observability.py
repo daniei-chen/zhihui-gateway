@@ -1051,6 +1051,11 @@ class RequestAuditMiddleware:
                 try:
                     with requestperf.measure('finalize'):
                         budget.finish(state)
+                        if state.budget_reserved and not getattr(state, 'portal_cleanup_unconfirmed', False):
+                            row = db.query_one('SELECT key_id,owner FROM budget_reservations WHERE request_id=?', (state.request_id,))
+                            if row:
+                                db.execute('INSERT OR IGNORE INTO request_lifetime_ends_v2 VALUES(?,?,?,?)',
+                                           (state.request_id, row['key_id'], row['owner'], int(time.time())))
                 except Exception:
                     log.exception("budget finalization failed request_id=%s",state.request_id)
                 try:
