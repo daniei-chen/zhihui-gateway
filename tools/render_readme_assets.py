@@ -81,6 +81,9 @@ def hero(mobile=False):
     if not mobile:
         body += rect(1053, 39, 175, 33, 16, '#ffffff')
         body += text(1140, 60, f'SELF-HOSTED / {VERSION}', 11, MUTED, text_anchor='middle', letter_spacing='.6')
+    else:
+        body += rect(455, 38, 140, 34, 17, '#ffffff')
+        body += text(525, 60, f'RELEASE {VERSION}', 12, MUTED, text_anchor='middle')
     x, top = (42, 136) if mobile else (59, 168)
     body += text(x, top, 'PRIVATE AI INFRASTRUCTURE', 11 if mobile else 12, BLUE, letter_spacing='2')
     body += text(x - 2, top + 66, '让灵感出发，', 43 if mobile else 47, weight=700)
@@ -188,11 +191,42 @@ def button(label, width, primary=False):
     return canvas(width, 44, label, label, body)
 
 
+def release(mobile=False):
+    width, height = (640, 786) if mobile else (1280, 368)
+    body = rect(1, 1, width - 2, height - 2, 28, 'url(#paper)')
+    body += text(36, 44, f'{VERSION} / RELEASE NOTES', 13, BLUE, 600, letter_spacing='1.5')
+    body += text(36, 88, '让每次调用，更可信。', 30 if mobile else 33, INK, 700)
+    if not mobile:
+        body += rect(1011, 29, 231, 34, 17, '#eff8f5', '#cee8dc')
+        body += dot(1031, 46, 3, '#29896a')
+        body += text(1043, 51, '2026.11.03 / 已验收', 13, '#36745f', 600)
+    items = [('01', '输入保真', '系统兼容有范围', '用户与工具内容不改写'),
+             ('02', '不盲目重放', '发送后状态未知', '保留失败，不重复请求'),
+             ('03', '双账本可恢复', '配对快照与隔离恢复', '不将旧余额直接启用')]
+    for index, (number, title, first, second) in enumerate(items):
+        x, y = (36, 125 + index * 166) if mobile else (36 + index * 414, 126)
+        body += rect(x, y, 568 if mobile else 382, 146 if mobile else 130, 18, '#ffffff', '#e0e8f5')
+        body += text(x + 22, y + 32, number, 12, BLUE, 600, letter_spacing='1')
+        body += text(x + 65, y + 37, title, 25 if mobile else 24, INK, 600)
+        body += text(x + 65, y + 76, first, 20 if mobile else 18, MUTED)
+        body += text(x + 65, y + 105, second, 20 if mobile else 18, MUTED)
+    baseline = 659 if mobile else 292
+    body += path(f'M36 {baseline} H{width - 36}', LINE, 1)
+    metrics = [('4,301', 'Manager'), ('1,727', '引擎'), ('33', '发布合同')]
+    for index, (value, label) in enumerate(metrics):
+        x = 36 + index * (201 if mobile else 395)
+        body += text(x, baseline + 42, value, 26 if mobile else 25, INK, 700)
+        body += text(x + (0 if mobile else 105), baseline + (70 if mobile else 41), label + '通过', 14 if mobile else 16, MUTED)
+    return canvas(width, height, f'智汇 {VERSION} 发布与验收',
+                  '输入保真、不确定不重放、双账本隔离恢复。数字是本次 Linux 验收记录，不是实时状态或长期保证。', body)
+
+
 def assets():
     return {
         'cover.svg': hero(), 'cover-mobile.svg': hero(True),
         'capabilities.svg': capabilities(), 'capabilities-mobile.svg': capabilities(True),
         'routing.svg': routing(), 'routing-mobile.svg': routing(True),
+        'release.svg': release(), 'release-mobile.svg': release(True),
         'button-home.svg': button('走进智汇 ↗', 144, True),
         'button-release.svg': button(f'{VERSION} 发布说明', 166),
         'button-develop.svg': button('开发与部署 ↓', 154),

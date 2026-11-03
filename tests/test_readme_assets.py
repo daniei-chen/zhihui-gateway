@@ -71,6 +71,29 @@ class ReadmeAssetsTests(unittest.TestCase):
                 if item.get('sourcePath'):
                     self.assertEqual(file.read_bytes(), (ROOT / item['sourcePath']).read_bytes())
 
+    def test_current_readme_explains_codex_compatibility_without_universal_claims(self):
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('WorkBuddy × Codex', readme)
+        self.assertIn('11128', readme)
+        self.assertIn('docs/WORKBUDDY-CODEX-COMPAT.md', readme)
+        self.assertIn('新部署需配置', readme)
+        self.assertNotIn('当前产品版本为 **`0.0.3`**', readme)
+        explanation = (ROOT / 'docs/WORKBUDDY-CODEX-COMPAT.md').read_text(encoding='utf-8')
+        for evidence in ('prompt_defuse_rules', 'prompt_compat_enabled=false', 'system/developer',
+                         'response.completed', 'response.incomplete', '默认规则不自动包含'):
+            self.assertIn(evidence, explanation)
+
+    def test_release_metrics_are_backed_by_published_verification(self):
+        proof = json.loads((ROOT / 'ops/workbuddy-remediation-0.0.5/production-verification.json').read_bytes())
+        self.assertTrue(proof['production_accepted'])
+        self.assertEqual(proof['manager_gate']['linux_passed'], 4301)
+        self.assertEqual(proof['engine_gate']['passed'], 1727)
+        self.assertEqual(proof['publisher_contracts']['passed'], 33)
+        for mobile in (False, True):
+            source = artwork.release(mobile)
+            for value in ('4,301', '1,727', '33'):
+                self.assertIn(value, source)
+
 
 if __name__ == '__main__':
     unittest.main()

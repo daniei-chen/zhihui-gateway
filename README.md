@@ -3,140 +3,184 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile.svg" />
-    <img src="docs/images/readme/cover.svg" width="100%" alt="智汇网关 · 让灵感出发，让工作向前。" />
+    <img src="docs/images/readme/cover.svg" width="100%" alt="智汇网关 0.0.5 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
 <br />
 
-<a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="走进智汇：访问产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="阅读 0.0.5 更新说明" /></a>
-<a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="查看开发与部署入口" /></a>
+**一个工作台，三条清晰的路径。**
+
+账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
+
+<a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
+<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="查看 0.0.5 正式发布与验收" /></a>
+<a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-**WorkBuddy · Qoder · Trae**
-
-把复杂留给网关，把清晰还给你。<br />
-三种入口，同一个智汇。<br />
-保留每个平台自己的路由、授权与记录。
-
-<br />
-
-<picture>
-  <source media="(max-width: 640px)" srcset="docs/images/readme/capabilities-mobile.svg" />
-  <img src="docs/images/readme/capabilities.svg" width="100%" alt="三平台独立路由与授权；缓存命中与输出速度有据可查，用量缺失不写成零。" />
-</picture>
+[本次更新](#005--让每次调用更可信) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 一套语言，从首页到控制台
+## 0.0.5 · 让每次调用更可信
 
-冰蓝、留白、轻盈的光路。首页、登录页与工作台，共享同一枚 Z。
+少一点“好像成功”，多一份可以核对的依据。
+
+<a href="docs/RELEASE-0.0.5.md">
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile.svg" />
+    <img src="docs/images/readme/release.svg" width="100%" alt="0.0.5 修复重点：输入保真、不确定不重放、双账本可恢复。Linux 验收：Manager 4301、引擎1727、发布合同33项通过；这些是本次测试记录，不是长期稳定性承诺。" />
+  </picture>
+</a>
+
+| 输入不走样 | 失败不掩盖 | 费用有凭据 |
+| :--- | :--- | :--- |
+| 三协议共用系统兼容策略，用户内容与工具参数不改写。 | 已发送但结果未知不自动重放；上游拒绝仍是失败。 | 调用独立留痕，主账本 WAL/FULL，双账本配对隔离恢复。 |
+
+**已经上线验收：** Chat / Responses / Messages、喜鹊两条 Responses 入口、图片输入与工具结果回合通过；内部连接密钥完成轮换，客户密钥和供应商账号授权不变。
+
+**WorkBuddy × Codex 的 11128 已复现问题已修复。** 针对“普通 API 正常，Codex 经喜鹊带系统提示词时报渠道错误”的特定模板，现网采用仅作用于 system/developer 的最小标点兼容，保留用户、工具与图片原文。[原因、配置与验证 →](docs/WORKBUDDY-CODEX-COMPAT.md) 新部署需配置对应规则；不是全部风控错误的通用绕过。
+
+[完整更新日志](CHANGELOG.md) · [发布说明与限制](docs/RELEASE-0.0.5.md) · [机器可读验收](ops/workbuddy-remediation-0.0.5/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5)
 
 > [!NOTE]
-> 当前版本与能力以 [0.0.5 发布说明](docs/RELEASE-0.0.5.md)及精确签名部署回执为准。历史 [0.0.4 发布记录](docs/RELEASE-0.0.4.md)与预发布标签保留，不将旧版限制或源码标签冒充当前运行状态。
+> 测试数字来自本次固定构建的 Linux 验收，不是 CI 徽章、在线监控或“全部问题已解决”的承诺。9 项既有冻结跳过保留，真实断电、长期 SLO 与异地灾备仍需独立验证。
 
-> [!IMPORTANT]
-> `0.0.5` 通过受信发布流程升级，包含调用保真、重试、协议、账本及恢复修复。详见[0.0.5 发布说明](docs/RELEASE-0.0.5.md)。历史发布回执保留，不把旧 commit 或自动源码包冒充现网签名制品。
->
-> `0.0.3` 已受控上线：智汇管家与预警中心沿用现有工作台，DeepSeek 读取脱敏证据、调用有限只读工具；规则先通知，AI 再补充。已验证真实模型计量、工具调用与 SMTP 接受；邮件入箱和长期稳定性仍需独立确认。见[本次发布回执](docs/RELEASE-0.0.3.md)与[管家运行合同](docs/STEWARD.md)。WorkBuddy、Qoder、Trae 保持三平台，原版登录不改；Codex / ChatGPT 留待独立产品。
+<br />
 
-[本轮集成与验收边界](docs/FOUR-GATEWAY-INTEGRATION.md) · [可编辑首页与复现](site/home-source/INTEGRATION.md)
+## 看得清，也用得顺
+
+冰蓝、留白、轻量交互。从账号池到调用记录，一处掌握。
 
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
-    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="智汇实际控制台构建预览，蓝白卡片与清晰的工作流；全部使用合成示例数据。" />
+    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="智汇实际控制台构建预览：三平台切换、冰蓝趋势图、数据卡片与浮动 Dock。全部数字为合成数据，不是线上账单。" />
   </picture>
 </a>
 
-<p align="center"><sub>粒子随指针轻动，平台与光路联动，账本落下回执。<a href="https://zhihui.kaogong.art/">访问现有网站 ↗</a></sub></p>
+<p align="center"><sub>实际控制台构建渲染 · 合成数据 · 非当前生产状态截图</sub></p>
 
-新版首页保留居中首屏、蓝色粒子、光路与主入口；页面动画是独立演示，不读取账号信息。
-
-登录保留熟悉的原版卡片、Z 标识、轻动效与表单交互，不采用新的三维登录设计；布局、文案与交互均保留原版。
-
-### 看起来更轻，用起来不减
-
-账号池、模型、访问 Key、用量与日志，一处掌握。保留浮动 Dock、明暗主题、平台切换与五语界面。
-
-权限分清，不把视野关小：普通管理员可浏览全部控制台页面与脱敏数据，只能添加授权账号；超级管理员负责账号维护、密钥额度、用户权限与系统设置。
-
-<picture>
-  <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
-  <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="实际控制台仪表盘：左上角智汇网关标识、三平台切换、冰蓝趋势图与浮动 Dock。所有数值为合成数据。" />
-</picture>
-
-<p align="center"><sub>真实控制台构建渲染 · 合成数据 · 不读取生产账号与调用</sub></p>
+- **管理不割裂。** WorkBuddy、Qoder、Trae 共用工作台，保留平台切换、明暗主题、浮动 Dock 与五语界面。
+- **授权有边界。** 普通管理员可浏览脱敏信息、添加授权账号；超级管理员维护密钥额度、用户权限与系统设置。
+- **用量不猜测。** 查看缓存命中、输出速度和请求记录；缺少可靠用量时显示未知，不包装成零消耗。
+- **用户有自己的空间。** 独立工作台管理绑定账号、签到批次、密钥与请求记录；财务策略以已批准配置和可核验证据为准。
+- **管家只做该做的事。** 基于有限脱敏证据研判，规则告警与 AI 补充分开；不授予 shell、凭据读取或自动改账权限。
 
 <details>
-<summary><b>再看四个工作面板</b> — 账号池 / 模型 / 访问密钥 / 用量</summary>
+<summary><b>展开更多工作面板</b> — 账号池、模型、密钥与用量</summary>
 
 <br />
 
 | 账号池 · 身份与状态 | 模型 · 来源与能力 |
 | :---: | :---: |
-| <img src="site/home/preview/accounts-desktop.jpg" width="100%" alt="智汇账号池实际构建渲染，使用合成数据。" /> | <img src="site/home/preview/models-desktop.jpg" width="100%" alt="智汇模型中心实际构建渲染，使用合成数据。" /> |
-| **访问密钥 · 按需授权** | **用量 · 核对每次消耗** |
-| <img src="site/home/preview/keys-desktop.jpg" width="100%" alt="智汇访问密钥实际构建渲染，使用合成数据，不包含真实凭证。" /> | <img src="site/home/preview/stats-desktop.jpg" width="100%" alt="智汇用量面板实际构建渲染，使用合成数据，不是线上账单。" /> |
+| <img src="site/home/preview/accounts-desktop.jpg" width="100%" alt="账号池实际构建预览，使用合成账号与状态。" /> | <img src="site/home/preview/models-desktop.jpg" width="100%" alt="模型中心实际构建预览，使用合成示例。" /> |
+| **密钥 · 按需授权** | **用量 · 核对每次消耗** |
+| <img src="site/home/preview/keys-desktop.jpg" width="100%" alt="密钥管理实际构建预览，不含真实凭据。" /> | <img src="site/home/preview/stats-desktop.jpg" width="100%" alt="用量面板实际构建预览，数值不是线上账单。" /> |
 
-预览不是另画的概念面板，来源见 [构建与图片清单](site/home/preview/manifest.json)。
-界面截图不证明供应商可用性或真实业务写操作已经全量验收。
+这些是历史控制台构建的合成预览，不是另画的概念面板，也不证明供应商可用性。
+[预览来源与摘要](site/home/preview/manifest.json) · [README 视觉素材清单](docs/images/readme/manifest.json)
 
 </details>
 
 <br />
 
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/images/readme/capabilities-mobile.svg" />
+  <img src="docs/images/readme/capabilities.svg" width="100%" alt="接入、授权、核对：三平台独立路由，按需授权，不把缺失用量当作零。" />
+</picture>
+
+<br />
+
 ## 统一入口，各有其路
 
-管理在一起，来源分得清。切换控制台视图，不会悄悄改变客户端的访问地址。
+切换控制台视图，不会悄悄改变客户端的访问地址。
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="智汇三平台路由：WorkBuddy /v1/*，Qoder /qoder/v1/*，Trae /trae/v1/*。" />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由与计量后分别访问：WorkBuddy /v1/*、Qoder /qoder/v1/*、Trae /trae/v1/*。" />
 </picture>
 
-一次失败不代表没有消耗；上游缺少 `usage` 时保留未知状态，不把它美化成零。
-[路由与权限](manager/server/routers/gateway.py) · [预算预留](manager/server/budget.py) · [账本事件](manager/server/ledger.py)
+| 平台 | 客户端 Base URL | 提醒 |
+| :--- | :--- | :--- |
+| WorkBuddy | `https://你的域名/v1` | Chat、Responses、Messages 适配 |
+| Qoder | `https://你的域名/qoder/v1` | 以该引擎能力和账号授权为准 |
+| Trae | `https://你的域名/trae/v1` | 以该引擎能力和账号授权为准 |
+
+<details>
+<summary><b>一个最小调用示例</b> — 使用自己已授权的模型和网关密钥</summary>
+
+```bash
+curl https://你的域名/v1/chat/completions \
+  -H "Authorization: Bearer $ZHIHUI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "YOUR_AUTHORIZED_MODEL",
+    "messages": [{"role": "user", "content": "你好"}],
+    "max_tokens": 128
+  }'
+```
+
+先在模型页确认实际模型 ID、平台与地区权限。网关密钥不是供应商账号授权；不要将真实密钥写入仓库、截图或工单。
+
+</details>
+
+[路由与权限](manager/server/routers/gateway.py) · [预算预留](manager/server/budget.py) · [不可变账本](manager/server/ledger.py)
+
+<br />
+
+## 把支持与不支持都讲清楚
+
+| Responses 能力 | 当前合同 |
+| :--- | :--- |
+| 显式完整历史、普通工具回合、SSE、图片 | 支持并回归验证 |
+| `previous_response_id` / `conversation` | 不支持服务端历史；转发前明确 400 |
+| `background=true` | 不支持后台任务；明确 400 |
+| `parallel_tool_calls=false` / 函数 `strict=true` | 上游不能保证；明确 400，不静默忽略 |
+| 自定义工具 grammar | 仅描述性提示，不宣称严格执行 |
+
+> [!IMPORTANT]
+> **失败不等于零费用，取消不等于供应商停止。** 处理状态不明时保留 unknown；发送与响应头事件不是供应商账单。版本回退只回退代码，不回退刚产生的消费、授权或会话撤销记录。
+
+<details>
+<summary><b>展开可靠性与恢复边界</b></summary>
+
+- 主账本采用 WAL/FULL，但物理持久性仍依赖操作系统与存储；进程崩溃恢复测试不是生产断电试验。
+- 双账本快照以 main→wallet 顺序短暂获取写锁。完整性与业务一致性检查、隔离恢复在复制后进行。
+- 恢复只写新隔离目录，禁用调用、撤销旧会话、封存凭据，不将旧余额直接启用。
+- 内部密钥已轮换；代码回滚保留新密钥，不重新启用已经撤销的旧凭据。
+- 现网采用排空后受控切换，有短维护窗口，不宣称零停机。历史 unknown、弱口令告警和其余审计项独立跟进。
+
+</details>
 
 <br />
 
 ## 开发与部署
 
-| 你想做什么 | 从这里开始 |
-| :--- | :--- |
-| 看网站与交互 | [产品首页 ↗](https://zhihui.kaogong.art/) · [首页源码](site/home/index.html) |
-| 本地运行或改版 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
-| 了解升级和回退 | [版本与发布合同](docs/PRODUCT-RELEASE.md) · [0.0.3 更新说明](CHANGELOG.md) |
-| 看清已做与待做 | [本版审计边界](docs/AUDIT-0.0.3.md) · [更新日志](CHANGELOG.md) |
-
-<details>
-<summary><b>本地开发速览</b> — Python 3.12 / Node.js 22+ / Next.js 16</summary>
+**Python 3.12 · Node.js 22+ · Next.js 16 · React 19**
 
 ```bash
 git clone https://github.com/daniei-chen/zhihui-gateway.git
 cd zhihui-gateway
 ```
 
-后端最小控制面、前端启动、静态构建与首页预览，按 [开发指南](docs/DEVELOPMENT.md) 分别运行。
-这不是一键安装完整三平台环境：引擎与账号仍需单独配置并获得授权。
+| 你的目标 | 从这里开始 |
+| :--- | :--- |
+| 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.5 验收](docs/RELEASE-0.0.5.md) |
+| 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
+| 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 
-</details>
+本地开发不是一键安装完整三平台服务。引擎、账号授权、认证与持久化需要单独配置，静态导出也不包含后端。
 
-### 一份仓库，一条自己的版本线
+```text
+固定来源 → 构建与隔离测试 → 哈希、签名与回执 → 受控发布 → 运行核验
+```
 
-当前产品版本为 **`0.0.3`**。软件源码与升级来源固定为 [本仓库](https://github.com/daniei-chen/zhihui-gateway)，不是模型供应商地址。生产切换及验收以[发布合同](docs/PRODUCT-RELEASE.md)中的实际记录为准。
-
-**固定提交 → 构建与隔离测试 → 哈希、签名与回执 → 受控发布 → 运行核验。**
-
-不直接把 `main` 覆盖到运行目录；回退代码，也不回退刚刚产生的账本、授权与撤销记录。
-[查看完整发布链路](docs/PRODUCT-RELEASE.md)
-
-> [!NOTE]
-> 面向自托管与已获授权的使用，不绕过供应商渠道校验。版本号不是“所有审计项已关闭”的认证；真实供应商长尾、离机灾备与长期 SLO 等历史边界见 [审计说明](docs/AUDIT-0.0.2.md)。新增管家不会自动关闭这些缺口。
+**不要把 GitHub 自动源码包当作生产安装包。** 现有受控实例仅使用受信发布器，不直接覆盖运行目录，不执行 `git pull && restart`，也不为回退代码恢复旧业务数据库。公开 tag 的提交记录与现网签名清单分别留证，不互相冒充。
 
 <br />
 
@@ -144,9 +188,9 @@ cd zhihui-gateway
 
 智汇在既有组件上持续演进。感谢 WorkBuddy Manager contributors、workbuddy2api、Qoder / Trae 相关项目与 [linux-do/cdk](https://github.com/linux-do/cdk) 的界面基础。
 
-产品源码采用 [MIT](LICENSE)，组件版权与第三方声明见 [Manager LICENSE](manager/LICENSE)。模型与账号授权遵循各自服务条款。
+产品源码采用 [MIT](LICENSE)。组件版权与第三方声明见 [Manager LICENSE](manager/LICENSE)、[来源声明](manager/UPSTREAM-NOTICES.md)；模型与账号授权遵循各自服务条款，不绕过供应商授权限制。
 
-新版首页的三维扫描及衍生海报适用 CC BY-SA 4.0，Three.js、Draco 保留各自许可；任务与骑行动画已替换为本仓库原创 HTML/CSS/SVG，不再发布参考站插画。来源与复现边界见 [首页集成说明](site/home-source/INTEGRATION.md)。
+封面、能力卡片与路由图为可编辑、自包含 SVG，没有外部字体、脚本或远程图片依赖。历史首页扫描素材及衍生海报遵循原 CC BY-SA 4.0，相关许可与原创替换范围见[首页集成说明](site/home-source/INTEGRATION.md)。
 
 <div align="center">
 <br />

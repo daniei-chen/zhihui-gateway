@@ -22,7 +22,7 @@
     {
       "path": "docs/images/readme/button-release.svg",
       "bytes": 1074,
-      "sha256": "55aa7fb1304f63becf8ce42d9707066b34653cb101665915e323a61270f3c535"
+      "sha256": "54dee92adda32212121208a79950d348df8dbc217a20fa82e787c2c8f30b6741"
     },
     {
       "path": "docs/images/readme/capabilities-mobile.svg",
@@ -36,13 +36,23 @@
     },
     {
       "path": "docs/images/readme/cover-mobile.svg",
-      "bytes": 5752,
-      "sha256": "1e4596c0bd32b02743b404db2fa7c1d04b7203b0f9cd07136cbcd2e28f3c109d"
+      "bytes": 6039,
+      "sha256": "cfba132bc52548210a426fc872d76c6bada6a113c164fa032342f250d8df1ca3"
     },
     {
       "path": "docs/images/readme/cover.svg",
       "bytes": 6325,
-      "sha256": "4956f173cba7805c5679bde46e10860c0afe7c6ef9c899aeb43c0c04a96cda56"
+      "sha256": "ea501485be76227f9423857bbd4105e397191035f32d585691d15254d87cb355"
+    },
+    {
+      "path": "docs/images/readme/release-mobile.svg",
+      "bytes": 5136,
+      "sha256": "69afa4f36ad9ea19aa0acc3f67b33b587b02d7799a1796735c1f99014c0f867b"
+    },
+    {
+      "path": "docs/images/readme/release.svg",
+      "bytes": 5471,
+      "sha256": "ea7c35185b60011083490551e5076a0d59a9788060f4b62f3697e6dc664c80af"
     },
     {
       "path": "docs/images/readme/routing-mobile.svg",

@@ -7,6 +7,7 @@
 
 ### 调用保真、重试与协议合同
 
+- 修复已复现的 WorkBuddy × Codex 系统提示词 11128 渠道误判：现网配置最小标点规则，覆盖喜鹊两条 Responses 入口；仅限 system/developer，新部署配置与范围见 docs/WORKBUDDY-CODEX-COMPAT.md，不承诺通用风控绕过。
 - WorkBuddy 兼容策略统一接入 Chat、Responses、Messages，仅处理明确的 system/developer 文本；用户输入、工具参数及结果不再参与指纹改写。
 - 取消跨租户全局系统提示词降级。上游明确拒绝仍返回失败；发送后断流或处理状态未知不自动重放。
 - Responses 不支持的服务端历史、后台执行、串行工具保证及严格函数参数以稳定 400 错误拒绝，不静默丢弃要求。
