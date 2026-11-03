@@ -71,6 +71,17 @@ class ReadmeAssetsTests(unittest.TestCase):
                 if item.get('sourcePath'):
                     self.assertEqual(file.read_bytes(), (ROOT / item['sourcePath']).read_bytes())
 
+    def test_release_button_uses_versioned_asset_and_actual_svg_text(self):
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        name = f'button-release-v{artwork.VERSION}.svg'
+        self.assertIn(f'src="docs/images/readme/{name}"', readme)
+        self.assertNotIn('src="docs/images/readme/button-release.svg"', readme)
+        source = (artwork.OUT / name).read_text(encoding='utf-8')
+        svg = ET.fromstring(source)
+        self.assertEqual([element.text for element in svg.findall('{*}text')],
+                         [f'{artwork.VERSION} 发布说明'])
+        self.assertIn(f'releases/tag/v{artwork.VERSION}', readme)
+
     def test_current_readme_explains_codex_compatibility_without_universal_claims(self):
         readme = (ROOT / 'README.md').read_text(encoding='utf-8')
         self.assertIn('WorkBuddy × Codex', readme)

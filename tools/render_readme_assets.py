@@ -229,6 +229,7 @@ def assets():
         'release.svg': release(), 'release-mobile.svg': release(True),
         'button-home.svg': button('走进智汇 ↗', 144, True),
         'button-release.svg': button(f'{VERSION} 发布说明', 166),
+        f'button-release-v{VERSION}.svg': button(f'{VERSION} 发布说明', 166),
         'button-develop.svg': button('开发与部署 ↓', 154),
     }
 

@@ -14,7 +14,7 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5"><img src="docs/images/readme/button-release.svg" width="166" height="44" alt="查看 0.0.5 正式发布与验收" /></a>
+<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.5"><img src="docs/images/readme/button-release-v0.0.5.svg" width="166" height="44" alt="查看 0.0.5 正式发布与验收" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
