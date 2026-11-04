@@ -2,8 +2,8 @@
 
 <a href="https://zhihui.kaogong.art/">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.6.svg" />
-    <img src="docs/images/readme/cover-v0.0.6.svg" width="100%" alt="智汇网关 0.0.6 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.7.svg" />
+    <img src="docs/images/readme/cover-v0.0.7.svg" width="100%" alt="智汇网关 0.0.7 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -14,40 +14,40 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.6"><img src="docs/images/readme/button-release-v0.0.6.svg" width="166" height="44" alt="查看 0.0.6 正式发布与验收" /></a>
+<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 正式发布与验收" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#006--自用稳定版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#007--稳定合并版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 0.0.6 · 自用稳定版
+## 0.0.7 · 稳定合并版
 
-把每天使用的链路磨稳，把每一次失败说清楚。
+把已验证修复合为一个版本：客户端更兼容，页面少做重复工作，失败与恢复都有边界。
 
-<a href="docs/RELEASE-0.0.6.md">
+<a href="docs/RELEASE-0.0.7.md">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.6.svg" />
-    <img src="docs/images/readme/release-v0.0.6.svg" width="100%" alt="0.0.6：Codex 与 Claude 系统模板兼容、SSE 心跳、有界公平等待、准确状态与诊断。固定 Linux 构建：Manager 4322、引擎 1730、切换合同 29 项通过；不是实时状态或长期稳定性承诺。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.7.svg" />
+    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；跨层发送预算、按需积分和清晰诊断。固定 Linux 验收 Manager 4403、引擎 1764、发布补充合同 6 项通过，不是实时状态或长期保证。" />
   </picture>
 </a>
 
 | 客户端兼容 | 流式与容量 | 看清每次调用 |
 | :--- | :--- | :--- |
-| 六条已验证模板规则随版交付；仅处理 WorkBuddy 的 system/developer。 | SSE 注释心跳、有界等待、按密钥轮转；排队取消及时释放。 | 真实 HTTP 状态、兼容包版本与命中 ID；有界指标和上下文来源。 |
+| 11 条 Codex / Claude / DSH 模板规则随版交付；只处理 WorkBuddy system/developer。 | 共享 8 次发送授权、SSE 完成与取消闭环；已接收不明不重放。 | 真实状态、有限错误族、v2 证据和只读核对；unknown 不冒充零。 |
 
-**WorkBuddy × Codex / Claude 的特定系统模板兼容已内置。** 针对“普通 API 正常，编码客户端带完整系统上下文却返回 11128”的已复现问题，使用最小措辞或标点调整。新部署自带六条规则，已有自定义规则继续优先；用户、助手、工具参数与结果、图片和其他平台原文保留。可即时关闭，不吞掉供应商拒绝。[原因、规则、排查与验证 →](docs/WORKBUDDY-CODEX-COMPAT.md)
+**WorkBuddy × Codex / Claude / DSH 的特定系统模板兼容已内置。** 针对“普通 API 正常，编码客户端带完整系统上下文却返回 11128”的已复现问题，使用最小措辞或标点调整。11 条规则版本化交付，已有自定义规则保留优先级；用户、助手、工具参数与结果、图像和其他平台原文保留。规则可关闭，真实渠道拒绝仍然返回，不承诺绕过供应商授权或未来风控。[原因、规则、排查与验证 →](docs/WORKBUDDY-CODEX-COMPAT.md)
 
-**保留现有钱包、权限和历史账本。** 延续 0.0.5 的输入保真、不确定不重放、内部密钥轮换及双账本恢复修复；本轮补充原生协议配置、近期本人认证、恢复和发布验收。新增售卖、补贴运营、媒体及高级有状态 Responses 暂缓。
+**让页面更轻，让恢复更稳。** 按需查询过期积分、失败退避、复用未变对象；跨语言续期单飞与内核锁；日志先归档校验再删除，未决和不可变证据保留。延续既有内部密钥轮换、取消关闭和双账本修复，代码回退不恢复旧账本；不新增售卖、费用运营、媒体或高级有状态 Responses。
 
-[发布说明与参数](docs/RELEASE-0.0.6.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.6/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.6)
+[发布说明与边界](docs/RELEASE-0.0.7.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.7/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7)
 
 > [!NOTE]
-> 数字来自固定构建的隔离验收；前端另有 116 项测试通过。9 项既有冻结跳过保留。国内账号做现网验证，国际账号仅合成回归；真实断电、长期 SLO 和完整新主机灾难恢复仍未验证。公开标签源码与现网签名制品分别记录身份。
+> 数字来自固定构建的 Linux 隔离验收；前端另有 128 项测试通过。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
 
 <br />
 
@@ -170,7 +170,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.6 验收](docs/RELEASE-0.0.6.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.7 验收](docs/RELEASE-0.0.7.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 

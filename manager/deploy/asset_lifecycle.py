@@ -158,6 +158,8 @@ def current_release() -> Path | None:
 
 def denied(path: Path, active: Path | None, opened: set[str]) -> str | None:
     text = str(path)
+    if path.name.endswith('.refresh.lock'):
+        return '共享凭证锁文件不能解除链接；锁文件存在不代表持锁进程存活'
     # 精确匹配文件名：`manager.db.bak-*.gz` 是**旧备份**，不是数据库本体。
     # 用子串匹配会把它们误标成「永不删除」，让真正该回收的空间留在原地。
     if path.name in HARD_DENY_PARTS:

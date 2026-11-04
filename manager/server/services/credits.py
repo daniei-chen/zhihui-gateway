@@ -38,6 +38,25 @@ _limits = weakref.WeakKeyDictionary()
 _generations = {}
 _all_generation = 0
 _state_lock = threading.RLock()
+_background_failures = {}
+
+
+def _auth_identity(auth):
+    return hashlib.sha256(json.dumps(auth, sort_keys=True, ensure_ascii=True,
+                                    separators=(',', ':'), default=str).encode()).hexdigest()
+
+
+def background_state(auth):
+    uid = str(auth.get('uid') or '')
+    identity = _auth_identity(auth)
+    with _state_lock:
+        hit = cached_credits(uid) if _cache_identity.get(uid) == identity else None
+        if hit is not None and hit[0] and hit[1] is not None:
+            return 'fresh', hit
+        failed_at = _background_failures.get(identity)
+        if failed_at is not None and time.monotonic() - failed_at < TTL_SECONDS:
+            return 'backoff', None
+    return 'stale', None
 
 # 余额快照持久化在 settings 表，重启后仍能继续比对
 _SNAP_KEY = 'credits_snapshot'
@@ -146,8 +165,7 @@ async def get_credits(
     真实查询成功且 record=True 时，顺带比对余额并记录积分变动流水。
     """
     uid = str(auth.get('uid') or '')
-    identity = hashlib.sha256(json.dumps(auth, sort_keys=True, ensure_ascii=True,
-                                         separators=(',', ':'), default=str).encode()).hexdigest()
+    identity = _auth_identity(auth)
     # Credentials/realm changes cannot reuse a previous authorization's balance.
     with _state_lock:
         if uid and _current_identity.get(uid) != identity:
@@ -181,9 +199,13 @@ async def get_credits(
                             if ok:
                                 _cache[uid] = (time.time(), ok, value, message, expiries)
                                 _cache_identity[uid] = identity
+                                _background_failures.pop(identity, None)
                             else:
                                 _cache.pop(uid, None)
                                 _cache_identity.pop(uid, None)
+                                _background_failures[identity] = time.monotonic()
+                                while len(_background_failures) > 512:
+                                    _background_failures.pop(next(iter(_background_failures)))
                         if ok and record:
                             try:
                                 record_balance(uid, nickname, value)

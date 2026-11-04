@@ -90,6 +90,7 @@ import {
 
 const StewardPanel = dynamic(() => import('@/components/common/settings/StewardPanel').then(module => module.StewardPanel));
 const AlertsPanel = dynamic(() => import('@/components/common/settings/AlertsPanel').then(module => module.AlertsPanel));
+const BudgetReviewPanel = dynamic(() => import('@/components/common/settings/BudgetReviewPanel').then(module => module.BudgetReviewPanel));
 
 /* ─────────────────────────────────────────────────────────
  * 可视化配置字段定义
@@ -2236,6 +2237,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
         {/* ═══ 系统更新 ═══ */}
         <TabsContent value="system" className="mt-4 space-y-4">
           <ConfigurationEvidence />
+          {isAdmin && <BudgetReviewPanel />}
           <UpdatePanel />
         </TabsContent>
 

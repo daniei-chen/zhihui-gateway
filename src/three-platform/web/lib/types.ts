@@ -1066,6 +1066,11 @@ export interface ProductRelease {
 }
 
 export interface UpdateStatus {
+  record_state?: 'absent' | 'unavailable' | 'identity_mismatch' | 'reported';
+  record_verification?: 'not-verified-by-panel';
+  release_id?: string;
+  legacy_history_available?: boolean;
+  legacy_history_blocked?: boolean;
   product?: ProductRelease;
   available: boolean;
   /** 是否运行在容器里（决定能力边界，见 can_update_upstream） */
@@ -1193,6 +1198,7 @@ export interface UpdatePackageMeta {
 }
 
 export interface Versions {
+  release_id?: string;
   product?: ProductRelease;
   manager: string;
   upstream_connected: boolean;

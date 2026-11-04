@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "product": "zhihui-gateway",
+  "version": "0.0.7",
+  "platform": "workbuddy",
+  "meaning": "Gateway adaptation contract, not a guarantee of supplier-native capabilities or future availability.",
+  "protocols": {
+    "chat": {"path": "/v1/chat/completions", "mode": "adapted", "capabilities": {"stream": true, "tool_round_trip": true, "supplier_native_strict": null}},
+    "responses": {"path": "/v1/responses", "mode": "stateless-adapted", "capabilities": {"stream": true, "tool_round_trip": true, "previous_response_id": false, "background": false, "strict_tools": false, "parallel_tool_calls_false": false}},
+    "messages": {"path": "/v1/messages", "mode": "adapted", "capabilities": {"stream": true, "tool_round_trip": true, "supplier_native_anthropic": false}}
+  },
+  "invariants": ["unsupported semantics fail before provider dispatch", "unknown usage is not zero", "no replay after uncertain acceptance or emitted output", "user and tool data are preserved"],
+  "client_versions": {"codex": null, "claude": null, "dsh": null},
+  "client_version_note": "Protocol fixtures are versioned separately; null is not a claim of testing every installed client version."
+}

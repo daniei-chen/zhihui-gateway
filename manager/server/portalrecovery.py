@@ -117,7 +117,11 @@ def _check_database(path):
 
 def _check_pair(root):
     with closing(_sqlite(root / 'manager.db')) as main, closing(_sqlite(root / 'user-portal.sqlite3')) as portal:
-        for link in portal.execute('SELECT key_id,key_hash FROM portal_key_links'):
+        for link in portal.execute(
+                'SELECT l.key_id,l.key_hash,k.revoked FROM portal_key_links l '
+                'JOIN portal_keys k ON k.key_id=l.key_id'):
+            if link['revoked']:
+                continue
             key = main.execute('SELECT key_hash FROM api_keys WHERE id=?', (link['key_id'],)).fetchone()
             if not key or key[0] != link['key_hash']:
                 raise ValueError('双库密钥归属不匹配，停止恢复并人工核对')

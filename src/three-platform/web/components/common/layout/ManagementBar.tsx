@@ -304,7 +304,7 @@ export function ManagementBar() {
   // 每个浏览器会话检测一次新版本，有更新则弹出提醒（避免打扰不重复提示）
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return;
-    const KEY = 'workbuddy-manager:update-notified';
+    const KEY = 'zhihui-gateway:release-notified';
     try {
       if (window.sessionStorage.getItem(KEY) === '1') return;
       window.sessionStorage.setItem(KEY, '1');
@@ -318,7 +318,6 @@ export function ManagementBar() {
         if (!c.has_any) return;
         const parts: string[] = [];
         if (c.manager.has_update) parts.push(t('update.managerVersion', {v: c.manager.latest}));
-        if (c.upstream.has_update) parts.push(t('update.upstreamVersion', {v: c.upstream.latest}));
         notify.warn(t('update.newVersion'), t('update.notice', {targets: parts.join(' · ')}));
       } catch {
         /* 检测失败静默：不打扰用户（如服务器访问 GitHub 受限） */

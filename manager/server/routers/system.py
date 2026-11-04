@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from .. import config, drain, security
+from .. import config, drain, security, productupdates
 from ..iputil import client_ip
 from ..services import changelog, updater, wb2api
 
@@ -231,29 +231,24 @@ class UpdateIn(BaseModel):
 
 @router.get('/update-status')
 def update_status(user: dict = Depends(security.current_user)) -> dict:
-    """更新进度与当前版本（含运行中的日志）。"""
-    status = updater.read_status()
+    """智汇发行身份与有界的发布器阶段，不读取旧升级器原始日志。"""
     is_admin = str((user or {}).get('role') or '') == 'admin'
-    # 日志里可能有代理地址、绝对路径与命令输出：只给管理员。只读账号仍能看到
-    # 版本与「是否在更新」，但拿不到实现细节（旧版对 viewer 是全量返回的）。
-    status['log_tail'] = updater.tail_log(80) if is_admin else ''
-    if not is_admin:
-        status['logs'] = []
-    return status
+    return productupdates.read_status(include_logs=is_admin)
+
+
+@router.get('/protocol-contracts')
+def protocol_contracts(user: dict = Depends(security.current_user)) -> dict:
+    from .. import protocolcontracts
+    return protocolcontracts.contracts()
 
 
 @router.post('/update')
 def start_update(body: UpdateIn, user: dict = Depends(security.require_session_admin)) -> dict:
-    """启动一键更新。
-
-    更新会在后台执行并可能重启本服务，因此立即返回，由前端轮询
-    `/api/system/update-status` 查看进度。
-    """
-    ok, message = updater.start_update(body.target, source=body.source)
-    if not ok:
-        raise HTTPException(status_code=409, detail=message)
-    security.audit(user,'start_update',body.target,message)
-    return {'ok': True, 'message': message}
+    """兼容旧客户端的失败关闭入口；不再启动网页安装或服务重启。"""
+    raise HTTPException(status_code=409, detail={
+        'code': 'trusted_publisher_required',
+        'message': '智汇采用受控发布；旧式网页安装与自动重建重启已停用，请使用可信发布器。',
+    })
 
 
 # ── 离线升级包（issue #153）──────────────────────────────────
@@ -400,12 +395,13 @@ def delete_update_package(user: dict = Depends(security.require_session_admin)) 
 
 @router.delete('/update-status')
 def clear_update_status(user: dict = Depends(security.require_session_admin)) -> dict:
-    """清除上次更新的结果与日志（issue #105：失败记录此前在面板里消除不掉）。"""
-    ok, message = updater.clear_status()
-    if not ok:
-        raise HTTPException(status_code=409, detail=message)
-    security.audit(user,'clear_update_status','','cleared update status')
-    return {'ok': True, 'message': message}
+    """显式归档旧升级器展示文件，不删除当前发布回执和业务记录。"""
+    try:
+        result = productupdates.archive_legacy_history()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    security.audit(user, 'archive_legacy_update_history', '', 'archived legacy updater display records')
+    return result
 
 
 @router.get('/check-update')

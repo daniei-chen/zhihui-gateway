@@ -177,6 +177,26 @@ class AttemptTimelineTest(_Base):
         self.assertEqual(data['evidence']['attempt_billing_facts'], 0)
         self.assertEqual(data['evidence']['request_outcomes'], 0)
 
+    def test_v2_evidence_gets_a_source_labeled_timeline(self) -> None:
+        request_id = 'req-u22-v2-timeline'
+        db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)',
+                   ('dispatch-v2', request_id, T0))
+        for offset, (phase, status) in enumerate((('sending', 0), ('headers', 200))):
+            db.execute(
+                'INSERT INTO provider_attempt_events_v2 '
+                '(request_id,dispatch_id,rotation,provider_attempt,phase,ts,'
+                'account_uid,model,realm,path,status,event_sha256) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                (request_id, 'dispatch-v2', 1, 1, phase, T0 + offset,
+                 'uid-v2', 'm', 'cn', '/v2/chat/completions', status, '0' * 64))
+        data = ledger.attempt_timeline(request_id)
+        self.assertEqual(data['attempt_count'], 1)
+        self.assertEqual(data['attempt_count_source'], 'provider_attempt_events_v2')
+        self.assertEqual(data['attempts'][0]['phase_sequence'], ['sending', 'headers'])
+        self.assertTrue(data['attempts'][0]['reached_upstream'])
+        self.assertEqual(data['timeline'][0]['dispatch_id'], 'dispatch-v2')
+        self.assertFalse(data['provider_evidence']['complete'])
+
 
 # ────────────────────────────────────────────────────────────────────────
 # 2. 端点契约

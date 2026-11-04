@@ -408,7 +408,7 @@ class ErrorLifetimeTest(_Fixture):
             else:
                 stream, status = _Stream([frames]), 200
             streams.append(stream)
-            return httpx.Response(status, stream=stream, headers={'content-type': 'text/event-stream'})
+            return httpx.Response(status, stream=stream, headers={'content-type': 'text/event-stream', 'x-wb-provider-attempts': '1'})
         with self.mock_transport(respond, clients):
             result = self.post('chat/completions', stream=True)
         self.assertEqual(result.status_code, 200)
@@ -421,7 +421,7 @@ class ErrorLifetimeTest(_Fixture):
         clients, calls = [], []
         def respond(request):
             calls.append(request)
-            return httpx.Response(503, json={'error': {'code': 'no_healthy_account'}})
+            return httpx.Response(503, json={'error': {'code': 'no_healthy_account'}}, headers={'x-wb-provider-attempts': '1'})
         for stream in (False, True):
             calls.clear()
             with self.mock_transport(respond, clients), \

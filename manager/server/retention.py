@@ -2,10 +2,12 @@
 
 ## 现状（证据）
 
-* **五张不可变事件表**：`ledger.py:44-63` 给 `attempt_events` / `usage_events` /
+* **原有五张不可变事件表**：`ledger.py:44-63` 给 `attempt_events` / `usage_events` /
   `adjustment_events` / `admin_events` / `forwarding_events` 各建了
   `*_no_update` 与 `*_no_delete` 触发器（`RAISE(ABORT, '… are immutable')`）。
   这些触发器**一个都不能删** —— 它们是「账本权威」的实现，不是可优化项。
+  v2 provider evidence 还新增了 `provider_attempt_events_v2` 与
+  `provider_evidence_conflicts_v2` 的同类触发器，同样必须保留。
 * **已有保留期**（`db.py::_prune_side_tables` / `_prune_request_logs`）：
   `request_logs.ts` 90 天滚动删除；`request_outcomes.ts` 90 天；`usage_hourly`
   90 天；`task_logs` 90 天；`audit_logs` 只留最新 20000 行；
@@ -60,6 +62,10 @@ IMMUTABLE_TABLES = {
     'adjustment_events': ('adjustment_events_no_update', 'adjustment_events_no_delete'),
     'admin_events': ('admin_events_no_update', 'admin_events_no_delete'),
     'forwarding_events': ('forwarding_events_no_update', 'forwarding_events_no_delete'),
+    'provider_attempt_events_v2': (
+        'provider_attempt_v2_no_update', 'provider_attempt_v2_no_delete'),
+    'provider_evidence_conflicts_v2': (
+        'provider_conflict_v2_no_update', 'provider_conflict_v2_no_delete'),
 }
 
 
@@ -86,7 +92,8 @@ class Dataset:
         """
         return self.watermark if self.watermark != 'rowid' else '_watermark'
 
-    def select_sql(self, before_ts: int, watermark: int, limit: int) -> tuple[str, tuple]:
+    def select_sql(self, before_ts: int, watermark: int, limit: int,
+                   extra_filter: str = '') -> tuple[str, tuple]:
         """按水位 + 时间窗选一批行（水位列必须单调）。"""
         columns = '*' if self.watermark != 'rowid' else 'rowid AS _watermark, *'
         where = [f'{self.watermark} > ?']
@@ -96,6 +103,8 @@ class Dataset:
             args.append(before_ts)
         if self.archive_filter:
             where.append(self.archive_filter)
+        if extra_filter:
+            where.append(extra_filter)
         sql = (f'SELECT {columns} FROM {self.name} WHERE ' + ' AND '.join(where)
                + f' ORDER BY {self.watermark} LIMIT ?')
         args.append(limit)
@@ -105,16 +114,26 @@ class Dataset:
         """只删除「已归档且已校验」的水位行；附加 delete_filter 保守收缩。"""
         where = [f'{self.watermark} <= ?']
         args: list[object] = [upto_watermark]
-        if self.delete_filter:
-            where.append(self.delete_filter)
+        # An archive-only filter must also protect the delete side.  The
+        # request_logs dataset, for example, archives rows with a request_id
+        # but a historical NULL-request_id row can have a lower id.  Falling
+        # back to archive_filter prevents that never-archived row from being
+        # removed merely because it is below the watermark.
+        delete_filter = self.delete_filter or self.archive_filter
+        if delete_filter:
+            where.append(delete_filter)
         return (f'DELETE FROM {self.name} WHERE ' + ' AND '.join(where), tuple(args))
 
     def delete_batch_sql(self, upto_watermark: int, limit: int) -> tuple[str, tuple]:
         """分批删除（SQLite 默认编译选项没有 `DELETE ... LIMIT`，用子查询限行）。"""
         where = [f'{self.watermark} <= ?']
         args: list[object] = [upto_watermark]
-        if self.delete_filter:
-            where.append(self.delete_filter)
+        # Keep the delete predicate as strict as the archive predicate.  A
+        # row that was intentionally excluded from the export must never be
+        # consumed by the watermark cleanup.
+        delete_filter = self.delete_filter or self.archive_filter
+        if delete_filter:
+            where.append(delete_filter)
         condition = ' AND '.join(where)
         sql = (f'DELETE FROM {self.name} WHERE {self.watermark} IN ('
                f'SELECT {self.watermark} FROM {self.name} WHERE {condition} LIMIT ?)')
@@ -138,7 +157,7 @@ DATASETS: tuple[Dataset, ...] = (
         retention_days=90, time_column='ts', watermark='rowid',
         reconcile='每个 request_id 应能在 request_logs 或「无花费路径」（容量/预算拒绝）里找到解释',
         evidence='db.py::_prune_side_tables；observability.py 中间件每 2000 次写清理',
-        note='现状同样直接删；目标策略是先归档校验再删。表无自增 id，水位用 rowid。',
+        note='先校验归档，再按具体行及内容一致性删除；rowid 仅用于分页，不作为删除证明。',
     ),
     Dataset(
         name='usage_events', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
@@ -162,6 +181,34 @@ DATASETS: tuple[Dataset, ...] = (
         evidence='ledger.attempt()；ledger.py:44-47 触发器；routers/logs.py::/attempts 只读端点',
         note=('审计明确「冻结的 attempt 数据不是可立即删除的死数据」：停写不代表无审计价值。'
               '保留期满后也只能归档，不能 DELETE。'),
+    ),
+    Dataset(
+        name='provider_dispatches_v2', klass=CLASS_LEDGER_EVENT,
+        action=ACTION_NO_DELETE,
+        retention_days=None, time_column='created_at', watermark='rowid',
+        reconcile=('dispatch_id 唯一；request_id 关联 provider_attempt_events_v2、'
+                   'request_logs.request_id 与 usage_events'),
+        evidence='providerevents.py::SCHEMA；routers/gateway.py::_upstream_headers',
+        note=('Provider dispatch 身份是 v2 证据的关联键。该表当前没有 no-delete '
+              '触发器，因此按证据表处理：只导出，不自动删除。'),
+    ),
+    Dataset(
+        name='provider_attempt_events_v2', klass=CLASS_LEDGER_EVENT,
+        action=ACTION_NO_DELETE,
+        retention_days=None, time_column='ts', watermark='rowid',
+        reconcile=('request_id/dispatch_id/rotation/provider_attempt/phase 主键；'
+                   '与 provider_dispatches_v2、request_outcomes 及计费事实分开核对'),
+        evidence='providerevents.py::SCHEMA；provider_audit.go；ledger.attempt_timeline',
+        note=('不可变 provider attempt 证据；sending 只代表发送前检查，headers 才证明'
+              '收到响应，缺少事件时不能补 0。'),
+    ),
+    Dataset(
+        name='provider_evidence_conflicts_v2', klass=CLASS_LEDGER_EVENT,
+        action=ACTION_NO_DELETE,
+        retention_days=None, time_column='ts', watermark='rowid',
+        reconcile='event_key + conflicting sha256 唯一；冲突必须保留并进入告警/人工核对',
+        evidence='providerevents.py::SCHEMA；provider_conflict_v2_no_update/no_delete',
+        note='冲突不是可清理噪声；删除会丢失“同一事件出现不同事实”的证据。',
     ),
     Dataset(
         name='attempt_billing_facts', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
@@ -261,10 +308,21 @@ DATASETS: tuple[Dataset, ...] = (
         name='archive_runs', klass=CLASS_ARCHIVE_LEDGER, action=ACTION_NEVER,
         retention_days=None, time_column='started_at', watermark='id',
         reconcile='每个归档文件都有 sha256 + 水位 + 条数 + 金额和，可回查',
-        evidence='migrations.py v3（本任务新增）；tools/archive_ledgers.py',
+        evidence='migrations.py v3（本任务新增）；server.archival（python -m server.archival）',
         note='归档台账本身必须永久保留，否则「归档过什么」无法证明。',
     ),
 )
+
+
+def active_reservation_guard(conn: sqlite3.Connection, definition: Dataset) -> str:
+    if definition.name not in ('request_logs', 'request_outcomes'):
+        return ''
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='budget_reservations'").fetchone()
+    if exists is None:
+        return '0'
+    return (f'NOT EXISTS (SELECT 1 FROM budget_reservations AS protected '
+            f'WHERE protected.request_id={definition.name}.request_id '
+            "AND protected.state IN ('reserved','forwarded','unknown'))")
 
 _BY_NAME = {d.name: d for d in DATASETS}
 
@@ -298,7 +356,7 @@ def immutable_triggers(conn: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def assert_immutable_triggers(conn: sqlite3.Connection) -> None:
-    """K24 硬约束：五张不可变表的 no_update/no_delete 触发器必须全在。
+    """K24 硬约束：所有不可变事件表的 no_update/no_delete 触发器必须全在。
 
     任何归档/清理脚本在动手前先调用它；缺一个就拒绝继续（说明有人为了让删除
     通过而拆了触发器）。
@@ -385,6 +443,9 @@ def archive_candidates(conn: sqlite3.Connection, *, now: int | None = None,
             # 只有「可归档后清理」的数据集才按 archive_filter 收缩统计口径
             # （预算预留必须排除 reserved/forwarded/unknown）
             where = f'({where}) AND {d.archive_filter}' if where else d.archive_filter
+        guard = active_reservation_guard(conn, d)
+        if guard:
+            where = f'({where}) AND {guard}' if where else guard
         row = conn.execute(f'SELECT COUNT(*) FROM {d.name} WHERE {where}', args).fetchone() \
             if where else conn.execute(f'SELECT COUNT(*) FROM {d.name}').fetchone()
         entry = {'exists': True, 'rows': int(row[0] or 0), 'cutoff': cutoff,

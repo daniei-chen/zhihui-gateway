@@ -1,0 +1,327 @@
+{
+  "schema": "zhihui.production-verification",
+  "version": 1,
+  "product_version": "0.0.7",
+  "release_id": "v0.0.7+stable.20261105.3",
+  "production_accepted": true,
+  "traffic_switched": true,
+  "state": "accepted",
+  "approved_window": "2026-11-05T07:20:00+08:00",
+  "manager_gate": {
+    "linux_passed": 4403,
+    "failed": 0,
+    "frozen_skipped": 9,
+    "source_tree_sha256": "da3e280a0e25d7330366bdd74ad37ca792b5cb0a8c0c80b8800486ae22a23c9f",
+    "manifest_sha256": "79ef7c2d430e9c153b80e1690ff2c7e0551c6918c52fef529a73685984e3dc35"
+  },
+  "engine_gate": {
+    "packages": 18,
+    "passed": 1764,
+    "failed": 0,
+    "skipped": 0,
+    "race_passed": 1298,
+    "race_platform": "windows",
+    "race_scope": "selected auth/upstream/server/pool/session packages",
+    "bounded_sse_fuzz_completed": true,
+    "binary_sha256": "2de8172824f7494ff378b423a1a4bc8bf4c72f81ca03bc0cabedb795eeae293f",
+    "source_commitment": "912479125152cc5a740b300f0bc1710e291c15963ce2a78fbf3db03baaeb3c3b"
+  },
+  "frontend_gate": {
+    "passed": 128,
+    "typecheck": true,
+    "static_build": true,
+    "performance_data": "synthetic; not provider inference benchmarks"
+  },
+  "publisher_contracts": {
+    "passed": 15,
+    "failed": 0,
+    "scope": "supplementary isolated Linux contracts",
+    "actual_frozen_pool_scope_checks": 2,
+    "pool_scope_test_boundary": "first sandbox omits signing; real release package signatures verified separately",
+    "existing_pool_merge_checks": 2,
+    "existing_pool_merge_boundary": "actual frozen publisher, readonly existing signed pool, ephemeral fixture stage signing; no production private key mounted"
+  },
+  "client_versions": {
+    "codex": null,
+    "claude_code": null,
+    "dsh": null
+  },
+  "boundaries": [
+    "No automatic supplier authorization or future channel-policy guarantee",
+    "No business ledger restore on code rollback",
+    "Unknown usage is not zero; immutable evidence retained",
+    "No live international-account inference or power-loss test",
+    "A bounded production acceptance window is not a long-term SLO"
+  ],
+  "private_credentials_or_business_backups_included": false,
+  "accepted_at": 1793836050,
+  "runtime_checks": {
+    "exact_active_release": true,
+    "service_active": true,
+    "manager_uid_10001": true,
+    "no_restarts_beyond_recorded_pre_exec_denial": true,
+    "exact_new_engine_image": true,
+    "exact_accepted_elf": true,
+    "config_and_internal_key_not_changed": true,
+    "all_related_containers_healthy": true,
+    "readiness_true": true,
+    "response_release_identity": true,
+    "exact_console_build": true
+  },
+  "protocol_smoke": {
+    "passed": true,
+    "checks": [
+      {
+        "check": "chat_codex_stream",
+        "passed": true,
+        "status": 200,
+        "seconds": 1.925,
+        "request_id": "70bdad511dac4d699b25161b6a84aa94",
+        "completed": true,
+        "frames": 3
+      },
+      {
+        "check": "codex_responses_stream",
+        "passed": true,
+        "status": 200,
+        "seconds": 1.534,
+        "request_id": "ff32052c4d9a45a29fa324fa1800be9a",
+        "completed": true,
+        "frames": 8
+      },
+      {
+        "check": "claude_messages_stream",
+        "passed": true,
+        "status": 200,
+        "seconds": 1.09,
+        "request_id": "1e3e37fae4e540afa5d9f0358051f7c3",
+        "completed": true,
+        "frames": 6
+      },
+      {
+        "check": "dsh_chat_stream",
+        "passed": true,
+        "status": 200,
+        "seconds": 1.662,
+        "request_id": "bcea4812744444ce9f95e80aa74c5a94",
+        "completed": true,
+        "frames": 3
+      },
+      {
+        "check": "native_responses_completed",
+        "passed": true,
+        "status": 200,
+        "request_id": "45144b168bbd4e5ca9e0b5c275c30db6",
+        "seconds": 1.601
+      },
+      {
+        "check": "tool_numeric_json_preserved",
+        "passed": true,
+        "status": 200,
+        "request_id": "7cb3e917ec5645cba5509483b17dc7e4"
+      },
+      {
+        "check": "simulated_tool_result_roundtrip",
+        "passed": true,
+        "status": 200,
+        "request_id": "e6bffa072057459e9088dbc1c4a92c81"
+      },
+      {
+        "check": "codex_responses_function_json_preserved",
+        "passed": true,
+        "status": 200,
+        "request_id": "6a916121e8004f8a983ca31a1c93f470"
+      },
+      {
+        "check": "codex_responses_function_result_roundtrip",
+        "passed": true,
+        "status": 200,
+        "request_id": "4e866ce41d874340985ca30adc36040b"
+      },
+      {
+        "check": "client_disconnect_after_first_content",
+        "passed": true,
+        "status": 200,
+        "request_id": "e5724788bb344980aebc95f352a5c2a0"
+      },
+      {
+        "check": "unsupported_previous_response_id",
+        "passed": true,
+        "status": 400
+      },
+      {
+        "check": "unsupported_background",
+        "passed": true,
+        "status": 400
+      },
+      {
+        "check": "unsupported_parallel_tool_calls",
+        "passed": true,
+        "status": 400
+      },
+      {
+        "check": "unsupported_strict_tools",
+        "passed": true,
+        "status": 400
+      },
+      {
+        "check": "exact_product_and_release",
+        "passed": true,
+        "status": 200
+      },
+      {
+        "check": "v2_evidence_fresh_and_no_conflicts",
+        "passed": true,
+        "status": 200
+      },
+      {
+        "check": "unsupported_semantics_no_provider_dispatch",
+        "passed": true
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "70bdad511dac4d699b25161b6a84aa94",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "ff32052c4d9a45a29fa324fa1800be9a",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "1e3e37fae4e540afa5d9f0358051f7c3",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "bcea4812744444ce9f95e80aa74c5a94",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "45144b168bbd4e5ca9e0b5c275c30db6",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "7cb3e917ec5645cba5509483b17dc7e4",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "e6bffa072057459e9088dbc1c4a92c81",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "6a916121e8004f8a983ca31a1c93f470",
+        "attempts": 2
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "4e866ce41d874340985ca30adc36040b",
+        "attempts": 1
+      },
+      {
+        "check": "bounded_provider_attempt_evidence",
+        "passed": true,
+        "request_id": "e5724788bb344980aebc95f352a5c2a0",
+        "attempts": 1
+      },
+      {
+        "check": "accepted_client_disconnect_not_replayed",
+        "passed": true,
+        "request_id": "e5724788bb344980aebc95f352a5c2a0",
+        "attempts": 1
+      },
+      {
+        "check": "public_readiness_after_smoke",
+        "passed": true
+      },
+      {
+        "check": "temporary_key_disabled_without_deleting_history",
+        "passed": true
+      }
+    ],
+    "transport": "public verified HTTPS; management probe stays loopback",
+    "client_bridge_boundary": "public gateway uses /v1/responses; Magpie local /backend-api/codex/responses is not a gateway route and was not client-binary tested",
+    "actual_shell_or_tool_execution": false
+  },
+  "business_invariants": {
+    "lifetime_counters_not_decreased": true,
+    "previously_disabled_keys_not_reenabled": true,
+    "portal_revocations_retained": true,
+    "billing_policy_retained": true,
+    "admin_security_fields_unchanged": true
+  },
+  "observation": {
+    "started_at": 1793835427,
+    "ended_at": 1793836050,
+    "duration_seconds": 623,
+    "requests": 38,
+    "groups": [
+      {
+        "status": 200,
+        "terminal": "completed",
+        "stage": null,
+        "count": 33
+      },
+      {
+        "status": 200,
+        "terminal": "client_cancelled",
+        "stage": "client",
+        "count": 1
+      },
+      {
+        "status": 400,
+        "terminal": "rejected",
+        "stage": null,
+        "count": 4
+      }
+    ],
+    "unexpected_failures": 0,
+    "channel_11128": 0,
+    "scope": "exact running release only; intentional negative-contract and disconnect fixtures retained"
+  },
+  "backup": {
+    "paired_cipher_verified": true,
+    "actual_local_decryption_verified": true,
+    "business_data_restored": false,
+    "offsite": false
+  },
+  "maintenance": {
+    "watchdog_original_trigger_restored": true
+  },
+  "startup_admission": {
+    "verified": true,
+    "release_id": "v0.0.7+stable.20261105.3",
+    "kind": "fixed-wrapper-rejection-before-exec",
+    "during_cutover": true,
+    "guard_bypassed": false,
+    "counter_reset": false,
+    "denied_launches": 1,
+    "failed_unit_attempts": 1,
+    "fixed_wrapper_verified": true,
+    "nrestarts_baseline": 1,
+    "running_manager_pid": "267509",
+    "guard_closure_sha256": "0e4706853fa5cfa4fb30eb955605f904d92f7c2bba548fd02f6cfad46997042f",
+    "exact_rejection_branch": "not recorded by installed guarded launcher",
+    "source_evidence": "writer_entry.main reaches application only through Launcher.execute os.execve; generic rejection emitted by original wrapper before exec"
+  },
+  "rollback": {
+    "target": "v0.0.6+stable.20261104.4",
+    "actual_preflight_prepared": true,
+    "path": "controlled code/frontend/engine rollback; never restore business ledgers",
+    "validation": "signed predecessor, actual live-source compatibility preflight and isolated publisher contracts; no extra live rollback for rehearsal"
+  }
+}

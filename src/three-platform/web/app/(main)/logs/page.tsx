@@ -1,11 +1,10 @@
 'use client';
 
 import {useCallback, useRef, useState} from 'react';
-import {ScrollText, RotateCcw, Trash2, ChevronLeft, ChevronRight} from 'lucide-react';
+import {ScrollText, RotateCcw, ChevronLeft, ChevronRight} from 'lucide-react';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {AttemptEvidence} from '@/components/operations/AttemptEvidence';
 import {OutcomeExplorer} from '@/components/operations/OutcomeExplorer';
-import {notify} from '@/lib/toast';
 import {keyApi, logApi} from '@/lib/api';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {useDebounced} from '@/lib/use-debounce';
@@ -13,7 +12,6 @@ import type {ApiKey, RequestLog} from '@/lib/types';
 import {fmtCredit, fmtDateTime, fmtDateTimeMarked, fmtLatency, fmtNumber} from '@/lib/format';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {EmptyState} from '@/components/common/layout/EmptyState';
-import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {useAuth} from '@/lib/auth-context';
@@ -267,23 +265,9 @@ export default function LogsPage() {
       actions={
         <>
           {isAdmin && (
-            <ConfirmDialog
-              title={t('logs.clearTitle')}
-              description={t('logs.clearDesc')}
-              confirmText={t('common.clear')}
-              destructive
-              onConfirm={async () => {
-                await logApi.clear();
-                notify.ok(t('logs.cleared'));
-                refetchFromFirstPage();
-              }}
-              trigger={
-                <Button variant="outline" size="sm" className="rounded-full text-red-500">
-                  <Trash2 />
-                  {t('common.clear')}
-                </Button>
-              }
-            />
+            <span role="note" className="text-muted-foreground text-xs">
+              {t('logs.retentionNotice')}
+            </span>
           )}
         </>
       }

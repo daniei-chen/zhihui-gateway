@@ -3,6 +3,7 @@ import {BASE_PATH} from './base-path';
 import type {Platform} from './platform-store';
 import type {Realm} from './realm-context';
 import type {AttemptExplanation, ConfigurationDrift, ConfigurationSnapshot, OutcomePage, OutcomeStats} from './operational-evidence';
+import type {BudgetReviewPage, RetentionStatus, ReviewBucket} from './budget-review';
 
 // These are Manager ledger/configuration endpoints, not QTG compatibility routes.
 // upstream_platform is a ledger filter; platform=qoder would rewrite the endpoint.
@@ -14,6 +15,13 @@ async function read<T>(url: string, params?: Record<string, unknown>): Promise<T
 }
 
 export const operationalApi = {
+  budgetReview: (bucket: ReviewBucket, cursor?: string, signal?: AbortSignal) => manager.get<BudgetReviewPage>('/api/budgets/review', {
+    params: {bucket, cursor, limit: 10}, signal,
+  }).then(response => response.data),
+  budgetEvidence: (requestId: string, signal?: AbortSignal) => manager.get<Record<string, unknown>>('/api/budgets/review/evidence', {
+    params: {request_id: requestId}, signal,
+  }).then(response => response.data),
+  retention: (signal?: AbortSignal) => manager.get<RetentionStatus>('/api/logs/retention/status', {signal}).then(response => response.data),
   outcomes: (platform: Platform, page: number, errorCode: string, days: number) => read<OutcomePage>('/api/logs/outcomes', {
     upstream_platform: platform, page, size: 10, days, error_code: errorCode || undefined,
   }),

@@ -73,7 +73,7 @@ def set_account_proxy(filename: str, proxy: str, auth_dir: Path | None = None) -
         raise ValueError('账号文件不能是符号链接')
     # 读—改—写串行（见 filelock.py）：与续期/导入并发时，后写者不会用旧快照
     # 把先写者刚改的字段盖回去。
-    with file_lock(path):
+    with file_lock(path, writing=True):
         raw = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(raw, dict):
             raise ValueError('账号文件格式异常')
@@ -127,7 +127,7 @@ def set_account_weight(filename: str, weight: float,
     path = _safe_file(filename, auth_dir)
     if path.is_symlink():
         raise ValueError('账号文件不能是符号链接')
-    with file_lock(path):
+    with file_lock(path, writing=True):
         raw = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(raw, dict):
             raise ValueError('账号文件格式异常')

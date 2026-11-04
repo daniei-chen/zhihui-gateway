@@ -45,7 +45,7 @@ def _metadata(value: dict, commit: str | None, managed: bool) -> dict:
         'releases_url': REPOSITORY_URL + '/releases', 'source_commit': commit,
         'manager_baseline': value['manager_baseline'],
         'release_channel': value['release_channel'], 'managed': managed,
-        'web_update_enabled': not managed,
-        'update_policy': 'trusted-publisher-required' if managed else 'legacy-updater',
+        'web_update_enabled': False,
+        'update_policy': 'trusted-publisher-required',
         'provider_endpoints_changed': False,
     }

@@ -10,6 +10,12 @@ from .. import db, keysvc, logview, observability, security
 
 router = APIRouter(prefix='/api/logs', tags=['logs'])
 
+
+@router.get('/retention/status')
+def retention_status(user: dict = Depends(security.require_panel_reader)):
+    from .. import archiveworker
+    return archiveworker.status()
+
 #: U21：`terminal_state` 的已知取值。过滤参数必须是其中之一，否则显式 400 ——
 #: 拼错的终态会静默返回空列表，看起来像"这段时间没有失败"，比报错更危险。
 TERMINAL_STATES = ('completed', 'rejected', 'upstream_error', 'transport_error',
@@ -225,6 +231,30 @@ def list_outcomes(
     has_code = observability.ensure_outcome_schema()
     code_expr = 'o.error_code' if has_code else 'NULL'
     source_expr = 'o.error_source' if has_code else 'NULL'
+    v2_exists = (
+        "EXISTS(SELECT 1 FROM provider_dispatches_v2 vd WHERE vd.request_id=o.request_id) "
+        "OR EXISTS(SELECT 1 FROM provider_attempt_events_v2 ve WHERE ve.request_id=o.request_id)"
+    )
+    # The v2 cutover is a per-request boundary, not a global boolean: a request
+    # dispatched after cutover must not fall back to stale legacy attempt rows
+    # just because its v2 event file was delayed.  Keep legacy rows readable for
+    # older requests, and return NULL when a v2 dispatch has no event yet.
+    attempt_source_expr = (
+        f"CASE WHEN {v2_exists} THEN 'provider_attempt_events_v2' "
+        "WHEN EXISTS(SELECT 1 FROM attempt_events le WHERE le.request_id=o.request_id) "
+        "THEN 'legacy_attempt_events' ELSE 'absent' END"
+    )
+    attempt_count_expr = (
+        f"CASE WHEN {v2_exists} THEN "
+        "CASE WHEN EXISTS(SELECT 1 FROM provider_attempt_events_v2 ve2 "
+        "WHERE ve2.request_id=o.request_id) "
+        "THEN (SELECT COUNT(*) FROM (SELECT 1 AS present "
+        "FROM provider_attempt_events_v2 ve3 WHERE ve3.request_id=o.request_id "
+        "GROUP BY ve3.dispatch_id, ve3.rotation, ve3.provider_attempt)) "
+        "ELSE NULL END "
+        "ELSE (SELECT COUNT(DISTINCT le2.attempt) FROM attempt_events le2 "
+        "WHERE le2.request_id=o.request_id) END"
+    )
     clause = ('WHERE ' + ' AND '.join(where)) if where else ''
     joined = 'FROM request_outcomes o LEFT JOIN request_logs l ON l.request_id = o.request_id'
     total = db.query_one(f'SELECT COUNT(*) AS c {joined} {clause}', args)['c']
@@ -233,8 +263,8 @@ def list_outcomes(
         f'o.terminal_state, o.error_stage, {code_expr} AS error_code, '
         f'{source_expr} AS error_source, o.release_id, o.client_request_id, o.latency_ms, '
         f'l.actual_platform AS platform, l.account AS account, '
-        f'(SELECT COUNT(DISTINCT a.attempt) FROM attempt_events a '
-        f' WHERE a.request_id = o.request_id) AS attempt_count '
+        f'{attempt_source_expr} AS attempt_source, '
+        f'{attempt_count_expr} AS attempt_count '
         f'{joined} {clause} ORDER BY o.ts DESC, o.request_id LIMIT ? OFFSET ?',
         (*args, size, (page - 1) * size),
     )
@@ -257,7 +287,9 @@ def list_outcomes(
             # 实际路由到的平台；NULL = 未记录（例如鉴权阶段就被拒），不是 workbuddy
             'platform': r['platform'],
             'account': r['account'],
-            'attempt_count': int(r['attempt_count'] or 0),
+            'attempt_source': r['attempt_source'],
+            'attempt_count': (None if r['attempt_count'] is None
+                              else int(r['attempt_count'])),
             'traffic_class': observability.traffic_class(r['endpoint'], r['method']),
         }
         for r in rows
@@ -337,5 +369,4 @@ def attempts_explain(request_id: str, user: dict = Depends(security.current_user
 
 @router.post('/clear')
 def clear_logs(user: dict = Depends(security.require_session_admin)) -> dict:
-    db.execute('DELETE FROM request_logs')
-    return {'ok': True}
+    raise HTTPException(409, detail='日志须先归档校验；批量清空已停用，以免丢失未决用量证据。请使用归档 CLI 或等待保留期归档任务。')

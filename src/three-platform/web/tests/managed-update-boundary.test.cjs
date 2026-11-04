@@ -13,33 +13,30 @@ const compiled = ts.transpileModule(source, {fileName: relative, compilerOptions
 }, reportDiagnostics: true});
 assert.deepEqual(compiled.diagnostics, []);
 
-function render(versionProduct, statusProduct, present) {
+function render(product, status = {}, isAdmin = true) {
   let stateIndex = 0;
   const jsx = (type, props) => ({type, props});
   const component = name => ({[name]: name});
   const mocks = {
     react: {
       useState(initial) {
-        const index = stateIndex++;
-        const value = index === 0 ? {product: statusProduct, running: false, ok: null, logs: []}
-          : index === 2 ? {product: versionProduct}
-          : index === 6 ? {present, name: 'inert.tar.gz'} : initial;
+        const value = stateIndex++ === 0 ? {versions: {product}, status} : initial;
         return [value, () => {}];
       },
-      useCallback: callback => callback, useEffect() {}, useMemo: callback => callback(),
-      useRef: value => ({current: value}),
+      useCallback: callback => callback, useEffect() {}, useRef: value => ({current: value}),
     },
     'react/jsx-runtime': {jsx, jsxs: jsx},
-    'lucide-react': new Proxy({}, {get: (_, name) => name}),
+    'lucide-react': new Proxy({}, {get: (_target, name) => name}),
     '@/lib/api': {errText: String, systemApi: {}},
-    '@/lib/product': {PRODUCT_REPOSITORY: 'synthetic/repository', PRODUCT_REPOSITORY_URL: 'https://invalid.example'},
-    '@/lib/toast': {notify: {}}, '@/lib/format': {fmtAgo: String, fmtDateTime: String},
-    '@/lib/auth-context': {useAuth: () => ({isAdmin: true})},
+    '@/lib/product': {PRODUCT_NAME: '智汇网关', PRODUCT_REPOSITORY: 'synthetic/zhihui',
+      PRODUCT_REPOSITORY_URL: 'https://github.com/synthetic/zhihui'},
+    '@/lib/toast': {notify: {}}, '@/lib/format': {fmtDateTime: String},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin})},
     '@/components/ui/button': component('Button'), '@/components/ui/badge': component('Badge'),
     '@/components/ui/input': component('Input'), '@/components/ui/label': component('Label'),
     '@/components/common/layout/ConfirmDialog': component('ConfirmDialog'),
     '@/components/common/states/LoadError': component('LoadError'),
-    '@/lib/i18n/rich-text': component('RichText'), '@/lib/i18n/provider': {useT: () => key => key},
+    '@/lib/i18n/provider': {useT: () => key => key},
   };
   const module = {exports: {}};
   vm.runInNewContext(compiled.outputText, {module, exports: module.exports,
@@ -53,33 +50,46 @@ function collect(tree, match) {
   return [...(match(tree) ? [tree] : []), ...collect(tree.props?.children, match)];
 }
 
-const managed = {managed: true, web_update_enabled: false};
-const legacy = {managed: false, web_update_enabled: true};
-
-test('managed, unknown and conflicting identities disable every package control', () => {
-  for (const [versions, status] of [[managed, managed], [undefined, undefined],
-    [legacy, managed], [managed, legacy], [legacy, undefined],
-    [{managed: false, web_update_enabled: false}, legacy]]) {
-    for (const present of [false, true]) {
-      const tree = render(versions, status, present);
-      const [fieldset] = collect(tree, node => node.props?.['data-slot'] === 'offline-update-package');
-      assert.ok(fieldset);
-      assert.equal(fieldset.type, 'fieldset');
-      assert.equal(fieldset.props.disabled, true);
-      const hints = collect(fieldset, node => node.type === 'RichText');
-      assert.equal(hints[0].props.text, 'product.controlledDetail');
-      const [targets] = collect(tree, node => node.props?.['data-slot'] === 'update-target');
-      const controls = collect(targets, node => node.type === 'ConfirmDialog');
-      assert.equal(controls.length, 2);
-      controls.forEach(node => assert.equal(node.props.trigger.props.disabled, true));
-    }
+test('every identity uses the Zhihui release center, never an inherited installer', () => {
+  for (const product of [undefined, {managed: true}, {managed: false, web_update_enabled: true},
+    {repository: 'foreign/project', managed: false, web_update_enabled: true}]) {
+    const tree = render(product);
+    assert.equal(collect(tree, node => node.props?.['data-slot'] === 'trusted-release-policy').length, 1);
+    assert.equal(collect(tree, node => node.props?.['data-slot'] === 'update-target').length, 0);
+    assert.equal(collect(tree, node => node.props?.['data-slot'] === 'offline-update-package').length, 0);
+    assert.equal(collect(tree, node => node.type === 'input' && node.props.type === 'file').length, 0);
   }
+  assert.doesNotMatch(source, /systemApi\.(startUpdate|uploadPackage|deletePackage|packageMeta)/);
+  assert.doesNotMatch(source, /setInterval|log_tail|targetBoth|targetManager|updatePanel\./);
 });
 
-test('explicitly unmanaged identities preserve historical package controls', () => {
-  const [fieldset] = collect(render(legacy, legacy, false),
-    node => node.props?.['data-slot'] === 'offline-update-package');
-  assert.equal(fieldset.props.disabled, false);
-  assert.equal(collect(fieldset, node => node.type === 'RichText')[0].props.text, 'updatePanel.pkgDesc');
-  assert.equal(collect(fieldset, node => node.type === 'input' && node.props.type === 'file').length, 1);
+test('old updater commands cannot masquerade as current release results', () => {
+  const tree = render({repository: 'synthetic/zhihui', version: '0.0.7'}, {
+    version: 'v1.0.79', ok: true, logs: [{text: 'legacy-command-NEVER-SHOW'}],
+    log_tail: 'another-command-NEVER-SHOW', legacy_history_available: true,
+  });
+  const text = JSON.stringify(tree);
+  assert.doesNotMatch(text, /v1\.0\.79|NEVER-SHOW/);
+  assert.match(text, /receiptUnknown/);
+  const dialogs = collect(tree, node => node.type === 'ConfirmDialog');
+  assert.equal(dialogs.length, 1);
+  assert.equal(dialogs[0].props.confirmText, 'releaseCenter.archiveHistory');
+});
+
+test('only matching structured phases are shown and viewers never see publisher events', () => {
+  const product = {repository: 'synthetic/zhihui', version: '0.0.7'};
+  const status = {product, record_state: 'reported', logs: [{ts: 1, text: 'activated'}, {ts: 2, text: 'arbitrary-shell'}]};
+  assert.match(JSON.stringify(render(product, status)), /phase\.activated/);
+  assert.doesNotMatch(JSON.stringify(render(product, status)), /arbitrary-shell/);
+  assert.doesNotMatch(JSON.stringify(render(product, status, false)), /phase\.activated/);
+  assert.doesNotMatch(JSON.stringify(render({repository: 'foreign/project'}, status)), /phase\.activated/);
+  assert.doesNotMatch(JSON.stringify(render(product, {...status, product: {repository: 'foreign/project'}})), /phase\.activated/);
+});
+
+test('release links are owned by Zhihui, not receipt or cached URLs', () => {
+  const links = collect(render({repository: 'synthetic/zhihui', version: '0.0.7'}), node => node.type === 'a');
+  links.forEach(node => assert.match(node.props.href, /^https:\/\/github\.com\/synthetic\/zhihui(?:\/releases)?$/));
+  const changelog = fs.readFileSync(path.join(root, 'components/common/settings/ChangelogPanel.tsx'), 'utf8');
+  assert.match(changelog, /PRODUCT_REPOSITORY_URL/);
+  assert.doesNotMatch(changelog, /ithtelab\/workbuddy-manager/);
 });

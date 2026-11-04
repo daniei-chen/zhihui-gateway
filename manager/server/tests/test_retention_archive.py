@@ -26,6 +26,8 @@ class PolicyTest(unittest.TestCase):
         names = {d.name for d in retention.DATASETS}
         for required in ('request_logs', 'request_outcomes', 'usage_daily', 'usage_hourly',
                          'usage_events', 'forwarding_events', 'attempt_events',
+                         'provider_dispatches_v2', 'provider_attempt_events_v2',
+                         'provider_evidence_conflicts_v2',
                          'adjustment_events', 'admin_events', 'budget_reservations',
                          'budget_adjustments', 'audit_logs', 'ip_access_logs',
                          'task_logs', 'checkin_logs', 'api_keys', 'archive_runs'):
@@ -143,6 +145,43 @@ class ArchiveTest(TempDBTest):
                            "WHERE dataset='request_logs' ORDER BY id DESC LIMIT 1")
         self.assertEqual(run['state'], 'deleted')
 
+    def test_delete_requires_a_verified_archive_record(self) -> None:
+        """A self-consistent but never-recorded sha must not authorize deletion."""
+        before = db.query_one('SELECT COUNT(*) c FROM request_logs')['c']
+        with self.assertRaises(SystemExit):
+            self.tool.delete_archived(
+                self.conn, 'request_logs', watermark=3,
+                sha='not-an-archive', confirm_sha='not-an-archive')
+        self.assertEqual(db.query_one('SELECT COUNT(*) c FROM request_logs')['c'], before)
+
+    def test_null_request_id_below_watermark_is_never_deleted(self) -> None:
+        """Rows excluded from the archive must also be excluded from cleanup."""
+        db.execute('DELETE FROM request_logs')
+        old = int(time.time()) - 100 * 86400
+        db.execute(
+            'INSERT INTO request_logs(ts,key_id,model,status,prompt_tokens,'
+            'completion_tokens,request_id,terminal_state) '
+            'VALUES(?,?,?,?,?,?,NULL,?)',
+            (old, 1, 'deepseek-v3', 200, 10, 5, 'completed'))
+        for i in range(3):
+            db.execute(
+                'INSERT INTO request_logs(ts,key_id,model,status,prompt_tokens,'
+                'completion_tokens,request_id,terminal_state) '
+                'VALUES(?,?,?,?,?,?,?,?)',
+                (old + i + 1, 1, 'deepseek-v3', 200, 10, 5, f'old-{i}', 'completed'))
+        result = self.tool.archive_dataset(
+            self.conn, 'request_logs', out_dir=self._out,
+            before_ts=int(time.time()) - 90 * 86400)
+        self.assertEqual(result['rows'], 3)
+        deleted = self.tool.delete_archived(
+            self.conn, 'request_logs', watermark=result['watermark'],
+            sha=result['sha256'], confirm_sha=result['sha256'])
+        self.assertEqual(deleted['deleted_rows'], 3)
+        self.assertEqual(db.query_one(
+            'SELECT COUNT(*) c FROM request_logs WHERE request_id IS NULL')['c'], 1,
+            'request_id IS NULL was intentionally outside the archive')
+        self.assertEqual(db.query_one('SELECT COUNT(*) c FROM request_logs')['c'], 1)
+
     def test_rerun_is_idempotent(self) -> None:
         cutoff = int(time.time()) - 90 * 86400
         first = self.tool.archive_dataset(self.conn, 'request_logs',
@@ -151,6 +190,55 @@ class ArchiveTest(TempDBTest):
                                            out_dir=self._out, before_ts=cutoff)
         self.assertEqual(second['rows'], 0, '水位之后没有新行，重复归档不能重复导出')
         self.assertEqual(second['watermark'], first['watermark'])
+
+    def test_dry_run_uses_same_filter_and_retention_window(self) -> None:
+        cutoff = int(time.time()) - 90 * 86400
+        # The null-request-id row is below the old watermark but outside the
+        # archive filter; the fresh row is inside the filter but outside the
+        # retention window.
+        db.execute(
+            'INSERT INTO request_logs(ts,key_id,model,status,request_id) '
+            "VALUES(?,?,?,?,NULL)", (cutoff - 100, 1, 'm', 200))
+        planning = self.tool.archive_dataset(
+            self.conn, 'request_logs', out_dir=self._out, before_ts=cutoff,
+            dry_run=True)
+        self.assertEqual(planning['pending_rows'], 3)
+        self.assertFalse(self._out.exists())
+
+    def test_cli_plan_and_dry_run_are_read_only(self) -> None:
+        import contextlib
+        import io
+
+        cutoff = int(time.time()) - 90 * 86400
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = archival.main([
+                'plan', '--db', str(config.DB_PATH)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())['candidates']['request_logs']['rows'], 3)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = archival.main([
+                'archive', '--db', str(config.DB_PATH), '--dataset', 'request_logs',
+                '--out', str(self._out), '--before-ts', str(cutoff)])
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(output.getvalue())['dry_run'])
+        self.assertFalse(self._out.exists())
+
+    def test_cli_verify_returns_failure_for_a_tampered_archive(self) -> None:
+        result = self.tool.archive_dataset(
+            self.conn, 'request_logs', out_dir=self._out,
+            before_ts=int(time.time()) - 90 * 86400)
+        path = Path(result['file'])
+        path.write_bytes(path.read_bytes() + b'{"tampered":true}\n')
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = archival.main([
+                'verify', '--file', str(path), '--sha', result['sha256']])
+        self.assertEqual(code, 1)
 
     def test_tampered_archive_is_detected(self) -> None:
         result = self.tool.archive_dataset(

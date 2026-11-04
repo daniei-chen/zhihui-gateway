@@ -87,22 +87,27 @@ class ReadmeAssetsTests(unittest.TestCase):
         self.assertIn('WorkBuddy × Codex', readme)
         self.assertIn('11128', readme)
         self.assertIn('docs/WORKBUDDY-CODEX-COMPAT.md', readme)
-        self.assertIn('新部署需配置', readme)
+        self.assertIn('11 条规则版本化交付', readme)
         self.assertNotIn('当前产品版本为 **`0.0.3`**', readme)
         explanation = (ROOT / 'docs/WORKBUDDY-CODEX-COMPAT.md').read_text(encoding='utf-8')
         for evidence in ('prompt_defuse_rules', 'prompt_compat_enabled=false', 'system/developer',
-                         'response.completed', 'response.incomplete', '默认规则不自动包含'):
+                         'response.completed', 'response.incomplete', '默认包含 11 条规则'):
             self.assertIn(evidence, explanation)
+        package = json.loads((ROOT / 'manager/server/workbuddy-compat.json').read_bytes())
+        self.assertEqual(len(package['rules']), 11)
+        self.assertIn(package['version'], explanation)
+        for rule in package['rules']:
+            self.assertIn('`' + rule['id'] + '`', explanation)
 
     def test_release_metrics_are_backed_by_published_verification(self):
-        proof = json.loads((ROOT / 'ops/workbuddy-remediation-0.0.5/production-verification.json').read_bytes())
+        proof = json.loads((ROOT / 'ops/workbuddy-stability-0.0.7/production-verification.json').read_bytes())
         self.assertTrue(proof['production_accepted'])
-        self.assertEqual(proof['manager_gate']['linux_passed'], 4301)
-        self.assertEqual(proof['engine_gate']['passed'], 1727)
-        self.assertEqual(proof['publisher_contracts']['passed'], 33)
+        self.assertEqual(proof['manager_gate']['linux_passed'], 4403)
+        self.assertEqual(proof['engine_gate']['passed'], 1764)
+        self.assertEqual(proof['publisher_contracts']['passed'], 15)
         for mobile in (False, True):
             source = artwork.release(mobile)
-            for value in ('4,301', '1,727', '33'):
+            for value in ('4,403', '1,764', '15'):
                 self.assertIn(value, source)
 
 

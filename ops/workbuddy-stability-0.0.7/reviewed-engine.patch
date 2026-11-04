@@ -1,0 +1,1699 @@
+--- a/cmd/server/config.go
++++ b/cmd/server/config.go
+@@ -129,11 +129,15 @@
+ 	} `json:"upstash"`
+ 
+ 	Pool struct {
+-		MaxInFlight        int    `json:"max_in_flight"`        // 单账号最大在途请求数，0 = 不限
+-		MaxInFlightGlobal  int    `json:"max_in_flight_global"` // global 域单账号在途上限（WAF 403 风控分档），0 = 回落 max_in_flight
+-		BreakerThreshold   int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
+-		BreakerCooldown    string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
+-		BreakerCooldownMax string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
++		CreditFloor                int64  `json:"credit_floor"`
++		LargeRequestLimit          int    `json:"large_request_limit"`
++		LargeRequestThresholdBytes int    `json:"large_request_threshold_bytes"`
++		LargeRequestWindowSeconds  int    `json:"large_request_window_seconds"`
++		MaxInFlight                int    `json:"max_in_flight"`        // 单账号最大在途请求数，0 = 不限
++		MaxInFlightGlobal          int    `json:"max_in_flight_global"` // global 域单账号在途上限（WAF 403 风控分档），0 = 回落 max_in_flight
++		BreakerThreshold           int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
++		BreakerCooldown            string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
++		BreakerCooldownMax         string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
+ 		// 连败降权（issue #114「累计错误率高/连续失败 N 次的账号移出候选池一段时间」）：
+ 		// ErrClient/传输层这类「不罚号」失败连续计数，达阈临时出池。与冷却/熔断
+ 		// 并存取更长者不叠加。默认 5 次 / 10m。
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -95,6 +95,8 @@
+ 	// 额度耗尽跳过（本地定制）：权威余额<=0 的账号从选号/粘性分配/探活中剔除，
+ 	// 等签到刷新余额自动恢复。默认开启（config pool.skip_exhausted / WB2A_SKIP_EXHAUSTED 可控）。
+ 	p.SetSkipExhausted(cfg.SkipExhaustedOn)
++	p.SetRoutingPreferences(cfg.Pool.CreditFloor, cfg.Pool.LargeRequestLimit,
++		cfg.Pool.LargeRequestThresholdBytes, time.Duration(cfg.Pool.LargeRequestWindowSeconds)*time.Second)
+ 	if cfg.SkipExhaustedOn {
+ 		log.Printf("额度耗尽跳过已启用（pool.skip_exhausted，权威余额<=0 的账号不再被选中）")
+ 	}
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -21,7 +21,11 @@
+ // Auth 是归一化后的账号凭证（来源可以是插件 OAuth 嵌套形或手写扁平形）。
+ type Auth struct {
+ 	// mu 串行化 RefreshToken 写与 SaveAtomic 读，防止并发写回半更新 token。
+-	mu sync.Mutex
++	mu                 sync.Mutex
++	sourceKnown        bool
++	sourceExists       bool
++	sourceAccessToken  string
++	sourceRefreshToken string
+ 
+ 	AccessToken  string
+ 	RefreshToken string
+@@ -345,6 +349,8 @@
+ 	if strings.TrimSpace(a.AccessToken) == "" {
+ 		return nil, fmt.Errorf("parse_error: missing accessToken")
+ 	}
++	a.sourceKnown = true
++	a.sourceAccessToken, a.sourceRefreshToken = a.AccessToken, a.RefreshToken
+ 	return &a, nil
+ }
+ 
+@@ -352,54 +358,7 @@
+ // 全程持 a.mu：防止与 RefreshToken 修改 token 字段并发，杜绝写回半更新。
+ // 防御：accessToken 为空时拒绝写回，避免误用空凭证覆盖有效文件。
+ func (a *Auth) SaveAtomic() error {
+-	a.mu.Lock()
+-	defer a.mu.Unlock()
+-	if strings.TrimSpace(a.AccessToken) == "" {
+-		return fmt.Errorf("save refused: empty accessToken (uid=%s)", a.UID)
+-	}
+-	if a.FilePath == "" {
+-		return fmt.Errorf("no FilePath set")
+-	}
+-	doc := map[string]any{
+-		"auth": map[string]any{
+-			"accessToken":  a.AccessToken,
+-			"refreshToken": a.RefreshToken,
+-			"expiresAt":    a.ExpiresAt,
+-			"domain":       a.Domain,
+-			"realm":        a.realm,
+-		},
+-		"account": map[string]any{
+-			"uid":          a.UID,
+-			"enterpriseId": a.EnterpriseID,
+-			"nickname":     a.Nickname,
+-		},
+-	}
+-	// DeviceToken 非空才写回顶层 device_token：避免在无该字段的旧文件里引入空键
+-	// （保持与插件 OAuth 输出形状一致，插件读取忽略未知键）。
+-	if a.DeviceToken != "" {
+-		doc["device_token"] = a.DeviceToken
+-	}
+-	// ProxyName 同理非空才写回：**刷新 token 会整份重建文件**，不保留就等于把面板
+-	// 绑好的出口线路静默解绑（出口随之改变，而这类变化没人会发现）。空值不写，
+-	// 避免在没绑线路的文件里引入空键。
+-	if a.ProxyName != "" {
+-		doc["proxy"] = a.ProxyName
+-	}
+-	// Weight 同理只在非零时写回（issue #187）：刷新 token 会整份重建文件，
+-	// 不保留等于把用户设的权重静默清零。0 = 未设置，不写键（面板把 1 当默认，
+-	// 手改过的文件也不会因此多出 weight: 1 这种噪音）。
+-	if a.Weight != 0 {
+-		doc["weight"] = a.Weight
+-	}
+-	raw, err := json.MarshalIndent(doc, "", "  ")
+-	if err != nil {
+-		return err
+-	}
+-	tmp := a.FilePath + ".tmp"
+-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+-		return err
+-	}
+-	return os.Rename(tmp, a.FilePath)
++	return a.saveWithLease()
+ }
+ 
+ // AuthFileGlob auth 文件的统一 glob 模式（宽侧：workbuddy*.json）。
+@@ -444,6 +403,7 @@
+ 			continue
+ 		}
+ 		a.FilePath = f
++		a.sourceExists = true
+ 		if prev, ok := seenUID[a.UID]; ok {
+ 			log.Printf("WARN: uid %s duplicated across %s and %s — 后者覆盖（不同 realm 同名 UID？）",
+ 				logfmt.Label(a.UID, a.Nickname), prev, f)
+--- /dev/null
++++ b/internal/auth/credential_file.go
+@@ -0,0 +1,196 @@
++package auth
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++)
++
++func lockCredentials(ctx context.Context, path string) (func(), error) {
++	if path == "" {
++		return nil, fmt.Errorf("no credential path")
++	}
++	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
++		return nil, fmt.Errorf("credential source must be regular")
++	}
++	handle, err := openCredentialLock(path+".refresh.lock", path)
++	if err != nil {
++		return nil, fmt.Errorf("credential lock unavailable: %w", err)
++	}
++	for {
++		if err := ctx.Err(); err != nil {
++			handle.Close()
++			return nil, err
++		}
++		locked, failure := tryCredentialLock(handle)
++		if failure != nil {
++			handle.Close()
++			return nil, failure
++		}
++		if locked {
++			return func() { unlockCredentialLock(handle); handle.Close() }, nil
++		}
++		select {
++		case <-ctx.Done():
++			handle.Close()
++			return nil, ctx.Err()
++		case <-time.After(25 * time.Millisecond):
++		}
++	}
++}
++
++func (a *Auth) RefreshSerialized(ctx context.Context, refresh func() error) error {
++	a.mu.Lock()
++	path, beforeAccess, beforeRefresh := a.FilePath, a.AccessToken, a.RefreshToken
++	a.mu.Unlock()
++	if path == "" {
++		return refresh()
++	}
++	release, err := lockCredentials(ctx, path)
++	if err != nil {
++		return err
++	}
++	defer release()
++	raw, err := os.ReadFile(path)
++	if err != nil {
++		return fmt.Errorf("credential source unavailable: %w", err)
++	}
++	stored, err := Parse(raw)
++	if err != nil {
++		return err
++	}
++	a.mu.Lock()
++	if a.UID != "" && stored.UID != a.UID {
++		a.mu.Unlock()
++		return fmt.Errorf("credential identity changed")
++	}
++	a.sourceKnown, a.sourceExists = true, true
++	a.sourceAccessToken, a.sourceRefreshToken = stored.AccessToken, stored.RefreshToken
++	changed := stored.AccessToken != beforeAccess || stored.RefreshToken != beforeRefresh
++	if changed {
++		a.AccessToken, a.RefreshToken, a.ExpiresAt, a.Domain = stored.AccessToken, stored.RefreshToken, stored.ExpiresAt, stored.Domain
++	}
++	a.mu.Unlock()
++	if changed {
++		if updated, _ := a.BackfillRealm(); updated {
++			return a.saveCredentialHeld()
++		}
++		return nil
++	}
++	if err := refresh(); err != nil {
++		return err
++	}
++	a.BackfillRealm()
++	return a.saveCredentialHeld()
++}
++
++func (a *Auth) saveWithLease() error {
++	a.mu.Lock()
++	path := a.FilePath
++	a.mu.Unlock()
++	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
++	defer cancel()
++	release, err := lockCredentials(ctx, path)
++	if err != nil {
++		return err
++	}
++	defer release()
++	return a.saveCredentialHeld()
++}
++
++func (a *Auth) saveCredentialHeld() error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if strings.TrimSpace(a.AccessToken) == "" {
++		return fmt.Errorf("save refused: empty accessToken")
++	}
++	document := map[string]any{}
++	raw, readError := os.ReadFile(a.FilePath)
++	existed := readError == nil
++	if readError != nil && (!os.IsNotExist(readError) || a.sourceExists) {
++		return fmt.Errorf("credential source unavailable: %w", readError)
++	}
++	if existed {
++		stored, err := Parse(raw)
++		if err != nil {
++			return err
++		}
++		if (a.UID != "" && stored.UID != a.UID) ||
++			(a.sourceKnown && (stored.AccessToken != a.sourceAccessToken || stored.RefreshToken != a.sourceRefreshToken) &&
++				(stored.AccessToken != a.AccessToken || stored.RefreshToken != a.RefreshToken)) {
++			return fmt.Errorf("credential generation changed; stale save refused")
++		}
++		decoder := json.NewDecoder(bytes.NewReader(raw))
++		decoder.UseNumber()
++		if err := decoder.Decode(&document); err != nil {
++			return err
++		}
++	}
++	credentials, _ := document["auth"].(map[string]any)
++	if credentials == nil {
++		credentials = map[string]any{}
++		document["auth"] = credentials
++	}
++	for name, value := range map[string]any{"accessToken": a.AccessToken, "refreshToken": a.RefreshToken,
++		"expiresAt": a.ExpiresAt, "domain": a.Domain, "realm": a.realm} {
++		credentials[name] = value
++		if _, flat := document[name]; flat {
++			document[name] = value
++		}
++	}
++	account, _ := document["account"].(map[string]any)
++	if account == nil {
++		account = map[string]any{}
++		document["account"] = account
++	}
++	account["uid"] = a.UID
++	if !existed {
++		account["enterpriseId"], account["nickname"] = a.EnterpriseID, a.Nickname
++		if a.DeviceToken != "" {
++			document["device_token"] = a.DeviceToken
++		}
++		if a.ProxyName != "" {
++			document["proxy"] = a.ProxyName
++		}
++		if a.Weight != 0 {
++			document["weight"] = a.Weight
++		}
++	}
++	encoded, err := json.MarshalIndent(document, "", "  ")
++	if err != nil {
++		return err
++	}
++	temporary, err := os.CreateTemp(filepath.Dir(a.FilePath), ".credential-*.tmp")
++	if err != nil {
++		return err
++	}
++	defer os.Remove(temporary.Name())
++	if err = prepareCredentialTemp(temporary, a.FilePath, existed); err != nil {
++		temporary.Close()
++		return err
++	}
++	if _, err = temporary.Write(encoded); err == nil {
++		err = temporary.Sync()
++	}
++	closeError := temporary.Close()
++	if err != nil {
++		return err
++	}
++	if closeError != nil {
++		return closeError
++	}
++	if err = os.Rename(temporary.Name(), a.FilePath); err != nil {
++		return err
++	}
++	if err = syncCredentialDirectory(filepath.Dir(a.FilePath)); err != nil {
++		return err
++	}
++	a.sourceKnown, a.sourceExists = true, true
++	a.sourceAccessToken, a.sourceRefreshToken = a.AccessToken, a.RefreshToken
++	return nil
++}
+--- /dev/null
++++ b/internal/auth/credential_file_test.go
+@@ -0,0 +1,120 @@
++package auth
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"sync"
++	"sync/atomic"
++	"testing"
++)
++
++func TestCredentialSavePreservesMetadataAndRejectsStaleGeneration(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "workbuddy-synthetic.json")
++	original := []byte(`{"auth":{"accessToken":"synthetic-old","refreshToken":"synthetic-refresh","custom":"preserve"},"account":{"uid":"synthetic","extra":true},"proxy":"synthetic-route","weight":3,"unknown":{"large":9007199254740993}}`)
++	if err := os.WriteFile(path, original, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	current, err := Parse(original)
++	if err != nil {
++		t.Fatal(err)
++	}
++	current.FilePath = path
++	current.AccessToken = "synthetic-new"
++	if err := current.SaveAtomic(); err != nil {
++		t.Fatal(err)
++	}
++	encoded, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var document map[string]json.RawMessage
++	if err = json.Unmarshal(encoded, &document); err != nil {
++		t.Fatal(err)
++	}
++	var unknown struct {
++		Large json.Number `json:"large"`
++	}
++	if err = json.Unmarshal(document["unknown"], &unknown); err != nil || unknown.Large.String() != "9007199254740993" {
++		t.Fatal("unknown metadata was lost or rounded")
++	}
++	stale, err := Parse(original)
++	if err != nil {
++		t.Fatal(err)
++	}
++	stale.FilePath = path
++	stale.AccessToken = "synthetic-stale"
++	if err = stale.SaveAtomic(); err == nil {
++		t.Fatal("stale credential overwrite accepted")
++	}
++	if err = os.Remove(path); err != nil {
++		t.Fatal(err)
++	}
++	if err = current.SaveAtomic(); err == nil {
++		t.Fatal("deleted source recreated")
++	}
++}
++
++func TestCredentialFileLeaseCoalescesReloadedAuthObjects(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "workbuddy-synthetic.json")
++	raw := []byte(`{"auth":{"accessToken":"synthetic-old","refreshToken":"synthetic-old"},"account":{"uid":"synthetic"}}`)
++	if err := os.WriteFile(path, raw, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	accounts := make([]*Auth, 32)
++	for index := range accounts {
++		account, err := Parse(raw)
++		if err != nil {
++			t.Fatal(err)
++		}
++		account.FilePath = path
++		accounts[index] = account
++	}
++	var sends atomic.Int32
++	var waiters sync.WaitGroup
++	for _, account := range accounts {
++		waiters.Add(1)
++		go func(current *Auth) {
++			defer waiters.Done()
++			err := current.RefreshSerialized(context.Background(), func() error {
++				sends.Add(1)
++				current.Lock()
++				current.AccessToken, current.RefreshToken = "synthetic-new", "synthetic-new"
++				current.Unlock()
++				return nil
++			})
++			if err != nil {
++				t.Error(err)
++			}
++		}(account)
++	}
++	waiters.Wait()
++	if sends.Load() != 1 {
++		t.Fatalf("file-level refresh sends=%d want=1", sends.Load())
++	}
++	for _, account := range accounts {
++		if account.AccessTokenValue() != "synthetic-new" {
++			t.Fatal("new generation not adopted")
++		}
++	}
++}
++
++func TestCredentialLeaseChild(t *testing.T) {
++	path := os.Getenv("WB_CREDENTIAL_LEASE_TEST")
++	if path == "" {
++		return
++	}
++	fmt.Println("SYNTHETIC_LEASE_ATTEMPT")
++	release, err := lockCredentials(context.Background(), path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer release()
++	fmt.Println("SYNTHETIC_LEASE_READY")
++	if _, err = io.CopyN(io.Discard, os.Stdin, 1); err != nil {
++		t.Fatal(err)
++	}
++}
+--- /dev/null
++++ b/internal/auth/credential_lock_unix.go
+@@ -0,0 +1,77 @@
++//go:build !windows
++
++package auth
++
++import (
++	"errors"
++	"os"
++	"syscall"
++)
++
++func openCredentialLock(path, source string) (*os.File, error) {
++	descriptor, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
++	if err != nil {
++		return nil, err
++	}
++	handle := os.NewFile(uintptr(descriptor), path)
++	initial, err := handle.Stat()
++	if err != nil || !initial.Mode().IsRegular() {
++		handle.Close()
++		return nil, errors.New("unsafe credential lock")
++	}
++	if owner, ok := initial.Sys().(*syscall.Stat_t); !ok || owner.Nlink != 1 {
++		handle.Close()
++		return nil, errors.New("unsafe credential lock links")
++	}
++	if sourceInfo, failure := os.Stat(source); failure == nil && os.Geteuid() == 0 {
++		if owner, ok := sourceInfo.Sys().(*syscall.Stat_t); ok {
++			if failure = handle.Chown(int(owner.Uid), int(owner.Gid)); failure != nil {
++				handle.Close()
++				return nil, failure
++			}
++		}
++	}
++	info, err := handle.Stat()
++	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
++		handle.Close()
++		if err == nil {
++			err = errors.New("unsafe credential lock")
++		}
++		return nil, err
++	}
++	return handle, nil
++}
++
++func prepareCredentialTemp(handle *os.File, source string, existed bool) error {
++	if !existed || os.Geteuid() != 0 {
++		return nil
++	}
++	info, err := os.Stat(source)
++	if err != nil {
++		return err
++	}
++	owner, ok := info.Sys().(*syscall.Stat_t)
++	if !ok {
++		return errors.New("credential owner unavailable")
++	}
++	return handle.Chown(int(owner.Uid), int(owner.Gid))
++}
++
++func tryCredentialLock(handle *os.File) (bool, error) {
++	err := syscall.Flock(int(handle.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
++	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
++		return false, nil
++	}
++	return err == nil, err
++}
++
++func unlockCredentialLock(handle *os.File) { syscall.Flock(int(handle.Fd()), syscall.LOCK_UN) }
++
++func syncCredentialDirectory(path string) error {
++	handle, err := os.Open(path)
++	if err != nil {
++		return err
++	}
++	defer handle.Close()
++	return handle.Sync()
++}
+--- /dev/null
++++ b/internal/auth/credential_lock_windows.go
+@@ -0,0 +1,40 @@
++package auth
++
++import (
++	"errors"
++	"os"
++	"syscall"
++	"unsafe"
++)
++
++var credentialKernel = syscall.NewLazyDLL("kernel32.dll")
++var credentialLock = credentialKernel.NewProc("LockFileEx")
++var credentialUnlock = credentialKernel.NewProc("UnlockFileEx")
++
++func openCredentialLock(path, source string) (*os.File, error) {
++	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
++		return nil, errors.New("unsafe credential lock")
++	}
++	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
++}
++
++func tryCredentialLock(handle *os.File) (bool, error) {
++	var overlapped syscall.Overlapped
++	result, _, failure := credentialLock.Call(handle.Fd(), 3, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
++	if result != 0 {
++		return true, nil
++	}
++	if errors.Is(failure, syscall.Errno(33)) {
++		return false, nil
++	}
++	return false, failure
++}
++
++func unlockCredentialLock(handle *os.File) {
++	var overlapped syscall.Overlapped
++	credentialUnlock.Call(handle.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
++}
++
++func syncCredentialDirectory(path string) error { return nil }
++
++func prepareCredentialTemp(handle *os.File, source string, existed bool) error { return nil }
+--- a/internal/pool/entry.go
++++ b/internal/pool/entry.go
+@@ -111,8 +111,9 @@
+ }
+ 
+ type entry struct {
+-	a       *auth.Auth
+-	credits int64
++	a             *auth.Auth
++	credits       int64
++	largeRequests []time.Time
+ 	// creditsKnown 余额是否经过**权威观测**（签到/余额接口返回值，或显式 SetCredits）。
+ 	// 选号跳过规则只信权威值（见 exhausted）：扣减内插的估算值（NoteModelCost 每请求
+ 	// 扣减）会因"消费早于记账"等误差漂移，实测出现过余额 2800+ 的账号被估算压到 0
+--- a/internal/pool/pool.go
++++ b/internal/pool/pool.go
+@@ -64,7 +64,11 @@
+ 	// skipExhausted 额度耗尽跳过开关（SetSkipExhausted 注入；默认 false=不跳过，
+ 	// 与引入前行为一致）。开启后：权威观测到 credits<=0 的账号在选号/粘性分配/
+ 	// 探活中被跳过（见 entry.exhausted 的保守口径——只信签到等权威值，不信估算）。
+-	skipExhausted bool
++	skipExhausted         bool
++	creditFloor           int64
++	largeRequestLimit     int
++	largeRequestThreshold int
++	largeRequestWindow    time.Duration
+ 	// randInt64N 仅供测试注入确定性随机源；nil 时用 math/rand/v2 全局源。
+ 	// 生产代码不应设置此字段。
+ 	randInt64N func(n int64) int64
+--- /dev/null
++++ b/internal/pool/routing_preferences.go
+@@ -0,0 +1,96 @@
++package pool
++
++import "time"
++
++func (p *Pool) SetRoutingPreferences(creditFloor int64, largeLimit, threshold int, window time.Duration) {
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	if creditFloor < 0 {
++		creditFloor = 0
++	}
++	if creditFloor > 1000000000 {
++		creditFloor = 1000000000
++	}
++	if largeLimit < 0 {
++		largeLimit = 0
++	}
++	if largeLimit > 1000 {
++		largeLimit = 1000
++	}
++	if threshold <= 0 {
++		threshold = 64 * 1024
++	}
++	if threshold > 128*1024*1024 {
++		threshold = 128 * 1024 * 1024
++	}
++	if window <= 0 {
++		window = 5 * time.Minute
++	}
++	if window > 24*time.Hour {
++		window = 24 * time.Hour
++	}
++	p.creditFloor, p.largeRequestLimit = creditFloor, largeLimit
++	p.largeRequestThreshold, p.largeRequestWindow = threshold, window
++}
++
++func (p *Pool) RoutingExclusions(tried map[string]bool, model, realm string, requestBytes int) map[string]bool {
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	if p.creditFloor == 0 && p.largeRequestLimit == 0 {
++		return tried
++	}
++	now := time.Now()
++	avoid := make(map[string]bool)
++	preferred := 0
++	for uid, candidate := range p.byUID {
++		if tried[uid] || !candidate.healthyForModel(now, model) || p.inFlightFull(candidate) ||
++			(realm != "" && candidate.a.Realm() != realm) || (p.skipExhausted && candidate.exhausted()) {
++			continue
++		}
++		candidate.largeRequests = recentLargeRequests(candidate.largeRequests, now.Add(-p.largeRequestWindow))
++		lowCredit := p.creditFloor > 0 && candidate.creditsKnown && candidate.credits < p.creditFloor
++		largeLimited := p.largeRequestLimit > 0 && requestBytes >= p.largeRequestThreshold && len(candidate.largeRequests) >= p.largeRequestLimit
++		if lowCredit || largeLimited {
++			avoid[uid] = true
++		} else {
++			preferred++
++		}
++	}
++	if preferred == 0 || len(avoid) == 0 {
++		return tried
++	}
++	for uid, excluded := range tried {
++		if excluded {
++			avoid[uid] = true
++		}
++	}
++	return avoid
++}
++
++func (p *Pool) NoteLargeRequest(uid string, requestBytes int) {
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	candidate := p.byUID[uid]
++	if candidate == nil || p.largeRequestLimit == 0 || requestBytes < p.largeRequestThreshold {
++		return
++	}
++	now := time.Now()
++	candidate.largeRequests = recentLargeRequests(candidate.largeRequests, now.Add(-p.largeRequestWindow))
++	if len(candidate.largeRequests) >= p.largeRequestLimit {
++		copy(candidate.largeRequests, candidate.largeRequests[1:])
++		candidate.largeRequests = candidate.largeRequests[:len(candidate.largeRequests)-1]
++	}
++	candidate.largeRequests = append(candidate.largeRequests, now)
++}
++
++func recentLargeRequests(events []time.Time, cutoff time.Time) []time.Time {
++	first := 0
++	for first < len(events) && !events[first].After(cutoff) {
++		first++
++	}
++	if first == 0 {
++		return events
++	}
++	copy(events, events[first:])
++	return events[:len(events)-first]
++}
+--- /dev/null
++++ b/internal/pool/routing_preferences_test.go
+@@ -0,0 +1,60 @@
++package pool
++
++import (
++	"testing"
++	"time"
++
++	"workbuddy2api/internal/auth"
++)
++
++func TestRoutingFloorKeepsUnknownAndFallsBackWhenAllLow(t *testing.T) {
++	accounts := New("")
++	accounts.Add(&auth.Auth{UID: "low", AccessToken: "synthetic"})
++	accounts.Add(&auth.Auth{UID: "unknown", AccessToken: "synthetic"})
++	accounts.SetRoutingPreferences(100, 0, 0, 0)
++	accounts.mu.Lock()
++	accounts.byUID["low"].creditsKnown, accounts.byUID["low"].credits = true, 10
++	accounts.mu.Unlock()
++	excluded := accounts.RoutingExclusions(nil, "", "", 0)
++	if !excluded["low"] || excluded["unknown"] {
++		t.Fatalf("unknown balance lost: %v", excluded)
++	}
++	excluded = accounts.RoutingExclusions(map[string]bool{"unknown": true}, "", "", 0)
++	if excluded["low"] {
++		t.Fatal("soft floor became a hard availability rejection")
++	}
++}
++
++func TestLargeRequestSlidingBudgetBoundariesAndSoftFallback(t *testing.T) {
++	accounts := New("")
++	accounts.Add(&auth.Auth{UID: "busy", AccessToken: "synthetic"})
++	accounts.Add(&auth.Auth{UID: "spare", AccessToken: "synthetic"})
++	accounts.SetRoutingPreferences(0, 2, 100, time.Minute)
++	accounts.NoteLargeRequest("busy", 99)
++	accounts.NoteLargeRequest("busy", 100)
++	if accounts.RoutingExclusions(nil, "", "", 100)["busy"] {
++		t.Fatal("budget counted a small request")
++	}
++	accounts.NoteLargeRequest("busy", 100)
++	if !accounts.RoutingExclusions(nil, "", "", 100)["busy"] {
++		t.Fatal("large budget not applied")
++	}
++	if accounts.RoutingExclusions(nil, "", "", 99)["busy"] {
++		t.Fatal("small request lost stickiness")
++	}
++	if accounts.RoutingExclusions(map[string]bool{"spare": true}, "", "", 100)["busy"] {
++		t.Fatal("budget blocked all available accounts")
++	}
++	for index := 0; index < 5000; index++ {
++		accounts.NoteLargeRequest("busy", 100)
++	}
++	accounts.mu.Lock()
++	if len(accounts.byUID["busy"].largeRequests) != 2 {
++		t.Fatal("unbounded sliding history")
++	}
++	accounts.byUID["busy"].largeRequests = []time.Time{time.Now().Add(-2 * time.Minute)}
++	accounts.mu.Unlock()
++	if accounts.RoutingExclusions(nil, "", "", 100)["busy"] {
++		t.Fatal("expired budget did not recover")
++	}
++}
+--- a/internal/scheduler/scheduler.go
++++ b/internal/scheduler/scheduler.go
+@@ -554,7 +554,7 @@
+ 			if err := s.cfg.Upstream.RefreshToken(a); err != nil {
+ 				log.Printf("checkin %s refresh: %v", logfmt.Label(st.UID, st.Nickname), err)
+ 				var ue *upstream.Error
+-				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
++				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && upstream.ClaimRefreshPenalty(err) {
+ 					if s.cfg.Pool.NoteSessionDead(st.UID) {
+ 						log.Printf("WARN: checkin %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
+ 					}
+@@ -569,10 +569,6 @@
+ 				}
+ 			} else {
+ 				a.BackfillRealm() // 老 auth 空 realm → 落盘前补标识（幂等：已有不动）
+-				if err := a.SaveAtomic(); err != nil {
+-					// 刷新成功但落盘失败：重启会用旧 token，必须暴露。
+-					log.Printf("checkin %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+-				}
+ 			}
+ 		}
+ 		// 签到返回错误（含"今天已签到"）也继续查余额：余额恢复即可解冻账号。
+@@ -914,7 +910,7 @@
+ 		if err := s.cfg.Upstream.RefreshToken(a); err != nil {
+ 			log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+ 			var ue *upstream.Error
+-			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
++			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && upstream.ClaimRefreshPenalty(err) {
+ 				if s.cfg.Pool.NoteSessionDead(st.UID) {
+ 					log.Printf("WARN: keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
+ 				}
+@@ -923,8 +919,5 @@
+ 		}
+ 		s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
+ 		a.BackfillRealm()                   // 老 auth 空 realm → 落盘前补标识（幂等：已有不动）
+-		if err := a.SaveAtomic(); err != nil {
+-			log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+-		}
+-	}
+-}
++	}
++}
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -631,6 +631,13 @@
+ 		dispatchID = newAuditID()
+ 	}
+ 	r.Header.Set("X-Manager-Dispatch-ID", dispatchID)
++	r, attemptBudget, cancelBudget, budgetErr := requestProviderBudget(r, w)
++	if budgetErr != nil {
++		st.status = http.StatusBadRequest
++		writeOpenAIError(w, http.StatusBadRequest, "invalid_provider_budget", budgetErr.Error())
++		return
++	}
++	defer cancelBudget()
+ 	chatMeta := upstream.ChatMeta{ConversationID: session.ConversationIDForHeaders(body, sessKey), ManagedCompatibility: r.Header.Get("X-WB-Compatibility") == "manager-scoped-v1"}
+ 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
+ 		chatMeta.ConversationRequestID = v
+@@ -650,9 +657,10 @@
+ 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
+ 
+ 	for i := 0; i < h.cfg.MaxRotate; i++ {
++		routingExcluded := h.cfg.Pool.RoutingExclusions(tried, bareModel, realm, len(body))
+ 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
+ 		var acct *auth.Auth
+-		if stickyUID != "" {
++		if stickyUID != "" && !routingExcluded[stickyUID] {
+ 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
+ 			if acct == nil || (realm != "" && acct.Realm() != realm) {
+ 				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑。
+@@ -662,7 +670,7 @@
+ 		if acct == nil {
+ 			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
+ 			// （healthyForModel），realm 谓词过滤跨域账号。
+-			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
++			acct = h.cfg.Pool.PickExcludingForRealm(routingExcluded, bareModel, realm)
+ 		}
+ 		if acct == nil {
+ 			st.status = http.StatusServiceUnavailable
+@@ -691,14 +699,19 @@
+ 
+ 		// token 临近过期 → 先 refresh（失败冷却换号）
+ 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
+-			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
++			if err := h.cfg.Upstream.RefreshTokenContext(r.Context(), acct); err != nil {
+ 				lastErr = err
++				if r.Context().Err() != nil {
++					fail(acct.UID)
++					break
++				}
+ 				var ue *upstream.Error
+-				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
++				penalize := upstream.ClaimRefreshPenalty(err)
++				if penalize && errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+ 					// 12153 一次失败不杀号（临时触发会误杀）：与 scheduler keepalive/checkin
+ 					// 同口径走连续计数，达到 sessionDeadThreshold 才禁用。
+ 					h.cfg.Pool.NoteSessionDead(acct.UID)
+-				} else {
++				} else if penalize {
+ 					h.cfg.Pool.NoteError(acct.UID)
+ 				}
+ 				fail(acct.UID)
+@@ -708,10 +721,6 @@
+ 				continue
+ 			}
+ 			acct.BackfillRealm() // 老 auth 空 realm → 落盘前补标识（幂等：已有不动）
+-			if err := acct.SaveAtomic(); err != nil {
+-				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
+-				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
+-			}
+ 		}
+ 
+ 		// 客户端 IP 透传（仅 PassthroughIP 开启）：按请求取首段作为参数传入 ChatStream，
+@@ -722,7 +731,16 @@
+ 		}
+ 		// 传 r.Context()：客户端断连/请求取消立即中断在途上游调用并释放租约，
+ 		// 不再让"幽灵请求"占满账号在途名额直到 IdleTimeout。
+-		chatMeta.AttemptObserver = providerObserver(r, dispatchID, i+1, acct.UID, bareModel, realm)
++		observer := providerObserver(r, dispatchID, i+1, acct.UID, bareModel, realm)
++		chatMeta.AttemptObserver = func(attempt int, phase string, status int, path string) error {
++			if phase == "sending" {
++				if err := attemptBudget.authorize(w); err != nil {
++					return err
++				}
++			}
++			return observer(attempt, phase, status, path)
++		}
++		h.cfg.Pool.NoteLargeRequest(acct.UID, len(body))
+ 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
+ 		auditAttempt(r, i+1, logfmt.Label(acct.UID, acct.Nickname), bareModel, realm, "upstream_headers", status)
+ 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
+@@ -734,6 +752,12 @@
+ 			status = uerr.Status
+ 		}
+ 		if uerr == nil && terr != nil {
++			if errors.Is(terr, errProviderBudgetExhausted) {
++				fail(acct.UID)
++				st.status = http.StatusServiceUnavailable
++				writeOpenAIError(w, http.StatusServiceUnavailable, "provider_attempt_budget_exhausted", "Provider attempt budget exhausted; request was not replayed further.")
++				return
++			}
+ 			if !upstream.DefinitelyUnsent(terr) || r.Context().Err() != nil {
+ 				fail(acct.UID)
+ 				st.status = http.StatusBadGateway
+--- /dev/null
++++ b/internal/server/provider_budget.go
+@@ -0,0 +1,50 @@
++package server
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"strconv"
++	"time"
++
++	"workbuddy2api/internal/upstream"
++)
++
++var errProviderBudgetExhausted = upstream.ErrProviderAttemptBudgetExhausted
++
++type providerBudget struct {
++	limit int
++	spent int
++}
++
++func requestProviderBudget(request *http.Request, writer http.ResponseWriter) (*http.Request, *providerBudget, context.CancelFunc, error) {
++	limit := 8
++	if raw := request.Header.Get("X-WB-Attempt-Budget"); raw != "" {
++		value, err := strconv.Atoi(raw)
++		if err != nil || value < 1 || value > 8 {
++			return request, nil, nil, errors.New("invalid provider attempt budget")
++		}
++		limit = value
++	}
++	ctx, cancel := context.WithCancel(request.Context())
++	if raw := request.Header.Get("X-WB-Remaining-Ms"); raw != "" {
++		value, err := strconv.Atoi(raw)
++		if err != nil || value < 1 || value > 600000 {
++			cancel()
++			return request, nil, nil, errors.New("invalid remaining deadline")
++		}
++		cancel()
++		ctx, cancel = context.WithTimeout(request.Context(), time.Duration(value)*time.Millisecond)
++	}
++	writer.Header().Set("X-WB-Provider-Attempts", "0")
++	return request.WithContext(ctx), &providerBudget{limit: limit}, cancel, nil
++}
++
++func (budget *providerBudget) authorize(writer http.ResponseWriter) error {
++	if budget.spent >= budget.limit {
++		return errProviderBudgetExhausted
++	}
++	budget.spent++
++	writer.Header().Set("X-WB-Provider-Attempts", strconv.Itoa(budget.spent))
++	return nil
++}
+--- /dev/null
++++ b/internal/server/provider_budget_test.go
+@@ -0,0 +1,42 @@
++package server
++
++import (
++	"errors"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestProviderBudgetBoundsAndSharedAuthorizations(t *testing.T) {
++	request := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++	request.Header.Set("X-WB-Attempt-Budget", "2")
++	request.Header.Set("X-WB-Remaining-Ms", "1000")
++	writer := httptest.NewRecorder()
++	bounded, budget, cancel, err := requestProviderBudget(request, writer)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer cancel()
++	if deadline, ok := bounded.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
++		t.Fatal("remaining deadline not propagated")
++	}
++	for count := 0; count < 2; count++ {
++		if err := budget.authorize(writer); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if !errors.Is(budget.authorize(writer), errProviderBudgetExhausted) || writer.Header().Get("X-WB-Provider-Attempts") != "2" {
++		t.Fatal("authorization count must be shared and bounded")
++	}
++}
++
++func TestInvalidProviderBudgetFailsBeforeDispatch(t *testing.T) {
++	for _, raw := range []string{"0", "9", "-1", "99999999999999999999999", "invalid"} {
++		request := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++		request.Header.Set("X-WB-Attempt-Budget", raw)
++		if _, _, cancel, err := requestProviderBudget(request, httptest.NewRecorder()); err == nil {
++			cancel()
++			t.Fatalf("invalid budget accepted: %q", raw)
++		}
++	}
++}
+--- a/internal/server/remediation_contracts_test.go
++++ b/internal/server/remediation_contracts_test.go
+@@ -85,3 +85,38 @@
+ 		}
+ 	}
+ }
++
++func TestProviderBudgetStopsPathFallbackAndPreservesAccount(test *testing.T) {
++	var bodies [][]byte
++	client := newBodyCaptureUpstream(test, &bodies, func(call int, body string) (int, string, bool) {
++		return 400, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`, false
++	})
++	handler := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999}), Upstream: client})
++	request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"fixture"}]}`))
++	request.Header.Set("X-WB-Attempt-Budget", "1")
++	writer := httptest.NewRecorder()
++	handler.ServeHTTP(writer, request)
++	if len(bodies) != 1 || writer.Code != 503 || !strings.Contains(writer.Body.String(), "provider_attempt_budget_exhausted") || writer.Header().Get("X-WB-Provider-Attempts") != "1" {
++		test.Fatalf("bounded fallback contract failed: count=%d status=%d body=%s", len(bodies), writer.Code, writer.Body.String())
++	}
++	next := httptest.NewRecorder()
++	handler.ServeHTTP(next, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"fixture"}]}`)))
++	if next.Code != 400 || !strings.Contains(next.Body.String(), "channel_check_rejected") || len(bodies) != 3 {
++		test.Fatal("attempt budget exhaustion must not remove the account")
++	}
++}
++
++func TestProviderRedirectDoesNotEscapeAttemptBudgetOrReplay(test *testing.T) {
++	accepted := 0
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
++		accepted++
++		return &http.Response{StatusCode: 307, Header: http.Header{"Location": []string{"https://different.invalid/replay"}},
++			Body: io.NopCloser(strings.NewReader("redirect"))}, nil
++	})}, ChatBaseCN: "https://fake.example"}
++	handler := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999}), Upstream: client})
++	writer := httptest.NewRecorder()
++	handler.ServeHTTP(writer, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"fixture"}]}`)))
++	if accepted != 1 || writer.Code != 502 || !strings.Contains(writer.Body.String(), "upstream_transport_uncertain") {
++		test.Fatalf("redirect replayed an accepted POST: attempts=%d status=%d", accepted, writer.Code)
++	}
++}
+--- /dev/null
++++ b/internal/upstream/channel_fallback_success_test.go
+@@ -0,0 +1,42 @@
++package upstream
++
++import (
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"workbuddy2api/internal/auth"
++)
++
++func TestChannelCheckFallsBackToConsoleOnce(t *testing.T) {
++	channel := `{"code":11128,"msg":"request illegal","displayTips":{"en":"This channel verification failed"}}`
++	var paths []string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		paths = append(paths, r.URL.Path)
++		if strings.Contains(r.URL.Path, "/v2/chat/completions") {
++			w.WriteHeader(http.StatusBadRequest)
++			_, _ = io.WriteString(w, channel)
++			return
++		}
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = io.WriteString(w, "data: [DONE]\n\n")
++	}))
++	defer srv.Close()
++
++	c := New()
++	c.ChatBaseCN = srv.URL
++	body := []byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"stream":true}`)
++	rc, status, raw, err := c.ChatStream(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}, body, "", ChatMeta{})
++	if rc != nil {
++		defer rc.Close()
++	}
++	if err != nil || status != http.StatusOK {
++		t.Fatalf("status=%d calls=%v err=%v raw=%s", status, paths, err, raw)
++	}
++	if len(paths) != 2 || !strings.Contains(paths[0], "/v2/chat/completions") ||
++		!strings.Contains(paths[1], "/console/chat/completions") {
++		t.Fatalf("fallback calls=%v want [/v2,/console]", paths)
++	}
++}
+--- a/internal/upstream/client.go
++++ b/internal/upstream/client.go
+@@ -756,6 +756,8 @@
+ 	// SanitizeFingerprints 出站请求体黑名单指纹脱敏开关（默认 true；false 完全还原）。
+ 	SanitizeFingerprints bool
+ 	AttemptTimeout       time.Duration
++	refreshMu            sync.Mutex
++	refreshCalls         map[*auth.Auth]*refreshCall
+ 
+ 	// GzipBody chat 请求体超过 gzipBodyThreshold 时用 gzip 压缩后再发上游
+ 	// （issue #297）。false 完全还原为不压缩（排障开关）。
+@@ -1099,7 +1101,7 @@
+ //     独占 a.mu，阻塞同账号的 SaveAtomic / 其他刷新（issue:持锁 120s I/O）。
+ //   - 写回前重新校验快照一致性：若锁外期间另一 goroutine 已完成刷新（refreshToken
+ //     已变），本次结果直接采用（新 token 已生效），不再重复写回。
+-func (c *Client) RefreshToken(a *auth.Auth) error {
++func (c *Client) refreshToken(a *auth.Auth) error {
+ 	// 第 1 段（锁内）：读快照。
+ 	a.Lock()
+ 	rtSnapshot := a.RefreshToken
+@@ -1202,6 +1204,7 @@
+ 	}
+ 	return strings.Contains(body, "渠道校验") ||
+ 		strings.Contains(lower, "channel verification") ||
++		strings.Contains(lower, "unapproved channel") ||
+ 		strings.Contains(lower, "official client")
+ }
+ 
+@@ -1251,16 +1254,15 @@
+ 		// 这是配置问题，不是账号问题（见 clientFor 的注释）。
+ 		return nil, 0, nil, cerr
+ 	}
++	requestClient := *chatClient
++	requestClient.CheckRedirect = func(request *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }
++	chatClient = &requestClient
+ 	paths := c.chatPaths(a)
+ 	// 请求体压缩（issue #297）：>64KB 才压；Compressed 为空表示未压缩。
+ 	// 这里算一次、循环内复用：路径回落（/v2 → /console）不需要重新压。
+ 	outBody, contentEncoding := c.outboundBody(prepared)
+ 	// gzipRetried 防止「压缩版失败 → 未压缩重试」再次进入同一分支。
+ 	gzipRetried := false
+-	// channelRetried 渠道校验命中且已无备用路径时，允许**原样重发一次**
+-	// （issue #296：上游报文明确写着「请求被拦截，请重新发送」，说明它期望
+-	// 客户端重试；灰度校验有概率性，同一请求重发一次常能通过）。
+-	channelRetried := false
+ 	var firstChannelBody []byte
+ 	firstChannelStatus := 0
+ 	providerAttempt := 0
+@@ -1270,6 +1272,9 @@
+ 		providerAttempt++
+ 		if meta.AttemptObserver != nil {
+ 			if observeErr := meta.AttemptObserver(providerAttempt, "sending", 0, path); observeErr != nil {
++				if errors.Is(observeErr, ErrProviderAttemptBudgetExhausted) {
++					return nil, 0, nil, ErrProviderAttemptBudgetExhausted
++				}
+ 				return nil, 0, nil, fmt.Errorf("provider attempt evidence unavailable")
+ 			}
+ 		}
+@@ -1313,6 +1318,11 @@
+ 				cancel()
+ 				return nil, 0, nil, fmt.Errorf("provider attempt evidence unavailable after send")
+ 			}
++		}
++		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
++			resp.Body.Close()
++			cancel()
++			return nil, 0, nil, fmt.Errorf("unexpected upstream redirect; processing is unknown and request was not replayed")
+ 		}
+ 		if resp.StatusCode >= 400 {
+ 			raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+@@ -1401,16 +1411,6 @@
+ 						logfmt.Label(a.UID, a.Nickname), path, resp.StatusCode, paths[i+1])
+ 					continue
+ 				}
+-				// 备用路径也被拦：按上游报文的要求原样重发一次（仅一次）。
+-				// 仍然失败就走下面的错误返回 —— 这条不再重试，避免把 429/风控
+-				// 放大成多倍请求。
+-				if !channelRetried {
+-					channelRetried = true
+-					log.Printf("WARN: [upstream] chat_stream acct=%s: 渠道校验在 %s 上仍被拦，原样重发一次",
+-						logfmt.Label(a.UID, a.Nickname), path)
+-					i--
+-					continue
+-				}
+ 			}
+ 			// ≥400 直接返回（除上面的渠道校验换路径外，chat 层无 fallback 链；billing
+ 			// 层的 404 fallback 独立存在，语义不受影响）。
+--- a/internal/upstream/client_test.go
++++ b/internal/upstream/client_test.go
+@@ -283,11 +283,17 @@
+ 		`{"code":11128,"msg":"blocked by security policy"}`,
+ 		`{"code":"11128","msg":"blocked by security policy"}`,
+ 		`Illegal API invocation from an unapproved channel`,
+-		`{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`,
+ 	} {
+ 		if got := Classify(400, body); got != ErrContentBlocked {
+ 			t.Errorf("Classify(400, %q)=%v want ErrContentBlocked", body, got)
+ 		}
++	}
++}
++
++func TestStructuredUnapprovedChannelIsNotContentPolicy(test *testing.T) {
++	body := `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`
++	if Classify(400, body) != ErrAccountFault || !IsChannelCheck(body) {
++		test.Fatal("structured channel refusal must retain channel classification before account policy")
+ 	}
+ }
+ 
+--- a/internal/upstream/gzip_body_test.go
++++ b/internal/upstream/gzip_body_test.go
+@@ -117,9 +117,9 @@
+ 	}
+ }
+ 
+-// TestChannelCheckResendsOnceOnBothPaths 两条路径都被渠道校验拦时，原样重发一次
+-// （issue #296：上游报文自己写着「请求被拦截，请重新发送」），仍失败才返回错误。
+-func TestChannelCheckResendsOnceOnBothPaths(t *testing.T) {
++// TestChannelCheckStopsAfterBothPaths 两条路径都被渠道校验拦时直接返回错误。
++// 渠道校验是请求级拒绝；不应在旧 issue #296 的“重发一次”上继续放大请求。
++func TestChannelCheckStopsAfterBothPaths(t *testing.T) {
+ 	channel := `{"code":11128,"msg":"request illegal","displayTips":{"en":"This channel verification failed"}}`
+ 	var calls int
+ 	c := testClient(func(r *http.Request) (*http.Response, error) {
+@@ -129,11 +129,11 @@
+ 	a := &auth.Auth{AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999}
+ 	_, _, _, err := c.ChatStream(a, []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`), "", ChatMeta{})
+ 	if err == nil {
+-		t.Fatal("两条路径 + 重发都被拦时应返回错误")
++		t.Fatal("两条路径都被拦时应返回错误")
+ 	}
+-	// /v2 + /console + 重发 1 次 = 3 次
+-	if calls != 3 {
+-		t.Fatalf("calls=%d want 3（/v2、/console、重发一次）", calls)
++	// /v2 + /console = 2 次；不再对同一路径原样重发。
++	if calls != 2 {
++		t.Fatalf("calls=%d want 2（/v2、/console；不再重发）", calls)
+ 	}
+ }
+ 
+--- /dev/null
++++ b/internal/upstream/refresh_singleflight.go
+@@ -0,0 +1,96 @@
++package upstream
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"sync/atomic"
++	"time"
++
++	"workbuddy2api/internal/auth"
++)
++
++type refreshCall struct {
++	done chan struct{}
++	err  error
++}
++
++type refreshFailure struct {
++	cause   error
++	claimed atomic.Bool
++}
++
++func (failure *refreshFailure) Error() string { return failure.cause.Error() }
++func (failure *refreshFailure) Unwrap() error { return failure.cause }
++
++func ClaimRefreshPenalty(failure error) bool {
++	if failure == nil || errors.Is(failure, context.Canceled) || errors.Is(failure, context.DeadlineExceeded) {
++		return false
++	}
++	var local *os.PathError
++	if errors.As(failure, &local) {
++		return false
++	}
++	var provider *Error
++	if errors.As(failure, &provider) && (provider.Kind == ErrContentBlocked || provider.Kind == ErrBadParams || provider.Kind == ErrToolCallMismatch || provider.Kind == ErrImageInvalid) {
++		return false
++	}
++	var shared *refreshFailure
++	if errors.As(failure, &shared) {
++		return shared.claimed.CompareAndSwap(false, true)
++	}
++	return true
++}
++
++func (c *Client) RefreshToken(account *auth.Auth) error {
++	return c.RefreshTokenContext(context.Background(), account)
++}
++
++func (c *Client) RefreshTokenContext(ctx context.Context, account *auth.Auth) error {
++	if account == nil {
++		return fmt.Errorf("missing refresh account")
++	}
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	account.Lock()
++	accessBefore, refreshBefore := account.AccessToken, account.RefreshToken
++	account.Unlock()
++	c.refreshMu.Lock()
++	if c.refreshCalls == nil {
++		c.refreshCalls = make(map[*auth.Auth]*refreshCall)
++	}
++	call := c.refreshCalls[account]
++	if call == nil {
++		account.Lock()
++		changed := account.AccessToken != accessBefore || account.RefreshToken != refreshBefore
++		account.Unlock()
++		if changed {
++			c.refreshMu.Unlock()
++			return nil
++		}
++		call = &refreshCall{done: make(chan struct{})}
++		c.refreshCalls[account] = call
++		go func() {
++			refreshContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
++			defer cancel()
++			failure := account.RefreshSerialized(refreshContext, func() error { return c.refreshToken(account) })
++			if failure != nil {
++				failure = &refreshFailure{cause: failure}
++			}
++			c.refreshMu.Lock()
++			call.err = failure
++			delete(c.refreshCalls, account)
++			close(call.done)
++			c.refreshMu.Unlock()
++		}()
++	}
++	c.refreshMu.Unlock()
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	case <-call.done:
++		return call.err
++	}
++}
+--- a/internal/upstream/sanitize.go
++++ b/internal/upstream/sanitize.go
+@@ -13,13 +13,12 @@
+ // sanitizeFeatures 特征预检：任一命中才进入净化（strings.Contains 快速路径，
+ // 普通请求全不中 → 原样返回，零分配）。
+ var sanitizeFeatures = []string{
+-	"x-anthropic-billing-header", // header 键值段键名
+-	"cc_entrypoint=",             // 尾随裸键值（截断前缀即可命中）
+-	"You are Claude Code",        // 身份句（截断前缀即可命中）
+-	"Main branch (",              // 注入指令句（截断前缀即可命中）
++	"x-anthropic-billing-header",                      // header 键值段键名
++	"cc_entrypoint=",                                  // 尾随裸键值（截断前缀即可命中）
++	"You are Claude Code",                             // 身份句（截断前缀即可命中）
++	"Main branch (",                                   // 注入指令句（截断前缀即可命中）
+ 	"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
+ 	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
+-	"11128",                                           // 上游反探测：裸数字错误码
+ }
+ 
+ // sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
+@@ -65,16 +64,6 @@
+ 		// 实测需整句同时出现）。give→provide 一词之差即可绕过，语义不变。
+ 		"To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+ 		"To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+-	},
+-	{
+-		// 上游反探测：只要请求体里出现裸数字 11128 就整单拦截（与该数字的上下文无关——
+-		// "code=11128" / 裸 "11128" / "错误码 11128" / "Code=11128" 全部命中；
+-		// 相邻的 11148 / 11101 / 11115 / 99999 均放行）。11128 正是本类拦截自身的错误码，
+-		// 上游据此识别"在讨论/回显其内部错误码"的请求。
+-		// 代价：用户对话中任何 11128 都会被改写——但这串数字出现在请求里本身就是拦截条件，
+-		// 不改写必然失败。插入连字符保留可读性与指代（零宽空格无效，实测上游会归一化）。
+-		"11128",
+-		"11-128",
+ 	},
+ }
+ 
+--- a/internal/upstream/sanitize_test.go
++++ b/internal/upstream/sanitize_test.go
+@@ -65,16 +65,11 @@
+ 	}
+ }
+ 
+-// 上游反探测：请求体里出现裸数字 11128 即整单拦截（与上下文无关）。
+-// 回归用例：该串会被改写为 11-128 以打断精确匹配。
+-func TestUpstreamErrorCodeRewritten(t *testing.T) {
++func TestUpstreamErrorCodePreserved(t *testing.T) {
+ 	in := "upstream returned code=11128 for this request"
+ 	out := sanitizeText(in)
+-	if strings.Contains(out, "11128") {
+-		t.Errorf("error code not rewritten: %q", out)
+-	}
+-	if !strings.Contains(out, "11-128") {
+-		t.Errorf("error code not rewritten as expected: %q", out)
++	if out != in {
++		t.Errorf("numeric application data changed: %q", out)
+ 	}
+ }
+ 
+@@ -417,22 +412,14 @@
+ 	}
+ }
+ 
+-// TestSanitizeLiteralByteExact 逐字节快照护栏：把 sanitizeFeatures 7 项 +
+-// sanitizeRewrites 5 对 + 3 个正则的当前字节值硬编码断言。
+-// 这些字面量是实验逆向出的上游内容审核黑名单（无契约可引用），上游按逐字精确
+-// 匹配拦截，一字之差即漏拦（400 code=11128）或误伤。任何未来改动（含看似无害的
+-// 统一常量/抽配置）都会先红在本测试——必须走 analysis 报告 #6 的逐字节验证
+-// 步骤：grep 全部出现点（表/正则/测试断言四处同查）+ 真实账号上游实测 +
+-// TestSanitize 全族回归，方可同步更新本快照。
+ func TestSanitizeLiteralByteExact(t *testing.T) {
+ 	features := []string{
+-		"x-anthropic-billing-header", // header 键值段键名
+-		"cc_entrypoint=",             // 尾随裸键值（截断前缀即可命中）
+-		"You are Claude Code",        // 身份句（截断前缀即可命中）
+-		"Main branch (",              // 注入指令句（截断前缀即可命中）
++		"x-anthropic-billing-header",                      // header 键值段键名
++		"cc_entrypoint=",                                  // 尾随裸键值（截断前缀即可命中）
++		"You are Claude Code",                             // 身份句（截断前缀即可命中）
++		"Main branch (",                                   // 注入指令句（截断前缀即可命中）
+ 		"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
+-		"github.com/anthropics/",     // 反馈句里的 Anthropic 仓库链接
+-		"11128",                      // 上游反探测：裸数字错误码
++		"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
+ 	}
+ 	if len(sanitizeFeatures) != len(features) {
+ 		t.Fatalf("sanitizeFeatures 项数=%d want %d（快照与实现不同步，见测试头注释的验证步骤）", len(sanitizeFeatures), len(features))
+@@ -460,10 +447,6 @@
+ 			"To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+ 			"To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+ 		},
+-		{
+-			"11128",
+-			"11-128",
+-		},
+ 	}
+ 	if len(sanitizeRewrites) != len(rewrites) {
+ 		t.Fatalf("sanitizeRewrites 对数=%d want %d（快照与实现不同步，见测试头注释的验证步骤）", len(sanitizeRewrites), len(rewrites))
+--- a/internal/upstream/send_safety.go
++++ b/internal/upstream/send_safety.go
+@@ -4,6 +4,8 @@
+ 	"errors"
+ 	"net"
+ )
++
++var ErrProviderAttemptBudgetExhausted = errors.New("provider attempt budget exhausted")
+ 
+ func DefinitelyUnsent(failure error) bool {
+ 	var network *net.OpError
+--- /dev/null
++++ b/internal/upstream/sse_fuzz_test.go
+@@ -0,0 +1,65 @@
++package upstream
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"testing"
++)
++
++type fragmentReader struct {
++	data []byte
++	size int
++}
++
++func TestChannelCheckRequiresUnambiguousChannelLanguage(test *testing.T) {
++	for _, sample := range []struct {
++		body string
++		want bool
++	}{
++		{`{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`, true},
++		{`{"code":11128,"msg":"blocked by security policy"}`, false},
++		{`{"code":11128}`, false},
++		{`{"code":11102,"msg":"unapproved channel"}`, false},
++	} {
++		if IsChannelCheck(sample.body) != sample.want {
++			test.Fatalf("unexpected classification for synthetic fixture %s", sample.body)
++		}
++	}
++}
++
++func (reader *fragmentReader) Read(buffer []byte) (int, error) {
++	if len(reader.data) == 0 {
++		return 0, io.EOF
++	}
++	count := min(len(buffer), reader.size, len(reader.data))
++	copy(buffer, reader.data[:count])
++	reader.data = reader.data[count:]
++	return count, nil
++}
++
++func FuzzAggregateFragmentation(fuzzer *testing.F) {
++	fuzzer.Add([]byte("data: [DONE]\n\n"), uint8(1))
++	fuzzer.Add([]byte("data: {\"id\":\"fixture\",\"created\":1,\"choices\":[{\"delta\":{\"content\":\"中文🙂\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"), uint8(3))
++	fuzzer.Add([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"port\\\":11128}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"), uint8(7))
++	fuzzer.Fuzz(func(test *testing.T, data []byte, step uint8) {
++		if len(data) > 65536 {
++			test.Skip()
++		}
++		full, fullErr := Aggregate(bytes.NewReader(data))
++		parts, partsErr := Aggregate(&fragmentReader{data: data, size: int(step%31) + 1})
++		if fmt.Sprint(fullErr) != fmt.Sprint(partsErr) {
++			test.Fatalf("fragmentation changed terminal error: %v / %v", fullErr, partsErr)
++		}
++		delete(full, "created")
++		delete(parts, "created")
++		delete(full, "id")
++		delete(parts, "id")
++		before, _ := json.Marshal(full)
++		after, _ := json.Marshal(parts)
++		if !bytes.Equal(before, after) {
++			test.Fatal("fragmentation changed aggregate output")
++		}
++	})
++}
+--- a/internal/upstream/thinking.go
++++ b/internal/upstream/thinking.go
+@@ -158,6 +158,9 @@
+ 	if !isDeepSeekModel(model) {
+ 		return
+ 	}
++	if implicitSmallBudget(obj) {
++		return
++	}
+ 	th, ok := obj["thinking"].(map[string]any)
+ 	typ := ""
+ 	if ok {
+@@ -185,6 +188,30 @@
+ 	ensureDeepSeekEffort(obj, defaultEffort)
+ }
+ 
++func implicitSmallBudget(obj map[string]any) bool {
++	for _, name := range []string{"thinking", "reasoning_effort", "reasoningEffort", "reasoning_summary", "reasoning"} {
++		if _, present := obj[name]; present {
++			return false
++		}
++	}
++	limit, present := obj["max_tokens"]
++	if !present {
++		limit = obj["max_completion_tokens"]
++	}
++	var tokens float64
++	switch value := limit.(type) {
++	case float64:
++		tokens = value
++	case int:
++		tokens = float64(value)
++	case int64:
++		tokens = float64(value)
++	default:
++		return false
++	}
++	return tokens > 0 && tokens <= 1024 && tokens == float64(int64(tokens))
++}
++
+ // ensureDeepSeekEffort 缺 effort 档位时补默认档（snake 优先，camel 兜底）。
+ // 已有任一 effort → 不覆盖（显式档位不做任何改写，降级交给 normalizeReasoningEffort）。
+ // defaultEffort 空串 → 回退 defaultDeepSeekEffort（硬编码 "high"）。
+--- /dev/null
++++ b/internal/upstream/upgrade_contracts_test.go
+@@ -0,0 +1,152 @@
++package upstream
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"workbuddy2api/internal/auth"
++)
++
++func TestSmallBudgetDoesNotInjectImplicitThinking(t *testing.T) {
++	cases := []struct {
++		name string
++		body string
++		want string
++	}{
++		{"short", `{"model":"deepseek-v4.1-flash","max_tokens":64}`, ""},
++		{"boundary", `{"model":"deepseek-v4.1-flash","max_tokens":1024}`, ""},
++		{"completion-alias", `{"model":"deepseek-v4.1-flash","max_completion_tokens":256}`, ""},
++		{"large", `{"model":"deepseek-v4.1-flash","max_tokens":1025}`, "enabled"},
++		{"missing", `{"model":"deepseek-v4.1-flash"}`, "enabled"},
++		{"invalid-zero", `{"model":"deepseek-v4.1-flash","max_tokens":0}`, "enabled"},
++		{"invalid-fraction", `{"model":"deepseek-v4.1-flash","max_tokens":0.5}`, "enabled"},
++		{"explicit-high", `{"model":"deepseek-v4.1-flash","max_tokens":64,"reasoning_effort":"high"}`, "enabled"},
++		{"explicit-low", `{"model":"deepseek-v4.1-flash","max_tokens":64,"reasoningEffort":"low"}`, "enabled"},
++		{"explicit-enabled", `{"model":"deepseek-v4.1-flash","max_tokens":64,"thinking":{"type":"enabled"}}`, "enabled"},
++		{"explicit-disabled", `{"model":"deepseek-v4.1-flash","max_tokens":64,"thinking":{"type":"disabled"}}`, "disabled"},
++		{"other-model", `{"model":"claude-opus","max_tokens":64}`, ""},
++	}
++	for _, entry := range cases {
++		t.Run(entry.name, func(t *testing.T) {
++			var body map[string]any
++			if err := json.Unmarshal([]byte(entry.body), &body); err != nil {
++				t.Fatal(err)
++			}
++			injectThinking(body, "high")
++			thinking, _ := body["thinking"].(map[string]any)
++			actual, _ := thinking["type"].(string)
++			if actual != entry.want {
++				t.Fatalf("thinking=%q want=%q", actual, entry.want)
++			}
++			if entry.want == "disabled" || entry.want == "" {
++				if _, present := body["reasoning_effort"]; present {
++					t.Fatal("disabled thinking acquired implicit effort")
++				}
++			}
++		})
++	}
++}
++
++func TestRefreshSingleflightForSameAccount(t *testing.T) {
++	for _, fail := range []bool{false, true} {
++		t.Run(map[bool]string{false: "success", true: "shared-error"}[fail], func(t *testing.T) {
++			var calls atomic.Int32
++			entered := make(chan struct{}, 32)
++			release := make(chan struct{})
++			client := testClient(rtFunc(func(request *http.Request) (*http.Response, error) {
++				calls.Add(1)
++				entered <- struct{}{}
++				<-release
++				if fail {
++					return nil, errors.New("synthetic refresh failure")
++				}
++				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
++					`{"code":0,"data":{"accessToken":"synthetic-new-access","refreshToken":"synthetic-new-refresh","expiresIn":3600}}`)), Header: http.Header{}}, nil
++			}))
++			account := &auth.Auth{UID: "synthetic-account", AccessToken: "synthetic-old-access", RefreshToken: "synthetic-old-refresh"}
++			var waiters sync.WaitGroup
++			failures := make(chan error, 32)
++			start := make(chan struct{})
++			for index := 0; index < 32; index++ {
++				waiters.Add(1)
++				go func() {
++					defer waiters.Done()
++					<-start
++					failures <- client.RefreshToken(account)
++				}()
++			}
++			close(start)
++			<-entered
++			time.Sleep(100 * time.Millisecond)
++			close(release)
++			waiters.Wait()
++			close(failures)
++			if got := calls.Load(); got != 1 {
++				t.Fatalf("refresh sends=%d want=1", got)
++			}
++			penalties := 0
++			for failure := range failures {
++				if (failure != nil) != fail {
++					t.Fatalf("shared result=%v fail=%v", failure, fail)
++				}
++				if ClaimRefreshPenalty(failure) {
++					penalties++
++				}
++			}
++			if fail && penalties != 1 {
++				t.Fatalf("shared failure penalties=%d want=1", penalties)
++			}
++		})
++	}
++}
++
++func TestSmallBudgetUsesRealPayloadPipeline(t *testing.T) {
++	output := PrepareBodyOpt([]byte(`{"model":"deepseek-v4.1-flash","max_completion_tokens":64,"messages":[{"role":"user","content":"synthetic"}]}`), false)
++	var body map[string]any
++	if err := json.Unmarshal(output, &body); err != nil {
++		t.Fatal(err)
++	}
++	if body["max_tokens"] != float64(64) {
++		t.Fatal("token alias lost")
++	}
++	if _, exists := body["thinking"]; exists {
++		t.Fatal("short request acquired implicit thinking")
++	}
++	if _, exists := body["reasoning_effort"]; exists {
++		t.Fatal("short request acquired implicit high effort")
++	}
++}
++
++func TestRefreshCancelledWaiterDoesNotCancelLeader(t *testing.T) {
++	entered, release := make(chan struct{}), make(chan struct{})
++	client := testClient(rtFunc(func(request *http.Request) (*http.Response, error) {
++		close(entered)
++		<-release
++		if request.Context().Err() != nil {
++			t.Error("shared refresh cancelled with waiter")
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
++			`{"code":0,"data":{"accessToken":"synthetic-new","refreshToken":"synthetic-new","expiresIn":3600}}`)), Header: http.Header{}}, nil
++	}))
++	account := &auth.Auth{UID: "synthetic-account", AccessToken: "synthetic-old", RefreshToken: "synthetic-old"}
++	leader := make(chan error, 1)
++	go func() { leader <- client.RefreshToken(account) }()
++	<-entered
++	waitContext, cancel := context.WithCancel(context.Background())
++	cancel()
++	if err := client.RefreshTokenContext(waitContext, account); !errors.Is(err, context.Canceled) {
++		t.Fatalf("cancelled waiter=%v", err)
++	}
++	close(release)
++	if err := <-leader; err != nil {
++		t.Fatal(err)
++	}
++}

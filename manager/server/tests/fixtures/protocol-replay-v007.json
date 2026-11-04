@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "fixture_version": "0.0.7.1",
+  "origin": "owned synthetic protocol fixtures; no captured credentials, conversations or commands",
+  "client_versions": {"codex": null, "claude": null, "dsh": null},
+  "transport_fault_coverage": ["UTF-8 and SSE arbitrary byte fragmentation", "accepted disconnect without replay", "empty and truncated stream terminal classification", "client cancellation and transport close joining", "function argument JSON fidelity"],
+  "cases": [
+    {"id": "chat-basic", "path": "/v1/chat/completions", "status": 200, "body": {"messages": [{"role": "user", "content": "synthetic fixture"}], "max_tokens": 16}},
+    {"id": "responses-basic", "path": "/v1/responses", "status": 200, "body": {"input": "synthetic fixture", "max_output_tokens": 16}},
+    {"id": "messages-basic", "path": "/v1/messages", "status": 200, "body": {"messages": [{"role": "user", "content": "synthetic fixture"}], "max_tokens": 16}},
+    {"id": "responses-no-server-history", "path": "/v1/responses", "status": 400, "body": {"input": "synthetic fixture", "previous_response_id": "synthetic-previous"}},
+    {"id": "responses-no-background", "path": "/v1/responses", "status": 400, "body": {"input": "synthetic fixture", "background": true}},
+    {"id": "responses-no-fake-serial-tools", "path": "/v1/responses", "status": 400, "body": {"input": "synthetic fixture", "parallel_tool_calls": false}},
+    {"id": "responses-no-fake-strict-tool", "path": "/v1/responses", "status": 400, "body": {"input": "synthetic fixture", "tools": [{"type": "function", "name": "read", "parameters": {"type": "object"}, "strict": true}]}}
+  ]
+}

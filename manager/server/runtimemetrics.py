@@ -11,6 +11,35 @@ PROTOCOLS = frozenset(('openai', 'responses', 'anthropic', 'http'))
 TRAFFIC = frozenset(('inference', 'admin', 'probe', 'other'))
 
 
+def error_family(code, terminal, status):
+    value = str(code or '')[:128].lower()
+    if terminal == 'client_cancelled' or status == 499:
+        return 'client_cancelled'
+    if value in ('channel_check_rejected', 'upstream.channel_check_rejected'):
+        return 'channel_rejected'
+    if value == '11128':
+        return 'upstream_11128_unclassified'
+    if value == 'provider_attempt_budget_exhausted':
+        return 'attempt_budget'
+    if 'auth' in value or status in (401, 403):
+        return 'authentication'
+    if 'capacity' in value or 'no_healthy_account' in value:
+        return 'capacity'
+    if 'rate_limit' in value or status == 429:
+        return 'rate_limited'
+    if 'first_byte' in value:
+        return 'first_byte_timeout'
+    if 'idle_timeout' in value:
+        return 'stream_idle_timeout'
+    if 'timeout' in value:
+        return 'timeout'
+    if terminal == 'protocol_incomplete':
+        return 'protocol_incomplete'
+    if terminal == 'transport_error' or 'transport' in value:
+        return 'transport'
+    return 'other'
+
+
 def _escape(value):
     return str(value).replace('\\', '\\\\').replace('\n', '\\n').replace('"', '\\"')
 
@@ -22,6 +51,7 @@ class Metrics:
         self.lock = threading.Lock()
         self.counts = Counter()
         self.outcomes = Counter()
+        self.failures = Counter()
         self.rules = Counter()
         self.minutes = {}
         self.models = set()
@@ -43,7 +73,7 @@ class Metrics:
             item['buckets'][i] += int(seconds <= bound)
 
     def observe(self, *, protocol, traffic, http_status, terminal, latency_ms,
-                first_token_ms=None, model=None, rules=()):
+                first_token_ms=None, model=None, rules=(), error_code=None):
         protocol = protocol if protocol in PROTOCOLS else 'http'
         traffic = traffic if traffic in TRAFFIC else 'other'
         status = http_status if type(http_status) is int else 500
@@ -64,6 +94,8 @@ class Metrics:
                 target['503'] += int(status == 503)
                 target['5xx'] += int(500 <= status < 600)
             self.outcomes[protocol, traffic, group] += 1
+            if status >= 400:
+                self.failures[protocol, traffic, error_family(error_code, terminal, status)] += 1
             if model:
                 model = str(model)[:96]
                 if model not in self.models and len(self.models) >= 64:
@@ -93,6 +125,7 @@ class Metrics:
                 if at >= minute - 59:
                     hour.update(values)
             counts, outcomes, rules = self.counts.copy(), self.outcomes.copy(), self.rules.copy()
+            failures = self.failures.copy()
             histograms = {key: dict(value, buckets=list(value['buckets'])) for key, value in self.histograms.items()}
             latency = sorted(value for at, value in self.samples if at >= now - 3600)
         lines, defined = [], set()
@@ -117,6 +150,9 @@ class Metrics:
         for key, value in sorted(day.items()):
             if key.startswith('model:'):
                 emit('workbuddy_requests_24h_by_model', 'gauge', 'Observed model window count; at most 64 models plus other.', value, {'model': key[6:]})
+        for (protocol, traffic, family), value in sorted(failures.items()):
+            emit('zhihui_failure_families_total', 'counter', 'Logical failures by fixed error family; no request content or identities.', value,
+                 {'protocol': protocol, 'traffic': traffic, 'error_family': family})
         for rule, value in sorted(rules.items()):
             emit('workbuddy_compatibility_hits_total', 'counter', 'Requests matching a rule; no prompt content is recorded.', value, {'rule': rule})
         for (stem, protocol), item in sorted(histograms.items()):

@@ -370,6 +370,7 @@ def attempt_billing_report(request_id: str) -> dict:
     """
     from . import db, providerevents
     attempts = derive_attempt_billing(request_id)
+    provider = providerevents.report(request_id)
     recorded = {int(r['attempt']): r for r in db.query(
         'SELECT attempt,billing_fact,billing_source,evidence,ts '
         'FROM attempt_billing_facts WHERE request_id=?', (request_id,))}
@@ -388,7 +389,7 @@ def attempt_billing_report(request_id: str) -> dict:
         'attempt_count': len(attempts),
         'attempt_count_source': ('provider_attempt_events_v2' if any(item.get('provider_identity') for item in attempts)
                                  else 'pool_attempt_events' if attempts else 'absent'),
-        'provider_evidence': providerevents.report(request_id),
+        'provider_evidence': provider,
         'attempts': [{k: item[k] for k in
                       ('attempt', 'billing_fact', 'billing_source', 'evidence',
                        'reached_upstream')} for item in attempts],
@@ -477,10 +478,106 @@ def _request_outcome(request_id: str) -> dict:
     }
 
 
+def _provider_attempt_timeline(request_id: str, provider: dict, billing: dict,
+                               outcome: dict) -> dict:
+    """Build the same read-only timeline shape from v2 evidence.
+
+    v2 has no stream-terminal phase and no per-attempt price.  `sending` is
+    before the provider call, while `headers` proves that a response was
+    received.  We therefore leave `reached_upstream` NULL for a sending-only
+    attempt instead of turning it into either a success or a failure.
+    """
+    events = provider.get('events') or []
+    grouped: dict[tuple[str, int, int], list[dict]] = {}
+    for event in events:
+        key = (str(event['dispatch_id']), int(event['rotation']),
+               int(event['provider_attempt']))
+        grouped.setdefault(key, []).append(event)
+    ordered = sorted(
+        grouped.items(),
+        key=lambda item: (min(int(row['ts']) for row in item[1]), item[0]))
+    attempts = []
+    timeline = []
+    all_ts = [int(row['ts']) for row in events]
+    first_ts = min(all_ts, default=None)
+    for number, ((dispatch_id, rotation, provider_attempt), rows) in enumerate(
+            ordered, 1):
+        rows = sorted(rows, key=lambda row: (int(row['ts']), str(row['phase'])))
+        phases = [{
+            'phase': str(row['phase']),
+            'ts': int(row['ts']),
+            'status': int(row['status']) if row['status'] is not None else None,
+            'path': str(row.get('path') or '') or None,
+        } for row in rows]
+        gap_rows = [(phases[index + 1]['ts'] - phases[index]['ts']) * 1000
+                    for index in range(len(phases) - 1)]
+        names = [phase['phase'] for phase in phases]
+        attempts.append({
+            'attempt': number,
+            'account_uid': str(rows[0].get('account_uid') or '') or None,
+            'resolved_model': str(rows[0].get('model') or '') or None,
+            'realm': str(rows[0].get('realm') or '') or None,
+            'config_hash': None,
+            'phase_sequence': names,
+            'phases': phases,
+            'started_at': phases[0]['ts'],
+            'ended_at': phases[-1]['ts'],
+            'duration_ms': max(0, phases[-1]['ts'] - phases[0]['ts']) * 1000,
+            'phase_gaps_ms': gap_rows,
+            'reached_upstream': (True if 'headers' in names
+                                 else None if 'transport_unknown' in names
+                                 else False),
+            'terminal_phase': None,
+            'last_phase': names[-1] if names else None,
+            'billing': None,
+            'provider_identity': {
+                'dispatch_id': dispatch_id,
+                'rotation': rotation,
+                'provider_attempt': provider_attempt,
+            },
+        })
+        for phase in phases:
+            timeline.append({
+                'ts': phase['ts'], 'attempt': number, 'phase': phase['phase'],
+                'status': phase['status'],
+                'elapsed_ms': ((phase['ts'] - first_ts) * 1000
+                               if first_ts is not None else None),
+                'dispatch_id': dispatch_id, 'rotation': rotation,
+                'provider_attempt': provider_attempt, 'path': phase['path'],
+            })
+    timeline.sort(key=lambda item: (item['ts'], item['attempt'], item['phase']))
+    return {
+        'request_id': request_id,
+        'provider_evidence': provider,
+        'explainable': False,
+        'reason': EXPLAIN_REASON,
+        'boundary': {key: list(value) for key, value in EXPLAIN_BOUNDARY.items()},
+        'attempt_count': len(attempts) if events else None,
+        'attempt_count_source': 'provider_attempt_events_v2',
+        'attempts': attempts,
+        'timeline': timeline,
+        'request': outcome,
+        'evidence': {
+            'sources': ['provider_attempt_events_v2', 'request_outcomes',
+                        'attempt_billing_facts'],
+            'attempt_events': 0,
+            'provider_attempt_events_v2': len(events),
+            'dispatch_count': int(provider.get('dispatch_count') or 0),
+            'attempt_billing_facts': len(billing),
+            'request_outcomes': 1 if outcome['source'] == 'request_outcomes' else 0,
+            'first_event_ts': first_ts,
+            'note': ('v2 evidence has no stream-terminal or per-attempt price; '
+                     'missing fields are null, not zero'),
+        },
+    }
+
+
 def attempt_timeline(request_id: str) -> dict:
     """把一次请求的 attempt 轨迹拼成时间线（**只读**，数据不编造）。
 
-    数据**只**来自 `attempt_events` / `request_outcomes` / `attempt_billing_facts`：
+    数据**只**来自 `provider_attempt_events_v2`（有 v2 证据时）、
+    `attempt_events`（legacy fallback）/ `request_outcomes` /
+    `attempt_billing_facts`：
 
       · `attempts[]`：每个 attempt 的 phase 序列、起止、总耗时、相邻 phase 间隔、
         是否到达上游、记录到的终态 phase、以及已落库的计费事实（没有就是 null）；
@@ -494,10 +591,7 @@ def attempt_timeline(request_id: str) -> dict:
     事件，是否失败以 `request.terminal_state` 为准）；不补 0、不推算缺失的 attempt。
     """
     from . import db, providerevents
-    events = db.query(
-        'SELECT attempt,phase,ts,account_uid,resolved_model,realm,status,config_hash '
-        'FROM attempt_events WHERE request_id=? ORDER BY attempt,ts,phase',
-        (request_id,))
+    provider = providerevents.report(request_id)
     billing = {int(r['attempt']): {'billing_fact': r['billing_fact'],
                                    'billing_source': r['billing_source'],
                                    'evidence': r['evidence'],
@@ -506,7 +600,12 @@ def attempt_timeline(request_id: str) -> dict:
                    'SELECT attempt,billing_fact,billing_source,evidence,ts '
                    'FROM attempt_billing_facts WHERE request_id=?', (request_id,))}
     outcome = _request_outcome(request_id)
-
+    if provider.get('events') or int(provider.get('dispatch_count') or 0):
+        return _provider_attempt_timeline(request_id, provider, billing, outcome)
+    events = db.query(
+        'SELECT attempt,phase,ts,account_uid,resolved_model,realm,status,config_hash '
+        'FROM attempt_events WHERE request_id=? ORDER BY attempt,ts,phase',
+        (request_id,))
     by_attempt: dict[int, list] = {}
     for row in events:
         by_attempt.setdefault(int(row['attempt']), []).append(row)
@@ -553,7 +652,7 @@ def attempt_timeline(request_id: str) -> dict:
 
     return {
         'request_id': request_id,
-        'provider_evidence': providerevents.report(request_id),
+        'provider_evidence': provider,
         'explainable': False,
         'reason': EXPLAIN_REASON,
         'boundary': {key: list(value) for key, value in EXPLAIN_BOUNDARY.items()},

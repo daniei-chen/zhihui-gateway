@@ -316,9 +316,14 @@ def budget_unknown_alert(summary: dict) -> tuple[bool, str]:
     unknown 不再计入，因此不会让这条告警长期 firing；但它们仍在汇总里以
     `archived_pending` 明示，不是「消失」，仍可人工 resolve。
     """
+    buckets = summary.get('review_buckets') or {}
     detail = ('unknown budget needing human review (%d rows older than 1h, '
+              'new-1h %d, older-1h %d, older-7d %d, upstream-rejected %d, '
               'auto-reconcilable %d, archived-pending %d, token bound %d)'
-              % (summary.get('needs_human_old', 0), summary.get('auto_reconcilable', 0),
+              % (summary.get('needs_human_old', 0),
+                 buckets.get('new_1h', 0), buckets.get('older_1h', 0),
+                 buckets.get('older_7d', 0), buckets.get('upstream_rejected', 0),
+                 summary.get('auto_reconcilable', 0),
                  summary.get('archived_pending', 0), summary.get('token_lower_bound', 0)))
     return bool(summary.get('needs_human_old', 0)) > 0, detail
 
@@ -377,6 +382,12 @@ def replay_ledger_receipts(now: int) -> dict:
 
 def _monitor_tick(now, failures, next_reconcile, next_replay):
     """Keep disk/SQLite/replay/legacy notification I/O off the ASGI event loop."""
+    from . import archiveworker
+    archive = archiveworker.status()
+    archive_problem = archive['enabled'] and (not archive['worker_alive'] or (
+        archive['sampled'] and (not archive['ok'] or not archive['fresh'])))
+    transition('archive_retention', archive_problem,
+               'retention archive unavailable or stale; source rows retained; inference readiness unchanged')
     # U01：先消化回执再判就绪，避免「积压刚产生就报警」的抖动。
     if now >= next_replay:
         next_replay = now + _reconcile_env_int('WB_LEDGER_REPLAY_INTERVAL_SEC', 30)
@@ -430,6 +441,21 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
 
 
 _cached_readiness = None
+
+
+async def initialize_readiness():
+    global _cached_readiness
+    from .services.asyncwork import joined_thread
+    _cached_readiness = None
+    try:
+        status = await joined_thread(readiness)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception('startup readiness sample unavailable')
+        return False
+    _cached_readiness = {'at': time.monotonic(), 'ok': bool(status['ok'])}
+    return bool(status['ok'])
 
 
 def public_readiness(now=None):

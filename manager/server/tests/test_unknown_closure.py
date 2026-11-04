@@ -178,6 +178,22 @@ class UnknownClosureTest(unittest.TestCase):
         self.assertEqual(summary['needs_human_old'], 2)
         self.assertEqual(summary['auto_reconcilable'], 0)
 
+    def test_review_buckets_separate_new_and_historical_backlog(self) -> None:
+        self._reserve('fresh', age=60)
+        self._log('fresh')
+        self._reserve('old', age=7200)
+        self._log('old')
+        result = budget.unresolved_summary()
+        summary = result['summary']
+        buckets = summary['review_buckets']
+        self.assertEqual(buckets['new_1h'], 1)
+        self.assertEqual(buckets['older_1h'], 1)
+        self.assertEqual(buckets['older_7d'], 0)
+        self.assertEqual(buckets['upstream_rejected'], 2)
+        items = {item['request_id']: item for item in result['items']}
+        self.assertEqual(items['fresh']['review_state'], 'review_required')
+        self.assertTrue(items['fresh']['has_request_log'])
+
 
 if __name__ == '__main__':
     unittest.main()

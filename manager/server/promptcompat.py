@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,18 @@ BUILTINS = tuple((rule['id'], rule['match'], rule['replacement']) for rule in _b
 if (len(BUILTINS) > 64 or len({r[0] for r in BUILTINS}) != len(BUILTINS)
         or any(not 0 < len(pat) <= 4096 or len(rep) > 8192 for _, pat, rep in BUILTINS)):
     raise ValueError('invalid compatibility rules')
+
+_matchers = {}
+for _rule in _bundle['rules']:
+    _variants = _rule.get('variants', [])
+    if (not isinstance(_variants, list) or len(_variants) > 16
+            or any(not isinstance(value, str) or not 0 < len(value) <= 4096 for value in _variants)
+            or not isinstance(_rule.get('case_insensitive', False), bool)):
+        raise ValueError('invalid compatibility variants')
+    if _variants or _rule.get('case_insensitive'):
+        _literals = sorted(set([_rule['match'], *_variants]), key=len, reverse=True)
+        _matchers[_rule['id']] = re.compile('|'.join(re.escape(value) for value in _literals),
+                                           re.IGNORECASE if _rule.get('case_insensitive') else 0)
 
 
 @dataclass(frozen=True)
@@ -49,8 +62,10 @@ def apply(body, *, platform, get_setting):
     def fix(text):
         nonlocal changes
         for name, pat, rep in rules:
-            if pat in text and pat != rep:
-                text = text.replace(pat, rep)
+            matcher = _matchers.get(name)
+            updated = matcher.sub(lambda match: rep, text) if matcher else text.replace(pat, rep)
+            if updated != text:
+                text = updated
                 matched.add(name)
                 changes += 1
         return text

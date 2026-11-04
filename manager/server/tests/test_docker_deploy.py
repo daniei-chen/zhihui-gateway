@@ -237,11 +237,14 @@ class UpstreamUpdateGuardTest(unittest.TestCase):
             self.assertFalse(updater.read_status()['can_update_upstream'],
                              '宿主但没装 docker 时应不可用')
 
-    def test_frontend_uses_capability_flag(self) -> None:
+    def test_frontend_has_no_docker_update_action(self) -> None:
         src = (_ROOT / 'web' / 'components' / 'common' / 'settings'
                / 'UpdatePanel.tsx').read_text(encoding='utf-8')
-        self.assertIn('can_update_upstream', src,
-                      '更新面板没读能力标志 —— 用户会点到不支持的操作')
+        self.assertIn('trusted-release-policy', src)
+        self.assertNotIn('systemApi.startUpdate', src,
+                         '智汇发布中心不应依据 Docker 能力重新打开旧安装通道')
+        self.assertNotIn('update-target', src)
+        self.assertNotIn('docker compose', src)
 
 
 class ComposeCommandTest(unittest.TestCase):

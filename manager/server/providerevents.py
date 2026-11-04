@@ -36,6 +36,7 @@ CREATE TRIGGER IF NOT EXISTS provider_conflict_v2_no_delete BEFORE DELETE ON pro
 IDENTITY = re.compile(r'[A-Za-z0-9_.:-]{1,128}\Z')
 PHASES = ('sending', 'headers', 'transport_unknown')
 FILENAME = re.compile(r'[A-Za-z0-9_.:-]{1,128}-[0-9]{2}-[0-9]{2}-(?:sending|headers|transport_unknown)\.json\Z')
+COLLECTION_STALE_SECONDS = 90
 _last_collection = {'at': None, 'error': None}
 
 
@@ -162,19 +163,37 @@ def health():
                         break
         conflicts = db.query_one('SELECT COUNT(*) count FROM provider_evidence_conflicts_v2')['count']
         age = max(0, int(time.time() - oldest)) if oldest is not None else 0
-        return {'ok': not _last_collection['error'] and not conflicts and age < 90 and pending <= 1000,
+        sampled_at = _last_collection.get('at')
+        collection_age = (max(0, int(time.time() - sampled_at))
+                          if isinstance(sampled_at, int) else None)
+        fresh = (collection_age is not None
+                 and collection_age <= COLLECTION_STALE_SECONDS)
+        return {'ok': (fresh and not _last_collection['error']
+                       and not conflicts and age < 90 and pending <= 1000),
+                'fresh': fresh,
+                'collection_age_seconds': collection_age,
+                'stale_after_seconds': COLLECTION_STALE_SECONDS,
                 'pending': pending, 'pending_count_capped': pending > 1000, 'oldest_seconds': age,
                 'conflicts': conflicts, 'collection': dict(_last_collection)}
     except Exception:
-        return {'ok': False, 'pending': None, 'conflicts': None, 'collection': dict(_last_collection)}
+        return {'ok': False, 'fresh': False, 'pending': None, 'conflicts': None,
+                'collection_age_seconds': None,
+                'stale_after_seconds': COLLECTION_STALE_SECONDS,
+                'collection': dict(_last_collection)}
 
 
 def report(request_id):
     from . import db
-    rows = db.query('SELECT * FROM provider_attempt_events_v2 WHERE request_id=? ORDER BY ts,dispatch_id,rotation,provider_attempt,phase', (request_id,))
-    attempts = {(row['dispatch_id'], row['rotation'], row['provider_attempt']) for row in rows}
+    rows = db.query('SELECT * FROM provider_attempt_events_v2 WHERE request_id=? ORDER BY ts,dispatch_id,rotation,provider_attempt,phase LIMIT 501', (request_id,))
+    count = db.query_one('SELECT COUNT(*) count FROM (SELECT dispatch_id,rotation,provider_attempt FROM provider_attempt_events_v2 WHERE request_id=? GROUP BY dispatch_id,rotation,provider_attempt)', (request_id,))['count']
     dispatches = db.query_one('SELECT COUNT(*) count FROM provider_dispatches_v2 WHERE request_id=?', (request_id,))['count']
-    return {'request_id': request_id, 'attempt_count': len(attempts), 'events': [dict(row) for row in rows],
+    legacy = db.query_one('SELECT COUNT(*) count FROM attempt_events WHERE request_id=?', (request_id,))['count']
+    return {'request_id': request_id, 'attempt_count': None if dispatches and not count else int(count),
+            'events': [dict(row) for row in rows[:500]], 'events_truncated': len(rows) > 500,
             'dispatch_count': dispatches,
+            'attempt_source': 'provider_attempt_events_v2',
+            'legacy_attempt_events': int(legacy),
+            'legacy_source_note': ('attempt_events is read-only history after the v2 cutover; '
+                                   'do not add its count to v2 attempt_count'),
             'per_attempt_billing': 'not_derived', 'complete': False,
             'note': 'durable pre-send/headers evidence, not supplier billing or cancellation proof'}

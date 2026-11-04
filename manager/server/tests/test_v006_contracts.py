@@ -150,6 +150,15 @@ class ContextDeclarations(unittest.TestCase):
 
 
 class CompatibilityBundle(unittest.TestCase):
+    def test_release_bundle_contains_verified_dsh_rules(self):
+        self.assertEqual(promptcompat.VERSION, 'workbuddy-prompts-20261104.2')
+        ids = {rule[0] for rule in promptcompat.BUILTINS}
+        self.assertEqual(len(ids), 11)
+        self.assertTrue({
+            'dsh-harness-identity', 'dsh-model-identity',
+            'dsh-web-gui-location', 'dsh-web-gui-reference',
+        }.issubset(ids))
+
     def test_fresh_install_all_builtins_are_scoped_and_idempotent(self):
         for rule_id, pattern, replacement in promptcompat.BUILTINS:
             with self.subTest(rule=rule_id):
@@ -157,6 +166,9 @@ class CompatibilityBundle(unittest.TestCase):
                 messages[3]['tool_calls'] = [{'function': {'arguments': json.dumps({'port': 11128, 'text': pattern})}}]
                 messages[4]['content'] = [{'type': 'text', 'text': pattern}, {'type': 'image_url', 'image_url': {'url': pattern}}]
                 expected = copy.deepcopy(messages)
+                if rule_id == 'claude-cli-identity':
+                    replacement = next(rule[2] for rule in promptcompat.BUILTINS
+                                       if rule[0] == 'claude-cli-identity-variants')
                 expected[0]['content'] = expected[1]['content'] = replacement
                 body = {'messages': messages}
                 applied = promptcompat.apply(body, platform='workbuddy', get_setting=lambda _: None)

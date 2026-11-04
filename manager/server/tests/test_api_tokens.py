@@ -222,7 +222,8 @@ class ApiTokenTest(unittest.TestCase):
         """会话调高危接口不受影响（新约束不能误伤正常人）。"""
         with self._as_session() as c:
             r = c.post('/api/logs/clear')
-        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertIn('归档', r.json()['detail'])
 
     # ── 记账 ─────────────────────────────────────────────
     def test_last_used_is_throttled(self) -> None:

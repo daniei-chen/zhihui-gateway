@@ -2,14 +2,18 @@
 
 No local supplier price table exists. One user request holds the entire currently
 available wallet, across all keys. New approved requests cap user charges at this
-hold; supplier overruns are platform costs, never user debt or future grants. Unknown
-charges never age out. Separate SQLite databases do NOT form one transaction;
-committed main-ledger receipts are replayed idempotently into the wallet.
+hold; supplier overruns are platform costs, never user debt or future grants.
+Unknown supplier usage is never guessed to be zero. A request that has a durable
+end proof and a client-cancelled terminal state may be closed under the explicit
+client-cancel policy, with a zero user charge and the supplier cost unresolved.
+Separate SQLite databases do NOT form one transaction; committed main-ledger
+receipts are replayed idempotently into the wallet.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from . import budgetowner, db, observability, portalbilling, portalpolicy as policy, portalstore as store
@@ -17,6 +21,13 @@ from . import budgetowner, db, observability, portalbilling, portalpolicy as pol
 RECEIPTS = '''CREATE TABLE IF NOT EXISTS portal_spend_receipts(
  request_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, payload TEXT NOT NULL
 )'''
+
+AUTO_CLOSE_ACTOR = 'system:client-cancel-v1'
+AUTO_CLOSE_REASON = '客户端取消后自动释放冻结；供应商实际费用未知，平台承担差额'
+AUTO_CLOSE_EVIDENCE = (
+    '请求生命周期已结束，且客户端终止状态为 client_cancelled；'
+    '没有可用的完整上游用量回执；不把供应商费用伪记为 0，仅释放用户侧的未决冻结'
+)
 
 
 def reject(message, code='portal_wallet_unavailable'):
@@ -240,6 +251,61 @@ def recover():
         committed = db.query_one('SELECT 1 FROM portal_spend_receipts WHERE request_id=?', (row['request_id'],))
         if committed or budgetowner.alive(row['worker']) is False:
             apply(row['request_id'])
+    auto_close_client_cancelled()
+
+
+def _client_cancel_auto_close_enabled():
+    raw = os.environ.get('WB_PORTAL_AUTO_CLOSE_CLIENT_CANCEL', '1').strip().lower()
+    return raw not in ('0', 'false', 'off', 'no')
+
+
+def _client_cancel_auto_close_grace():
+    raw = os.environ.get('WB_PORTAL_CLIENT_CANCEL_GRACE_SEC', '60')
+    try:
+        return min(3600, max(0, int(raw)))
+    except (TypeError, ValueError):
+        return 60
+
+
+def auto_close_client_cancelled(limit=100):
+    """Close only proven client-cancelled unknowns, never guess supplier cost.
+
+    The source of truth for closure is a matching ``portal_request_ends`` row,
+    not an elapsed timeout. The final request log must also prove a client
+    cancellation. A pending ledger replay or disagreement with a committed
+    receipt defers the item to the existing manual reconciliation path.
+    """
+    if not _client_cancel_auto_close_enabled() or not (store.config.DATA_DIR / 'user-portal.sqlite3').exists():
+        return 0
+    cutoff = store.now() - _client_cancel_auto_close_grace()
+    with store.transaction() as conn:
+        quarantine = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
+        if quarantine and quarantine[0] == 'true':
+            return 0
+        rows = [dict(row) for row in conn.execute(
+            "SELECT s.request_id FROM portal_spends s "
+            "JOIN portal_request_ends e ON e.request_id=s.request_id "
+            "WHERE s.state='unknown' AND e.owner_id=s.owner_id "
+            "AND e.key_id=s.key_id AND e.worker=s.worker AND e.ended_at<=? "
+            "ORDER BY e.ended_at,s.created_at,s.request_id LIMIT ?",
+            (cutoff, max(0, int(limit))))]
+    if not rows or replay_problem():
+        return 0
+    closed = 0
+    logger = logging.getLogger(__name__)
+    for row in rows:
+        log = db.query_one(
+            'SELECT terminal_state,status FROM request_logs WHERE request_id=? ORDER BY ts DESC LIMIT 1',
+            (row['request_id'],))
+        if not log or (log['terminal_state'] != 'client_cancelled' and log['status'] != 499):
+            continue
+        try:
+            resolve_unknown(row['request_id'], 0, AUTO_CLOSE_ACTOR, AUTO_CLOSE_REASON, AUTO_CLOSE_EVIDENCE)
+            closed += 1
+        except Exception as exc:  # bounded per-row failure; recovery keeps running
+            logger.warning('client-cancel auto-close deferred request_id=%s error=%s',
+                           row['request_id'], type(exc).__name__)
+    return closed
 
 
 def resolve_unknown(request_id, amount, actor, reason, evidence):

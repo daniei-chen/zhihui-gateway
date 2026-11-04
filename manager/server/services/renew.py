@@ -158,15 +158,10 @@ async def refresh_all(force: bool = False, now: int | None = None) -> dict:
             _note_failure(label, '缺少 refreshToken，无法续期（需重新扫码或登录）')
             stats['failed'] += 1
             continue
-        ok, message, fields = await tencent.refresh_token(payload)
+        from . import credentialrefresh
+        ok, message, fields = await credentialrefresh.refresh(name, payload, base_dir)
         if not ok:
             _note_failure(label, message)
-            stats['failed'] += 1
-            continue
-        try:
-            tencent.update_auth_tokens(name, fields, base_dir)
-        except Exception as exc:  # noqa: BLE001
-            _note_failure(label, f'刷新成功但写入失败: {err_text(exc)}')
             stats['failed'] += 1
             continue
         stats['renewed'] += 1

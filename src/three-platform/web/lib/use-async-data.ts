@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {asyncFlags, depMode, splitSettled, type DepPrints, type FetchMode} from '@/lib/async-state';
+import {asyncFlags, depMode, shareJson, splitSettled, type DepPrints, type FetchMode} from '@/lib/async-state';
 
 /** 字段名 → 取数函数 */
 export type AsyncFetchers<T> = {[K in keyof T]: () => Promise<T[K]>};
@@ -109,7 +109,7 @@ export function useAsyncAll<T extends Record<string, unknown>>(
     const progressive = progressiveRef.current;
     const results = keys.map((key) => Promise.resolve().then(currentFetchers[key]).then(value => {
       if (mine === seq.current && progressive) {
-        setValues(previous => ({...previous, [key]: value}));
+        setValues(previous => shareJson(previous, {...previous, [key]: value}));
         setErrors(previous => {
           const next = {...previous};
           delete next[key];
@@ -129,7 +129,7 @@ export function useAsyncAll<T extends Record<string, unknown>>(
 
       const fresh = splitSettled(keys as string[], settled);
       if (!progressive) {
-        setValues(previous => (mode === 'initial' ? fresh.values : {...previous, ...fresh.values}) as Partial<T>);
+        setValues(previous => (mode === 'initial' ? fresh.values : shareJson(previous, {...previous, ...fresh.values})) as Partial<T>);
         setErrors(fresh.errors as Partial<Record<keyof T, unknown>>);
       }
       setPending(false);

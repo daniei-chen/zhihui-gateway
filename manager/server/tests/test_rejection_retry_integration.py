@@ -105,8 +105,8 @@ class RejectionRetryIntegrationTest(unittest.TestCase):
             status, body = script[index]
             if stream:
                 return httpx.Response(status, json=body,
-                                      headers={'content-type': 'text/event-stream'})
-            return httpx.Response(status, json=body)
+                                      headers={'content-type': 'text/event-stream', 'x-wb-provider-attempts': '1'})
+            return httpx.Response(status, json=body, headers={'x-wb-provider-attempts': '1'})
 
         with mock.patch.object(config, 'http_client',
                                lambda *a, **k: httpx.AsyncClient(

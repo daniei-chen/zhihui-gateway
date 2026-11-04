@@ -1126,12 +1126,35 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)', (dispatch_id, state.request_id, int(time.time())))
         headers['X-Manager-Dispatch-ID'] = dispatch_id
         headers['X-WB-Compatibility'] = 'manager-scoped-v1'
+        if (getattr(state, 'forced_platform', None) or 'workbuddy') == 'workbuddy':
+            state.provider_budget_enabled = True
+            headers['X-WB-Attempt-Budget'] = str(state.provider_attempts_remaining)
+            from .. import deadline as provider_deadline
+            total = provider_deadline.request_budgets(config.UPSTREAM_TIMEOUT).total_s
+            remaining = max(1, min(600000, int((total - (time.monotonic() - state.started)) * 1000)))
+            headers['X-WB-Remaining-Ms'] = str(remaining)
         if getattr(state,'config_hash',None):
             headers['X-WB-Config-Hash'] = state.config_hash
         if state.key_id is not None:
             namespace = f'key:{state.key_id}/upstream:{up.get("id") or 0}'
             headers['X-WB-Tenant'] = namespace
     return headers
+
+
+def _consume_attempt_budget(response) -> bool:
+    state = observability.current.get()
+    if state is None or not state.provider_budget_enabled:
+        return True
+    raw = (getattr(response, 'headers', {}) or {}).get('x-wb-provider-attempts', '')
+    if not isinstance(raw, str) or not raw.isascii() or not raw.isdigit() or len(raw) > 2:
+        state.provider_attempts_remaining = 0
+        return False
+    spent = int(raw)
+    if spent > state.provider_attempts_remaining:
+        state.provider_attempts_remaining = 0
+        return False
+    state.provider_attempts_remaining -= spent
+    return state.provider_attempts_remaining > 0
 
 
 def _upstream_hint(upstream: dict | None) -> str:
@@ -2225,8 +2248,9 @@ async def _chat(request: Request, upstream_path: str):
                     # 判据见 _is_not_processed_rejection()：这类响应没有生成、
                     # 没有 usage、没有计费，重放安全。
                     # 先按状态码短路：2xx 连 `.text` 都不碰（热路径）。
+                    budget_available = _consume_attempt_budget(resp)
                     rejection_limit = _rejection_retry_limit()
-                    if (attempt < rejection_limit
+                    if (budget_available and attempt < rejection_limit
                             and resp.status_code in _REJECTION_RETRY_CODES
                             and _is_not_processed_rejection(resp.status_code,
                                                             _response_text(resp))):
@@ -2306,12 +2330,13 @@ async def _chat(request: Request, upstream_path: str):
             req = client.build_request('POST', url, content=wire, headers=_upstream_headers(upstream))
             resp = await deadline_mod.await_headers(
                 client.send(req, stream=True), request_deadline)
+            budget_available = _consume_attempt_budget(resp)
             if resp.status_code < 400:
                 handed_off = True
                 break
             early = await deadline_mod.read_error_body(resp, request_deadline)
             text = early.decode('utf-8', 'replace')
-            if attempt < rejection_limit and _is_not_processed_rejection(resp.status_code, text):
+            if budget_available and attempt < rejection_limit and _is_not_processed_rejection(resp.status_code, text):
                 # Each attempt owns its client facade; transport pooling is shared.
                 await _close_pending_response(resp, client, budgets)
                 resp = None

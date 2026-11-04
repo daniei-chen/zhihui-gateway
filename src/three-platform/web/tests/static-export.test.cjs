@@ -5,6 +5,12 @@ const path = require('node:path');
 const os = require('node:os');
 const {normalizeStaticExport} = require('../scripts/normalize-static-export.cjs');
 
+test('inference logs do not offer a bulk clear that bypasses archive verification', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../app/(main)/logs/page.tsx'), 'utf8');
+  assert.doesNotMatch(source, /logApi\.clear\(/);
+  assert.match(source, /logs\.retentionNotice/);
+});
+
 test('Windows RSC segment normalization preserves bytes and is idempotent', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zhihui-rsc-test-'));
   const nested = path.join(root, 'settings/system/__next.!KG1haW4p/settings/system');

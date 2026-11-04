@@ -603,6 +603,13 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
     items = []
     by_class = {name: 0 for name in UNKNOWN_CLASSES}
     by_state = {state: 0 for state in ('reserved', 'forwarded', 'unknown')}
+    review_buckets = {
+        'new_1h': 0,
+        'older_1h': 0,
+        'older_7d': 0,
+        'archived_pending': 0,
+        'upstream_rejected': 0,
+    }
     total = unknown_total = needs_human = needs_human_old = auto_reconcilable = 0
     archived_pending = archived_pending_tokens = token_lower_bound = 0
     for row, log in _unresolved_with_logs(key_id):
@@ -610,10 +617,24 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         by_class[cls] = by_class.get(cls, 0) + 1
         total += 1
         by_state[row['state']] += 1
+        age_seconds = max(0, now - int(row.get('created_at') or now))
         archived = bool(row['state'] == 'unknown' and cls in EVIDENCELESS_CLASSES
                         and _is_archived(row))
         if len(items) < 1000:
-            items.append({**row, 'class': cls, 'archived': archived})
+            items.append({
+                **row,
+                'class': cls,
+                'archived': archived,
+                'age_seconds': age_seconds,
+                'review_state': ('archived_pending' if archived else
+                                 'review_required' if row['state'] == 'unknown' else
+                                 'in_flight'),
+                'has_request_log': log is not None,
+                'has_provider_usage': bool(log is not None and (
+                    (log['usage_source'] or '') == 'upstream'
+                    or log['credit'] is not None
+                    or (log['usage_event_count'] or 0) > 0)),
+            })
         if row['state'] != 'unknown':
             continue
         unknown_total += 1
@@ -625,9 +646,18 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         if archived:
             archived_pending += 1
             archived_pending_tokens += reserved
+            review_buckets['archived_pending'] += 1
         elif not confirmed_zero:
             needs_human += 1
-            needs_human_old += int(int(row.get('created_at') or now) < now - stale_after)
+            if age_seconds <= stale_after:
+                review_buckets['new_1h'] += 1
+            else:
+                review_buckets['older_1h'] += 1
+            if age_seconds >= 7 * 86400:
+                review_buckets['older_7d'] += 1
+            if cls == 'upstream_rejected':
+                review_buckets['upstream_rejected'] += 1
+            needs_human_old += int(age_seconds > stale_after)
     return {
         'items': items,
         'items_truncated': total > len(items),
@@ -642,6 +672,7 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
             'needs_human_old': needs_human_old,
             'archived_pending': archived_pending,
             'archived_pending_tokens': archived_pending_tokens,
+            'review_buckets': review_buckets,
             'review_deadline_days': days,
             'token_lower_bound': token_lower_bound,
             'credit_lower_bound': 0.0,

@@ -1309,7 +1309,13 @@ def cached_group_credits(upstream_id: int | None = Query(None),
     now = int(time.time())
     for account in accounts:
         uid = str(account.get('uid') or '')
-        hit = creditsvc.cached_credits(uid)
+        try:
+            raw = wb2api.read_account_file(account['file'], base_dir)
+            freshness, hit = creditsvc.background_state(_auth_dict(raw))
+            if freshness != 'fresh':
+                hit = None
+        except (OSError, ValueError, KeyError, TypeError):
+            hit = None
         if hit is not None:
             ok, value, message, expiries = hit
             if not ok:
@@ -1332,6 +1338,7 @@ async def refresh_all_credits(
     force: bool = True,
     upstream_id: int | None = Query(None),
     user: dict = Depends(security.current_user),
+    stale_only: bool = False,
 ) -> dict:
     """并发查询所有账号的积分，返回 {uid: credits} 与每条是否来自缓存。
 
@@ -1354,6 +1361,8 @@ async def refresh_all_credits(
     """
     if force and str(user.get('role') or '') != 'admin':
         raise HTTPException(status_code=403, detail='刷新积分需要管理员权限')
+    if stale_only and force:
+        raise HTTPException(status_code=400, detail='按需后台刷新不能强制绕过缓存')
 
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
@@ -1364,6 +1373,7 @@ async def refresh_all_credits(
     # 是同一个池，它排在队尾。限流后批量任务最多占 CREDITS_CONCURRENCY 个连接，
     # 而交互操作（测活/单号刷新）另走独立车道，谁也不会把谁饿死。
     sem = asyncio.Semaphore(config.CREDITS_CONCURRENCY)
+    automatic_remaining = [64]
 
     async def one(
         acc: dict,
@@ -1372,11 +1382,19 @@ async def refresh_all_credits(
             raw = wb2api.read_account_file(acc['file'], base_dir)
         except Exception as exc:  # noqa: BLE001
             return acc['uid'], None, f'读取失败: {exc}', False, None, []
+        auth = _auth_dict(raw)
+        if stale_only:
+            state, hit = creditsvc.background_state(auth)
+            if state == 'fresh':
+                return acc['uid'], hit[1], hit[2], True, creditsvc.cache_age(str(acc['uid'])), hit[3]
+            if state == 'backoff' or automatic_remaining[0] <= 0:
+                return acc['uid'], None, '后台刷新已退避或达到批次上限；保留上次快照，可手动刷新', False, None, []
+            automatic_remaining[0] -= 1
         # 信号量包住**整次取数**而不是只包网络那一段：缓存命中时它几乎瞬时，
         # 冷启动时这才是真正要限流的窗口。
         async with sem:
             ok, value, message, cached, age, expiries = await creditsvc.get_credits(
-                _auth_dict(raw), force=force, nickname=str(acc.get('nickname') or ''),
+                auth, force=force, nickname=str(acc.get('nickname') or ''),
             )
         return acc['uid'], value if ok else None, message, cached, age, expiries
 
@@ -1943,7 +1961,8 @@ async def _refresh_one_token(filename: str, base_dir: Path) -> dict:
         return {'ok': False, 'message': '该账号没有 refreshToken —— 只能重新扫码或登录',
                 'nickname': nickname, 'uid': uid, 'expires_at': None}
 
-    ok, message, fields = await tencent.refresh_token({
+    from ..services import credentialrefresh
+    ok, message, fields = await credentialrefresh.refresh(filename, {
         'access_token': auth.get('accessToken', ''),
         'refresh_token': auth.get('refreshToken', ''),
         'uid': uid,
@@ -1954,19 +1973,11 @@ async def _refresh_one_token(filename: str, base_dir: Path) -> dict:
         # v1.0.78 起：刷新要带上该账号的线路（proxy），否则走默认出口，
         # 与账号绑定的线路不一致可能被风控当成异常来源。
         'proxy': str(raw.get('proxy') or ''),
-    })
+    }, base_dir)
     if not ok:
         return {'ok': False, 'message': message, 'nickname': nickname,
                 'uid': uid, 'expires_at': None}
 
-    try:
-        tencent.update_auth_tokens(filename, fields, base_dir)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        # 刷新成功但写不进去：如实说清。**不能报成功**——用户以为续期了，
-        # 而磁盘上还是旧 token，重启后又变回过期状态，比直接失败更难查。
-        return {'ok': False,
-                'message': f'{message}，但写入账号文件失败：{exc}（有效期未保存）',
-                'nickname': nickname, 'uid': uid, 'expires_at': None}
     return {'ok': True, 'message': message, 'nickname': nickname,
             'uid': uid, 'expires_at': fields.get('expires_at')}
 

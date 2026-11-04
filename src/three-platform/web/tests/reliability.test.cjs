@@ -25,6 +25,7 @@ function hookHarness() {
       return [slots[index].value, next => { slots[index].value = typeof next === 'function' ? next(slots[index].value) : next; }];
     },
     useRef(initial) { const index = cursor++; slots[index] ??= {current: initial}; return slots[index]; },
+    useId() { const index = cursor++; slots[index] ??= {value: `test-id-${index}`}; return slots[index].value; },
     useCallback(callback, deps) {
       const index = cursor++;
       if (!same(slots[index]?.deps, deps)) slots[index] = {value: callback, deps};
@@ -63,6 +64,154 @@ function load(relative, mocks) {
   vm.runInNewContext(code, context, {filename: relative});
   return compiled.exports;
 }
+
+function reviewPanelFixture() {
+  const harness = hookHarness();
+  let admin = true;
+  const reads = [], archives = [], evidence = [];
+  const jsx = (type, props) => ({type, props});
+  const {BudgetReviewPanel} = load('components/common/settings/BudgetReviewPanel.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': {RefreshCw: 'icon'}, '@/components/ui/button': {Button: 'button'},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: admin})},
+    '@/lib/i18n/provider': {useI18n: () => ({t: key => key, locale: 'en'})},
+    '@/lib/api': {errText: () => 'synthetic unavailable'},
+    '@/lib/operational-api': {operationalApi: {
+      budgetReview(bucket, cursor, signal) { const entry = {...deferred(), bucket, cursor, signal}; reads.push(entry); return entry.promise; },
+      retention(signal) { const entry = {...deferred(), signal}; archives.push(entry); return entry.promise; },
+      budgetEvidence(requestId, signal) { const entry = {...deferred(), requestId, signal}; evidence.push(entry); return entry.promise; },
+    }}, globals: {AbortController},
+  });
+  return {harness, reads, archives, evidence, setAdmin: value => {admin = value;}, render: () => harness.render(BudgetReviewPanel)};
+}
+
+function reviewNodes(tree) {
+  if (Array.isArray(tree)) return tree.flatMap(reviewNodes);
+  if (!tree || typeof tree !== 'object') return [];
+  return [tree, ...reviewNodes(tree.props?.children)];
+}
+
+function reviewPage(requestId) {
+  return {items: [{request_id: requestId, key_id: 1, created_at: 1000, class: 'unexplained'}], next_cursor: null};
+}
+
+function releasePanelFixture() {
+  const harness = hookHarness();
+  const versions = deferred(), status = deferred(), check = deferred();
+  const calls = [];
+  const jsx = (type, props) => ({type, props});
+  const {UpdatePanel} = load('components/common/settings/UpdatePanel.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': new Proxy({}, {get: (_target, key) => key}),
+    '@/lib/api': {errText: String, systemApi: {
+      versions() {calls.push('versions'); return versions.promise;},
+      updateStatus() {calls.push('status'); return status.promise;},
+      checkUpdate() {calls.push('check'); return check.promise;},
+    }},
+    '@/lib/product': {PRODUCT_NAME: '智汇网关', PRODUCT_REPOSITORY: 'synthetic/zhihui', PRODUCT_REPOSITORY_URL: 'https://github.com/synthetic/zhihui'},
+    '@/lib/toast': {notify: {}}, '@/lib/format': {fmtDateTime: String},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: false})},
+    '@/components/ui/button': {Button: 'button'}, '@/components/ui/badge': {Badge: 'span'},
+    '@/components/ui/input': {Input: 'input'}, '@/components/ui/label': {Label: 'label'},
+    '@/components/common/layout/ConfirmDialog': {ConfirmDialog: 'confirm'},
+    '@/components/common/states/LoadError': {LoadError: 'load-error'},
+    '@/lib/i18n/provider': {useT: () => key => key},
+    globals: {window: {setInterval() {throw new Error('release center must not poll');}}},
+  });
+  return {harness, versions, status, check, calls, render: () => harness.render(UpdatePanel)};
+}
+
+test('release center local metadata is not held behind a slow GitHub check and does not poll', async () => {
+  const fixture = releasePanelFixture();
+  fixture.render(); fixture.harness.effects();
+  const product = {repository: 'synthetic/zhihui', version: '0.0.7'};
+  fixture.versions.resolve({product}); fixture.status.resolve({product, record_state: 'absent'});
+  await flush();
+  const text = JSON.stringify(fixture.render());
+  assert.match(text, /0\.0\.7/);
+  assert.match(text, /releaseCenter\.checking/);
+  assert.deepEqual(fixture.calls, ['versions', 'status', 'check']);
+  fixture.harness.unmount();
+  fixture.check.resolve({manager: {repo: 'synthetic/zhihui', has_update: true, latest: 'v99.0.0'}});
+  await flush();
+  assert.doesNotMatch(JSON.stringify(fixture.render()), /v99\.0\.0/);
+});
+
+test('release center preserves independent good metadata but reports incomplete loads', async () => {
+  const fixture = releasePanelFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.versions.reject(new Error('synthetic unavailable'));
+  fixture.status.resolve({product: {repository: 'synthetic/zhihui', version: '0.0.7'}, record_state: 'absent'});
+  fixture.check.resolve({manager: {repo: 'foreign/project', has_update: true, latest: 'v1.0.79'}});
+  await flush();
+  const text = JSON.stringify(fixture.render());
+  assert.match(text, /0\.0\.7/);
+  assert.match(text, /releaseCenter\.loadFailed/);
+  assert.match(text, /releaseCenter\.checkUnknown/);
+  assert.doesNotMatch(text, /v1\.0\.79/);
+  fixture.harness.unmount();
+});
+
+test('release checks never turn stale/error metadata into up-to-date or pending assets into an installer', async () => {
+  for (const manager of [{repo: 'synthetic/zhihui', has_update: false, stale: true, error: 'synthetic 403'},
+    {repo: 'synthetic/zhihui', has_update: true, latest: 'v0.0.8', assets_ready: false}]) {
+    const fixture = releasePanelFixture();
+    fixture.render(); fixture.harness.effects();
+    const product = {repository: 'synthetic/zhihui', version: '0.0.7'};
+    fixture.versions.resolve({product}); fixture.status.resolve({product, record_state: 'absent'});
+    fixture.check.resolve({manager}); await flush();
+    const tree = fixture.render();
+    const text = JSON.stringify(tree);
+    assert.doesNotMatch(text, /releaseCenter\.noNewRelease/);
+    assert.match(text, manager.error ? /releaseCenter\.checkUnknown/ : /releaseCenter\.assetsPending/);
+    assert.equal(reviewNodes(tree).some(node => node.props?.['data-slot'] === 'update-target'), false);
+    fixture.harness.unmount();
+  }
+});
+
+test('budget review rejects late reads after filter change and never reads for non-admins', async () => {
+  const fixture = reviewPanelFixture();
+  fixture.setAdmin(false);
+  assert.equal(fixture.render(), null);
+  fixture.harness.effects();
+  assert.equal(fixture.reads.length, 0);
+  fixture.setAdmin(true);
+  let tree = fixture.render(); fixture.harness.effects();
+  const select = reviewNodes(tree).find(node => node.type === 'select');
+  select.props.onChange({target: {value: 'older_7d'}});
+  fixture.render(); fixture.harness.effects();
+  assert.equal(fixture.reads[0].signal.aborted, true);
+  fixture.reads[0].resolve(reviewPage('synthetic-old'));
+  fixture.archives[0].resolve({enabled: true, sampled: true, ok: true, fresh: true});
+  fixture.reads[1].resolve(reviewPage('synthetic-new'));
+  fixture.archives[1].resolve({enabled: true, sampled: true, ok: true, fresh: true});
+  await flush();
+  tree = fixture.render();
+  assert.ok(JSON.stringify(tree).includes('synthetic-new'));
+  assert.ok(!JSON.stringify(tree).includes('synthetic-old'));
+  fixture.setAdmin(false); assert.equal(fixture.render(), null); fixture.harness.effects();
+  assert.equal(fixture.reads[1].signal.aborted, true);
+  fixture.harness.unmount();
+});
+
+test('budget review preserves independent successful page and clears evidence on authorization denial', async () => {
+  const fixture = reviewPanelFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.reads[0].resolve(reviewPage('synthetic-private'));
+  fixture.archives[0].reject(new Error('synthetic archive unavailable'));
+  await flush();
+  let tree = fixture.render();
+  assert.ok(JSON.stringify(tree).includes('synthetic-private'));
+  assert.ok(JSON.stringify(tree).includes('budgetReview.archiveUnknown'));
+  const button = reviewNodes(tree).find(node => node.type === 'button' && node.props.children === 'budgetReview.view');
+  button.props.onClick();
+  fixture.evidence[0].reject({response: {status: 403}});
+  await flush();
+  tree = fixture.render();
+  assert.ok(!JSON.stringify(tree).includes('synthetic-private'));
+  assert.ok(JSON.stringify(tree).includes('synthetic unavailable'));
+  fixture.harness.unmount();
+});
 
 test('usage cache rates preserve missing data, true zero and provider denominator', () => {
   const {formatCacheHitRate} = load('lib/usage-metrics.ts', {});

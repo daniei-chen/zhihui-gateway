@@ -37,16 +37,21 @@ _WORKFLOW = _ROOT / '.github' / 'workflows' / 'release.yml'
 _DOCS = _ROOT / 'docs'
 
 
-def _linked_docs(text: str) -> set[str]:
+def _linked_docs(text: str, parent: Path = Path('.')) -> set[str]:
     """正文里指向 docs/ 下文件的链接（含同目录内的相对写法）。"""
     out: set[str] = set()
     for target in re.findall(r'\]\(([^)]+)\)', text):
         target = target.split('#')[0].strip()
         if target.startswith('docs/'):
-            out.add(Path(target).name)
-        elif re.fullmatch(r'[^/\\]+\.md', target):
-            out.add(target)
-    return {name for name in out if (_DOCS / name).is_file()}
+            relative = Path(target[len('docs/'):])
+        elif target.endswith('.md') and not re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', target):
+            relative = parent / target
+        else:
+            continue
+        path = (_DOCS / relative).resolve()
+        if path.is_relative_to(_DOCS.resolve()) and path.is_file():
+            out.add(path.relative_to(_DOCS.resolve()).as_posix())
+    return out
 
 
 def _closure() -> set[str]:
@@ -61,7 +66,7 @@ def _closure() -> set[str]:
         if name in seen:
             continue
         seen.add(name)
-        for linked in _linked_docs((_DOCS / name).read_text(encoding='utf-8')):
+        for linked in _linked_docs((_DOCS / name).read_text(encoding='utf-8'), Path(name).parent):
             if linked not in seen:
                 frontier.add(linked)
     return seen
@@ -87,6 +92,12 @@ class DocsPackagingTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.whitelist = _whitelist()
         cls.closure = _closure()
+
+    def test_nested_release_notes_and_relative_links_are_not_dropped(self):
+        self.assertIn('releases/v0.0.7.md', self.closure)
+        self.assertIn('V007-OPERATIONS.md', _linked_docs(
+            '[operations](../V007-OPERATIONS.md)', Path('releases')))
+        self.assertEqual(_linked_docs('[outside](../../README.md)', Path('releases')), set())
 
     def test_parsing_is_not_vacuous(self) -> None:
         """解析要真的抓到东西：抓不到就全是「空集等于空集」的假绿。"""

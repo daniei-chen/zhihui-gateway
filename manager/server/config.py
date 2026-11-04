@@ -184,6 +184,9 @@ ENABLE_DOCS = _env('WB_ENABLE_DOCS', '0') == '1'
 # WB_BACKGROUND_JOBS=0 启动——只对外服务请求，不运行签到/任务/巡检等
 # 调度器与日志采集器，避免过渡窗口内双实例重复执行后台动作。
 BACKGROUND_JOBS = _env_bool('WB_BACKGROUND_JOBS', True)
+ARCHIVE_ENABLED = _env_bool('WB_ARCHIVE_ENABLED', True)
+ARCHIVE_INTERVAL_SEC = max(60, min(86400, _env_int('WB_ARCHIVE_INTERVAL_SEC', 300)))
+ARCHIVE_BATCH_ROWS = max(1, min(1000, _env_int('WB_ARCHIVE_BATCH_ROWS', 200)))
 # 入站访问日志（安全页的「IP 访问日志」）是否记录**放行**的请求。
 #
 # 默认关闭：那张表的用途是安全审计（谁在扫我、谁被挡了），记全量会把信号淹没。

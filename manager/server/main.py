@@ -15,7 +15,7 @@ import asyncio
 import threading
 import time
 
-from . import config, db, drain, redpacket, security
+from . import archiveworker, config, db, drain, redpacket, security
 from .iputil import client_ip
 from .stdio_utf8 import force_utf8_stdio
 from .routers import (
@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI):
         # 请求日志的「账号」回填（issue #69）：账号是上游选的、不在响应里回传，
         # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
         accountlog.start_collector()
+        archiveworker.start()
         # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
         # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
         pgsync.start_scheduler()
@@ -196,6 +197,7 @@ async def lifespan(app: FastAPI):
             logger.error('steward startup failed; status is unavailable, gateway remains serving')
         if config.BACKGROUND_JOBS:
             portal_checkins = asyncio.create_task(portalservice.automatic_loop())
+        await operational.initialize_readiness()
         yield
     finally:
         if portal_checkins is not None:
@@ -248,6 +250,7 @@ async def lifespan(app: FastAPI):
         cooling.stop_scheduler()
         dailyplan.stop_scheduler()
         accountlog.stop_collector()
+        await asyncio.to_thread(archiveworker.stop)
         pgsync.stop_scheduler()
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。

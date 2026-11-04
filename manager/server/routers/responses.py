@@ -155,7 +155,8 @@ class _ToolBridge:
                 continue
             if not name:
                 continue
-            if _tool_inner(tool).get('strict') is True:
+            strict = _tool_inner(tool).get('strict')
+            if strict is not None and strict is not False:
                 raise StructuredOutputError('该上游未提供严格工具参数保证，不能接受 strict=true', 'unsupported_strict_tools')
             identity = path + (name,)
             if identity in self._seen:

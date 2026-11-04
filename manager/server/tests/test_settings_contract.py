@@ -199,6 +199,7 @@ MATRIX = (
     ('GET', '/api/system/drain', 'panel_reader', 'ok', None),
     ('POST', '/api/system/drain', 'session_admin', 'skip', None),
     ('GET', '/api/system/update-status', 'current_user', 'ok', None),
+    ('GET', '/api/system/protocol-contracts', 'current_user', 'ok', None),
     ('POST', '/api/system/update', 'session_admin', 'skip', None),
     ('GET', '/api/system/update-package', 'current_user', 'ok', None),
     ('POST', '/api/system/update-package', 'session_admin', 'skip', None),

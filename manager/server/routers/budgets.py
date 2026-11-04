@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from .. import budget, security
+from .. import budgetreview
 
 router=APIRouter(prefix='/api/budgets',tags=['budgets'])
 
@@ -11,6 +12,25 @@ class Resolution(BaseModel):
     reason: str = Field(min_length=1,max_length=500)
     evidence: str = Field(min_length=8,max_length=500)
 
+
+@router.get('/review')
+def review(limit: int = 25, bucket: str = 'all', cursor: str | None = None,
+           user=Depends(security.require_admin)):
+    try:
+        return budgetreview.page(limit=limit, bucket=bucket, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from None
+
+
+@router.get('/review/evidence')
+def review_evidence(request_id: str, user=Depends(security.require_admin)):
+    try:
+        return budgetreview.evidence(request_id)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(404, detail=str(exc)) from None
+
 @router.get('/unresolved')
 def unresolved(user=Depends(security.require_panel_reader)):
     """未结算预留 + unknown 分类汇总（U02）。
@@ -19,6 +39,7 @@ def unresolved(user=Depends(security.require_panel_reader)):
       · by_class          六类互斥分类的计数
       · auto_reconcilable 完整上游回执与不可变用量事件均确认零用量的条数
       · needs_human       其余待核对请求，包括只有拒绝错误、没有完整用量证据的请求
+      · review_buckets   按新增/历史、7 天以上、明确拒绝拆分的人工队列
       · token_lower_bound 预留估算之和（**不是**实际用量）
       · credit_lower_bound 恒为 0 —— 本地没有定价表，不编造金额
     """

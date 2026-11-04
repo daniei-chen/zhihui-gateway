@@ -258,14 +258,25 @@ function FullAccountsPage() {
       try {
         // force=false：60 秒内重复打开页面直接命中服务端缓存，
         // 不再每次都全量请求腾讯；命中时界面会明确标注「缓存」
-        const r = await accountApi.refreshCredits(false, groupId);
+        try {
+          const snapshot = await accountApi.cachedCredits(groupId);
+          if (!alive) return;
+          setLiveCredits(Object.fromEntries(Object.entries(snapshot.credits).filter(([uid, value]) =>
+            typeof value === 'number' && snapshot.meta[uid]?.source === 'cache')) as Record<string, number>);
+          setCreditsMeta(snapshot.meta ?? {});
+        } catch {
+          if (!alive) return;
+        }
+        const r = await accountApi.refreshCredits(false, groupId, true);
         if (!alive) return;
-        setLiveCredits(
-          Object.fromEntries(
+        setLiveCredits(previous => ({...previous, ...Object.fromEntries(
             Object.entries(r.credits).filter(([, v]) => typeof v === 'number') as [string, number][],
-          ),
-        );
-        setCreditsMeta(r.meta ?? {});
+          )}));
+        setCreditsMeta(previous => Object.fromEntries(Object.entries(r.meta ?? {}).map(([uid, meta]) => [
+          uid, r.credits[uid] == null && previous[uid]
+            ? {...previous[uid], cached: true, message: meta.message} : meta,
+        ])));
+        setCreditsFailed((r.failed?.length ?? 0) > 0);
       } catch {
         // 这次没取到**不是**致命的：上游 /status 自带快照值，界面会照常显示并标注
         // 「上游快照」。但不能像原来那样裸吞——用户会以为快照就是当前余额。

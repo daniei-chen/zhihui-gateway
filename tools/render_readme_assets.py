@@ -199,10 +199,10 @@ def release(mobile=False):
     if not mobile:
         body += rect(1011, 29, 231, 34, 17, '#eff8f5', '#cee8dc')
         body += dot(1031, 46, 3, '#29896a')
-        body += text(1043, 51, '2026.11.04 / 已验收', 13, '#36745f', 600)
-    items = [('01', '客户端兼容', 'Codex / Claude 规则随版交付', '只处理系统与开发者文本'),
-             ('02', '流式更稳', '注释心跳与有界等待', '及时取消，不盲目重放'),
-             ('03', '诊断有据', '真实状态与规则命中', '有界指标与上下文来源')]
+        body += text(1043, 51, '2026.11.05 / 固定构建', 13, '#36745f', 600)
+    items = [('01', '客户端兼容', 'Codex / Claude / DSH · 11 规则', '只处理系统与开发者文本'),
+             ('02', '链路更稳', '共享发送预算与流式闭环', '及时取消，不盲目重放'),
+             ('03', '页面更轻', '结构共享与按需查积分', '固定错误族，证据可核对')]
     for index, (number, title, first, second) in enumerate(items):
         x, y = (36, 125 + index * 166) if mobile else (36 + index * 414, 126)
         body += rect(x, y, 568 if mobile else 382, 146 if mobile else 130, 18, '#ffffff', '#e0e8f5')
@@ -212,7 +212,7 @@ def release(mobile=False):
         body += text(x + 65, y + 105, second, 24 if mobile else 18, MUTED)
     baseline = 659 if mobile else 292
     body += path(f'M36 {baseline} H{width - 36}', LINE, 1)
-    metrics = [('4,322', 'Manager'), ('1,730', '引擎'), ('29', '切换合同')]
+    metrics = [('4,403', 'Manager'), ('1,764', '引擎'), ('15', '发布补充')]
     for index, (value, label) in enumerate(metrics):
         x = 36 + index * (201 if mobile else 395)
         body += text(x, baseline + 42, value, 30 if mobile else 25, INK, 700)

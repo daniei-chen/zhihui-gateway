@@ -31,6 +31,8 @@ _TTL_FAIL = 60
 # 缓存**按版本分键**：国内版与国际版的模型清单完全不同，若共用一份，
 # 后拉取的那个会把前一个覆盖掉（两个版本的模型无法共存）。
 _cache: dict[str, dict] = {}
+_flights = {}
+_generations = {'cn': 0, 'global': 0}
 
 
 def _slot(realm: str) -> dict:
@@ -229,21 +231,43 @@ async def catalog(realm: str = 'cn', force: bool = False) -> dict:
     realm 区分国内版与国际版：两边的模型几乎不重叠（国际版以 gpt-* 等为主），
     必须分开取、分开缓存，否则会互相覆盖。
     """
+    if realm not in ('cn', 'global'):
+        raise ValueError('invalid catalog realm')
     slot = _slot(realm)
     now = time.time()
-    if not force and slot['payload'] is not None and now - slot['at'] < slot['ttl']:
+    if not force and slot['payload'] is not None and 0 <= now - slot['at'] < slot['ttl']:
         out = dict(slot['payload'])
         out['cached'] = True
         out['cache_age'] = int(now - slot['at'])
+        out['fresh'] = out.get('source') != 'none'
+        out['cache_expires_at'] = int(slot['at'] + slot['ttl'])
         return out
+    generation = _generations[realm]
+    key = (asyncio.get_running_loop(), realm, generation, bool(force))
+    task = _flights.get(key)
+    if task is None:
+        task = asyncio.create_task(_refresh_catalog(realm, force, generation))
+        _flights[key] = task
 
+        def completed(finished):
+            if _flights.get(key) is finished:
+                _flights.pop(key, None)
+            if not finished.cancelled():
+                finished.exception()
+
+        task.add_done_callback(completed)
+    return dict(await asyncio.shield(task))
+
+
+async def _refresh_catalog(realm, force, generation):
     result = await _build(realm, force=force)
-    slot.update({
-        'at': now,
-        'ttl': _TTL_OK if result.get('source') == 'tencent' else _TTL_FAIL,
-        'payload': result,
-    })
-    return dict(result, cached=False, cache_age=0)
+    now = time.time()
+    superseded = generation != _generations[realm]
+    ttl = _TTL_OK if result.get('source') == 'tencent' else _TTL_FAIL
+    if not superseded:
+        _slot(realm).update(at=now, ttl=ttl, payload=result)
+    return dict(result, cached=False, cache_age=0, cache_expires_at=int(now + ttl),
+                fresh=not superseded and result.get('source') != 'none', superseded=superseded)
 
 
 async def _build(realm: str, force: bool = False) -> dict:
@@ -381,8 +405,12 @@ def _belongs(m: dict, realm: str) -> bool:
 def invalidate(realm: str | None = None) -> None:
     """清空缓存（手动刷新、账号变动后调用）。不传 realm 则全清。"""
     if realm is None:
+        for known in _generations:
+            _generations[known] += 1
         _cache.clear()
         return
+    if realm in _generations:
+        _generations[realm] += 1
     _cache.pop(realm, None)
 
 

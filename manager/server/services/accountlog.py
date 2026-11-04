@@ -209,7 +209,12 @@ def _collect_once() -> int:
     from .. import providerevents
     imported = providerevents.collect()
     from .. import operational
-    operational.transition('provider_evidence', not providerevents.health()['ok'], 'provider evidence backlog or conflict requires review')
+    health = providerevents.health()
+    operational.transition(
+        'provider_evidence', not health['ok'],
+        'provider evidence pending=%s oldest=%ss conflicts=%s fresh=%s'
+        % (health.get('pending'), health.get('oldest_seconds'),
+           health.get('conflicts'), health.get('fresh')))
     lines, mtime = wb2api.read_container_logs(_TAIL, timestamps=True, with_mtime=True)
     if not lines:
         return imported

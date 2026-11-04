@@ -24,6 +24,7 @@ from ..modelcontext import optional_fields as context_fields
 from fastapi import HTTPException
 
 from .. import config
+from .credentialrefresh import generation as _credential_generation
 from .realm import (
     CN,
     GLOBAL,
@@ -388,7 +389,7 @@ def update_auth_tokens(filename: str, fields: dict,
     """
     target = _safe_auth_path(filename, auth_dir)
     # 读—改—写必须串行（见 filelock.py）：否则续期与其它写者会互相覆盖。
-    with file_lock(target):
+    with file_lock(target, writing=True):
         try:
             raw = json.loads(target.read_text(encoding='utf-8'))
         except FileNotFoundError:
@@ -402,6 +403,12 @@ def update_auth_tokens(filename: str, fields: dict,
         if not isinstance(auth, dict):
             auth = {}
             raw['auth'] = auth
+        expected = fields.get('_refresh_expected')
+        if expected is not None and expected != _credential_generation(auth):
+            raise ValueError('credential generation changed; stale update refused')
+        if ('_refresh_expected_uid' in fields
+                and str((raw.get('account') or raw).get('uid') or '') != fields['_refresh_expected_uid']):
+            raise ValueError('credential identity changed; stale update refused')
         if 'access_token' in fields:
             auth['accessToken'] = fields['access_token']
         if 'refresh_token' in fields:
@@ -465,7 +472,7 @@ def write_auth_file(account: dict, auth_dir: Path | None = None,
     resolved = resolve_realm(account.get('realm'), domain)
 
     # 读旧值 → 合并 → 原子写，整体串行：重登/导入不能把别人刚写的字段盖掉。
-    with file_lock(target):
+    with file_lock(target, writing=True):
         # No-overwrite must be decided while holding the write lock.
         existed = target.exists()
         if existed and not allow_overwrite:

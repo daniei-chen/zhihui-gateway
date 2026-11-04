@@ -145,6 +145,43 @@ class PortalCloseoutTests(fixtures.PortalTests):
                 wallet.resolve_unknown(state.request_id, '2.123456', 'admin', REASON, REASON)
         self.assertEqual(store.overview('alice')['balance_units'], store.units('97.876544'))
 
+    async def test_recover_auto_closes_only_proven_client_cancel(self):
+        state = await self.make_unknown('auto-cancel')
+        wallet.finish(state)
+        db.execute('INSERT INTO request_logs(ts,key_id,model,status,request_id,terminal_state) VALUES(?,?,?,?,?,?)',
+            (NOW, state.key_id, 'deepseek-v4-flash', 499, state.request_id, 'client_cancelled'))
+        with mock.patch.dict('os.environ', {'WB_PORTAL_CLIENT_CANCEL_GRACE_SEC': '0'}):
+            self.assertEqual(wallet.recover(), None)
+            self.assertEqual(wallet.recover(), None)
+        with store.transaction() as conn:
+            spend = conn.execute(
+                'SELECT state,charged_units FROM portal_spends WHERE request_id=?',
+                (state.request_id,)).fetchone()
+            resolutions = conn.execute(
+                'SELECT amount_units,actor FROM portal_spend_resolutions WHERE request_id=?',
+                (state.request_id,)).fetchall()
+        self.assertEqual(tuple(spend), ('settled', 0))
+        self.assertEqual(len(resolutions), 1)
+        self.assertEqual(tuple(resolutions[0]), (0, 'system:client-cancel-v1'))
+        self.assertEqual(store.overview('alice')['held_units'], 0)
+        self.assertEqual(store.overview('alice')['balance_units'], store.units(100))
+
+    async def test_recover_does_not_auto_close_without_end_or_cancel_evidence(self):
+        state = await self.make_unknown('not-a-cancel')
+        wallet.finish(state)
+        db.execute('INSERT INTO request_logs(ts,key_id,model,status,request_id,terminal_state) VALUES(?,?,?,?,?,?)',
+            (NOW, state.key_id, 'deepseek-v4-flash', 502, state.request_id, 'transport_error'))
+        with mock.patch.dict('os.environ', {'WB_PORTAL_CLIENT_CANCEL_GRACE_SEC': '0'}):
+            wallet.recover()
+        with store.transaction() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT state FROM portal_spends WHERE request_id=?',
+                (state.request_id,)).fetchone()[0], 'unknown')
+            self.assertEqual(conn.execute(
+                'SELECT COUNT(*) FROM portal_spend_resolutions WHERE request_id=?',
+                (state.request_id,)).fetchone()[0], 0)
+        self.assertEqual(store.overview('alice')['held_units'], store.units(100))
+
     async def test_log_or_wrong_request_end_owner_never_proves_closure(self):
         state = await self.make_unknown()
         with store.transaction() as conn:
@@ -465,6 +502,18 @@ class PortalCloseoutTests(fixtures.PortalTests):
         with self.assertRaisesRegex(ValueError, '双库密钥归属不匹配'):
             recovery.create_snapshot(**args)
         self.assertFalse((args['destination'] / 'manifest.json').exists())
+
+    async def test_revoked_orphan_portal_key_does_not_block_snapshot(self):
+        args = await self.prepare_snapshot()
+        with store.transaction() as conn:
+            conn.execute(
+                'INSERT INTO portal_keys(key_id,owner_sv,label,created_at,revoked) '
+                'VALUES(?,?,?,?,?)', (987654, 0, 'synthetic revoked', NOW, 1))
+            conn.execute(
+                'INSERT INTO portal_key_links VALUES(?,?,?)',
+                (987654, 'alice', '0' * 64))
+        result = recovery.create_snapshot(**args)
+        self.assertTrue(result['complete'])
 
     async def test_shared_credential_uid_mismatch_refuses_complete_snapshot(self):
         args = await self.prepare_snapshot()

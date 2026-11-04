@@ -1,0 +1,243 @@
+{
+  "schema": 1,
+  "product": "zhihui-gateway",
+  "observed_at": "2026-11-04T15:27:10.407Z",
+  "automatic_installation": false,
+  "credential_or_private_runtime_state_included": false,
+  "projects": [
+    {
+      "repository": "ithtelab/workbuddy-manager",
+      "url": "https://github.com/ithtelab/workbuddy-manager",
+      "observed_head": "80b4b21c7e6976d6a50dde45501e6b264dd82915",
+      "head_committed_at": "2026-11-04T05:42:24Z"
+    },
+    {
+      "repository": "ardeyouxipianyi/workbuddy2api-hub",
+      "url": "https://github.com/ardeyouxipianyi/workbuddy2api-hub",
+      "observed_head": "3bee2536db704aaa5546f8646ce73c0e613eadbc",
+      "head_committed_at": "2026-11-04T09:53:46Z"
+    },
+    {
+      "repository": "magpie-community/plugins",
+      "url": "https://github.com/magpie-community/plugins",
+      "observed_head": "311d62867c14947c0d03496959aa08e7b0aa6946",
+      "head_committed_at": "2026-11-03T08:53:50Z"
+    },
+    {
+      "repository": "hawklithm/workbuddy2api",
+      "url": "https://github.com/hawklithm/workbuddy2api",
+      "observed_head": "d5847723dc95474e2ab56e2aadb2bd1f32cc30ca",
+      "head_committed_at": "2026-10-24T10:49:32Z"
+    },
+    {
+      "repository": "misakano7545/workbuddy2api-panel",
+      "url": "https://github.com/misakano7545/workbuddy2api-panel",
+      "observed_head": "dd01a5262379d1f63065165c16c1af902cf0ea6f",
+      "head_committed_at": "2026-11-04T13:05:00Z"
+    },
+    {
+      "repository": "jin66god/workbuddy2api-panel",
+      "url": "https://github.com/jin66god/workbuddy2api-panel",
+      "observed_head": "6f0caf3cd4f777b2f0111d9e32a8ddac15c1aaea",
+      "head_committed_at": "2026-11-03T08:34:09Z"
+    },
+    {
+      "repository": "hanhan1223/workbuddy-bridge",
+      "url": "https://github.com/hanhan1223/workbuddy-bridge",
+      "observed_head": "2d905ed399804ca28df9a73af8d616edeaf76b1e",
+      "head_committed_at": "2026-10-14T08:32:22Z"
+    },
+    {
+      "repository": "lg22-long/workbuddy-bridge",
+      "url": "https://github.com/lg22-long/workbuddy-bridge",
+      "observed_head": "f9b02a3d15346cc88d17963a04f3e8b3a85732a0",
+      "head_committed_at": "2026-09-14T03:36:32Z"
+    },
+    {
+      "repository": "CangShui/workbuddy-gateway",
+      "url": "https://github.com/CangShui/workbuddy-gateway",
+      "observed_head": "d30156215395b255e065131dfef222678072d824",
+      "head_committed_at": "2026-11-03T14:25:47Z"
+    },
+    {
+      "repository": "Faide-cyber/dsh-workbuddy",
+      "url": "https://github.com/Faide-cyber/dsh-workbuddy",
+      "observed_head": "64886e1dcae5b55cc1e511e6cb6186deaba0a776",
+      "head_committed_at": "2026-10-30T11:35:56Z"
+    },
+    {
+      "repository": "kangjiazhen/workbuddy2everything",
+      "url": "https://github.com/kangjiazhen/workbuddy2everything",
+      "observed_head": "25d995260942ea1acd586201f9edcec101f4b984",
+      "head_committed_at": "2026-11-03T06:46:38Z"
+    },
+    {
+      "repository": "modersetech/workbuddy-connect-api",
+      "url": "https://github.com/modersetech/workbuddy-connect-api",
+      "observed_head": "232def29b30b3287394fe7820c2702be95cc8dd2",
+      "head_committed_at": "2026-09-10T15:59:15Z"
+    },
+    {
+      "repository": "denysvitali/llm-proxy",
+      "url": "https://github.com/denysvitali/llm-proxy",
+      "observed_head": "40e5a3494c40e990e323a71a08f1bd4799c606a5",
+      "head_committed_at": "2026-11-03T01:06:08Z"
+    },
+    {
+      "repository": "dingminhua/dsh-connect-workbuddy",
+      "url": "https://github.com/dingminhua/dsh-connect-workbuddy",
+      "observed_head": "b783a3ba702a6e9599015c92329c62aeee09bb82",
+      "head_committed_at": "2026-11-04T07:54:38Z"
+    },
+    {
+      "repository": "sanguine886/workbuddy-sdk",
+      "url": "https://github.com/sanguine886/workbuddy-sdk",
+      "observed_head": "45e7cd50add8382adec750dd5a26f3f6ee9f93f5",
+      "head_committed_at": "2026-10-26T06:36:47Z"
+    },
+    {
+      "repository": "dsh-plugin-lab/dsh-workbuddy-bridge",
+      "url": "https://github.com/dsh-plugin-lab/dsh-workbuddy-bridge",
+      "observed_head": "2b5cb88ec3eae8cfc24d8f3e1e0a6080d47067d4",
+      "head_committed_at": "2026-10-29T04:06:03Z"
+    },
+    {
+      "repository": "Tencent/workbuddy-bench",
+      "url": "https://github.com/Tencent/workbuddy-bench",
+      "observed_head": "625b2233093ae4f23e76be28c1f341d41cc70373",
+      "head_committed_at": "2026-08-20T06:07:27Z"
+    },
+    {
+      "repository": "moshouhot/workbuddy-switch-gateway",
+      "url": "https://github.com/moshouhot/workbuddy-switch-gateway",
+      "observed_head": "d815cefca98c26bdf79c0a71803cdf807125136a",
+      "head_committed_at": "2026-09-11T18:55:37Z"
+    },
+    {
+      "repository": "icebears111/workbuddy2api",
+      "url": "https://github.com/icebears111/workbuddy2api",
+      "observed_head": "0ced9aba2a736d95160ff94af7055499a643da41",
+      "head_committed_at": "2026-09-17T02:57:46Z"
+    },
+    {
+      "repository": "HanawaBanana/workbuddy2api",
+      "url": "https://github.com/HanawaBanana/workbuddy2api",
+      "observed_head": "af5e77947c93fd6b7f8b3815ee047d64e0b97752",
+      "head_committed_at": "2026-10-16T12:19:40Z"
+    },
+    {
+      "repository": "linguo2625469/workbuddy2api-panel",
+      "url": "https://github.com/linguo2625469/workbuddy2api-panel",
+      "observed_head": "73a7560efc7a88ebd9865db4c71ae7f6d85859f8",
+      "head_committed_at": "2026-10-21T03:05:03Z"
+    },
+    {
+      "repository": "3304711297/workbuddy2api",
+      "url": "https://github.com/3304711297/workbuddy2api",
+      "observed_head": "0ff62c29b39f6f4004fab4a9b800aac916a6e991",
+      "head_committed_at": "2026-11-04T10:24:03Z"
+    },
+    {
+      "repository": "DistPub/workbuddy2api",
+      "url": "https://github.com/DistPub/workbuddy2api",
+      "observed_head": "1fb14000b1cfe46ea6408e84809179e09e7393bc",
+      "head_committed_at": "2026-10-31T13:54:24Z"
+    },
+    {
+      "repository": "ckldy/workbuddy2api",
+      "url": "https://github.com/ckldy/workbuddy2api",
+      "observed_head": "50a9ba2c7bf5c62948cdcef251d2eb9ac2999ee5",
+      "head_committed_at": "2026-07-28T14:17:02Z"
+    },
+    {
+      "repository": "Zhengyuuuui/workbuddy2api",
+      "url": "https://github.com/Zhengyuuuui/workbuddy2api",
+      "observed_head": "82941c37f5411e48b463ea42d1489e8c8da0eaea",
+      "head_committed_at": "2026-10-20T05:47:41Z"
+    },
+    {
+      "repository": "Shiho-Patch/workbuddy2api",
+      "url": "https://github.com/Shiho-Patch/workbuddy2api",
+      "observed_head": "f55f286c4704582638d4a8fc0e51e2fd02c81658",
+      "head_committed_at": "2026-10-19T02:52:08Z"
+    },
+    {
+      "repository": "Tom6814/WorkBuddy2API",
+      "url": "https://github.com/Tom6814/WorkBuddy2API",
+      "observed_head": "297516f48935f816a1a8860baadecab04206eae6",
+      "head_committed_at": "2026-08-29T06:02:57Z"
+    },
+    {
+      "repository": "Ianzhyh/workbuddy-to-dsh",
+      "url": "https://github.com/Ianzhyh/workbuddy-to-dsh",
+      "observed_head": "954f66a8712d2658e07d6245b1bf95e9b5646b77",
+      "head_committed_at": "2026-11-04T03:27:25Z"
+    },
+    {
+      "repository": "haohaomin/workbuddy2api-panel",
+      "url": "https://github.com/haohaomin/workbuddy2api-panel",
+      "observed_head": "8ab33376e2a52d32868d18b3553bafaed76d3454",
+      "head_committed_at": "2026-11-04T02:23:07Z"
+    },
+    {
+      "repository": "maximhq/bifrost",
+      "url": "https://github.com/maximhq/bifrost",
+      "observed_head": "170e5086e0b6abdf4121653d10f40b52af7e36d7",
+      "head_committed_at": "2026-11-04T13:50:45Z"
+    },
+    {
+      "repository": "BerriAI/litellm",
+      "url": "https://github.com/BerriAI/litellm",
+      "observed_head": "03c26c6e077b5f0e4f54b2ff19061278cfc63153",
+      "head_committed_at": "2026-11-04T15:10:03Z"
+    },
+    {
+      "repository": "Portkey-AI/gateway",
+      "url": "https://github.com/Portkey-AI/gateway",
+      "observed_head": "669825cbe89ee51569918b8f78a9db486fd69dd4",
+      "head_committed_at": "2026-05-25T13:54:51Z"
+    },
+    {
+      "repository": "theagentrouter/agent-router",
+      "url": "https://github.com/theagentrouter/agent-router",
+      "observed_head": "931b020400a40c0e0f9a819a1c4b229ef945b8bd",
+      "head_committed_at": "2026-10-28T14:53:23Z"
+    },
+    {
+      "repository": "open-telemetry/semantic-conventions",
+      "url": "https://github.com/open-telemetry/semantic-conventions",
+      "observed_head": "35ee31c3a16a718824e30316b544ea8f9e226c66",
+      "head_committed_at": "2026-11-03T18:52:46Z"
+    },
+    {
+      "repository": "sigstore/cosign",
+      "url": "https://github.com/sigstore/cosign",
+      "observed_head": "421d7421bd114796df0c1361b6f31b6df984b600",
+      "head_committed_at": "2026-11-04T13:58:04Z"
+    },
+    {
+      "repository": "oasdiff/oasdiff",
+      "url": "https://github.com/oasdiff/oasdiff",
+      "observed_head": "c126a508cc77a8787ff750fc6118fa1ec16ef700",
+      "head_committed_at": "2026-11-04T14:57:39Z"
+    },
+    {
+      "repository": "OpenAPITools/openapi-diff",
+      "url": "https://github.com/OpenAPITools/openapi-diff",
+      "observed_head": "63850d8074452f5761ce7e7e460307f0f127647a",
+      "head_committed_at": "2026-08-05T09:56:33Z"
+    },
+    {
+      "repository": "xiaofan6ya/wb2api",
+      "url": "https://github.com/xiaofan6ya/wb2api",
+      "observed_head": "21276d214667eeb05c703d5d2de0abbea3a0fdaa",
+      "head_committed_at": "2026-10-27T15:30:33Z"
+    },
+    {
+      "repository": "open-telemetry/semantic-conventions-genai",
+      "url": "https://github.com/open-telemetry/semantic-conventions-genai",
+      "observed_head": "633cbb060b16b1487ea2dcd23c4307edc1a03f01",
+      "head_committed_at": "2026-11-04T00:49:31Z"
+    }
+  ]
+}

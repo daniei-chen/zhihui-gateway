@@ -1324,7 +1324,6 @@ def _prune_side_tables() -> None:
     task_cutoff = now - _TASK_LOG_RETAIN_DAYS * 86400
     for sql, args in (
         # request_outcomes 只增不减且无触发器保护，按同一保留期滚动清理
-        ('DELETE FROM request_outcomes WHERE ts < ?', (int(time.time()) - _REQUEST_LOG_RETAIN_DAYS * 86400,)),
         ('DELETE FROM request_performance WHERE ts < ?', (int(time.time()) - 7 * 86400,)),
         ('DELETE FROM usage_hourly WHERE day < ?', (hourly_cutoff,)),
         ('DELETE FROM task_logs WHERE ts < ?', (task_cutoff,)),
@@ -1344,9 +1343,9 @@ def _prune_request_logs() -> None:
 
     旁路操作：任何失败都不能影响写入本身（更不能影响转发）。
     """
-    cutoff = int(time.time()) - _REQUEST_LOG_RETAIN_DAYS * 86400
     try:
-        execute('DELETE FROM request_logs WHERE ts < ?', (cutoff,))
+        from . import archiveworker
+        archiveworker.notify()
     except Exception:  # noqa: BLE001
         pass
     _prune_side_tables()

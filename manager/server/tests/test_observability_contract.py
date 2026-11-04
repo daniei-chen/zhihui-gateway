@@ -264,12 +264,31 @@ class OutcomesEndpointTest(_SeededEndpointTest):
         self.assertEqual(body['total'], len(self.rows))
         items = {item['request_id']: item for item in body['items']}
         self.assertEqual(items['rid-upstream']['attempt_count'], 2)
+        self.assertEqual(items['rid-upstream']['attempt_source'], 'legacy_attempt_events')
         self.assertEqual(items['rid-upstream']['platform'], 'qoder')
         self.assertEqual(items['rid-upstream']['error_code'], '11102')
         self.assertEqual(items['rid-upstream']['error_source'], 'upstream')
         self.assertEqual(items['rid-ok']['attempt_count'], 0)
+        self.assertEqual(items['rid-ok']['attempt_source'], 'absent')
         self.assertEqual(items['rid-ok']['traffic_class'], 'inference')
         self.assertEqual(items['rid-probe']['traffic_class'], 'probe')
+
+    def test_v2_evidence_wins_over_legacy_for_the_same_request(self):
+        self._login()
+        db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)',
+                   ('v2-dispatch', 'rid-upstream', self.now))
+        db.execute('INSERT INTO provider_attempt_events_v2 '
+                   '(request_id,dispatch_id,rotation,provider_attempt,phase,ts,'
+                   'account_uid,model,realm,path,status,event_sha256) '
+                   'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                   ('rid-upstream', 'v2-dispatch', 1, 1, 'headers', self.now,
+                    'acct', 'm', 'cn', '/v2/chat/completions', 200, '0' * 64))
+        response = self.client.get('/api/logs/outcomes', params={'days': 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        item = {row['request_id']: row for row in response.json()['items']}['rid-upstream']
+        self.assertEqual(item['attempt_source'], 'provider_attempt_events_v2')
+        self.assertEqual(item['attempt_count'], 1,
+                         'a v2 request must not be counted from legacy attempt_events')
 
     def test_filters_by_error_code_terminal_platform_release(self) -> None:
         self._login()

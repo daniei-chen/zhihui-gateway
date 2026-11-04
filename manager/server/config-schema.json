@@ -6,6 +6,9 @@
     "WB2API_"
   ],
   "settings": {
+    "WB_ARCHIVE_ENABLED": {"type": "boolean", "sensitive": false, "default": true, "consumers": ["server/archiveworker.py"], "description": "Archive and verify eligible derived logs before exact-row pruning; disabled never permits direct deletion."},
+    "WB_ARCHIVE_INTERVAL_SEC": {"type": "integer", "sensitive": false, "default": 300, "minimum": 60, "maximum": 86400, "consumers": ["server/archiveworker.py"], "unit": "seconds"},
+    "WB_ARCHIVE_BATCH_ROWS": {"type": "integer", "sensitive": false, "default": 200, "minimum": 1, "maximum": 1000, "consumers": ["server/archiveworker.py"], "unit": "rows per dataset per cycle"},
     "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
       "type": "integer",
       "sensitive": false,
@@ -105,6 +108,21 @@
       "choices": ["0", "1"],
       "description": "Opt-in customer DeepSeek public-pool candidate; disabled by default",
       "consumers": ["manager/server/portalpolicy.py"]
+    },
+    "WB_PORTAL_AUTO_CLOSE_CLIENT_CANCEL": {
+      "type": "string",
+      "sensitive": false,
+      "default": "1",
+      "choices": ["0", "1"],
+      "description": "Automatically close a proved client-cancelled portal hold under the platform-absorbs policy",
+      "consumers": ["manager/server/portalwallet.py"]
+    },
+    "WB_PORTAL_CLIENT_CANCEL_GRACE_SEC": {
+      "type": "string",
+      "sensitive": false,
+      "default": "60",
+      "description": "Grace period before auto-closing a proved client-cancelled portal hold",
+      "consumers": ["manager/server/portalwallet.py"]
     },
     "WB_BACKGROUND_JOBS": {
       "type": "boolean",

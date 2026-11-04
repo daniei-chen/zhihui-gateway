@@ -208,6 +208,8 @@ class RequestAudit:
     error_source: str | None = None
     compatibility_version: str | None = None
     compatibility_rules: tuple[str, ...] = ()
+    provider_attempts_remaining: int = 8
+    provider_budget_enabled: bool = False
 
 current: contextvars.ContextVar[RequestAudit | None] = contextvars.ContextVar("wb_request_audit", default=None)
 _key_slots={}
@@ -1017,6 +1019,7 @@ class RequestAuditMiddleware:
                         http_status=status, terminal=terminal,
                         latency_ms=(time.monotonic()-state.started)*1000,
                         first_token_ms=state.first_token_ms, model=state.metrics_model,
+                        error_code=state.error_code or _gateway_code(terminal, state.error_stage, status)[0],
                         rules=state.compatibility_rules)
                 except Exception:
                     log.warning('bounded request metrics unavailable')
@@ -1079,9 +1082,8 @@ class RequestAuditMiddleware:
                     _outcome_writes+=1
                     if _outcome_writes>=2000:
                         _outcome_writes=0
-                        db.execute('DELETE FROM request_outcomes WHERE request_id IN '
-                                   '(SELECT request_id FROM request_outcomes WHERE ts<? ORDER BY ts LIMIT 2000)',
-                                   (int(time.time())-90*86400,))
+                        from . import archiveworker
+                        archiveworker.notify()
             except Exception:
                 log.exception("request outcome persistence failed request_id=%s", state.request_id)
             finally:

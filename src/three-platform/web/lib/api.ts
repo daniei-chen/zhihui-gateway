@@ -56,7 +56,6 @@ import type {
   TaskLogResponse,
   TaskRunStatus,
   UpdateCheck,
-  UpdatePackageMeta,
   UpdateStatus,
   UpstreamConfig,
   UpstreamEndpoint,
@@ -373,7 +372,7 @@ export const accountApi = {
          meta: Record<string, CreditsMeta>; failed: string[]; provider_called: false}>(
       '/api/accounts/credits-cached', upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 查询全部账号积分；force=false 时 60 秒内命中服务端缓存 */
-  refreshCredits: (force = true, upstreamId?: number | null) =>
+  refreshCredits: (force = true, upstreamId?: number | null, staleOnly = false) =>
     post<{
       total: number;
       succeeded: number;
@@ -381,7 +380,8 @@ export const accountApi = {
       meta: Record<string, CreditsMeta>;
       failed: string[];
     }>('/api/accounts/refresh-credits?force=' + (force ? 'true' : 'false')
-       + (upstreamId == null ? '' : `&upstream_id=${encodeURIComponent(String(upstreamId))}`)),
+       + (upstreamId == null ? '' : `&upstream_id=${encodeURIComponent(String(upstreamId))}`)
+       + (staleOnly ? '&stale_only=true' : '')),
   checkinAll: (upstreamId?: number | null) =>
     post<{
       /**
@@ -805,13 +805,11 @@ export const settingsApi = {
 
 export type {Account};
 
-/* ── 系统维护（一键更新）──────────────────────────────── */
 export const systemApi = {
   updateStatus: () => get<UpdateStatus>('/api/system/update-status'),
   /** 检测新版本；force=true 绕过 6 小时缓存 */
   checkUpdate: (force = false) => get<UpdateCheck>('/api/system/check-update', {force}),
   versions: () => get<Versions>('/api/system/versions'),
-  /** GitHub Token（版本检测 / 一键更新的认证）：读回掩码，写只传明文 */
   githubToken: () => get<{configured: boolean; masked: string; source: 'env' | 'panel' | ''}>(
     '/api/settings/github-token'),
   saveGithubToken: (token: string) =>
@@ -820,34 +818,8 @@ export const systemApi = {
   githubMirror: () => get<GithubMirror>('/api/settings/github-mirror'),
   saveGithubMirror: (mirror: string) =>
     put<GithubMirror>('/api/settings/github-mirror', {mirror}),
-  /**
-   * 启动一键更新；target: manager | upstream | both。
-   * source='uploaded' 用面板里已上传的离线升级包（issue #153）。
-   */
-  startUpdate: (target: 'manager' | 'upstream' | 'both', source: 'release' | 'uploaded' = 'release') =>
-    post<{ok: boolean; message: string}>('/api/system/update', {target, source}),
-  /** 已上传的离线升级包元信息 */
-  packageMeta: () => get<UpdatePackageMeta>('/api/system/update-package'),
-  /**
-   * 上传离线升级包（发布页下载的 .tar.gz）。
-   * `expectedSha256` 是发布页那串摘要；服务端默认必填，缺失会直接拒收。
-   */
-  uploadPackage: (file: File, expectedSha256: string) => {
-    const body = new FormData();
-    body.append('file', file, file.name);
-    body.append('expected_sha256', expectedSha256);
-    return post<UpdatePackageMeta>('/api/system/update-package', body);
-  },
-  deletePackage: () => del<{ok: boolean}>('/api/system/update-package'),
-  /**
-   * 清除上次更新的结果与日志（issue #105）。
-   *
-   * 此前失败记录只能靠「下次发起更新」覆盖：状态文件与 update.log 都留着，
-   * 界面上那条「更新未完成」与日志永远擦不掉，用户得进容器手删文件。
-   * 更新进行中后端会拒绝（409）——那会把「正在更新」看丢。
-   */
   clearUpdateStatus: () =>
-    del<{ok: boolean; message: string}>('/api/system/update-status'),
+    del<{ok: boolean; archived: number; message: string}>('/api/system/update-status'),
   /** 更新日志（解析仓库根目录 CHANGELOG.md，离线可用） */
   changelog: () => get<Changelog>('/api/system/changelog'),
 };

@@ -8,7 +8,7 @@ from unittest import mock
 
 import httpx
 
-from server import db, providerevents
+from server import config, db, providerevents
 from server.routers import gateway
 from server.tests.test_rejection_retry_integration import RejectionRetryIntegrationTest
 
@@ -57,7 +57,10 @@ class RemediationContracts(RejectionRetryIntegrationTest):
         self.assertTrue(providerevents.record(value))
         second = dict(value, dispatch_id='dispatch-2')
         self.assertTrue(providerevents.record(second))
-        self.assertEqual(providerevents.report('execution-1')['attempt_count'], 2)
+        report = providerevents.report('execution-1')
+        self.assertEqual(report['attempt_count'], 2)
+        self.assertEqual(report['attempt_source'], 'provider_attempt_events_v2')
+        self.assertIn('legacy_attempt_events', report)
         conflict = dict(value, account_uid='different-account')
         self.assertFalse(providerevents.record(conflict))
         self.assertEqual(db.query_one('SELECT COUNT(*) count FROM provider_evidence_conflicts_v2')['count'], 1)
@@ -77,6 +80,24 @@ class RemediationContracts(RejectionRetryIntegrationTest):
                 self.assertEqual(providerevents.collect(), 1)
                 self.assertEqual(providerevents.collect(), 0)
                 self.assertEqual(providerevents.report('atomic-execution')['attempt_count'], 1)
+
+    def test_provider_evidence_health_is_unknown_until_a_collection_sample(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(config, 'UPSTREAM_DIR', Path(temporary)), \
+                mock.patch.dict(providerevents._last_collection,
+                                {'at': None, 'error': None}, clear=True):
+            before = providerevents.health()
+            self.assertFalse(before['ok'])
+            self.assertFalse(before['fresh'])
+            self.assertIsNone(before['collection_age_seconds'])
+            providerevents.collect()
+            after = providerevents.health()
+            self.assertTrue(after['fresh'])
+            self.assertEqual(after['collection']['error'], None)
+            providerevents._last_collection['at'] = int(time.time()) - providerevents.COLLECTION_STALE_SECONDS - 1
+            stale = providerevents.health()
+            self.assertFalse(stale['fresh'])
+            self.assertFalse(stale['ok'])
 
 
     def test_recent_human_session_required_without_sliding_extension(self):
