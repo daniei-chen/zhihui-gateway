@@ -96,8 +96,10 @@ PG 恢复反例使用当前源代码与临时 SQLite transport。其输出不能
 ## 必须在匹配环境补验的门禁
 
 当前执行环境中 `/proc/self/stat` 与数字 PID 路径不一致；已回收的自有子进程
-在该视图中仍可能显示运行。因此 PID、zombie 和 PDEATHSIG 相关结果需要原生
-Linux runner 复验。未修改这些断言、未为本次审计新增 skip。
+在该视图中仍可能显示运行。随后已在 GitHub 原生 Linux runner 完成独立复验：
+4,600 项中 4,591 通过、9 个既有跳过、0 失败，PID、zombie 和 PDEATHSIG 三项
+均在真实 JUnit 中 PASS。回执见 `evidence/native-ci/`；本地失败历史仍保留。
+未修改这些断言、未为本次审计新增 skip。
 Windows 注册表、原生进程关闭和 PowerShell 安装/更新需要 Windows runner。
 真实 PostgreSQL 恢复、真实 age 解密、离机全量恢复、私有完整引擎以及供应商
 首 token 延迟、token/s、生产 P95/P99 不在本地合成测试的证明范围内。

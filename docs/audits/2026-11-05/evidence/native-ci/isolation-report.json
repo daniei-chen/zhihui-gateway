@@ -1,0 +1,2175 @@
+{
+  "iso_root": "/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9",
+  "run_id": "20261105-125307-bb1663",
+  "net_policy": "block",
+  "installed": true,
+  "syspath_added": [],
+  "env_problems": [],
+  "pytest_exitstatus": 0,
+  "duration_s": 388.59,
+  "network": {
+    "attempts": [
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.483,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_cancelled_waiter_does_not_leak_capacity (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.538,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_cancelled_waiter_does_not_leak_capacity (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.574,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_cleanup_failure_cannot_open_unbounded_replacement_pools (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.628,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_cleanup_failure_cannot_open_unbounded_replacement_pools (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.663,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_distinct_leases_isolate_cookies_and_default_headers (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.7,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_failed_transport_construction_returns_its_capacity (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.734,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_full_active_pool_times_out_new_identity_without_cutting_old_stream (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.825,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_global_capacity_and_cleanup_across_live_event_loops (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.908,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_global_capacity_and_cleanup_across_live_event_loops (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.944,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_graceful_pool_cleanup_waits_for_response_body (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 18.981,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_identity_is_not_overridden_by_lane (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.011,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_identity_is_not_overridden_by_lane (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.047,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_idle_eviction_does_not_close_a_different_active_stream (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.076,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_idle_eviction_does_not_close_a_different_active_stream (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.107,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_idle_eviction_does_not_close_a_different_active_stream (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.146,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_legacy_helper_shares_the_actual_business_pool (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.188,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_response_body_survives_early_client_release (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.226,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_serial_leases_reuse_one_real_tcp_connection (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 19.427,
+        "test": "server/tests/test_actual_http_pool.py::ActualHttpPoolTest::test_upstream_set_cookie_stays_in_its_own_lease (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 28.219,
+        "test": "server/tests/test_attempt_explain.py::HealthFreshnessTest::test_stale_pool_does_not_claim_current_availability (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 28.327,
+        "test": "server/tests/test_attempt_explain.py::HealthFreshnessTest::test_status_and_accounts_endpoints_carry_pool_health (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 28.357,
+        "test": "server/tests/test_attempt_explain.py::HealthFreshnessTest::test_status_and_accounts_endpoints_carry_pool_health (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 28.385,
+        "test": "server/tests/test_attempt_explain.py::HealthFreshnessTest::test_successful_sample_is_fresh_with_evidence (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 91.754,
+        "test": "server/tests/test_docker_deploy.py::UpstreamHealthProbeAddressTest::test_探测不被代理带偏 (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 91.754,
+        "test": "server/tests/test_docker_deploy.py::UpstreamHealthProbeAddressTest::test_探测不被代理带偏 (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 91.754,
+        "test": "server/tests/test_docker_deploy.py::UpstreamHealthProbeAddressTest::test_探测不被代理带偏 (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 99.589,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_falls_back_to_direct_when_mirror_fails (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 99.589,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_falls_back_to_direct_when_mirror_fails (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 99.589,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_falls_back_to_direct_when_mirror_fails (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 100.123,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_goes_through_the_mirror_first (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 100.123,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_goes_through_the_mirror_first (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 100.123,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_api_goes_through_the_mirror_first (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 100.659,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 100.659,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 100.66,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 100.678,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 100.678,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 100.678,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 100.697,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 100.697,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 100.697,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 100.716,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 100.716,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 100.716,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_falls_back_when_the_mirror_returns_an_error_page (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 101.718,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_goes_through_the_mirror_then_falls_back (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 101.718,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_goes_through_the_mirror_then_falls_back (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 101.718,
+        "test": "server/tests/test_github_mirror.py::WorkerMirrorRequestTest::test_download_goes_through_the_mirror_then_falls_back (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 102.259,
+        "test": "server/tests/test_github_mirror.py::ServerGhGetMirrorTest::test_gh_get_uses_mirror_and_hides_token (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 102.259,
+        "test": "server/tests/test_github_mirror.py::ServerGhGetMirrorTest::test_gh_get_uses_mirror_and_hides_token (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 102.259,
+        "test": "server/tests/test_github_mirror.py::ServerGhGetMirrorTest::test_gh_get_uses_mirror_and_hides_token (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 105.015,
+        "test": "server/tests/test_http_client_pool.py::InternalHostBypassTest::test_internal_target_does_not_touch_the_proxy (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 105.023,
+        "test": "server/tests/test_http_client_pool.py::InternalHostBypassTest::test_internal_target_does_not_touch_the_proxy (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 118.296,
+        "test": "server/tests/test_key_realm_e2e.py::GatewayRealmIsolationE2ETest::test_scoped_key_passes_auth_for_own_realm (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 118.506,
+        "test": "server/tests/test_key_realm_e2e.py::GatewayRealmIsolationE2ETest::test_unscoped_key_passes_both_realms (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 118.545,
+        "test": "server/tests/test_key_realm_e2e.py::GatewayRealmIsolationE2ETest::test_unscoped_key_passes_both_realms (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 130.752,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 130.752,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.752,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.788,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 130.803,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 130.803,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.803,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_accepted_generation_without_response_is_not_replayed_or_refunded (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 130.9,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 130.9,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.9,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.937,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.981,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.022,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.038,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.038,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.038,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.05,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.05,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.05,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.082,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.123,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.164,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.192,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.192,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.192,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.203,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.203,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.203,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.241,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.282,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.321,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.352,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.352,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.352,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.362,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.362,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.363,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 131.369,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 131.369,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 131.369,
+        "test": "server/tests/test_live_http_platform_flow.py::LiveHttpPlatformFlowTest::test_three_platform_key_lifecycle_reaches_real_http_and_settles_usage (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 134.791,
+        "test": "server/tests/test_login_server_poll.py::SaveFailureRetryTest::test_recovery_once_permissions_are_fixed (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 143.632,
+        "test": "server/tests/test_notify.py::DispatchTest::test_http_mode_unreachable_never_raises (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 143.632,
+        "test": "server/tests/test_notify.py::DispatchTest::test_http_mode_unreachable_never_raises (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 143.632,
+        "test": "server/tests/test_notify.py::DispatchTest::test_http_mode_unreachable_never_raises (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 144.112,
+        "test": "server/tests/test_observability_contract.py::OutcomePersistenceTest::test_gateway_marked_code_reaches_the_database (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.876,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.876,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.876,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.009,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.011,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.105,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.107,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.201,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.204,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.298,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.3,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.394,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.397,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.49,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.492,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.587,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.589,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.684,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.686,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.78,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.782,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.877,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.879,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.974,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.976,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.071,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.073,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.167,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.169,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.264,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.266,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.36,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.362,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.457,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.459,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.553,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.555,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.649,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.651,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.745,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.747,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.842,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.844,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.939,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 164.941,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.035,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.037,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.132,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.134,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.227,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.229,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.323,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.325,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.418,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.42,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.514,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.516,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.611,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.614,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.709,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.711,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.806,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.808,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.902,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.904,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 165.999,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.001,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.095,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.098,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.192,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.194,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.288,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.29,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.385,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.387,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.481,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.484,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.578,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.58,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.674,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.676,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.77,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.772,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.866,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.868,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.962,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 166.965,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.059,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.061,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.155,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.158,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.251,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.254,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.347,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.349,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.444,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.446,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.54,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.542,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.637,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.639,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.733,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.736,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.83,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.832,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.927,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 167.929,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.023,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.026,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.12,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.122,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.215,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.218,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.312,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.314,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.409,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.411,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.505,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.507,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.602,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.604,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.698,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.7,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.795,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.797,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.891,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.894,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.989,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 168.991,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.085,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.087,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.18,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.183,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.275,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.277,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.371,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.374,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.468,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.47,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.564,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.566,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.66,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.662,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.755,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.757,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.851,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.854,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.949,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 169.951,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.046,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.048,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.143,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.145,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.238,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.24,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.333,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.335,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.429,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.431,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.525,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.527,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.622,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.624,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.717,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.719,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.813,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.816,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.908,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 170.91,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.004,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.006,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.1,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.102,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.197,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.199,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.292,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.294,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.389,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.391,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.485,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.487,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.581,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.583,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.677,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.679,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.772,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.774,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.868,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.87,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.964,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 171.966,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 172.06,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 172.062,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 172.156,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 172.158,
+        "test": "server/tests/test_pool_tcp_closure.py::RealTCPPoolContracts::test_bounded_load_cancel_and_file_descriptors (call)"
+      }
+    ],
+    "attempt_count": 525,
+    "sample_count": 300,
+    "samples_truncated": true,
+    "blocked": 10,
+    "blocked_samples": [
+      {
+        "host": "api.github.com",
+        "where": "socket.create_connection",
+        "t": 285.064,
+        "test": "server/tests/test_settings_contract.py::EndpointMatrixTest::test_viewer_is_allowed_on_read_scope_endpoints (call)"
+      },
+      {
+        "host": "us1-xxx.upstash.io",
+        "where": "socket.getaddrinfo",
+        "t": 289.154,
+        "test": "server/tests/test_ssrf_guard.py::InternalHostRejectionTest::test_allowed_hosts (call)"
+      },
+      {
+        "host": "upstash.io",
+        "where": "socket.getaddrinfo",
+        "t": 289.154,
+        "test": "server/tests/test_ssrf_guard.py::InternalHostRejectionTest::test_allowed_hosts (call)"
+      },
+      {
+        "host": "my-redis.example.com",
+        "where": "socket.getaddrinfo",
+        "t": 289.154,
+        "test": "server/tests/test_ssrf_guard.py::InternalHostRejectionTest::test_allowed_hosts (call)"
+      },
+      {
+        "host": "us1-abc.upstash.io",
+        "where": "socket.getaddrinfo",
+        "t": 289.157,
+        "test": "server/tests/test_ssrf_guard.py::TestUpstashEndpointTest::test_public_target_is_actually_probed (call)"
+      },
+      {
+        "host": "10.255.255.1",
+        "where": "socket.connect",
+        "t": 294.174,
+        "test": "server/tests/test_ssrf_guard.py::SelfHostedRedisProbeTest::test_私网地址不再被拦而是如实报连接结果 (call)"
+      },
+      {
+        "host": "evil.example",
+        "where": "socket.getaddrinfo",
+        "t": 328.791,
+        "test": "server/tests/test_trust_and_upstash_hardening.py::UpstashSavedTokenTest::test_empty_token_with_foreign_url_is_refused_without_request (call)"
+      },
+      {
+        "host": "saved.upstash.io",
+        "where": "socket.getaddrinfo",
+        "t": 328.792,
+        "test": "server/tests/test_trust_and_upstash_hardening.py::UpstashSavedTokenTest::test_empty_token_with_saved_url_uses_saved_token (call)"
+      },
+      {
+        "host": "another.upstash.io",
+        "where": "socket.getaddrinfo",
+        "t": 328.794,
+        "test": "server/tests/test_trust_and_upstash_hardening.py::UpstashSavedTokenTest::test_explicit_token_still_allows_any_public_url (call)"
+      },
+      {
+        "host": "a.example",
+        "where": "socket.getaddrinfo",
+        "t": 343.519,
+        "test": "server/tests/test_upstreams.py::ApiKeyNeverReturnedTest::test_no_endpoint_returns_the_plaintext_key (call)"
+      }
+    ],
+    "blocked_samples_truncated": false
+  },
+  "writes": {
+    "protected_violations": [
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_instance_runtime.py::TestInstanceRuntime::test_real_application_lifespan_claims_and_releases (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_k36_security_headers.py::ManagerUnauthorizedHeaderTest::test_unauthorized_response_carries_headers (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_max_tokens_e2e.py::SentToUpstreamTest::test_chat_completions_clamps_on_the_wire (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_max_tokens_e2e.py::SentToUpstreamTest::test_chat_completions_normal_value_untouched (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_max_tokens_e2e.py::SentToUpstreamTest::test_max_completion_tokens_clamps_on_the_wire (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_max_tokens_e2e.py::SentToUpstreamTest::test_responses_clamps_on_the_wire (call)"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open",
+        "test": "server/tests/test_metrics_auth.py::MetricsAuthTest::test_prefix_alias_uses_the_same_authority (call)"
+      }
+    ],
+    "outside_iso_samples": [
+      {
+        "path": "/dev/null",
+        "where": "builtins.open",
+        "t": 0.02
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 288.555
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 316.066
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 318.582
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 319.687
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 328.223
+      }
+    ],
+    "outside_iso_count": 6
+  },
+  "fake_provider": {
+    "total": 32,
+    "completed": 32,
+    "cancelled": 0,
+    "by_path": {
+      "/v1/chat/completions": 29,
+      "/v1/models": 3
+    },
+    "by_mode": {
+      "accepted_disconnect": 1,
+      "normal": 23,
+      "echo": 6,
+      "refusal": 1,
+      "error_500": 1
+    },
+    "bytes_in": 301579,
+    "bytes_out": 330461,
+    "max_body": 295325,
+    "errors": [],
+    "uptime_s": 389.115,
+    "recent": [
+      {
+        "t": 131.319,
+        "path": "/v1/chat/completions",
+        "mode": "accepted_disconnect",
+        "body": 145
+      },
+      {
+        "t": 131.465,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.509,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.552,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 131.612,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.652,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.694,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 131.768,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.81,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.849,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 226.443,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 269
+      },
+      {
+        "t": 226.697,
+        "path": "/v1/chat/completions",
+        "mode": "refusal",
+        "body": 239
+      },
+      {
+        "t": 226.864,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 295325
+      },
+      {
+        "t": 227.025,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 560
+      },
+      {
+        "t": 227.072,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 227.121,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 227.276,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 884
+      },
+      {
+        "t": 251.869,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.122,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.137,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.151,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.17,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.35,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.393,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.547,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.703,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.746,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.789,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.939,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.983,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 253.136,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 190
+      },
+      {
+        "t": 253.181,
+        "path": "/v1/chat/completions",
+        "mode": "error_500",
+        "body": 146
+      }
+    ]
+  }
+}

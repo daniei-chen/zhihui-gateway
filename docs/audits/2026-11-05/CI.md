@@ -83,7 +83,28 @@ version JSON 核对到 CPython 3.12 / Linux x86_64 兼容、未撤销的 wheel�
 - 直接执行收集器的两个临时合成场景：测试前失败仍有收集说明；本轮回执与历史回执
   并存时只复制本轮完整证据。未使用真实用户数据或伪造云 CI 成功。
 
-结果及 workflow SHA 在 `evidence/ci-static-validation.json`。下一步是在实际提交后的
-GitHub 托管 runner 检查首次完整结果，再决定是否设为分支保护必需检查；本地 YAML
-和下载通过不会自动改变仓库设置。Windows 的 registry、ACL、PowerShell、原生进程
-生命周期尚需独立 Windows runner 门槛，本 workflow 不声称已覆盖它们。
+结果及 workflow SHA 在 `evidence/ci-static-validation.json`。本地 YAML 和下载通过
+不会自动改变仓库设置。Windows 的 registry、ACL、PowerShell、原生进程生命周期
+尚需独立 Windows runner 门槛，本 workflow 不声称已覆盖它们。
+
+## 实际 GitHub 执行结果
+
+[Run 42030666659](https://github.com/daniei-chen/zhihui-gateway/actions/runs/42030666659)
+的 attempt 1 已完成，结论为 **success**；全部 19 个 job 步骤成功，包括回执上传。
+候选 head 是 `a6664aeeb5567f9cbcb0ca10d45a381662622962`，GitHub 临时合并提交
+`32ad580c1d455243d64672f424c9dbd8e8275c35` 的 tree 与候选相同，均为
+`1076a402dda2e7322a9954d50d5313e44b94bf63`。
+
+- Python 3.12.16 / Node 24.22.2 / npm 11.19.1；三个 hash 锁 37 个版本逐项匹配，
+  pip check 成功。
+- 前端 226/226，typecheck、lint 和静态导出成功；lint 0 errors / 79 warnings。
+- 完整 Manager 4,600 项：**4,591 passed、0 failed、0 errors、9 skipped**，
+  另 3,219 subtests passed。三个本地 proc/PDEATHSIG 失败用例在实际 JUnit 中
+  均 PASS，未改为 skip；9 个既有 skip 的 ID 和原因与本地逐项一致。
+- 根工具 75/75 通过；测试视图前后摘要一致。
+
+Artifact 13416357861 已下载并比对 GitHub digest；原始 ZIP、JUnit、stats、视图、
+隔离回执、依赖清单与 job 日志已归档至 `evidence/native-ci/`，不依赖 14 天后失效
+的下载地址。该成功不消除 QTG 隔离夹具、PG 恢复、Windows 和私有引擎等剩余门槛。
+此云端结果只通过 docs/audits 下的补充提交记录，没有改业务、测试或 workflow。
+仓库分支保护设置未被修改。

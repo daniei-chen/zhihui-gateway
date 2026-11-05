@@ -10,7 +10,7 @@
 
 本次交付包含实际修复、对照反例、完整后端回归、前端测试与构建、逐文件阅读记录和可重复的本机性能实验。重点是身份与账号池归属、财务证据一致性、并发准入、流式资源边界、取消与租约生命周期、发布签名、恢复和文件安全。
 
-**候选代码可以进入审查，当前证据不足以批准生产发布。** 原生 Linux 的进程语义门禁、真实恢复、旧 Windows 更新来源和完整私有引擎仍有未关闭事项。代码审读、自动扫描与测试通过分别证明不同事情；不能将本报告解释为“所有文件均已人工逐行审过”“不存在任何漏洞”或“生产速率已经达到最大”。
+**候选代码可以进入审查，当前证据不足以批准生产发布。** GitHub 原生 Linux CI 已成功完成，关闭了本地环境中无法证明的三个进程用例；真实恢复、旧 Windows 更新来源和完整私有引擎仍有未关闭事项。代码审读、自动扫描与测试通过分别证明不同事情；不能将本报告解释为“所有文件均已人工逐行审过”“不存在任何漏洞”或“生产速率已经达到最大”。
 
 本次未合并主分支、未发布版本、未部署、未触碰生产数据库或真实凭据、未向真实模型供应商发送计费请求。旧的用户工作区保持不变，修复与验证在独立 checkout 和隔离测试视图中进行。
 
@@ -261,7 +261,8 @@ Tencent probe 不再把任意 HTTP 200 非空字节判为健康。重用 StreamA
 | 验证范围 | 实际结果 | 解释 |
 | --- | --- | --- |
 | 固定基线 Manager | 4,412 项：4,393 通过、10 失败、9 跳过 | pytest 9.2.0；原始回执保留 |
-| 冻结运行时代码的完整 Manager | **4,600 项：4,588 通过、3 失败、9 跳过**；3,219 subtests 通过，379.54 秒 | pytest 9.1.1 / pytest-asyncio 1.4.0；完整 hash 锁环境，未选测；3 个原生进程门禁仍失败 |
+| **GitHub 原生 Linux 完整 Manager** | **4,600 项：4,591 通过、0 失败、9 跳过**；3,219 subtests 通过，389.19 秒 | 对候选 `a6664aee` 的实际 CI；三个进程用例均 PASS，9 个跳过 ID/原因与本地完全相同 |
+| 本地冻结运行时代码的完整 Manager | **4,600 项：4,588 通过、3 失败、9 跳过**；3,219 subtests 通过，379.54 秒 | pytest 9.1.1 / pytest-asyncio 1.4.0；完整 hash 锁环境，未选测；3 个进程用例在本地失败，云端复验见上一行 |
 | 前端统一测试 | **226 / 226 通过** | 包括实际转译组件与解析器测试；没有真实浏览器端到端执行 |
 | 前端 typecheck / lint / build:export | 类型检查通过；lint 0 errors / 79 warnings；30 个页面静态导出成功 | 全导出体积不是首屏体积 |
 | 最终根工具测试 | **75 / 75 通过** | 完整 hash 锁环境；包含末轮历史脚本拒绝的 2 个方法、11 个子场景 |
@@ -269,7 +270,7 @@ Tencent probe 不再把任意 HTTP 200 非空字节判为健康。重用 StreamA
 | 历史 site/home-source | check / build 失败 | 缺真实 public 输入文件，未伪造成功 |
 | Python 三个 hash 锁依赖 | 37 项、0 已知公告、0 跳过 | 仅扫描当时公告，不证明未知漏洞不存在 |
 
-完整 Manager run 为 `20261105-212828-13b0299c`，`scope=full`、`built_web_required=true`，测试前后视图 SHA256 均为 `f0e74e97e90e9e4387ccbb9ab6603abb13718a039d4cb8d3a4682c22ad960a6b`。统计、JUnit、逐例日志和视图文件位于 [final-manager/](evidence/final-manager/)。**退出码为 1，不将此结果写成“全量全绿”。**
+本地完整 Manager run 为 `20261105-212828-13b0299c`，`scope=full`、`built_web_required=true`，测试前后视图 SHA256 均为 `f0e74e97e90e9e4387ccbb9ab6603abb13718a039d4cb8d3a4682c22ad960a6b`。统计、JUnit、逐例日志和视图文件位于 [final-manager/](evidence/final-manager/)。**本地退出码仍记为 1，没有因随后云端成功而改写。** 云端独立结果见 8.5 节。
 
 该全量后只追加遗留企业脚本的执行拒绝、双语文档和独立根测试。两份隔离视图逐路径比较显示仅企业脚本与两个 README 改变，Manager 运行代码、Manager 测试和前端所有字节均相同；详见 [收尾变更边界与复验](evidence/post-full-legacy-refusal/change-boundary.json)。完整回执没有被改写成较晚视图的哈希。
 
@@ -286,11 +287,11 @@ Tencent probe 不再把任意 HTTP 200 非空字节判为健康。重用 StreamA
 
 根工具 `test_config_capture` 原来要求 Manager 扩展生成器与可移植核心完全相同，基线也失败。测试现在核对实际共用函数 AST、QTG 可移植原文和明确的 IANA 分支差异；保留 Manager 既有扩展，不覆盖业务代码来制造字节相同。
 
-### 8.2 原生进程门禁仍未通过
+### 8.2 本地进程失败与原生复验
 
 三个测试涉及当前 PID 是否存活、zombie 是否已死及 SMTP 私有 worker 的 PDEATHSIG。独立实验发现本环境 `/proc/self/stat` 可读，而 `/proc/<os.getpid()>/stat` 为 ENOENT；已 terminate/wait 的自有 child，在数字 PID 视图中仍可能呈 S 且 start_ticks 不变。
 
-[环境证据](evidence/ops-proc-evidence.json)支持“当前 runner 不能可靠证明这些原生合同”，不能据此断言生产正常，也不能据此断言生产必坏。本次未新增 skip 或放宽原断言；不同运行中既有 zombie 条件 skip 可能使结果为 2 失败/10 跳过或 3 失败/9 跳过。最终报告只使用对应最终 run 的准确结果。
+[环境证据](evidence/ops-proc-evidence.json)支持“本地 runner 不能可靠证明这些原生合同”，不能仅据此断言生产正常或必坏。本次未新增 skip 或放宽原断言；不同本地运行中既有 zombie 条件 skip 可能使结果为 2 失败/10 跳过或 3 失败/9 跳过。随后 GitHub 原生 Linux 的真实 JUnit 已确认三个用例均通过，关闭的是本次原生 Linux 用例门禁，不是所有 OS、所有进程后代树或生产故障场景的普遍证明。
 
 ### 8.3 隔离回执本身也经审查
 
@@ -307,6 +308,22 @@ Tencent probe 不再把任意 HTTP 200 非空字节判为健康。重用 StreamA
 本地 YAML、actionlint、十个 Bash 块和回执收集器的两个失败场景已验证。任何业务检查失败仍使 job 失败，回执保留完整统计、测试 ID 和视图摘要。详见 [CI.md](CI.md)；云端执行状态须看实际候选提交的运行结果，不能用工作流存在代替成功。
 
 最终前端 lint 为 **0 errors / 79 warnings**。其中 4 个新增 `set-state-in-effect` 警告来自身份/目标变化时清除敏感或旧状态；没有用 disable 或无意义的延迟规避规则。后续以 keyed component 或按身份保存 state 重构时，应保留这些清除合同并重跑组件回归。当前通过 lint 的退出状态不等于零警告或真实浏览器端到端验证。
+
+### 8.5 GitHub 原生 Linux CI 已实际成功
+
+[Run 42030666659](https://github.com/daniei-chen/zhihui-gateway/actions/runs/42030666659) 的 attempt 1 已 `completed / success`，全部 19 个 job 步骤成功，包括回执收集和上传。它测试候选 head `a6664aeeb5567f9cbcb0ca10d45a381662622962`；实际 checkout 的 PR 合并提交是 `32ad580c1d455243d64672f424c9dbd8e8275c35`，父提交是基线与候选 head，Git tree 均为 `1076a402dda2e7322a9954d50d5313e44b94bf63`，已核对并非测试了其他代码。
+
+云端环境是 Python **3.12.16**、Node **24.22.2**、npm **11.19.1**；三个 Python hash 锁 37 个版本逐一一致，pip check 成功。前端 **226/226**、类型检查、静态导出与根工具 **75/75** 均通过，lint 仍为 0 errors / 79 warnings。完整 Manager 为 **4,591 通过、0 失败、9 跳过**，另 3,219 subtests 通过。9 个跳过的 ID/原因与本地完全相同，三个进程用例没有转为 skip。
+
+| 原生 JUnit 用例 | 结果 |
+| --- | --- |
+| `ClaimAndStateMachineTest.test_pid_alive_helpers` | PASS，0.091 秒 |
+| `SMTPWorkerTests.test_linux_parent_death_stops_actual_private_smtp_worker` | PASS，0.103 秒 |
+| `PidAlive.test_zombie_pid_reports_false_posix` | PASS，0.001 秒 |
+
+原始 artifact **13416357861** 已实际下载；ZIP 为 356,598 bytes，SHA256 `1b1af6c41357a65edb58a93c9d4557ba19ea7f0518cdf25474a35b11d8d86c03` 与 GitHub digest 相同。完整 ZIP、可直接读取的 JUnit/stats/视图、隔离报告及 job 日志均归档于 [native-ci/](evidence/native-ci/)。云端视图前后 SHA256 为 `63f07a936099bc525cc4c89d32ac0c06c8c74e00e00bf4208b1f86460316361d`，测试期未变。
+
+云端仍出现相同 10 次网络阻断、7 次 QTG 默认审计路径拒绝及 6 条 `/dev/null` 观察；CI 成功不消除 8.3 节的夹具与集成覆盖缺口，也不证明真实 PG/Windows/私有引擎和生产 SLO。本节与原始云回执作为后续 **docs/audits 目录内的补充提交**加入，没有改变已经通过 CI 的应用、前端、测试或 workflow 字节。
 
 ## 9. 依赖、静态扫描与源码库存
 
@@ -325,7 +342,7 @@ Bandit 在当时的 59,640 非注释行上产生 392 个候选（2 high、112 me
 | **P1：PG 镜像恢复** | 当前导入先 VACUUM 活库到 staging，再 DELETE 表；已有 admin_events 会触发不可变账本禁止删除。合成 PG transport +真实导入/DDL 复现失败，原库未替换 | 定义受控恢复合同并做真实 PostgreSQL 往返；不能临时 DROP 审计触发器或用空库证明有数据实例可恢复 |
 | **P1 条件项：旧 Windows 发行链** | update.ps1 固定旧 `ithtelab/workbuddy-manager` 来源；prepare/start/build 仍可达，缺同等 managed-release 拒绝门 | 若继续支持 Windows，应先阻断旧来源入口，统一当前产品/签名身份，在原生 Windows 验证安装、更新、回滚和进程身份 |
 | **高风险运维条件：asset_lifecycle apply** | 精确打开路径检查不覆盖目录内打开文件；apply 不重读 current/不取发布锁；旧 v10.7.x 与 v0.0.x 混合排序可能误选回退保留点 | 在受控发布协议中绑定 current/inode/版本族与发布锁；审计只读完成，未执行删除实验或声称已发生损失 |
-| **必须补验：原生进程与恢复** | 三个 proc/PDEATHSIG 门禁未通过；restore_drill 只证明抽查 | 原生 Linux、真实 age 密钥解密、离机完整资产恢复、故障回滚与数据库完整性验收 |
+| **必须补验：完整恢复** | restore_drill 只证明抽查；真实 age 解密与离机全量恢复未验证 | 真实密钥解密、离机完整资产恢复、故障回滚与数据库完整性验收；不能以三个原生进程用例通过替代 |
 | **必须补验：私有引擎** | 公开 Go patch 的 reasoning/tail 累积未见累计 cap；完整 refresh 调用链不全；Manager 限额不约束引擎内部未发出的缓冲 | 取得实际构建的完整源码与依赖、验证取消/刷新总期限、内存和发送预算；不能用 patch 阅读代替 |
 | **P2：管理探针 SSRF** | Upstash 主机预检查 DNS 异常 fail-open，且预检查与 HTTP client 实际解析分离 | 将验证的地址集合与实际连接/SNI 绑定，定义私有 Redis 的独立允许策略；一次 hostname 检查不足以证明抗 rebinding |
 | **P2：跨 UID 凭据读取政策** | Tencent 新 auth 文件仍可能为 0644，父目录可遍历时其他本机用户可读；现部署有 root Manager→uid10001 upstream | 设计共享组/ACL、目录 traversal 和容器 UID 权限；盲目设 0600 会破坏现有跨 UID 读取 |

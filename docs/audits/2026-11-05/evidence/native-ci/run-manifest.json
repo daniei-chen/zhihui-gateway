@@ -1,0 +1,14 @@
+{
+  "run_id": "20261105-125307-bb1663",
+  "target": "manager-assets",
+  "iso_root": "/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9",
+  "repo": "/home/runner/work/zhihui-gateway/zhihui-gateway",
+  "created_at": 1793883187.6889336,
+  "finished_at": 1793883577.227613,
+  "pytest_exit": 0,
+  "log_path": "",
+  "isolation_report": "/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9/artifacts/isolation-report.json",
+  "kept": true,
+  "python": "3.12.16 (main, Oct 26 2026, 02:50:49) [GCC 13.3.0]",
+  "platform": "linux"
+}

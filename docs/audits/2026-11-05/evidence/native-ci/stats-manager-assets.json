@@ -1,0 +1,298 @@
+{
+  "run_id": "20261105-125307-a361399c",
+  "scope": "full",
+  "pytest_args": [
+    "server/tests",
+    "-p",
+    "no:cacheprovider",
+    "--tb=short",
+    "-q",
+    "--continue-on-collection-errors",
+    "--junitxml=/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9/artifacts/20261105-125307-a361399c/junit-manager-assets.xml"
+  ],
+  "requested_test_paths": [
+    "server/tests"
+  ],
+  "python": "3.12.16 (main, Oct 26 2026, 02:50:49) [GCC 13.3.0]",
+  "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+  "view_sha256": "63f07a936099bc525cc4c89d32ac0c06c8c74e00e00bf4208b1f86460316361d",
+  "view_digest_schema": "path-kind-content/v2",
+  "view_sha256_after": "63f07a936099bc525cc4c89d32ac0c06c8c74e00e00bf4208b1f86460316361d",
+  "view_changed_during_tests": false,
+  "view_changed_paths": [],
+  "verification_exit": 0,
+  "built_web_required": true,
+  "isolation_run_id": "20261105-125307-bb1663",
+  "target": "manager-assets",
+  "description": "Manager + 前端/dev/docs 资产（诊断视图，非部署树）",
+  "iso_root": "/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9",
+  "cwd": "/home/runner/work/_temp/zhihui-audit/zhihui-iso-20261105-125307-qc7mqtu9/view/manager-assets-view",
+  "pytest_exit": 0,
+  "elapsed_s": 389.19,
+  "junit": "/home/runner/work/zhihui-gateway/zhihui-gateway/evidence/runs/20261105-125307-a361399c/junit-manager-assets.xml",
+  "summary": "tests=4600 passed=4591 failed=0 errors=0 skipped=9",
+  "stats": {
+    "tests": 4600,
+    "passed": 4591,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 9,
+    "xfailed": 0,
+    "xpassed": 0,
+    "failures": [],
+    "error_items": [],
+    "skips": [
+      {
+        "id": "server.tests.test_k36_security_headers.HeaderPresenceTest::test_qtg_declares_all_required_headers",
+        "reason": "qtg 源码不在 manager 隔离视图中"
+      },
+      {
+        "id": "server.tests.test_k36_security_headers.HeaderPresenceTest::test_src_three_platform_declares_all_required_headers",
+        "reason": "src/three-platform 源码树不在隔离视图中"
+      },
+      {
+        "id": "server.tests.test_k36_security_headers.CspContentTest::test_qtg_csp",
+        "reason": "QTG 源码不在隔离视图中"
+      },
+      {
+        "id": "server.tests.test_k36_security_headers.CspContentTest::test_src_three_platform_csp",
+        "reason": "src/three-platform 源码不在隔离视图中"
+      },
+      {
+        "id": "server.tests.test_k36_security_headers.HeaderUniformityTest::test_qtg_static_paths_get_headers_but_csp_is_page_only",
+        "reason": "qtg 源码不在 manager 隔离视图中"
+      },
+      {
+        "id": "server.tests.test_k36_security_headers.CspReportOnlyEdgeTest::test_edge_uses_report_only_so_app_csp_is_authoritative",
+        "reason": "ops/nginx 不在隔离视图中"
+      },
+      {
+        "id": "server.tests.test_key_import.ClientPathDetectionTests::test_detect_remembers_and_cache_is_reused",
+        "reason": "协议注册表与 .exe 扫描是 Windows 专属（keyimport._from_registry / _scan_respects_depth 在非 Windows 上按设计返回 None）；POSIX 侧的契约由 test_posix_detection_never_invents_a_path 钉住"
+      },
+      {
+        "id": "server.tests.test_key_import.ClientPathDetectionTests::test_scan_respects_depth",
+        "reason": "协议注册表与 .exe 扫描是 Windows 专属（keyimport._from_registry / _scan_respects_depth 在非 Windows 上按设计返回 None）；POSIX 侧的契约由 test_posix_detection_never_invents_a_path 钉住"
+      },
+      {
+        "id": "server.tests.test_pgsync.RealPgTest::test_export_then_import",
+        "reason": "未设置 WB_TEST_PG_DSN，跳过真实 PG 用例"
+      }
+    ]
+  },
+  "fake_provider": {
+    "total": 32,
+    "completed": 32,
+    "cancelled": 0,
+    "by_path": {
+      "/v1/chat/completions": 29,
+      "/v1/models": 3
+    },
+    "by_mode": {
+      "accepted_disconnect": 1,
+      "normal": 23,
+      "echo": 6,
+      "refusal": 1,
+      "error_500": 1
+    },
+    "bytes_in": 301579,
+    "bytes_out": 333264,
+    "max_body": 295325,
+    "errors": [],
+    "uptime_s": 389.538,
+    "recent": [
+      {
+        "t": 131.319,
+        "path": "/v1/chat/completions",
+        "mode": "accepted_disconnect",
+        "body": 145
+      },
+      {
+        "t": 131.465,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.509,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.552,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 131.612,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.652,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.694,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 131.768,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 131.81,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 131.849,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 226.443,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 269
+      },
+      {
+        "t": 226.697,
+        "path": "/v1/chat/completions",
+        "mode": "refusal",
+        "body": 239
+      },
+      {
+        "t": 226.864,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 295325
+      },
+      {
+        "t": 227.025,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 560
+      },
+      {
+        "t": 227.072,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 227.121,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 227.276,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 884
+      },
+      {
+        "t": 251.869,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.122,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.137,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.151,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.17,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.35,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.393,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.547,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.703,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.746,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.789,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.939,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 252.983,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 253.136,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 190
+      },
+      {
+        "t": 253.181,
+        "path": "/v1/chat/completions",
+        "mode": "error_500",
+        "body": 146
+      }
+    ]
+  }
+}

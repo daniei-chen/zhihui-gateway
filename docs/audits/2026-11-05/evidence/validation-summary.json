@@ -306,10 +306,11 @@
   "github_ci": {
     "configuration": "../../../.github/workflows/audit-checks.yml",
     "local_static_validation": "ci-static-validation.json",
-    "cloud_execution_status": "not_yet_observed"
+    "cloud_execution_status": "completed/success on a6664aeeb5567f9cbcb0ca10d45a381662622962; subsequent supplement is docs/audits only",
+    "run_url": "https://github.com/daniei-chen/zhihui-gateway/actions/runs/42030666659",
+    "evidence": "native-ci/"
   },
   "unclosed_gates": [
-    "native Linux PID/zombie/PDEATHSIG",
     "real PostgreSQL restore with immutable ledger data",
     "native Windows updater identity and process/ACL checks",
     "real age decrypt and complete offsite recovery",
@@ -326,5 +327,104 @@
     "log": "post-full-legacy-refusal/root-tools.log"
   },
   "code_commit": "431bb8e16e5bd3a0e243957e6adca31611fb0929",
-  "latest_main_evidence": "latest-main.json"
+  "latest_main_evidence": "latest-main.json",
+  "native_ci": {
+    "workflow_run": 42030666659,
+    "job_id": 127255990073,
+    "artifact_id": 13416357861,
+    "artifact_sha256": "1b1af6c41357a65edb58a93c9d4557ba19ea7f0518cdf25474a35b11d8d86c03",
+    "manager_run_id": "20261105-125307-a361399c",
+    "manager_stats": {
+      "tests": 4600,
+      "passed": 4591,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 9,
+      "xfailed": 0,
+      "xpassed": 0,
+      "failures": [],
+      "error_items": [],
+      "skips": [
+        {
+          "id": "server.tests.test_k36_security_headers.HeaderPresenceTest::test_qtg_declares_all_required_headers",
+          "reason": "qtg 源码不在 manager 隔离视图中"
+        },
+        {
+          "id": "server.tests.test_k36_security_headers.HeaderPresenceTest::test_src_three_platform_declares_all_required_headers",
+          "reason": "src/three-platform 源码树不在隔离视图中"
+        },
+        {
+          "id": "server.tests.test_k36_security_headers.CspContentTest::test_qtg_csp",
+          "reason": "QTG 源码不在隔离视图中"
+        },
+        {
+          "id": "server.tests.test_k36_security_headers.CspContentTest::test_src_three_platform_csp",
+          "reason": "src/three-platform 源码不在隔离视图中"
+        },
+        {
+          "id": "server.tests.test_k36_security_headers.HeaderUniformityTest::test_qtg_static_paths_get_headers_but_csp_is_page_only",
+          "reason": "qtg 源码不在 manager 隔离视图中"
+        },
+        {
+          "id": "server.tests.test_k36_security_headers.CspReportOnlyEdgeTest::test_edge_uses_report_only_so_app_csp_is_authoritative",
+          "reason": "ops/nginx 不在隔离视图中"
+        },
+        {
+          "id": "server.tests.test_key_import.ClientPathDetectionTests::test_detect_remembers_and_cache_is_reused",
+          "reason": "协议注册表与 .exe 扫描是 Windows 专属（keyimport._from_registry / _scan_respects_depth 在非 Windows 上按设计返回 None）；POSIX 侧的契约由 test_posix_detection_never_invents_a_path 钉住"
+        },
+        {
+          "id": "server.tests.test_key_import.ClientPathDetectionTests::test_scan_respects_depth",
+          "reason": "协议注册表与 .exe 扫描是 Windows 专属（keyimport._from_registry / _scan_respects_depth 在非 Windows 上按设计返回 None）；POSIX 侧的契约由 test_posix_detection_never_invents_a_path 钉住"
+        },
+        {
+          "id": "server.tests.test_pgsync.RealPgTest::test_export_then_import",
+          "reason": "未设置 WB_TEST_PG_DSN，跳过真实 PG 用例"
+        }
+      ]
+    },
+    "manager_elapsed_s": 389.19,
+    "view_sha256": "63f07a936099bc525cc4c89d32ac0c06c8c74e00e00bf4208b1f86460316361d",
+    "view_sha256_after": "63f07a936099bc525cc4c89d32ac0c06c8c74e00e00bf4208b1f86460316361d",
+    "native_cases": [
+      {
+        "id": "server.tests.test_instance_leases.ClaimAndStateMachineTest::test_pid_alive_helpers",
+        "time": "0.091",
+        "status": "PASS",
+        "children": []
+      },
+      {
+        "id": "server.tests.test_smtp_transport.SMTPWorkerTests::test_linux_parent_death_stops_actual_private_smtp_worker",
+        "time": "0.103",
+        "status": "PASS",
+        "children": []
+      },
+      {
+        "id": "server.tests.test_update_lifecycle.PidAlive::test_zombie_pid_reports_false_posix",
+        "time": "0.001",
+        "status": "PASS",
+        "children": []
+      }
+    ],
+    "head_sha": "a6664aeeb5567f9cbcb0ca10d45a381662622962",
+    "tested_merge_commit": "32ad580c1d455243d64672f424c9dbd8e8275c35",
+    "tested_tree": "1076a402dda2e7322a9954d50d5313e44b94bf63",
+    "status": "completed",
+    "conclusion": "success",
+    "run_url": "https://github.com/daniei-chen/zhihui-gateway/actions/runs/42030666659",
+    "evidence": "native-ci/",
+    "python": "3.12.16 (main, Oct 26 2026, 02:50:49) [GCC 13.3.0]",
+    "node": "v24.22.2",
+    "npm": "11.19.1",
+    "locked_versions_verified": 37,
+    "skip_ids_and_reasons_identical_to_local": true,
+    "frontend_tests": 226,
+    "root_tests": 75,
+    "scope_of_supplement": "Documentation and raw evidence only; production, frontend, tests and workflow bytes unchanged."
+  },
+  "closed_native_gates": [
+    "test_pid_alive_helpers",
+    "test_linux_parent_death_stops_actual_private_smtp_worker",
+    "test_zombie_pid_reports_false_posix"
+  ]
 }

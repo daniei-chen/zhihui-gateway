@@ -1,0 +1,15 @@
+{
+  "github_sha": "32ad580c1d455243d64672f424c9dbd8e8275c35",
+  "github_run_id": "42030666659",
+  "github_run_attempt": "1",
+  "copied_receipts": [
+    "isolation/zhihui-iso-20261105-125307-qc7mqtu9/isolation-report.json",
+    "isolation/zhihui-iso-20261105-125307-qc7mqtu9/run-manifest.json",
+    "isolation/zhihui-iso-20261105-125307-qc7mqtu9/20261105-125307-a361399c/junit-manager-assets.xml",
+    "runs/20261105-125307-a361399c/junit-manager-assets.xml",
+    "runs/20261105-125307-a361399c/stats-manager-assets.json",
+    "runs/20261105-125307-a361399c/view-after.json",
+    "runs/20261105-125307-a361399c/view-before.json"
+  ],
+  "interpretation": "Receipt collection is not test success; inspect step exits and JUnit/stats."
+}
