@@ -366,7 +366,7 @@ def delete_key(key_id: int) -> bool:
     return True
 
 
-def reset_usage(key_id: int) -> bool:
+def reset_usage(key_id: int, *, actor: str = 'reset_usage') -> bool:
     """把已用 Token 与已用积分一起归零。返回是否真的命中了密钥。
 
     返回布尔值是为了让路由能对「不存在的 id」报 404 —— 原来静默成功会让
@@ -377,9 +377,17 @@ def reset_usage(key_id: int) -> bool:
     重置过」）。若只想放开其中一项，正确做法是把对应的**额度**调大，而不是
     靠重置。
     """
-    if not db.query_one('SELECT id FROM api_keys WHERE id = ?', (key_id,)):
-        return False
-    db.execute('UPDATE api_keys SET used_tokens = 0, used_credit = 0, used_credit_units = 0 WHERE id = ?', (key_id,))
+    from . import budget, ledgerreplay
+    budget.initialize()
+    with db.transaction() as conn:
+        row=conn.execute('SELECT used_tokens,used_credit_units FROM api_keys WHERE id=?',(key_id,)).fetchone()
+        if row is None:return False
+        if budget.unresolved(key_id) or ledgerreplay.backlog()!=0 or ledgerreplay.admission_block()['blocked']:
+            raise ValueError('存在未决请求或费用回执，先完成核对再重置用量')
+        baseline=conn.execute('SELECT COALESCE(SUM(credit_units),0) FROM usage_events WHERE key_id=?',(key_id,)).fetchone()[0]
+        conn.execute('INSERT INTO usage_reset_events(key_id,event_units_before,previous_units,previous_tokens,ts,actor) VALUES(?,?,?,?,?,?)',
+                     (key_id,baseline,int(row['used_credit_units'] or 0),int(row['used_tokens'] or 0),int(time.time()),str(actor)[:128]))
+        conn.execute('UPDATE api_keys SET used_tokens=0,used_credit=0,used_credit_units=0 WHERE id=?',(key_id,))
     return True
 
 
@@ -700,6 +708,48 @@ def validate(key: dict, ip: str, model: str | None,
         if not model_allowed(key, model):
             return Rejection(f'模型 {model} 不在密钥白名单内', 400,
                              'invalid_request_error', 'model_not_allowed')
+    return None
+
+
+def claim_ip(key: dict, ip: str) -> Rejection | None:
+    """Atomically bind a limited key's IP before its first upstream dispatch.
+
+    ``validate`` remains a read-only preflight. Recording IPs only at settlement
+    allowed simultaneous requests (and long streams) from arbitrarily many new
+    IPs to pass the same limit. Re-read the current limit inside the write
+    transaction so separate workers cannot both claim its last available slot.
+    No usage is charged here; an admitted IP stays bound even if the upstream
+    later fails. Unlimited keys keep their existing settlement-time recording.
+    """
+    with db.transaction() as conn:
+        row = conn.execute(
+            'SELECT enabled,expires_at,max_ips FROM api_keys WHERE id=?',
+            (key['id'],),
+        ).fetchone()
+        if row is None:
+            return Rejection('API Key 已撤销或已更换', 401,
+                             'authentication_error', 'invalid_api_key')
+        if not row['enabled']:
+            return Rejection('密钥已停用', 403, 'permission_error', 'key_disabled')
+        if row['expires_at'] and row['expires_at'] < time.time():
+            return Rejection('密钥已过期', 403, 'permission_error', 'key_expired')
+        try:
+            limit = keylimits.validate('max_ips', row['max_ips'])
+        except ValueError:
+            return Rejection('密钥限制策略损坏，请管理员修复', 403,
+                             'permission_error', 'invalid_key_policy')
+        if not limit:
+            return None
+        if conn.execute('SELECT 1 FROM api_key_ips WHERE key_id=? AND ip=?',
+                        (key['id'], ip)).fetchone():
+            return None
+        count = conn.execute('SELECT COUNT(*) FROM api_key_ips WHERE key_id=?',
+                             (key['id'],)).fetchone()[0]
+        if count >= limit:
+            return Rejection(f'密钥已绑定 {count} 个 IP，超出上限 {limit}', 400,
+                             'invalid_request_error', 'too_many_ips')
+        conn.execute('INSERT INTO api_key_ips(key_id,ip,first_seen) VALUES(?,?,?)',
+                     (key['id'], ip, int(time.time())))
     return None
 
 

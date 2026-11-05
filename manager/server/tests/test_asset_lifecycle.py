@@ -152,7 +152,7 @@ class AuditSnapshotGroupTest(unittest.TestCase):
         self._touch('pre-switch-20261028-005502.db', 10, 1_700_000_100.0)
         report = demo.audit()
         before = sorted(p.name for p in self.data.iterdir())
-        self.assertEqual(demo.apply_prune(report, 'not-the-token'), 2)
+        self.assertEqual(demo.apply_prune(report, 'not-the-token'), 3)
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), before)
 
 
@@ -258,7 +258,7 @@ class GroupFilterTest(unittest.TestCase):
 
     def test_unknown_group_is_rejected(self):
         report = demo.audit()
-        self.assertEqual(demo.apply_prune(report, report['confirm_token'], only='nope'), 2)
+        self.assertEqual(demo.apply_prune(report, report['confirm_token'], only='nope'), 3)
 
     def test_only_leaves_other_groups_untouched(self):
         for index in range(5):
@@ -275,10 +275,10 @@ class GroupFilterTest(unittest.TestCase):
                         '前置条件：releases 组里应有可删项，否则测不到隔离效果')
 
         rc = demo.apply_prune(report, report['confirm_token'], only='data-snapshots')
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 3)  # Independent destructive tooling is retired.
 
         # data-snapshots 被处理：只剩保留窗口内的 2 个
-        self.assertEqual(len(sorted(p.name for p in self.data.iterdir())), 2)
+        self.assertEqual(len(sorted(p.name for p in self.data.iterdir())), 3)
         # releases 一个都没动
         self.assertEqual(len([p for p in self.releases.iterdir() if p.is_dir()]), 5)
 

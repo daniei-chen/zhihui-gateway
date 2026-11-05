@@ -39,7 +39,9 @@ _STATE: dict[str, Any] = {
     "net_policy": "block",
     "started_at": 0.0,
     "net_attempts": [],
+    "net_attempt_count": 0,
     "net_blocked": 0,
+    "net_blocked_samples": [],
     "protected_writes": [],
     "outside_writes": [],
     "outside_write_count": 0,
@@ -113,7 +115,8 @@ def pytest_configure(config: pytest.Config) -> None:
         pytest.exit(f"隔离根不存在: {root}", returncode=3)
 
     policy = config.getoption("--zh-net-policy") or os.environ.get("ZH_NET_POLICY", "block")
-    _STATE.update(net_attempts=[], net_blocked=0, protected_writes=[], outside_writes=[],
+    _STATE.update(net_attempts=[], net_attempt_count=0, net_blocked=0,
+                  net_blocked_samples=[], protected_writes=[], outside_writes=[],
                   outside_write_count=0)
     _STATE.pop('final_report', None)
     _STATE.update({
@@ -175,11 +178,17 @@ def _install_net_guard(policy: str) -> None:
     orig_cc = socket.create_connection
 
     def _decide(host: str, where: str) -> None:
-        _sample("net_attempts", {"host": host, "where": where,
-                                 "t": round(time.time() - _STATE["started_at"], 3)})
+        observation = {"host": host, "where": where,
+                       "t": round(time.time() - _STATE["started_at"], 3),
+                       "test": os.environ.get("PYTEST_CURRENT_TEST", "")}
+        _STATE["net_attempt_count"] += 1
+        _sample("net_attempts", observation)
         if is_loopback(host):
             return
         _STATE["net_blocked"] += 1
+        # Preserve rejected destinations even when earlier loopback traffic has
+        # filled the general sample buffer. Counters are never sample lengths.
+        _sample("net_blocked_samples", observation)
         if policy == "block":
             raise NetworkBlocked(
                 f"[ZH-ISO] 阻断非回环网络访问：{host}（{where}）。"
@@ -238,7 +247,8 @@ def _install_path_guard(root: Path) -> None:
             pass
         reason = protected_reason(p, iso_root=root)
         if reason:
-            _sample("protected_writes", {"path": str(p), "reason": reason, "where": where})
+            _sample("protected_writes", {"path": str(p), "reason": reason, "where": where,
+                                         "test": os.environ.get("PYTEST_CURRENT_TEST", "")})
             raise PermissionError(
                 f"[ZH-ISO] 拒绝写入受保护的生产路径：{p}（{reason}），来源 {where}")
         _STATE["outside_write_count"] += 1
@@ -287,6 +297,9 @@ def _fake_provider_stats() -> dict[str, Any]:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     report_path = os.environ.get("ZH_ISO_REPORT", "")
+    # This fetch itself uses the observed loopback transport. Complete it before
+    # taking one consistent snapshot of counters and bounded sample lists.
+    fake_provider = _fake_provider_stats()
     payload = {
         "iso_root": _STATE["iso_root"],
         "run_id": _STATE["run_id"],
@@ -297,16 +310,20 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         "pytest_exitstatus": int(exitstatus),
         "duration_s": round(time.time() - _STATE["started_at"], 2),
         "network": {
-            "attempts": _STATE["net_attempts"],
-            "attempt_count": len(_STATE["net_attempts"]),
+            "attempts": list(_STATE["net_attempts"]),
+            "attempt_count": _STATE["net_attempt_count"],
+            "sample_count": len(_STATE["net_attempts"]),
+            "samples_truncated": _STATE["net_attempt_count"] > len(_STATE["net_attempts"]),
             "blocked": _STATE["net_blocked"],
+            "blocked_samples": list(_STATE["net_blocked_samples"]),
+            "blocked_samples_truncated": _STATE["net_blocked"] > len(_STATE["net_blocked_samples"]),
         },
         "writes": {
             "protected_violations": _STATE["protected_writes"],
             "outside_iso_samples": _STATE["outside_writes"],
             "outside_iso_count": _STATE["outside_write_count"],
         },
-        "fake_provider": _fake_provider_stats(),
+        "fake_provider": fake_provider,
     }
     if report_path:
         try:
@@ -327,8 +344,9 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:  # ty
     tr.write_sep("-", "隔离环境摘要 (ZH-ISO)")
     tr.write_line(f"隔离根: {payload.get('iso_root')}")
     tr.write_line(f"网络策略: {payload.get('net_policy')}；"
-                  f"非回环尝试 {payload['network']['attempt_count']} 次，"
-                  f"阻断 {payload['network']['blocked']} 次")
+                  f"观察到网络调用 {payload['network']['attempt_count']} 次"
+                  f"（样本 {payload['network']['sample_count']} 条），"
+                  f"非回环调用 {payload['network']['blocked']} 次")
     writes = payload.get("writes", {})
     tr.write_line(f"受保护路径写入拦截: {len(writes.get('protected_violations', []))} 次；"
                   f"越界写(仅记录): {writes.get('outside_iso_count', 0)} 次")

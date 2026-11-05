@@ -83,20 +83,26 @@ async def _realm_available(request: Request, platform: str, realm: str) -> bool:
     只有账号本身带 realm。所以「该版本下一个账号都没有」是唯一能确定的情形：
     这时必须返回空，否则切到国际版会看到和国内版一模一样的数字（用户实测反馈）。
     """
-    if realm not in ("cn", "intl"):
+    if not realm:
         return True
+    if realm not in ("cn", "global", "intl"):
+        raise HTTPException(status_code=422, detail='Invalid usage realm')
     try:
-        agg = await build_aggregate(_rt(request))
-    except Exception:  # noqa: BLE001
-        return True
+        from ..service import build_pool_snapshot
+        agg = await build_pool_snapshot(_rt(request),platform)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail='无法核实账号池版本归属') from exc
     rows = {
         "qoder": agg.qoder_accounts,
         "trae": agg.trae_accounts,
         "workbuddy": agg.wb_accounts,
     }.get(platform, [])
+    observed={('global' if str(getattr(a,'realm','')).lower()=='intl' else str(getattr(a,'realm','') or 'cn').lower()) for a in rows}
+    if len(observed)>1:
+        raise HTTPException(status_code=409, detail='旧上游仅提供全池用量，不能按版本归属')
     for a in rows:
         got = str(getattr(a, "realm", "") or "").strip().lower()
-        if got == realm:
+        if ("global" if got=="intl" else got) == ("global" if realm=="intl" else realm):
             return True
         # 上游不分版本时（Trae 的账号没有 realm 字段）这些账号默认属于国内版；
         # 把它们算到国际版会让国际版凭空多出一份用量。
@@ -108,7 +114,12 @@ async def _realm_available(request: Request, platform: str, realm: str) -> bool:
 
 async def _payload(request: Request, days: int = 14):
     rt = _rt(request)
-    agg = await build_aggregate(rt)
+    platform=_platform(request)
+    from ...services.scope import fixed
+    agg = await build_aggregate(rt, usage_days=days,scope=fixed(platform,authority='upstream'))
+    prefixes=('wb.',) if platform=='workbuddy' else (platform+'.',)
+    if any(error.startswith(prefixes) for error in agg.errors):
+        raise HTTPException(status_code=503, detail='用量证据不完整，不能以空数组或零值代替')
     return rt, usage_payload(agg, days)
 
 
@@ -158,11 +169,13 @@ async def stats_summary(request: Request, realm: str = Query(default="")) -> Dic
         "today_tokens": int(today_row["prompt_tokens"] + today_row["completion_tokens"]) if today_row else 0,
         "today_credit": float(today_row["credit"]) if today_row else 0.0,
         "week_credit": round(sum(float(d["credit"]) for d in week_rows), 4),
-        "total_credit": round(sum(float(d["credit"]) for d in daily), 4),
+        "total_credit": None,
         "week_requests": sum(int(d["requests"]) for d in week_rows),
         "week_tokens": sum(int(d["prompt_tokens"] + d["completion_tokens"]) for d in week_rows),
-        "total_requests": sum(int(d["requests"]) for d in daily),
-        "total_tokens": sum(int(d["prompt_tokens"] + d["completion_tokens"]) for d in daily),
+        "total_requests": None,
+        "total_tokens": None,
+        "observed_window_days": 14,
+        "lifetime_totals_known": False,
         "active_keys": len([k for k in rt.store.list_keys()
                             if platform in (k.get("platforms") or PLATFORMS)]),
         "top_model": str(_get(top, "model", "")) if top else None,

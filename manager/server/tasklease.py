@@ -277,10 +277,12 @@ def claim(task: str, ttl_seconds: int | None = None, *, guard=None,
     if ttl <= 0:
         raise ValueError('ttl 必须为正数')
     me = owner or identity()
-    stamp = _now(now)
     initialize()
     from . import db
     with db.transaction() as conn:
+        # BEGIN IMMEDIATE and the process lock can outlive the old lease.
+        # Evaluate both ownership and the new TTL after acquiring them.
+        stamp = _now(now)
         blocked = False
         if respect_publish and publish_state(conn, now=stamp) is not None:
             blocked = True
@@ -300,7 +302,9 @@ def claim(task: str, ttl_seconds: int | None = None, *, guard=None,
         until = int(row['lease_until'] or 0)
         fence = int(row['fence'] or 0)
         # 只有「没人持有 / 自己持有 / 已过期」才能接管；否则如实拒绝。
-        if current_owner and current_owner != me and until > stamp:
+        if current_owner and (until > stamp or owner_alive(current_owner) is not False):
+            # A TTL is not proof that a process stopped sending external writes.
+            # Same-process re-entry is also refused; renew() owns that operation.
             return False, fence
         new_fence = fence + 1
         changed = conn.execute(
@@ -317,19 +321,21 @@ def claim(task: str, ttl_seconds: int | None = None, *, guard=None,
 
 def renew(task: str, fence: int, ttl_seconds: int | None = None, *,
           owner: str | None = None, now: int | None = None) -> bool:
-    """带 fence 续租；fence/owner 不匹配 → False（旧 owner 已失效）。"""
+    """带 fence 续租；过期、发布中或 fence/owner 不匹配均拒绝。"""
     ttl = int(DEFAULT_TTL if ttl_seconds is None else ttl_seconds)
     if ttl <= 0:
         raise ValueError('ttl 必须为正数')
     me = owner or identity()
-    stamp = _now(now)
     initialize()
     from . import db
     with db.transaction() as conn:
+        stamp = _now(now)
+        if publish_state(conn, now=stamp) is not None:
+            return False
         changed = conn.execute(
             'UPDATE task_leases SET lease_until=?, updated_at=? '
-            'WHERE task=? AND fence=? AND owner=?',
-            (stamp + ttl, stamp, task, int(fence), me)).rowcount
+            'WHERE task=? AND fence=? AND owner=? AND lease_until>?',
+            (stamp + ttl, stamp, task, int(fence), me, stamp)).rowcount
         return changed == 1
 
 
@@ -337,10 +343,10 @@ def release(task: str, fence: int, *, owner: str | None = None,
             now: int | None = None) -> bool:
     """带 fence 释放：owner 清空、lease_until 归零，fence 不回退（防 ABA）。"""
     me = owner or identity()
-    stamp = _now(now)
     initialize()
     from . import db
     with db.transaction() as conn:
+        stamp = _now(now)
         changed = conn.execute(
             "UPDATE task_leases SET owner='', lease_until=0, updated_at=?, detail='released' "
             'WHERE task=? AND fence=? AND owner=?',
@@ -356,53 +362,55 @@ def still_holding(task: str, fence: int, *, owner: str | None = None,
     `dailyplan.mark_ran_fenced`）；为 False 时必须放弃写入。
     """
     me = owner or identity()
-    stamp = _now(now)
     from . import db
     row = db.query_one(
         'SELECT owner, lease_until FROM task_leases WHERE task=? AND fence=?',
         (task, int(fence)))
     if row is None or str(row['owner'] or '') != me:
         return False
-    return int(row['lease_until'] or 0) > stamp
+    return int(row['lease_until'] or 0) > _now(now)
 
 
 def active_leases(conn: sqlite3.Connection, *, now: int | None = None) -> list[dict]:
     """未过期的租约列表（发布方检查用；纯 conn，不依赖 Manager 运行时）。"""
     stamp = _now(now)
-    try:
-        rows = conn.execute(
-            'SELECT task, owner, lease_until, fence FROM task_leases '
-            'WHERE lease_until > ? ORDER BY task', (stamp,)).fetchall()
-    except sqlite3.Error:
-        return []           # 旧库还没有这张表 = 不存在任何租约
+    # Unknown liveness is not permission to publish, even after TTL expiry.
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_leases'").fetchone() is None:
+        return []
+    rows = conn.execute(
+        'SELECT task, owner, lease_until, fence FROM task_leases '
+        "WHERE owner <> '' ORDER BY task").fetchall()
     return [{'task': str(r[0]), 'owner': str(r[1] or ''),
-             'lease_until': int(r[2] or 0), 'fence': int(r[3] or 0)} for r in rows]
+             'lease_until': int(r[2] or 0), 'fence': int(r[3] or 0)} for r in rows
+            if int(r[2] or 0) > stamp or owner_alive(str(r[1])) is not False]
 
 
 # ── 发布状态（publish.state）：双向握手协议，纯 conn ────────────────────
 
 
 def publish_state(conn: sqlite3.Connection, *, now: int | None = None) -> dict | None:
-    """未过期的发布状态；无记录/已过期/格式坏 → None（按「没有发布」处理）。"""
+    """未过期的发布状态；无记录/已过期为 None，不可核实的状态拒绝放行。"""
     stamp = _now(now)
-    try:
-        row = conn.execute('SELECT value FROM settings WHERE key=?',
-                           (PUBLISH_KEY,)).fetchone()
-    except sqlite3.Error:
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone() is None:
         return None
+    row = conn.execute('SELECT value FROM settings WHERE key=?',
+                       (PUBLISH_KEY,)).fetchone()
     if row is None:
         return None
     raw = row[0]
     try:
         state = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(state, dict) or str(state.get('state')) != 'publishing':
-        return None
+    except (TypeError, ValueError) as exc:
+        raise PublishBlocked('发布状态损坏，无法证明当前允许执行任务') from exc
+    if not isinstance(state, dict) or state.get('state') != 'publishing':
+        raise PublishBlocked('发布状态格式无效，无法证明当前允许执行任务')
     try:
-        until = int(state.get('lease_until') or 0)
-    except (TypeError, ValueError):
-        return None
+        raw_until = state['lease_until']
+        if isinstance(raw_until, bool) or not isinstance(raw_until, int) or raw_until <= 0:
+            raise ValueError('invalid lease deadline')
+        until = raw_until
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PublishBlocked('发布租约截止时间无效，无法证明当前允许执行任务') from exc
     return state if until > stamp else None
 
 

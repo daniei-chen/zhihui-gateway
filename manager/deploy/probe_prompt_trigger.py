@@ -95,7 +95,7 @@ def key_from_store(profile_text: str) -> str | None:
                 return value
             if current.startswith('llm-pi-ai/') and fallback is None:
                 fallback = value
-    return fallback
+    return None  # Never choose an unrelated provider credential.
 
 
 def resolve_credentials(base_url: str | None, api_key: str | None,
@@ -112,13 +112,17 @@ def resolve_credentials(base_url: str | None, api_key: str | None,
     except OSError:
         pass
 
-    base = base_url or _first(r'^\s*baseURL:\s*(\S+)\s*$', profile_text)
+    profile_base = _first(r'^\s*baseURL:\s*(\S+)\s*$', profile_text)
+    base = base_url or profile_base
+    if base_url and base_url.rstrip('/') != (profile_base or '').rstrip('/') and not (api_key or api_key_env):
+        raise ValueError('覆盖地址必须显式提供该地址对应的凭据')
     if api_key:
         return base, api_key
     if api_key_env:
         env_value = os.environ.get(api_key_env)
-        if env_value:
-            return base, env_value
+        if not env_value:
+            raise ValueError('指定凭据环境变量为空，拒绝回退其他凭据')
+        return base, env_value
     inline = _first(r'^\s*apiKey:\s*(\S+)\s*$', profile_text)
     if inline:
         return base, inline
@@ -126,6 +130,37 @@ def resolve_credentials(base_url: str | None, api_key: str | None,
     if named and os.environ.get(named):
         return base, os.environ[named]
     return base, key_from_store(profile_text)
+
+
+
+def inference_evidence(raw):
+    """A successful HTTP transport alone is not a successful model probe."""
+    try:value=json.loads(raw)
+    except (ValueError,UnicodeDecodeError):return False
+    if not isinstance(value,dict) or value.get('error') or value.get('code') in (11128,'11128'):
+        return False
+    choices=value.get('choices')
+    if not isinstance(choices,list) or not choices:return False
+    for choice in choices:
+        if not isinstance(choice,dict):continue
+        message=choice.get('message')
+        if not isinstance(message,dict):continue
+        if choice.get('finish_reason') not in (None,'stop','length'):continue
+        if any(isinstance(message.get(key),str) and message[key].strip()
+               for key in ('content','reasoning_content')):return True
+    return False
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_request(request, timeout):
+    # The selected origin owns the credential. Redirects and inherited proxy
+    # settings must not silently create a second credential destination.
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+    return opener.open(request,timeout=timeout)
 
 
 def probe(base_url: str, api_key: str, system_text: str, model: str,
@@ -144,16 +179,20 @@ def probe(base_url: str, api_key: str, system_text: str, model: str,
         headers={'Content-Type': 'application/json',
                  'Authorization': 'Bearer ' + api_key})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read(4096).decode('utf-8', 'replace')
-            return {'status': response.status, 'rejected': False, 'body': body[:300]}
+        with _open_request(request, timeout=timeout) as response:
+            raw=response.read(16385)
+            body=raw.decode('utf-8','replace')
+            valid=len(raw)<=16384 and inference_evidence(body)
+            return {'status': response.status, 'rejected': False,
+                    'ok': 200<=response.status<300 and valid, 'body':body.replace(api_key,'[REDACTED]')[:300]}
     except urllib.error.HTTPError as exc:
         body = exc.read(4096).decode('utf-8', 'replace')
-        return {'status': exc.code,
+        return {'status': exc.code, 'ok': False,
                 'rejected': any(marker in body for marker in REJECTION_MARKERS),
-                'body': body[:300]}
+                'body': body.replace(api_key,'[REDACTED]')[:300]}
     except Exception as exc:  # noqa: BLE001
-        return {'status': 0, 'rejected': False, 'body': '%s: %s' % (type(exc).__name__, exc)}
+        return {'status': 0, 'rejected': False, 'ok': False,
+                'body': ('%s: %s' % (type(exc).__name__, exc)).replace(api_key,'[REDACTED]')[:300]}
 
 
 def segments(text: str, parts: int) -> list:
@@ -191,7 +230,11 @@ def main(argv: list) -> int:
             print(chunk[:400] + ('…' if len(chunk) > 400 else ''))
         return 0
 
-    base_url, api_key = resolve_credentials(args.base_url, args.api_key, args.api_key_env)
+    try:
+        base_url, api_key = resolve_credentials(args.base_url, args.api_key, args.api_key_env)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if not base_url:
         print('无法解析 baseURL：请在 --base-url 指定（profile 里应有 baseURL）', file=sys.stderr)
         return 2
@@ -204,17 +247,22 @@ def main(argv: list) -> int:
     if not args.bisect:
         result = probe(base_url, api_key, text, args.model)
         print(json.dumps(result, ensure_ascii=False))
-        return 1 if result['rejected'] else 0
+        return 1 if result['rejected'] else 0 if result['ok'] else 3
 
     chunks = segments(text, args.parts)
-    hits = []
+    hits, unknown = [], []
     for index, chunk in enumerate(chunks):
         result = probe(base_url, api_key, chunk, args.model)
-        flag = 'REJECTED' if result['rejected'] else 'ok      '
+        flag = 'REJECTED' if result['rejected'] else 'ok' if result['ok'] else 'UNKNOWN'
         print('[%2d/%2d] %s status=%s  %d 字符' % (index + 1, len(chunks), flag,
                                                    result['status'], len(chunk)))
+        if not result['ok'] and not result['rejected']:
+            unknown.append(index)
         if result['rejected']:
             hits.append(index)
+    if unknown:
+        print('存在请求失败或未知结果，不能判定全部通过')
+        return 3
     if hits:
         print('\n命中片段：%s' % ', '.join(str(i + 1) for i in hits))
         print('把命中片段里的句子逐条再跑一次 --text，缩小到句级后写进 prompt_defuse_rules。')

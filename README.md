@@ -29,10 +29,12 @@
 
 把已验证修复合为一个版本：客户端更兼容，页面少做重复工作，失败与恢复都有边界。
 
+**本次增补构建：`v0.0.7+stable.20261106.1`。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产。
+
 <a href="docs/RELEASE-0.0.7.md">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.7.svg" />
-    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；跨层发送预算、按需积分和清晰诊断。固定 Linux 验收 Manager 4403、引擎 1764、发布补充合同 6 项通过，不是实时状态或长期保证。" />
+    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；完整门禁、来源绑定与账本保护。验收以具体构建的签名回执为准。" />
   </picture>
 </a>
 
@@ -47,7 +49,7 @@
 [发布说明与边界](docs/RELEASE-0.0.7.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.7/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7)
 
 > [!NOTE]
-> 数字来自固定构建的 Linux 隔离验收；前端另有 128 项测试通过。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
+> 测试数量必须对应具体构建，旧版或草稿 PR 的通过回执不能替代本次门禁。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
 
 <br />
 

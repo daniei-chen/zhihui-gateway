@@ -71,7 +71,8 @@ async def overview(refresh: bool = Query(default=False),
                    user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
     agg = await qservice.build_aggregate(rt, force=refresh)
-    return qservice.overview_payload(agg, qservice.systemd_timers(), qservice.random_state())
+    timers, state = await asyncio.gather(asyncio.to_thread(qservice.systemd_timers), asyncio.to_thread(qservice.random_state))
+    return qservice.overview_payload(agg, timers, state)
 
 
 @router.get('/accounts')
@@ -94,7 +95,7 @@ async def usage(days: int = Query(default=14, ge=1, le=90),
 async def tasks(user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
     agg = await qservice.build_aggregate(rt)
-    return qservice.tasks_payload(agg, qservice.systemd_timers())
+    return qservice.tasks_payload(agg, await asyncio.to_thread(qservice.systemd_timers))
 
 
 @router.get('/keys')
@@ -149,7 +150,8 @@ async def requests_rows(days: int = Query(default=3, ge=1, le=30),
 @router.get('/ops')
 async def ops(user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    audit_meta = {'records': rt.audit.count(), 'integrity': rt.audit.verify()}
+    count, integrity = await asyncio.gather(asyncio.to_thread(rt.audit.count), asyncio.to_thread(rt.audit.verify))
+    audit_meta = {'records': count, 'integrity': integrity}
     return qservice.ops_payload(
         rt.settings,
         Path(rt.settings.limits_file),

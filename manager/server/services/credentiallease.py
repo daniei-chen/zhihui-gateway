@@ -89,8 +89,12 @@ async def acquire(path: Path, *, timeout: float = 35):
         while not _try_lock(descriptor):
             if time.monotonic() >= deadline:
                 raise TimeoutError('credential refresh is busy; retry later')
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(min(0.025,max(0,deadline-time.monotonic())))
+            if time.monotonic()>=deadline:
+                raise TimeoutError('credential refresh is busy; retry later')
         locked = True
+        if time.monotonic()>deadline:
+            raise TimeoutError('credential refresh acquisition exceeded its deadline')
         token = _held.set({**_held.get(), key: _owner()})
         yield
     finally:
@@ -104,7 +108,7 @@ async def acquire(path: Path, *, timeout: float = 35):
 
 
 @contextmanager
-def mutation(path: Path):
+def mutation(path: Path, *, timeout: float = 0):
     key = str(path.absolute())
     if _held.get().get(key) == _owner():
         yield
@@ -113,8 +117,12 @@ def mutation(path: Path):
     locked = False
     token = None
     try:
-        if not _try_lock(descriptor):
-            raise OSError(errno.EBUSY, 'credential refresh is busy; retry later')
+        deadline=time.monotonic()+max(0,timeout)
+        while not _try_lock(descriptor):
+            if time.monotonic()>=deadline:
+                raise OSError(errno.EBUSY, 'credential refresh is busy; retry later')
+            # Only explicitly opted-in blocking workers use a wait budget.
+            time.sleep(min(0.01,max(0,deadline-time.monotonic())))
         locked = True
         token = _held.set({**_held.get(), key: _owner()})
         yield

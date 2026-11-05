@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import db, keysvc, portalpolicy, portalservice as service, portalstore as store, security
+from .. import db, keysvc, portalkeys, portalpolicy, portalservice as service, portalstore as store, security
 from ..services import tencent
 from ..services.asyncwork import joined_thread
 
@@ -94,10 +94,55 @@ async def login(request: Request, body: dict = Body(...)):
         user = await joined_thread(verify)
     finally:
         _login_active -= 1
+    # Adopt labels/default selection without issuing or rotating a credential.
+    try:await joined_thread(portalkeys.adopt_or_create,user)
+    except HTTPException as exc:
+        if exc.status_code!=429:raise
+        # Optional label adoption must not prevent an otherwise valid login.
     token = security._sign(json.dumps({'id': user['id'], 'sv': user['sv'], 'exp': store.now() + 86400}), store.secret())
     response = JSONResponse({'username': user['username']})
     response.set_cookie(COOKIE, token, max_age=86400, httponly=True, secure=security.cookie_secure(request), samesite='strict', path='/')
     return response
+
+
+@router.get('/registration')
+def registration_policy(request: Request):
+    from .. import portalregistration as registration
+    try:payload,cookie=registration.policy(request)
+    except ValueError as exc:raise HTTPException(409,'注册暂不可用，请稍后核对') from exc
+    response=JSONResponse(payload,headers={'Cache-Control':'no-store'})
+    if cookie:response.set_cookie(registration.COOKIE,cookie,max_age=365*86400,httponly=True,
+        secure=security.cookie_secure(request),samesite='strict',path='/')
+    return response
+
+
+@router.post('/register')
+async def register(request: Request):
+    same_origin(request)
+    from .. import portalregistration as registration
+    result=await registration.register(request)
+    return JSONResponse(result,status_code=201,headers={'Cache-Control':'no-store'})
+
+
+@admin_router.get('/invitations')
+def invitations(admin=Depends(security.require_session_admin)):
+    from .. import portalregistration as registration
+    return registration.list_invites()
+
+
+@admin_router.post('/invitations')
+def create_invitations(body: dict=Body(...),admin=Depends(security.require_session_admin)):
+    from .. import portalregistration as registration
+    if set(body)-{'count','days'}:raise HTTPException(400,'邀请码参数无效')
+    try:return registration.create_invites(admin,count=body.get('count',1),days=body.get('days',7))
+    except ValueError as exc:raise HTTPException(409,'恢复隔离期间不能生成邀请码') from exc
+
+
+@admin_router.delete('/invitations/{identifier}')
+def revoke_invitation(identifier: str,admin=Depends(security.require_session_admin)):
+    from .. import portalregistration as registration
+    try:return registration.revoke_invite(identifier,admin)
+    except ValueError as exc:raise HTTPException(409,'恢复隔离期间不能修改邀请码') from exc
 
 
 @router.get('/me')
@@ -116,6 +161,14 @@ def logout(request: Request):
 @router.get('/overview')
 def overview(user=Depends(current)):
     return store.overview(user['id'])
+
+
+@router.get('/workspace')
+def workspace(user=Depends(current)):
+    # One authenticated identity owns both halves of the first-page response.
+    # Parallel or sequential independent cookies cannot be combined by the UI.
+    return {'me':{'username':user['username'],'id':user['id']},
+            'data':store.overview(user['id'])}
 
 
 @router.get('/requests')
@@ -154,15 +207,24 @@ def keys(user=Depends(current)):
     for row in rows:
         live = db.query_one('SELECT key_hash,prefix,enabled,source FROM api_keys WHERE id=?', (row['key_id'],))
         if live and hmac.compare_digest(live['key_hash'], row['key_hash']):
-            items.append({'id': row['key_id'], 'label': row['label'], 'prefix': live['prefix'], 'created_at': row['created_at'],
+            items.append({'id': row['key_id'], 'label': user['username'], 'prefix': live['prefix'], 'created_at': row['created_at'],
+                '_eligible':bool(not row['revoked'] and row['owner_sv']==user['sv'] and live['source']==portalpolicy.SOURCE),
                 'enabled': bool(live['enabled'] and not row['revoked'] and row['owner_sv'] == user['sv'] and live['source'] == portalpolicy.SOURCE)})
+    active=sorted((item for item in items if item['_eligible']),key=lambda item:(item['created_at'],item['id']))
+    # Display exactly one stable default. Keep all ownership links for history
+    # and ongoing settlement; do not revoke legacy extras during an upgrade.
+    selected=active[:1] or sorted(items,key=lambda item:(item['created_at'],item['id']))[:1]
+    can_initialize=not active
+    for item in selected:item.pop('_eligible',None)
     from .. import portalbilling
     pooled = portalpolicy.enabled()
     with store.transaction() as conn:
         row = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
         quarantined = bool(row and row[0] == 'true')
         approved = portalbilling.dispatch_ready(conn)
-    return {'items': items, 'allowed_models': list(portalpolicy.MODELS), 'pool': 'public', 'max_ips': 0,
+    return {'items': selected, 'default_key_id':selected[0]['id'] if selected else None,
+            'single_key':True,'can_initialize':can_initialize,'legacy_key_count':max(0,len(items)-1),
+            'allowed_models': list(portalpolicy.MODELS), 'pool': 'public', 'max_ips': 0,
             'model_discovery_enabled': not quarantined, 'pool_enabled': pooled and not quarantined,
             'dispatch_enabled': pooled and not quarantined and approved,
             'dispatch_note': '恢复副本隔离核对中，不可调用' if quarantined else
@@ -175,38 +237,14 @@ def create_key(body: dict = Body(...), user=Depends(current)):
     label = body.get('label', '我的调用密钥')
     if set(body) - {'label'} or not isinstance(label, str) or not 1 <= len(label.strip()) <= 60:
         raise HTTPException(status_code=400, detail='密钥名称需为1至60字；不能修改平台、模型或IP策略')
-    check_user(user)
-    with store.transaction() as conn:
-        count = conn.execute('SELECT COUNT(*) FROM portal_key_links l JOIN portal_keys k ON k.key_id=l.key_id WHERE l.owner_id=? AND k.revoked=0 AND k.owner_sv=?', (user['id'], user['sv'])).fetchone()[0]
-        if count >= 5:
-            raise HTTPException(status_code=409, detail='最多保留5个有效密钥，请先撤销不用的密钥')
-    # Source provenance is committed with the key. An orphan is never an ordinary
-    # unlimited manager key, even if portal-link creation or activation fails.
-    with db.transaction() as conn:
-        made = keysvc.create_key(label.strip(), models=list(portalpolicy.MODELS), realm='cn', platforms=['workbuddy'], _conn=conn, _portal=True)
-        conn.execute('UPDATE api_keys SET source=?,enabled=0 WHERE id=?', (portalpolicy.SOURCE, made['id']))
-    with store.transaction() as conn:
-        fresh = conn.execute('SELECT sv,enabled FROM portal_users WHERE id=?', (user['id'],)).fetchone()
-        if not fresh or not fresh['enabled'] or fresh['sv'] != user['sv']:
-            raise HTTPException(status_code=401, detail='用户登录已失效')
-        count = conn.execute('SELECT COUNT(*) FROM portal_key_links l JOIN portal_keys k ON k.key_id=l.key_id WHERE l.owner_id=? AND k.revoked=0 AND k.owner_sv=?', (user['id'], user['sv'])).fetchone()[0]
-        if count >= 5:
-            raise HTTPException(status_code=409, detail='最多保留5个有效密钥，请先撤销不用的密钥')
-        conn.execute('INSERT INTO portal_key_links VALUES(?,?,?)', (made['id'], user['id'], keysvc._hash(made['key'])))
-        conn.execute('INSERT INTO portal_keys VALUES(?,?,?,?,0)', (made['id'], user['sv'], label.strip(), store.now()))
-    db.execute('UPDATE api_keys SET enabled=1 WHERE id=? AND source=?', (made['id'], portalpolicy.SOURCE))
-    return {'id': made['id'], 'key': made['key'], 'label': label.strip(), 'message': '明文仅返回这一次，请妥善保存；多个密钥共享你的积分钱包'}
+    try:return portalkeys.adopt_or_create(user,create=True)
+    except ValueError as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
 @router.delete('/keys/{key_id}')
 def revoke_key(key_id: int, user=Depends(current)):
-    with store.transaction() as conn:
-        row = conn.execute('SELECT key_hash FROM portal_key_links WHERE key_id=? AND owner_id=?', (key_id, user['id'])).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail='密钥不存在')
-        conn.execute('UPDATE portal_keys SET revoked=1 WHERE key_id=?', (key_id,))
-    db.execute('UPDATE api_keys SET enabled=0 WHERE id=? AND key_hash=? AND source=?', (key_id, row['key_hash'], portalpolicy.SOURCE))
-    return {'ok': True}
+    try:return portalkeys.revoke(user,key_id)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from exc
 
 
 @router.post('/auth/start')

@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {PortalError, portalFetch, type PortalOverview} from './portal-api';
+import {PortalError, portalFetch, type PortalOverview, type PortalWorkspace} from './portal-api';
 import {useHeartbeat} from './use-heartbeat';
 
 type Identity = {id: string; username: string};
@@ -28,15 +28,13 @@ export function usePortalWorkspace() {
     const generation = sequence.current;
     const controller = new AbortController();
     const current = () => !controller.signal.aborted && generation === sequence.current;
-    setState(previous => ({...previous, pending: true}));
+    setState(previous => ({...previous, pending: !background || !previous.data}));
     const promise = Promise.resolve().then(async () => {
       if (!current()) return false;
       try {
-        const me = await portalFetch<Identity>('portal/me', {signal: controller.signal});
+        const {me,data} = await portalFetch<PortalWorkspace>('portal/workspace', {signal: controller.signal});
         if (!current()) return false;
-        setState(previous => ({...previous, me, anonymous: false, data: previous.me?.id === me.id ? previous.data : null}));
-        const data = await portalFetch<PortalOverview>('portal/overview', {signal: controller.signal});
-        if (!current()) return false;
+        if (data.owner_id!==me.id) throw new Error('工作台快照身份不一致，请重新连接。');
         setState({me, data, anonymous: false, pending: false, error: ''});
         return true;
       } catch (err) {

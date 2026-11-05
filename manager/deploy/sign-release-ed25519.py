@@ -41,7 +41,8 @@ import os
 import stat
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PurePosixPath
 
 #: 默认信任锚（与 source_preflight.py 用的是同一把公钥）
 DEFAULT_TRUST = '/opt/workbuddy-manager/release-trust-ed25519.pem'
@@ -78,18 +79,29 @@ def resolve_key(cli_key: str | None) -> Path:
     return key
 
 
-def sign_file(key: Path, target: Path, signature: Path) -> None:
+def sign_file(key: Path, target: Path, signature: Path, *, trust: Path | None = None) -> None:
     """Ed25519 detached signature，**raw over 目标文件字节**（与验签侧一致）。"""
-    if signature.exists():
-        signature.unlink()
-    proc = subprocess.run(
-        ['openssl', 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
-         '-in', str(target), '-out', str(signature)],
-        capture_output=True, timeout=30)
-    if proc.returncode:
-        die(3, '签名失败：%s' % proc.stderr.decode('utf-8', 'replace').strip()[:400])
-    # Detached signatures are public verification material; do not inherit a private umask.
-    signature.chmod(0o644)
+    # Failed signing must leave the previous detached signature intact.  OpenSSL
+    # writes only to an exclusively created sibling, then replace atomically.
+    fd, name = tempfile.mkstemp(prefix='.%s.' % signature.name, dir=signature.parent)
+    temporary = Path(name)
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            ['openssl', 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
+             '-in', str(target), '-out', str(temporary)],
+            capture_output=True, timeout=30)
+        if proc.returncode:
+            die(3, '签名失败：%s' % proc.stderr.decode('utf-8', 'replace').strip()[:400])
+        if trust is not None:
+            verify_file(trust, target, temporary)
+        # Detached signatures are public verification material, even under umask 077.
+        temporary.chmod(0o644)
+        with temporary.open('rb') as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, signature)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def verify_file(trust: Path, target: Path, signature: Path) -> None:
@@ -105,7 +117,21 @@ def verify_file(trust: Path, target: Path, signature: Path) -> None:
         die(3, '签名校验失败：%s' % target)
 
 
-def rebuild_json_manifest(root: Path, manifest: Path) -> dict:
+def _source_path(root: Path, relative: str) -> Path:
+    parts = PurePosixPath(relative)
+    if (not relative or parts.is_absolute() or '..' in parts.parts
+            or '\\' in relative or '\x00' in relative or parts.as_posix() != relative):
+        die(4, '不安全路径: %r' % relative)
+    path = root / relative
+    if any((root / Path(*parts.parts[:end])).is_symlink()
+           for end in range(1, len(parts.parts) + 1)):
+        die(4, '缺失或为软链: %s' % relative)
+    if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+        die(4, '缺失或越界: %s' % relative)
+    return path
+
+
+def rebuild_json_manifest(root: Path, manifest: Path, *, add=(), write: bool = True) -> dict:
     """重算清单里每个文件的 sha256 / mode，并物理检查它们。
 
     与 `sign-release.sh`（RSA 版）的检查等价：清单引用的文件必须存在、不是软链、
@@ -113,6 +139,10 @@ def rebuild_json_manifest(root: Path, manifest: Path) -> dict:
     本脚本只重算哈希，不增删条目，避免「自动扫描把不该发布的文件签进来」。
     """
     release = json.loads(manifest.read_text(encoding='utf-8'))
+    if not isinstance(release, dict) or not isinstance(release.get('files'), dict):
+        die(4, '清单 files 必须是对象')
+    for relative in add:
+        release['files'].setdefault(relative, {})
     if release.get('signature_algorithm') != ALGORITHM:
         # 允许首次从旧清单升级：显式写入算法，而不是猜
         release['signature_algorithm'] = ALGORITHM
@@ -120,18 +150,15 @@ def rebuild_json_manifest(root: Path, manifest: Path) -> dict:
         release['signature_required'] = True
 
     problems: list[str] = []
-    if 'deploy/managed-release.json' in release.get('files', {}):
-        die(4, '清单不得包含自身（deploy/managed-release.json）')
+    if {'deploy/managed-release.json', 'deploy/managed-release.sig'}.intersection(release['files']):
+        die(4, '清单不得包含自身或其签名')
 
     changed = 0
     for relative, item in release['files'].items():
-        if relative.startswith('/') or '..' in relative.split('/') or '\\' in relative:
-            problems.append('不安全路径: %r' % relative)
+        if not isinstance(item, dict):
+            problems.append('清单条目必须是对象: %s' % relative)
             continue
-        path = root / relative
-        if path.is_symlink() or not path.is_file():
-            problems.append('缺失或为软链: %s' % relative)
-            continue
+        path = _source_path(root, relative)
         mode = stat.S_IMODE(path.stat().st_mode)
         if mode not in SAFE_MODES:
             problems.append('权限不在白名单: %s=%o' % (relative, mode))
@@ -164,9 +191,11 @@ def rebuild_json_manifest(root: Path, manifest: Path) -> dict:
             print('version: %r -> %r' % (release.get('version'), actual_version))
             release['version'] = actual_version
 
-    manifest.write_text(json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-                        encoding='utf-8')
-    print('rebuilt %s: files=%d changed=%d' % (manifest, len(release['files']), changed))
+    if write:
+        manifest.write_text(json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+                            encoding='utf-8')
+    print('%s %s: files=%d changed=%d' % (
+        'rebuilt' if write else 'dry-run (未写入)', manifest, len(release['files']), changed))
     return release
 
 
@@ -201,39 +230,25 @@ def main(argv: list[str] | None = None) -> int:
         print('verify ok: %s' % manifest)
         return 0
 
+    if args.sign_only and args.add:
+        die(2, '--add 不能与 --sign-only 共用')
+    if args.sign_only and args.dry_run:
+        print('dry-run: %s（未写入、未签名）' % manifest)
+        return 0
+
+    # Resolve the explicit signing key before modifying a manifest.  A dry run
+    # never needs a key and follows the same validation path as a real rebuild.
+    key = None if args.dry_run else resolve_key(args.key)
+
     if not args.sign_only:
         if not is_json:
             die(2, '--rebuild 只适用于 JSON 清单；前端 manifest 请用 --sign-only')
         root = Path(args.root).resolve() if args.root else manifest.parent.parent
-        if args.add:
-            # 清单的键集合本来是人工维护的（这正是它抗「自动扫描把不该发布的文件
-            # 签进来」的原因）。但新增一个**门禁脚本自身**进清单时，手工改 JSON 太
-            # 容易漏字段，所以把「加键」也做成显式、可审计、可复跑的一步。
-            release = json.loads(manifest.read_text(encoding='utf-8'))
-            files = release.setdefault('files', {})
-            for relative in args.add:
-                path = root / relative
-                if path.is_symlink() or not path.is_file():
-                    die(4, '--add 的文件不存在或为软链：%s' % relative)
-                mode = stat.S_IMODE(path.stat().st_mode)
-                if mode not in SAFE_MODES:
-                    die(4, '--add 的文件权限不在白名单：%s=%o' % (relative, mode))
-                files[relative] = {'candidate_sha256': sha256_file(path), 'mode': mode}
-                print('added %s (mode %o)' % (relative, mode))
-            manifest.write_text(
-                json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-                encoding='utf-8')
+        rebuild_json_manifest(root, manifest, add=args.add or (), write=not args.dry_run)
         if args.dry_run:
-            release = json.loads(manifest.read_text(encoding='utf-8'))
-            changed = sum(1 for rel, item in release['files'].items()
-                          if (root / rel).is_file()
-                          and sha256_file(root / rel) != item.get('candidate_sha256'))
-            print('dry-run: %d 个文件的哈希与会不符（未写入）' % changed)
             return 0
-        rebuild_json_manifest(root, manifest)
 
-    key = resolve_key(args.key)
-    sign_file(key, manifest, signature)
+    sign_file(key, manifest, signature, trust=Path(args.trust))
     # 立刻用信任锚自验一次：签出来的东西必须当场可验，否则等于没签
     verify_file(Path(args.trust), manifest, signature)
     print('signed %s -> %s (%d bytes)' % (manifest, signature, signature.stat().st_size))

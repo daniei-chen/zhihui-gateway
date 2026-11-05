@@ -79,6 +79,34 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
             out = await service.import_ready(user, result)
         return out, result
 
+    async def test_workspace_binds_identity_and_overview_in_one_authenticated_response(self):
+        await self.bind()
+        for who, expected in (('alice', 1), ('bob', 0)):
+            response = await self.call('GET', '/api/portal/workspace', headers=self.headers(who))
+            self.assertEqual(response.status_code, 200, response.text)
+            value = response.json()
+            self.assertEqual(value['me']['id'], who)
+            self.assertEqual(value['data']['owner_id'], who)
+            self.assertEqual(value['data']['account_count'], expected)
+        response = await self.call('GET', '/api/portal/workspace', headers={})
+        self.assertEqual(response.status_code, 401)
+
+    async def test_read_only_overview_does_not_wait_for_an_existing_wallet_writer(self):
+        # Warm the schema/session secret before holding the independent writer.
+        store.secret()
+        store.overview('alice')
+        with store.transaction() as conn:
+            conn.execute("UPDATE portal_users SET username='uncommitted' WHERE id='alice'")
+            value = await asyncio.wait_for(asyncio.to_thread(store.overview, 'alice'), 2)
+            self.assertEqual(value['owner_id'], 'alice')
+            self.assertEqual(value['account_count'], 0)
+
+    async def test_read_only_wallet_transaction_enforces_no_writes(self):
+        import sqlite3
+        with store.transaction(read_only=True) as conn:
+            with self.assertRaises(sqlite3.OperationalError):
+                conn.execute("UPDATE portal_users SET username='bad' WHERE id='alice'")
+
     async def test_initial_balance_has_original_expiry_and_never_duplicates(self):
         out, result = await self.bind()
         with mock.patch.object(tencent, 'fetch_credits', side_effect=AssertionError('must not fetch again')):

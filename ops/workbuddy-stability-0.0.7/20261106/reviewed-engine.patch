@@ -1,0 +1,1153 @@
+--- /dev/null
++++ b/internal/pool/audit_fixes_test.go
+@@ -0,0 +1,64 @@
++package pool
++
++import (
++	"testing"
++	"workbuddy2api/internal/auth"
++)
++
++func TestAuditFixLeaseSurvivesRemovalAndReadd(t *testing.T) {
++	p := New("")
++	p.SetMaxInFlight(2)
++	account := &auth.Auth{UID: "synthetic", AccessToken: "synthetic"}
++	p.Add(account)
++	old := p.AcquireLease(account.UID)
++	if old == nil {
++		t.Fatal("first lease missing")
++	}
++	p.SyncToDir(nil)
++	p.SyncToDir([]*auth.Auth{account})
++	current := p.AcquireLease(account.UID)
++	if current == nil || p.AcquireLease(account.UID) != nil {
++		t.Fatal("same physical account bypassed the limit")
++	}
++	old.Release()
++	old.Release()
++	extra := p.AcquireLease(account.UID)
++	if extra == nil || p.AcquireLease(account.UID) != nil {
++		t.Fatal("old duplicate release affected another lease")
++	}
++	current.Release()
++	extra.Release()
++	p.SyncToDir(nil)
++	if len(p.retired) != 0 {
++		t.Fatal("completed tombstones were retained")
++	}
++}
++
++func TestAuditFixUnlimitedLeaseStillCountsAfterLimitAndReimport(t *testing.T) {
++	p := New("")
++	p.SetMaxInFlight(0)
++	account := &auth.Auth{UID: "synthetic", AccessToken: "synthetic"}
++	p.Add(account)
++	old := p.AcquireLease(account.UID)
++	if old == nil {
++		t.Fatal("unlimited lease missing")
++	}
++	p.SyncToDir(nil)
++	p.SetMaxInFlight(1)
++	p.SyncToDir([]*auth.Auth{account})
++	if lease := p.AcquireLease(account.UID); lease != nil {
++		lease.Release()
++		t.Fatal("unlimited old lease bypassed new limit")
++	}
++	old.Release()
++	current := p.AcquireLease(account.UID)
++	if current == nil {
++		t.Fatal("released old lease did not free its entry")
++	}
++	old.Release()
++	if lease := p.AcquireLease(account.UID); lease != nil {
++		lease.Release()
++		t.Fatal("duplicate old release freed current lease")
++	}
++	current.Release()
++}
+--- a/internal/pool/pool.go
++++ b/internal/pool/pool.go
+@@ -14,6 +14,7 @@
+ type Pool struct {
+ 	mu      sync.RWMutex
+ 	byUID   map[string]*entry
++	retired map[string]*entry // live leases survive removal and same-UID re-add
+ 	stateFp string
+ 	dirty   atomic.Bool // 内存有变更待落盘
+ 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。
+@@ -268,27 +269,41 @@
+ // Acquire 为 uid 占一个在途名额（会话粘性命中后调用）；池上限内返回 true。
+ // 名额用 entry.inFlight 原子自增，满额返回 false。上限按账号 realm 分档
+ // （global 档 maxInFlightGlobal，P1-1；未设置回落 maxInFlight）。
+-func (p *Pool) Acquire(uid string) bool {
++type Lease struct {
++	p    *Pool
++	e    *entry
++	once sync.Once
++}
++
++func (l *Lease) Release() {
++	if l != nil {
++		l.once.Do(func() { l.p.releaseEntry(l.e) })
++	}
++}
++
++// Acquire is retained for legacy callers; request handlers use the bound lease.
++func (p *Pool) Acquire(uid string) bool { return p.AcquireLease(uid) != nil }
++
++func (p *Pool) AcquireLease(uid string) *Lease {
+ 	p.mu.RLock()
++	defer p.mu.RUnlock()
+ 	e, ok := p.byUID[uid]
+ 	if !ok {
+-		p.mu.RUnlock()
+-		return false
++		return nil
+ 	}
+ 	limit := p.inFlightLimit(e)
+-	p.mu.RUnlock()
+ 	if limit <= 0 {
+ 		// 不限：计数仍累加（供状态观测），但永不拒绝。
+ 		e.inFlight.Add(1)
+-		return true
++		return &Lease{p: p, e: e}
+ 	}
+ 	for {
+ 		cur := e.inFlight.Load()
+ 		if cur >= int64(limit) {
+-			return false
++			return nil
+ 		}
+ 		if e.inFlight.CompareAndSwap(cur, cur+1) {
+-			return true
++			return &Lease{p: p, e: e}
+ 		}
+ 	}
+ }
+@@ -297,16 +312,30 @@
+ func (p *Pool) Release(uid string) {
+ 	p.mu.RLock()
+ 	e, ok := p.byUID[uid]
++	if !ok {
++		e, ok = p.retired[uid]
++	}
+ 	p.mu.RUnlock()
+ 	if !ok {
+ 		return
+ 	}
++	p.releaseEntry(e)
++}
++
++func (p *Pool) releaseEntry(e *entry) {
+ 	for {
+ 		cur := e.inFlight.Load()
+ 		if cur <= 0 {
+ 			return
+ 		}
+ 		if e.inFlight.CompareAndSwap(cur, cur-1) {
++			if cur == 1 {
++				p.mu.Lock()
++				if p.retired[e.a.UID] == e && e.inFlight.Load() == 0 {
++					delete(p.retired, e.a.UID)
++				}
++				p.mu.Unlock()
++			}
+ 			return
+ 		}
+ 	}
+@@ -340,6 +369,12 @@
+ 	changed := false
+ 	for uid := range p.byUID {
+ 		if !seen[uid] {
++			if p.byUID[uid].inFlight.Load() > 0 {
++				if p.retired == nil {
++					p.retired = make(map[string]*entry)
++				}
++				p.retired[uid] = p.byUID[uid]
++			}
+ 			delete(p.byUID, uid)
+ 			changed = true
+ 		}
+@@ -356,5 +391,11 @@
+ 		e.a = a // 保留 credits/cooling 状态
+ 		return
+ 	}
++	if e, ok := p.retired[a.UID]; ok {
++		e.a = a
++		p.byUID[a.UID] = e
++		delete(p.retired, a.UID)
++		return
++	}
+ 	p.byUID[a.UID] = &entry{a: a}
+ }
+--- /dev/null
++++ b/internal/server/audit_fixes_test.go
+@@ -0,0 +1,152 @@
++package server
++
++import (
++	"context"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"workbuddy2api/internal/auth"
++	"workbuddy2api/internal/session"
++	"workbuddy2api/internal/upstream"
++)
++
++func TestAuditFixHandlerDoesNotReplayAggregateFailure(t *testing.T) {
++	for _, body := range []string{
++		`data: {"error":{"code":11128,"message":"Illegal API invocation from an unapproved channel"}}` + "\n\ndata: [DONE]\n\n",
++		`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
++	} {
++		calls := 0
++		client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++			calls++
++			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
++		})}, ChatBaseCN: "https://synthetic.invalid"}
++		p := testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999})
++		h := NewHandler(Config{Pool: p, Upstream: client, MaxRotate: 3})
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)))
++		if w.Code < 400 || calls != 1 || strings.Contains(w.Body.String(), `"object":"chat.completion"`) {
++			t.Fatalf("failure fabricated or replayed: code=%d calls=%d body=%s", w.Code, calls, w.Body.String())
++		}
++		if strings.Contains(body, "11128") && w.Code != 400 {
++			t.Fatalf("supplier 11128 status lost: %d", w.Code)
++		}
++		status, _ := p.Status("one")
++		if status.SuccessCount != 0 {
++			t.Fatal("failed upstream response counted as account success")
++		}
++	}
++}
++
++func TestAuditFixActualHandlerNamespacesTenantHeaders(t *testing.T) {
++	var captured [][4]string
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		captured = append(captured, [4]string{r.Header.Get("X-Conversation-ID"), r.Header.Get("X-Conversation-Request-ID"), r.Header.Get("X-Trace-ID"), r.Header.Get("X-B3-TraceId")})
++		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sseOK)), Request: r}, nil
++	})}, ChatBaseCN: "https://synthetic.invalid"}
++	p := testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999})
++	sticky := session.New(session.Config{Available: func() []string { return []string{"one"} }})
++	h := NewHandler(Config{Pool: p, Upstream: client, Session: sticky, APIKey: "synthetic-link"})
++	for _, tenant := range []string{"key:A/upstream:1", "key:B/upstream:1", "key:A/upstream:1"} {
++		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","conversation_id":"same-client-id","messages":[{"role":"user","content":"same"}]}`))
++		r.Header.Set("Authorization", "Bearer synthetic-link")
++		r.Header.Set("X-WB-Tenant", tenant)
++		r.Header.Set("X-Conversation-Request-ID", "same-client-turn")
++		r.Header.Set("X-Trace-ID", "same-client-trace")
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, r)
++		if w.Code != 200 {
++			t.Fatalf("request failed: %d %s", w.Code, w.Body.String())
++		}
++	}
++	if len(captured) != 3 || captured[0] != captured[2] || captured[0][0] == captured[1][0] || captured[0][1] == captured[1][1] {
++		t.Fatalf("tenant aggregation isolation lost: %#v", captured)
++	}
++	for _, ids := range captured {
++		if len(ids[1]) != 32 {
++			t.Fatalf("invalid supplier request-ID shape: %q", ids[1])
++		}
++	}
++	for i := 0; i < 4; i++ {
++		if captured[0][i] == captured[1][i] {
++			t.Fatalf("tenant header %d was shared", i)
++		}
++	}
++}
++
++func TestAuditFixOversizedTenantDoesNotFallBackToBareKey(t *testing.T) {
++	request := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++	request.Header.Set("X-WB-Tenant", strings.Repeat("a", 1024))
++	first := tenantSessionKey(request, "synthetic", "cn", "client-key")
++	request.Header.Set("X-WB-Tenant", strings.Repeat("b", 1024))
++	second := tenantSessionKey(request, "synthetic", "cn", "client-key")
++	if first == "client-key" || first == second {
++		t.Fatal("oversized tenant lost its namespace")
++	}
++}
++
++func TestAuditFixSupplierFailureIsObservedAs502Not499(t *testing.T) {
++	withChatLog(t)
++	resetMetricsForTest(t)
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
++			Body: io.NopCloser(strings.NewReader(`data: {"error":{"code":11128,"message":"synthetic refusal"}}` + "\n\ndata: [DONE]\n\n")), Request: r}, nil
++	})}, ChatBaseCN: "https://synthetic.invalid"}
++	p := testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: client})
++	rec := httptest.NewRecorder()
++	logged := captureStdout(t, func() {
++		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)))
++	})
++	status, _ := p.Status("one")
++	if status.SuccessCount != 0 || !strings.Contains(logged, "| 502 |") || strings.Contains(logged, "| 499 |") {
++		t.Fatalf("supplier error misclassified: success=%d log=%s", status.SuccessCount, logged)
++	}
++}
++
++type auditUpstreamReadFailure struct{}
++
++func (auditUpstreamReadFailure) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
++
++type auditCancelledRead struct{ cancel context.CancelFunc }
++
++func (r auditCancelledRead) Read(p []byte) (int, error) { r.cancel(); return 0, context.Canceled }
++
++func TestAuditFixDownstreamCancellationDuringReadIs499Not502(t *testing.T) {
++	withChatLog(t)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	calls := 0
++	wire := `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		calls++
++		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(io.MultiReader(strings.NewReader(wire), auditCancelledRead{cancel})), Request: r}, nil
++	})}, ChatBaseCN: "https://synthetic.invalid"}
++	p := testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: client, MaxRotate: 3})
++	request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
++	logged := captureStdout(t, func() { h.ServeHTTP(httptest.NewRecorder(), request) })
++	status, _ := p.Status("one")
++	if calls != 1 || status.SuccessCount != 0 || !strings.Contains(logged, "| 499 |") || strings.Contains(logged, "| 502 |") {
++		t.Fatalf("cancel misclassified or replayed: calls=%d success=%d log=%s", calls, status.SuccessCount, logged)
++	}
++}
++
++func TestAuditFixHandlerReadFailureDoesNotRecordSuccessOrReplay(t *testing.T) {
++	calls := 0
++	raw := `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"
++	client := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		calls++
++		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
++			Body: io.NopCloser(io.MultiReader(strings.NewReader(raw), auditUpstreamReadFailure{})), Request: r}, nil
++	})}, ChatBaseCN: "https://synthetic.invalid"}
++	p := testPoolWith(&auth.Auth{UID: "one", AccessToken: "synthetic", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: client, MaxRotate: 3})
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)))
++	status, _ := p.Status("one")
++	if calls != 1 || status.SuccessCount != 0 || !strings.Contains(w.Body.String(), "upstream_truncated") || !strings.Contains(w.Body.String(), "data: [DONE]") {
++		t.Fatalf("upstream failure lost: calls=%d success=%d body=%s", calls, status.SuccessCount, w.Body.String())
++	}
++}
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -529,6 +529,7 @@
+ 	if stickyKey == "" {
+ 		stickyKey = session.StickyFallbackKey(body)
+ 	}
++	stickyKey = tenantSessionKey(r, h.cfg.APIKey, realm, stickyKey)
+ 	stickyUID := ""
+ 	if h.cfg.Session != nil && stickyKey != "" {
+ 		// 传给 ResolveForModel 的是**完整**模型名（peek.Model，含 realm 前缀）。
+@@ -554,17 +555,13 @@
+ 	reqHasImage := hasImagePart(body)
+ 
+ 	// 在途租约：成功选中即占名额；函数出口（含成功 return 与 panic）统一释放。
+-	var heldUID string
++	var heldLease *pool.Lease
+ 	defer func() {
+-		if heldUID != "" {
+-			h.cfg.Pool.Release(heldUID)
+-		}
++		heldLease.Release()
+ 	}()
+ 	releaseHeld := func() {
+-		if heldUID != "" {
+-			h.cfg.Pool.Release(heldUID)
+-			heldUID = ""
+-		}
++		heldLease.Release()
++		heldLease = nil
+ 	}
+ 	// unbindSticky 解绑当前会话粘性号（stickyUID 非空时）。供「粘性号不可用/被抢」与 fail 共用。
+ 	// 幂等：stickyUID 已空则空操作；不会误解绑其他轮的绑定。仅当 Session != nil 时 stickyUID 才会非空。
+@@ -655,6 +652,13 @@
+ 		chatMeta.ConversationRequestID = session.TurnRequestID("")
+ 	}
+ 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
++	if strings.TrimSpace(r.Header.Get("X-WB-Tenant")) != "" {
++		chatMeta.ConversationID = tenantSessionKey(r, h.cfg.APIKey, realm, chatMeta.ConversationID)
++		chatMeta.ConversationRequestID = session.RequestIDForKey(tenantSessionKey(r, h.cfg.APIKey, realm, chatMeta.ConversationRequestID))
++		if chatMeta.TraceID != "" {
++			chatMeta.TraceID = session.RequestIDForKey(tenantSessionKey(r, h.cfg.APIKey, realm, chatMeta.TraceID))
++		}
++	}
+ 
+ 	for i := 0; i < h.cfg.MaxRotate; i++ {
+ 		routingExcluded := h.cfg.Pool.RoutingExclusions(tried, bareModel, realm, len(body))
+@@ -682,7 +686,8 @@
+ 		tried[acct.UID] = true
+ 
+ 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
+-		if !h.cfg.Pool.Acquire(acct.UID) {
++		heldLease = h.cfg.Pool.AcquireLease(acct.UID)
++		if heldLease == nil {
+ 			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
+ 			// 满载粘性号再浪费一次粘性命中往返（语义与 fail()/粘性命中-nil 的解绑一致）。
+ 			if stickyUID != "" && acct.UID == stickyUID {
+@@ -694,7 +699,6 @@
+ 			}
+ 			continue // 最后一个名额被并发抢走 → 换号
+ 		}
+-		heldUID = acct.UID
+ 		auditAttempt(r, i+1, logfmt.Label(acct.UID, acct.Nickname), bareModel, realm, "selected", 0)
+ 
+ 		// token 临近过期 → 先 refresh（失败冷却换号）
+@@ -868,14 +872,14 @@
+ 			}
+ 			continue
+ 		}
+-		h.cfg.Pool.NoteSuccess(acct.UID)
+-		// 11102 负缓存清命：该账号该模型实测成功，立即解除避让（不必等 TTL 到期）。
+-		// BlockModelClear 按 "11102" reason 前缀识别，只清 11102 条目、不碰 6004 独立冷却。
+-		h.cfg.Pool.BlockModelClear(acct.UID, bareModel)
+-		// 粘性跟随最终成功号：本轮成功的账号成为该会话的粘性绑定（覆盖旧绑定）。
+-		// 若 sticky 号失败、轮换到别的号成功，这里把会话重绑到新号，多轮对话下一跳不再随机抽。
+-		if stickyKey != "" && h.cfg.Session != nil {
+-			h.cfg.Session.Bind(stickyKey, acct.UID)
++		// Headers do not prove generation success. Only a trusted stream/completion
++		// may reset account health or update sticky/latency observations.
++		noteCompleted := func() {
++			h.cfg.Pool.NoteSuccess(acct.UID)
++			h.cfg.Pool.BlockModelClear(acct.UID, bareModel)
++			if stickyKey != "" && h.cfg.Session != nil {
++				h.cfg.Session.Bind(stickyKey, acct.UID)
++			}
+ 		}
+ 		if peek.Stream {
+ 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
+@@ -887,7 +891,10 @@
+ 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
+ 				return h.hintContext(bareModel, reqHasImage)
+ 			}))
+-			if upstream.IsEmptyStreamError(sErr) || upstream.IsTruncatedStreamError(sErr) {
++			var supplierFailure *upstream.StreamError
++			if sErr != nil && r.Context().Err() != nil {
++				st.status = 499 // cancelled downstream context, including upstream read cancellation
++			} else if upstream.IsEmptyStreamError(sErr) || upstream.IsTruncatedStreamError(sErr) || errors.As(sErr, &supplierFailure) {
+ 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
+ 				// 兜底（HTTP 头已发出只能 200），但这是上游缺陷不是成功——日志/
+ 				// 状态收敛到 502 观测，与非流式 Aggregate 空流→502 upstream_parse
+@@ -896,6 +903,8 @@
+ 				// 502 观测没有意义）。
+ 				st.status = http.StatusBadGateway
+ 				log.Printf("WARN: [server] stream acct=%s model=%s: upstream stream failed: %v", logfmt.Label(acct.UID, acct.Nickname), bareModel, sErr)
++			} else if sErr != nil {
++				st.status = 499 // downstream write/cancellation, not account success
+ 			}
+ 			st.ttfb = stats.TTFB()
+ 			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
+@@ -928,6 +937,7 @@
+ 			// 慢号）。空流（上游 200 但 0 帧）是上游缺陷不是成功，不喂。非流式
+ 			// 路径无 TTFB 观测，不喂（见 slowdegrade.go 观测范围）。
+ 			if st.status == http.StatusOK {
++				noteCompleted()
+ 				h.cfg.Pool.NoteSpeed(acct.UID, st.ttfb)
+ 			}
+ 			rc.Close()
+@@ -936,11 +946,24 @@
+ 		resp, err := upstream.Aggregate(rc)
+ 		rc.Close()
+ 		if err != nil {
++			var failure *upstream.StreamError
++			if errors.As(err, &failure) {
++				status := http.StatusBadGateway
++				if upstream.IsChannelCheck(failure.Error()) {
++					status = http.StatusBadRequest
++				} else if upstream.Classify(400, failure.Error()) == upstream.ErrSoftRate {
++					status = http.StatusTooManyRequests
++				}
++				writeJSON(w, status, failure.Payload)
++				st.status = status
++				return
++			}
+ 			// 上游流解析失败：客户端还没看到任何输出，回 502 并告知原因。
+ 			writeOpenAIError(w, http.StatusBadGateway, "upstream_parse", err.Error())
+ 			st.status = http.StatusBadGateway
+ 			return
+ 		}
++		noteCompleted()
+ 		writeJSON(w, http.StatusOK, resp)
+ 		st.status = http.StatusOK
+ 		st.toks = completionTokens(resp)
+--- a/internal/server/session_namespace.go
++++ b/internal/server/session_namespace.go
+@@ -1,22 +1,25 @@
+ package server
+ 
+ import (
+- "crypto/sha256"
+- "encoding/hex"
+- "net/http"
+- "strings"
++	"crypto/sha256"
++	"encoding/hex"
++	"net/http"
++	"strings"
+ )
+ 
+ // Called after API authentication. Manager replaces this header with a namespace
+ // based on the resolved key and upstream; user supplied headers are never forwarded.
+ func tenantSessionKey(r *http.Request, apiKey, realm, key string) string {
+- if key==""{return ""}
+- tenant:=strings.TrimSpace(r.Header.Get("X-WB-Tenant"))
+- if len(tenant)>256{tenant=""}
+- // Existing direct gateway clients retain their original sticky and request-ID
+- // keys. Manager supplies a trusted tenant header for cross-key isolation.
+- if tenant==""{return key}
+- identity:=sha256.Sum256([]byte(apiKey+"\x00"+tenant+"\x00"+realm))
+- sum:=sha256.Sum256([]byte(hex.EncodeToString(identity[:])+"\x00"+key))
+- return "ns2:"+hex.EncodeToString(sum[:])
++	if key == "" {
++		return ""
++	}
++	tenant := strings.TrimSpace(r.Header.Get("X-WB-Tenant"))
++	// Existing direct gateway clients retain their original sticky and request-ID
++	// keys. Manager supplies a trusted tenant header for cross-key isolation.
++	if tenant == "" {
++		return key
++	}
++	identity := sha256.Sum256([]byte(apiKey + "\x00" + tenant + "\x00" + realm))
++	sum := sha256.Sum256([]byte(hex.EncodeToString(identity[:]) + "\x00" + key))
++	return "ns2:" + hex.EncodeToString(sum[:])
+ }
+--- a/internal/server/session_namespace_test.go
++++ b/internal/server/session_namespace_test.go
+@@ -1,18 +1,36 @@
+ package server
+-import("net/http/httptest";"testing")
+-func TestTenantSessionNamespaceStableAndIsolated(t *testing.T){
+- r:=httptest.NewRequest("POST","/v1/chat/completions",nil)
+- r.Header.Set("X-WB-Tenant","key:1/upstream:0")
+- a:=tenantSessionKey(r,"internal-key","cn","conversation")
+- if a!=tenantSessionKey(r,"internal-key","cn","conversation"){t.Fatal("unstable")}
+- if a==tenantSessionKey(r,"internal-key","global","conversation"){t.Fatal("realm collision")}
+- r.Header.Set("X-WB-Tenant","key:2/upstream:0")
+- if a==tenantSessionKey(r,"internal-key","cn","conversation"){t.Fatal("tenant collision")}
+- if tenantSessionKey(r,"internal-key","cn","")!=""{t.Fatal("invented session")}
++
++import (
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestTenantSessionNamespaceStableAndIsolated(t *testing.T) {
++	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++	r.Header.Set("X-WB-Tenant", "key:1/upstream:0")
++	a := tenantSessionKey(r, "internal-key", "cn", "conversation")
++	if a != tenantSessionKey(r, "internal-key", "cn", "conversation") {
++		t.Fatal("unstable")
++	}
++	if a == tenantSessionKey(r, "internal-key", "global", "conversation") {
++		t.Fatal("realm collision")
++	}
++	r.Header.Set("X-WB-Tenant", "key:2/upstream:0")
++	if a == tenantSessionKey(r, "internal-key", "cn", "conversation") {
++		t.Fatal("tenant collision")
++	}
++	if tenantSessionKey(r, "internal-key", "cn", "") != "" {
++		t.Fatal("invented session")
++	}
+ }
+-func TestTenantSessionNamespacePreservesDirectClientKeys(t *testing.T){
+- r:=httptest.NewRequest("POST","/v1/chat/completions",nil)
+- if got:=tenantSessionKey(r,"internal-key","cn","conv-1");got!="conv-1"{t.Fatalf("legacy key changed: %q",got)}
+- r.Header.Set("X-WB-Tenant",string(make([]byte,257)))
+- if got:=tenantSessionKey(r,"internal-key","cn","conv-1");got!="conv-1"{t.Fatalf("invalid tenant changed legacy key: %q",got)}
++func TestTenantSessionNamespacePreservesDirectClientKeys(t *testing.T) {
++	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
++	if got := tenantSessionKey(r, "internal-key", "cn", "conv-1"); got != "conv-1" {
++		t.Fatalf("legacy key changed: %q", got)
++	}
++	r.Header.Set("X-WB-Tenant", strings.Repeat("a", 257))
++	if got := tenantSessionKey(r, "internal-key", "cn", "conv-1"); got == "conv-1" {
++		t.Fatalf("explicit oversized tenant silently fell back to a shared raw key: %q", got)
++	}
+ }
+--- /dev/null
++++ b/internal/upstream/audit_fixes_test.go
+@@ -0,0 +1,133 @@
++package upstream
++
++import (
++	"errors"
++	"io"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestAuditFixAggregateFailureAndCompletion(t *testing.T) {
++	t.Run("supplier error is not completion", func(t *testing.T) {
++		body := `data: {"error":{"code":11128,"message":"unapproved channel"}}` + "\n\ndata: [DONE]\n\n"
++		resp, err := Aggregate(strings.NewReader(body))
++		var failure *StreamError
++		if resp != nil || !errors.As(err, &failure) || !strings.Contains(failure.Error(), "11128") {
++			t.Fatalf("lost structured supplier failure: %#v %v", resp, err)
++		}
++	})
++	t.Run("partial EOF is not stop", func(t *testing.T) {
++		resp, err := Aggregate(strings.NewReader(`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"))
++		if resp != nil || !IsTruncatedStreamError(err) {
++			t.Fatalf("accepted partial response: %#v %v", resp, err)
++		}
++	})
++	for name, tail := range map[string]string{
++		"done":   "data: [DONE]\n\n",
++		"finish": `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n",
++	} {
++		t.Run(name, func(t *testing.T) {
++			body := `data: {"choices":[{"delta":{"content":"complete"}}]}` + "\n\n" + tail
++			resp, err := Aggregate(strings.NewReader(body))
++			if err != nil || resp == nil {
++				t.Fatalf("rejected completed response: %v", err)
++			}
++		})
++	}
++}
++
++type auditBrokenReader struct{ sent bool }
++
++func (r *auditBrokenReader) Read(p []byte) (int, error) {
++	if r.sent {
++		return 0, io.ErrUnexpectedEOF
++	}
++	r.sent = true
++	return copy(p, `data: {"choices":[{"delta":{"content":"partial"}}]}`+"\n\n"), nil
++}
++
++func TestAuditFixStreamReadErrorAndSupplierError(t *testing.T) {
++	w := httptest.NewRecorder()
++	err := StreamHint(w, &auditBrokenReader{}, nil)
++	if !IsTruncatedStreamError(err) || !strings.Contains(w.Body.String(), "upstream_truncated") || !strings.HasSuffix(w.Body.String(), "data: [DONE]\n\n") {
++		t.Fatalf("read failure lacks failure terminal: %v %s", err, w.Body.String())
++	}
++	w = httptest.NewRecorder()
++	err = StreamHint(w, strings.NewReader(`data: {"error":{"code":"refused","message":"original"}}`+"\n\ndata: [DONE]\n\n"), nil)
++	var failure *StreamError
++	if !errors.As(err, &failure) || !strings.Contains(w.Body.String(), "original") {
++		t.Fatalf("supplier error marked success: %v", err)
++	}
++}
++
++func TestAuditFixOutputByteBudgetBoundsUnterminatedFrames(t *testing.T) {
++	t.Setenv("WB2A_MAX_OUTPUT_BYTES", "65536")
++	body := strings.NewReader("data: " + strings.Repeat("x", 2<<20))
++	if response, err := Aggregate(body); response != nil || err == nil {
++		t.Fatal("oversized aggregate accepted")
++	}
++	if body.Len() < (2<<20)-66000 {
++		t.Fatal("reader consumed an unbounded response")
++	}
++	writer := httptest.NewRecorder()
++	if err := StreamHint(writer, strings.NewReader("data: "+strings.Repeat("x", 2<<20)), nil); err == nil {
++		t.Fatal("oversized stream accepted")
++	}
++	if writer.Body.Len() > 65536 {
++		t.Fatal("oversized output forwarded")
++	}
++}
++
++func TestAuditFixMalformedSupplierErrorIsNeverCompletion(t *testing.T) {
++	for _, frame := range []string{`{"error":null}`, `{"error":""}`, `{"error":{}}`, `{"type":"error"}`} {
++		wire := "data: " + frame + "\n\ndata: [DONE]\n\n"
++		if response, failure := Aggregate(strings.NewReader(wire)); response != nil || failure == nil {
++			t.Fatalf("accepted malformed error: %s", frame)
++		}
++		writer := httptest.NewRecorder()
++		var failure *StreamError
++		if err := StreamHint(writer, strings.NewReader(wire), nil); !errors.As(err, &failure) || !strings.Contains(writer.Body.String(), "upstream_invalid_error_frame") {
++			t.Fatalf("not explicit failure: %v %s", err, writer.Body.String())
++		}
++	}
++	positive := `data: {"error":null,"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
++	if _, err := Aggregate(strings.NewReader(positive)); err != nil {
++		t.Fatalf("rejected legitimate nullable field: %v", err)
++	}
++	for _, frame := range []string{`{"choices":null,"error":null}`, `{"usage":{"total_tokens":0}}`, `null`, `{}`} {
++		wire := "data: " + frame + "\n\ndata: [DONE]\n\n"
++		if result, err := Aggregate(strings.NewReader(wire)); result != nil || err == nil {
++			t.Fatalf("metadata-only completion accepted: %s", frame)
++		}
++		if err := StreamHint(httptest.NewRecorder(), strings.NewReader(wire), nil); err == nil {
++			t.Fatalf("metadata-only stream accepted: %s", frame)
++		}
++	}
++}
++
++func TestAuditFixSupplierErrorSuppressesLaterContentButKeepsUsage(t *testing.T) {
++	wire := `data: {"error":{"code":11128,"message":"refused"}}` + "\n\n" +
++		`data: {"choices":[{"delta":{"content":"MUST_NOT_REACH_CLIENT"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"credit":1.25}}` + "\n\ndata: [DONE]\n\n"
++	writer := httptest.NewRecorder()
++	var failure *StreamError
++	if err := StreamHint(writer, strings.NewReader(wire), nil); !errors.As(err, &failure) {
++		t.Fatalf("supplier refusal lost: %v", err)
++	}
++	if strings.Contains(writer.Body.String(), "MUST_NOT_REACH_CLIENT") || !strings.Contains(writer.Body.String(), `"credit":1.25`) {
++		t.Fatalf("content or usage handling wrong: %s", writer.Body.String())
++	}
++}
++
++func TestAuditFixBareChannelErrorPreservesSupplierCode(t *testing.T) {
++	wire := `data: {"code":11128,"msg":"original channel refusal","requestId":"synthetic-request"}` + "\n\ndata: [DONE]\n\n"
++	result, err := Aggregate(strings.NewReader(wire))
++	var supplier *StreamError
++	if result != nil || !errors.As(err, &supplier) || !strings.Contains(supplier.Error(), "original channel refusal") {
++		t.Fatalf("channel evidence lost: %v", err)
++	}
++	writer := httptest.NewRecorder()
++	if err := StreamHint(writer, strings.NewReader(wire), nil); !errors.As(err, &supplier) || !strings.Contains(writer.Body.String(), `"code":11128`) {
++		t.Fatalf("bare channel error lost: %v %s", err, writer.Body.String())
++	}
++}
+--- a/internal/upstream/client.go
++++ b/internal/upstream/client.go
+@@ -1102,6 +1102,10 @@
+ //   - 写回前重新校验快照一致性：若锁外期间另一 goroutine 已完成刷新（refreshToken
+ //     已变），本次结果直接采用（新 token 已生效），不再重复写回。
+ func (c *Client) refreshToken(a *auth.Auth) error {
++	return c.refreshTokenWithContext(context.Background(), a)
++}
++
++func (c *Client) refreshTokenWithContext(parent context.Context, a *auth.Auth) error {
+ 	// 第 1 段（锁内）：读快照。
+ 	a.Lock()
+ 	rtSnapshot := a.RefreshToken
+@@ -1112,7 +1116,7 @@
+ 	}
+ 
+ 	url := c.chatBase(a) + "/v2/plugin/auth/token/refresh"
+-	ctx, cancel := context.WithTimeout(context.Background(), refreshIOTimeout)
++	ctx, cancel := context.WithTimeout(parent, refreshIOTimeout)
+ 	defer cancel()
+ 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+ 	if err != nil {
+--- a/internal/upstream/hint_test.go
++++ b/internal/upstream/hint_test.go
+@@ -132,9 +132,9 @@
+ // 字符串形态 + extError 深层 marker + displayMsg 文案家族。
+ func TestGatewayHintMarkerTolerance(t *testing.T) {
+ 	variants := []string{
+-		body11133,                                                     // 实测原始 body
+-		`{"code":"11133","msg":"..."}`,                                // code 字符串形态
+-		`{"extError":{"code":"model_param_invalid"}}`,                 // extError 深层 marker
++		body11133,                      // 实测原始 body
++		`{"code":"11133","msg":"..."}`, // code 字符串形态
++		`{"extError":{"code":"model_param_invalid"}}`,                                 // extError 深层 marker
+ 		`{"msg":"The request parameters do not meet the current model requirements"}`, // displayMsg en 文案
+ 	}
+ 	for _, v := range variants {
+@@ -143,7 +143,7 @@
+ 		}
+ 	}
+ 	v11135 := []string{
+-		body11135,                                     // 实测原始 body
++		body11135, // 实测原始 body
+ 		`{"extError":{"code":"invalid_image_data"}}`, // extError 深层 marker
+ 	}
+ 	for _, v := range v11135 {
+@@ -172,8 +172,8 @@
+ 		return GatewayHint(FrameKind(payload), payload, HintContext{})
+ 	}
+ 	rec := httptest.NewRecorder()
+-	if err := StreamHint(rec, strings.NewReader(raw), hintFn); err != nil {
+-		t.Fatal(err)
++	if err := StreamHint(rec, strings.NewReader(raw), hintFn); err == nil {
++		t.Fatal("supplier error must remain observable to the caller")
+ 	}
+ 	body := rec.Body.String()
+ 
+@@ -221,8 +221,8 @@
+ 	const errFrame = `{"error":{"message":"misc","code":"x"}}`
+ 	raw := "data: " + errFrame + "\n\ndata: [DONE]\n\n"
+ 	rec := httptest.NewRecorder()
+-	if err := StreamHint(rec, strings.NewReader(raw), func(string) string { return "" }); err != nil {
+-		t.Fatal(err)
++	if err := StreamHint(rec, strings.NewReader(raw), func(string) string { return "" }); err == nil {
++		t.Fatal("supplier error must remain observable to the caller")
+ 	}
+ 	if got := rec.Body.String(); !strings.Contains(got, errFrame) || strings.Contains(got, "gateway_hint") {
+ 		t.Errorf("empty hint must leave frame verbatim: %q", got)
+@@ -233,11 +233,11 @@
+ func TestStreamHintNilFuncEqualsStream(t *testing.T) {
+ 	raw := "data: {\"id\":\"x1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"error\":{\"message\":\"m\"}}\n\ndata: [DONE]\n\n"
+ 	a, b := httptest.NewRecorder(), httptest.NewRecorder()
+-	if err := Stream(a, strings.NewReader(raw)); err != nil {
+-		t.Fatal(err)
+-	}
+-	if err := StreamHint(b, strings.NewReader(raw), nil); err != nil {
+-		t.Fatal(err)
++	if err := Stream(a, strings.NewReader(raw)); err == nil {
++		t.Fatal("supplier error must remain observable to the caller")
++	}
++	if err := StreamHint(b, strings.NewReader(raw), nil); err == nil {
++		t.Fatal("supplier error must remain observable to the caller")
+ 	}
+ 	if a.Body.String() != b.Body.String() {
+ 		t.Errorf("nil hintFn must be byte-identical to Stream:\nStream=%q\nStreamHint=%q", a.Body, b.Body)
+--- a/internal/upstream/refresh_singleflight.go
++++ b/internal/upstream/refresh_singleflight.go
+@@ -75,7 +75,7 @@
+ 		go func() {
+ 			refreshContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+ 			defer cancel()
+-			failure := account.RefreshSerialized(refreshContext, func() error { return c.refreshToken(account) })
++			failure := account.RefreshSerialized(refreshContext, func() error { return c.refreshTokenWithContext(refreshContext, account) })
+ 			if failure != nil {
+ 				failure = &refreshFailure{cause: failure}
+ 			}
+--- /dev/null
++++ b/internal/upstream/remaining_audit_test.go
+@@ -0,0 +1,68 @@
++package upstream
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"workbuddy2api/internal/auth"
++)
++
++func TestRemainingAuditRefreshNetworkInheritsOwnedDeadline(t *testing.T) {
++	received := make(chan struct{})
++	release := make(chan struct{})
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		close(received)
++		select {
++		case <-r.Context().Done():
++		case <-release:
++		}
++	}))
++	defer server.Close()
++	defer close(release)
++	client := New()
++	client.ChatBaseCN = server.URL
++	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++	defer cancel()
++	started := time.Now()
++	err := client.refreshTokenWithContext(ctx, &auth.Auth{UID: "synthetic", AccessToken: "fixture", RefreshToken: "fixture-refresh"})
++	if err == nil || time.Since(started) > 2*time.Second {
++		t.Fatalf("refresh ignored owned deadline: %v", err)
++	}
++	select {
++	case <-received:
++	default:
++		t.Fatal("fixture did not reach the local HTTP server")
++	}
++	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
++		t.Fatal("parent deadline was not the cancellation authority")
++	}
++}
++
++func TestRemainingAuditReasoningAndPostFinishTailShareAccumulatedCap(t *testing.T) {
++	t.Setenv("WB2A_MAX_OUTPUT_BYTES", "65536")
++	for _, field := range []string{"reasoning_content", "content"} {
++		frame := `data: {"choices":[{"delta":{"` + field + `":"` + strings.Repeat("x", 1024) + `"}}]}` + "\n\n"
++		input := strings.Repeat(frame, 100) + "data: [DONE]\n\n"
++		if result, failure := Aggregate(strings.NewReader(input)); failure == nil || result != nil {
++			t.Fatal("aggregate retained an excessive reasoning/content history")
++		}
++		writer := httptest.NewRecorder()
++		if failure := StreamHint(writer, strings.NewReader(input), nil); failure == nil {
++			t.Fatal("stream accepted accumulated output over the cap")
++		}
++	}
++	finish := `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\n"
++	tail := `data: {"usage":{"unrecognized":"` + strings.Repeat("x", 1024) + `"}}` + "\n\n"
++	writer := httptest.NewRecorder()
++	if failure := StreamHint(writer, strings.NewReader(finish+strings.Repeat(tail, 100)), nil); failure == nil {
++		t.Fatal("post-finish tail bypassed the same cumulative byte budget")
++	}
++	if !strings.Contains(writer.Body.String(), "upstream_truncated") {
++		t.Fatal("oversized tail lost the explicit failure terminal")
++	}
++}
+--- a/internal/upstream/sse.go
++++ b/internal/upstream/sse.go
+@@ -8,7 +8,9 @@
+ 	"fmt"
+ 	"io"
+ 	"net/http"
++	"os"
+ 	"sort"
++	"strconv"
+ 	"strings"
+ 	"time"
+ )
+@@ -35,11 +37,72 @@
+ // 告知客户端的义务由 StreamHint 在 [DONE] 之前插入的 error 帧承担。
+ func IsTruncatedStreamError(err error) bool { return errors.Is(err, errTruncatedStream) }
+ 
++// StreamError retains the supplier's structured error without replaying a send.
++type StreamError struct{ Payload map[string]any }
++
++func (e *StreamError) Error() string {
++	b, _ := json.Marshal(e.Payload)
++	return string(b)
++}
++
++func supplierFrameFailure(frame map[string]any) *StreamError {
++	value, exists := frame["error"]
++	_, hasChoices := frame["choices"]
++	explicitError := frame["type"] == "error"
++	if !hasChoices && fmt.Sprint(frame["code"]) == "11128" {
++		return &StreamError{Payload: map[string]any{"error": frame}}
++	}
++	if !explicitError && (!exists || (value == nil && hasChoices)) {
++		return nil
++	}
++	if structured, ok := value.(map[string]any); ok && len(structured) > 0 {
++		return &StreamError{Payload: frame}
++	}
++	// Preserve malformed supplier evidence inside an explicit, parseable failure.
++	// A null/empty error-only frame must never turn into a successful completion.
++	return &StreamError{Payload: map[string]any{"error": map[string]any{
++		"type": "api_error", "code": "upstream_invalid_error_frame",
++		"message": "Upstream emitted a malformed error frame", "upstream": frame,
++	}}}
++}
++
++func completionFrame(frame map[string]any) bool {
++	choices, _ := frame["choices"].([]any)
++	for _, raw := range choices {
++		choice, _ := raw.(map[string]any)
++		if _, ok := choice["delta"].(map[string]any); ok {
++			return true
++		}
++		if _, ok := choice["message"].(map[string]any); ok {
++			return true
++		}
++		if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
++			return true
++		}
++	}
++	return false
++}
++
+ // Aggregate 读取完整 SSE 流，聚合 delta.content 为单个 OpenAI chat.completion 响应。
+ // 分片/半行由 bufio.Reader.ReadString 处理；遇到 "data: [DONE]" 结束。
+ // tool_calls 以流式 delta 到达（按 index 合并：首片带 id/type/name，后续只带 arguments 片段）。
++func boundedOutput(r io.Reader) *io.LimitedReader {
++	maximum, failure := strconv.ParseInt(os.Getenv("WB2A_MAX_OUTPUT_BYTES"), 10, 64)
++	if failure != nil {
++		maximum = 4 << 20
++	}
++	if maximum < 65536 {
++		maximum = 65536
++	}
++	if maximum > 16<<20 {
++		maximum = 16 << 20
++	}
++	return &io.LimitedReader{R: r, N: maximum + 1}
++}
++
+ func Aggregate(r io.Reader) (map[string]any, error) {
+-	br := bufio.NewReaderSize(r, 64*1024)
++	bounded := boundedOutput(r)
++	br := bufio.NewReaderSize(bounded, 64*1024)
+ 	var (
+ 		id, model     string
+ 		created       float64
+@@ -51,6 +114,7 @@
+ 		gotAnyContent bool
+ 		validEvents   int
+ 		sawDone       bool // 上游显式发过 data: [DONE]（正常收尾）
++		sawFinish     bool
+ 		toolCalls     = map[int]map[string]any{}
+ 		toolOrder     []int
+ 		// toolSeq 缺 index 的 tool_call 的分配序号源：跨帧延续「最近分配」槽位，
+@@ -152,6 +216,9 @@
+ 	}
+ 	for {
+ 		line, err := br.ReadString('\n')
++		if bounded.N == 0 {
++			return nil, fmt.Errorf("%w: upstream output byte limit exceeded", errTruncatedStream)
++		}
+ 		if err != nil && err != io.EOF {
+ 			return nil, err
+ 		}
+@@ -165,8 +232,13 @@
+ 			} else {
+ 				var chunk map[string]any
+ 				if json.Unmarshal([]byte(payload), &chunk) == nil {
++					if failure := supplierFrameFailure(chunk); failure != nil {
++						return nil, failure
++					}
+ 					// 有效事件计数：仅 JSON 解析成功的数据帧计入（解析失败沿用静默 continue）。
+-					validEvents++
++					if completionFrame(chunk) {
++						validEvents++
++					}
+ 					if v, ok := chunk["id"].(string); ok && id == "" {
+ 						id = v
+ 					}
+@@ -187,6 +259,7 @@
+ 							}
+ 							if fr, ok := c["finish_reason"].(string); ok && fr != "" {
+ 								finishReason = fr
++								sawFinish = true
+ 							}
+ 							if delta, ok := c["delta"].(map[string]any); ok {
+ 								if r2, ok := delta["role"].(string); ok && r2 != "" {
+@@ -223,6 +296,9 @@
+ 		// 不再合成空 content 的假成功响应，直接报错，由 handler 映射为 502 upstream_parse。
+ 		return nil, errEmptyStream
+ 	}
++	if !sawDone && !sawFinish {
++		return nil, errTruncatedStream
++	}
+ 	if id == "" {
+ 		id = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+ 	}
+@@ -526,6 +602,8 @@
+ 	// 两者皆无而流已结束 = 中途断掉，不是「模型说完了」。
+ 	sawDone := false
+ 	sawFinish := false
++	var readErr error
++	var supplierErr *StreamError
+ 	flushTail := func() error {
+ 		for _, p := range tailBuf {
+ 			if _, err := io.WriteString(w, "data: "+p+"\n\n"); err != nil {
+@@ -572,7 +650,11 @@
+ 			// normalizeFrame 白名单——白名单会剥掉 error 字段，客户端就看不到上游
+ 			// code/msg/requestId。error.message 即上游原文（如 6004 限流、审核拦截），
+ 			// 计入有效帧（避免误判空流补写 "empty upstream stream"）。
+-			if _, hasErr := obj["error"]; hasErr {
++			if failure := supplierFrameFailure(obj); failure != nil {
++				supplierErr = failure
++				if structured, ok := obj["error"].(map[string]any); !ok || len(structured) == 0 {
++					payload = failure.Error()
++				}
+ 				// 已进入收尾段：先把缓冲的收尾帧发出去，再发错误帧，避免顺序反转。
+ 				if werr := flushTail(); werr != nil {
+ 					return 0, werr
+@@ -581,6 +663,17 @@
+ 					return 0, werr
+ 				}
+ 				return 1, nil
++			}
++			if supplierErr != nil {
++				// A refusal is terminal for content. Drain bounded trailing usage
++				// evidence for accounting, without exposing later executable/text data.
++				usage, hasUsage := obj["usage"]
++				if !hasUsage {
++					return 0, nil
++				}
++				obj = map[string]any{"usage": usage, "choices": []any{}}
++				encoded, _ := json.Marshal(obj)
++				payload = string(encoded)
+ 			}
+ 			// reasoningBackfill：记录整轮是否出现正文/工具调用，并累积思考原文。
+ 			// 放在错误帧早退之后 —— 上游错误帧不属于正常内容，不该参与判定。
+@@ -623,7 +716,9 @@
+ 			if raw, err := json.Marshal(normalizeFrame(obj)); err == nil {
+ 				payload = string(raw)
+ 			}
+-			valid = 1
++			if completionFrame(obj) {
++				valid = 1
++			}
+ 			// 收尾观测：出现过 finish_reason 即算上游正常收了尾（与开关无关）。
+ 			if frameHasFinish(obj) {
+ 				sawFinish = true
+@@ -645,11 +740,16 @@
+ 		return valid, nil
+ 	}
+ 
+-	br := bufio.NewReaderSize(r, 64*1024)
++	bounded := boundedOutput(r)
++	br := bufio.NewReaderSize(bounded, 64*1024)
+ 	validFrames := 0
+ readLoop:
+ 	for {
+ 		line, err := br.ReadString('\n')
++		if bounded.N == 0 {
++			readErr = errors.New("upstream output byte limit exceeded")
++			break
++		}
+ 		trimmed := strings.TrimRight(line, "\r\n")
+ 		switch {
+ 		case strings.HasPrefix(trimmed, "data: [DONE]"):
+@@ -677,7 +777,8 @@
+ 			if err == io.EOF {
+ 				break
+ 			}
+-			return err
++			readErr = err
++			break
+ 		}
+ 	}
+ 	// 空流（0 有效帧）：先写一帧 error（绕过 normalizeFrame 原样保留 error 字段），
+@@ -691,7 +792,7 @@
+ 	// reasoningBackfill：整轮无正文、无工具调用，但思考通道有内容 —— 补发一帧
+ 	// 正文，让只看 content 的客户端拿到输出，而不是判成「模型没有输出」。
+ 	// 放在 [DONE] 之前，客户端仍按正常流收尾；开关关闭时这段不执行。
+-	if ReasoningFallbackEnabled() && !sawContent && !sawToolCalls && reasoningBuf.Len() > 0 {
++	if ReasoningFallbackEnabled() && supplierErr == nil && readErr == nil && (sawDone || sawFinish) && !sawContent && !sawToolCalls && reasoningBuf.Len() > 0 {
+ 		rid := firstID
+ 		if rid == "" {
+ 			rid = "chatcmpl-wb2api"
+@@ -732,7 +833,7 @@
+ 	//
+ 	// 判据与非流式 Aggregate 同构：那边同样以 !sawDone 认定「未正常收尾」。
+ 	// 空流（validFrames == 0）走上方的 errEmptyStream 分支，不重复判定。
+-	truncated := validFrames > 0 && !sawDone && !sawFinish
++	truncated := validFrames > 0 && (readErr != nil || (!sawDone && !sawFinish)) && supplierErr == nil
+ 	if truncated {
+ 		// 本地判定帧不走 writeRaw：它的 hintFn 是给**上游** error 帧配建议用的，
+ 		// 这里不是上游错误，不编造 hint。
+@@ -751,7 +852,13 @@
+ 		return errEmptyStream
+ 	}
+ 	if truncated {
++		if readErr != nil {
++			return fmt.Errorf("%w: %v", errTruncatedStream, readErr)
++		}
+ 		return errTruncatedStream
++	}
++	if supplierErr != nil {
++		return supplierErr
+ 	}
+ 	return nil
+ }
+--- a/internal/upstream/sse_test.go
++++ b/internal/upstream/sse_test.go
+@@ -283,13 +283,8 @@
+ 	raw := `data: {"id":"x1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"","tool_calls":[{"id":"call_a","type":"function","function":{"name":"bash","arguments":"{\"cmd\":"},"index":0}]}}]}
+ data: {"id":"x1","choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"\"ls\""},"index":0}]}}]}` // EOF 截断，无 DONE
+ 	resp, err := Aggregate(strings.NewReader(raw))
+-	if err != nil {
+-		t.Fatalf("EOF-truncated stream must still aggregate: %v", err)
+-	}
+-	choice := resp["choices"].([]any)[0].(map[string]any)
+-	msg := choice["message"].(map[string]any)
+-	if calls, ok := msg["tool_calls"].([]map[string]any); ok && len(calls) != 0 {
+-		t.Fatalf("truncated tool_calls must be dropped: %#v", msg["tool_calls"])
++	if resp != nil || !IsTruncatedStreamError(err) {
++		t.Fatalf("partial tool turn must fail closed: response=%v error=%v", resp, err)
+ 	}
+ }
+ 
+@@ -967,8 +962,8 @@
+ 		"data: [DONE]\n\n"
+ 
+ 	rec := httptest.NewRecorder()
+-	if err := Stream(rec, strings.NewReader(raw)); err != nil {
+-		t.Fatal(err)
++	if err := Stream(rec, strings.NewReader(raw)); err == nil {
++		t.Fatal("supplier error must remain observable to the caller")
+ 	}
+ 	body := rec.Body.String()
+ 	// 错误帧原文存续：message/code/requestId 都在。

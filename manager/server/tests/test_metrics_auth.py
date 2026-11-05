@@ -39,6 +39,7 @@ class MetricsAuthTest(unittest.TestCase):
         self.client = TestClient(main.app)
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
 
     def tearDown(self):
         self.client.close()
@@ -46,6 +47,7 @@ class MetricsAuthTest(unittest.TestCase):
             db._close_connection_locked()
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self.patches.close()
         self.temp.cleanup()
 

@@ -158,6 +158,11 @@ def readiness():
     """
     from . import drain
     draining = drain.is_draining()
+    shared_ok = True
+    if config.SHARED_ADMISSION:
+        from .observability import admission_snapshot
+        shared = admission_snapshot(probe=True)
+        shared_ok = bool(shared and shared.get('scope') == 'same_host_shared' and shared.get('healthy'))
     backlog = _ledger_backlog()
     healthy = _ledger_channel_ok()
     spool = 'failed' if ledger_spool_failed else 'ok'
@@ -174,7 +179,7 @@ def readiness():
                    'dead_dispositions': -1, 'spool_dir': '', 'exists': False,
                    'used': False, 'checked_at': None}
     return {
-        'ok': bool(writable and healthy and not draining),
+        'ok': bool(writable and healthy and not draining and shared_ok),
         'database_write': bool(writable), 'ledger_write': healthy,
         'ledger_backlog': max(0, backlog), 'ledger_spool': spool,
         'draining': draining,
@@ -381,6 +386,10 @@ def replay_ledger_receipts(now: int) -> dict:
 
 
 def _monitor_tick(now, failures, next_reconcile, next_replay):
+    if not config.BACKGROUND_JOBS:
+        # Transition workers refresh local readiness only. Shared recovery,
+        # notifications and maintenance belong to the stable primary instance.
+        return failures, next_reconcile, next_replay, readiness()
     """Keep disk/SQLite/replay/legacy notification I/O off the ASGI event loop."""
     from . import archiveworker
     archive = archiveworker.status()
@@ -389,7 +398,7 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
     transition('archive_retention', archive_problem,
                'retention archive unavailable or stale; source rows retained; inference readiness unchanged')
     # U01：先消化回执再判就绪，避免「积压刚产生就报警」的抖动。
-    if now >= next_replay:
+    if now >= next_replay and config.BACKGROUND_JOBS:
         next_replay = now + _reconcile_env_int('WB_LEDGER_REPLAY_INTERVAL_SEC', 30)
         replay_ledger_receipts(now)
     status = readiness()

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import threading
 import time
 
 from . import config
@@ -95,6 +96,15 @@ CREATE TRIGGER IF NOT EXISTS portal_settlements_no_update BEFORE UPDATE ON porta
  BEGIN SELECT RAISE(ABORT,'settlements are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS portal_settlements_no_delete BEFORE DELETE ON portal_settlements
  BEGIN SELECT RAISE(ABORT,'settlements are immutable'); END;
+CREATE TABLE IF NOT EXISTS portal_unknown_supplier_costs(
+ request_id TEXT PRIMARY KEY REFERENCES portal_spends(request_id), owner_id TEXT NOT NULL,
+ key_id INTEGER NOT NULL, charged_units INTEGER NOT NULL CHECK(charged_units=0),
+ held_units INTEGER NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS portal_unknown_cost_no_update BEFORE UPDATE ON portal_unknown_supplier_costs
+ BEGIN SELECT RAISE(ABORT,'supplier cost observations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS portal_unknown_cost_no_delete BEFORE DELETE ON portal_unknown_supplier_costs
+ BEGIN SELECT RAISE(ABORT,'supplier cost observations are immutable'); END;
 CREATE TABLE IF NOT EXISTS portal_allocations(
  request_id TEXT NOT NULL REFERENCES portal_spends(request_id),
  grant_id TEXT NOT NULL REFERENCES portal_grants(id), amount_units INTEGER NOT NULL,
@@ -143,6 +153,32 @@ CREATE TABLE IF NOT EXISTS portal_debt_bonus_allocations(
 '''
 
 
+_schema_lock = threading.Lock()
+_schema_ready: tuple | None = None
+
+
+def _ensure_schema(conn: sqlite3.Connection, path: Path) -> None:
+    """Skip repeated DDL only for the same process, file and SQLite schema.
+
+    Every portal read used to execute the complete schema before BEGIN, even
+    when all tables already existed. A bounded one-database cache avoids that
+    work; inode and schema_version changes still force the idempotent bootstrap
+    after a replacement, restore or schema change. No credential/value is cached.
+    """
+    global _schema_ready
+    with _schema_lock:
+        stat = path.stat()
+        identity = (os.getpid(), str(path.resolve()), stat.st_dev, stat.st_ino)
+        version = conn.execute('PRAGMA schema_version').fetchone()[0]
+        if _schema_ready == (*identity, version):
+            return
+        conn.executescript(SCHEMA)
+        from .portalregistration import SCHEMA as REGISTRATION_SCHEMA
+        conn.executescript(REGISTRATION_SCHEMA)
+        version = conn.execute('PRAGMA schema_version').fetchone()[0]
+        _schema_ready = (*identity, version)
+
+
 def now() -> int:
     return int(time.time())
 
@@ -152,7 +188,7 @@ def day(at: int | None = None) -> str:
 
 
 @contextmanager
-def transaction():
+def transaction(*, read_only=False):
     path = config.DATA_DIR / 'user-portal.sqlite3'
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
@@ -169,8 +205,9 @@ def transaction():
     try:
         conn.execute('PRAGMA foreign_keys=ON')
         conn.execute('PRAGMA synchronous=FULL')
-        conn.executescript(SCHEMA)
-        conn.execute('BEGIN IMMEDIATE')
+        _ensure_schema(conn, path)
+        if read_only:conn.execute('PRAGMA query_only=ON')
+        conn.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
         yield conn
         conn.commit()
     except BaseException:
@@ -181,6 +218,9 @@ def transaction():
 
 
 def secret() -> str:
+    with transaction(read_only=True) as conn:
+        row=conn.execute('SELECT value FROM portal_settings WHERE key=?',('session_secret',)).fetchone()
+        if row:return row[0]
     with transaction() as conn:
         conn.execute('INSERT OR IGNORE INTO portal_settings VALUES(?,?)', ('session_secret', secrets.token_hex(48)))
         return conn.execute('SELECT value FROM portal_settings WHERE key=?', ('session_secret',)).fetchone()[0]
@@ -220,7 +260,7 @@ def snapshot(ok, total, expiries, *, at=None) -> dict[int, int]:
 
 
 def user(user_id: str) -> dict | None:
-    with transaction() as conn:
+    with transaction(read_only=True) as conn:
         row = conn.execute('SELECT * FROM portal_users WHERE id=?', (user_id,)).fetchone()
         return dict(row) if row else None
 
@@ -362,30 +402,45 @@ def spendable_grants(conn, owner_id, at):
 
 def overview(owner_id: str) -> dict:
     at = now()
-    with transaction() as conn:
-        expire(conn, owner_id, at)
+    # Materialize expiration only when there is actual work. Steady-state page
+    # and authentication reads must not reserve the wallet's single writer.
+    with transaction(read_only=True) as conn:
+        quarantine=conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
+        quarantined=bool(quarantine and quarantine[0]=='true')
+        needs_expiry=conn.execute('SELECT 1 FROM portal_grants WHERE owner_id=? AND remaining_units>0 AND expires_at<=? '
+            'UNION ALL SELECT 1 FROM portal_bonus_grants WHERE owner_id=? AND remaining_units>0 AND expires_at<=? LIMIT 1',
+            (owner_id,at,owner_id,at)).fetchone()
+    if needs_expiry and not quarantined:
+        with transaction() as conn:
+            require_not_quarantined(conn)
+            expire(conn,owner_id,at)
+    with transaction(read_only=True) as conn:
+        quarantine=conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
+        quarantined=bool(quarantine and quarantine[0]=='true')
+        # Viewing a quarantined recovery copy must preserve its evidence. Time
+        # filtering still excludes expired balances without materializing edits.
         accounts = [dict(row) for row in conn.execute(
             'SELECT a.id,a.label,a.created_at,a.status,a.initial_state,c.state AS checkin_state,c.confirmed_at,c.credited_units '
             'FROM portal_accounts a LEFT JOIN portal_checkins c ON c.account_id=a.id AND c.day=? '
             'WHERE a.owner_id=? ORDER BY a.created_at DESC,a.id', (day(at), owner_id))]
         grants = [dict(row) for row in conn.execute(
             'SELECT source,amount_units,remaining_units,received_at,expires_at FROM portal_grants '
-            'WHERE owner_id=? AND remaining_units>0 ORDER BY expires_at,id', (owner_id,))]
+            'WHERE owner_id=? AND remaining_units>0 AND expires_at>? ORDER BY expires_at,id', (owner_id,at))]
         grants += [dict(row) for row in conn.execute("SELECT 'admin_bonus' AS source,amount_units,remaining_units,received_at,expires_at "
-            'FROM portal_bonus_grants WHERE owner_id=? AND remaining_units>0', (owner_id,))]
+            'FROM portal_bonus_grants WHERE owner_id=? AND remaining_units>0 AND expires_at>?', (owner_id,at))]
         grants.sort(key=lambda row: (row['expires_at'], row['received_at'], row['source']))
         events = [dict(row) for row in conn.execute('SELECT kind,amount_units,ts,expires_at FROM portal_events WHERE owner_id=? ORDER BY id DESC LIMIT 100', (owner_id,))]
         held = conn.execute("SELECT COALESCE(SUM(held_units),0) FROM portal_spends WHERE owner_id=? AND state IN ('reserved','forwarded','unknown')", (owner_id,)).fetchone()[0]
         unpooled = conn.execute('SELECT COALESCE(SUM(g.remaining_units),0) FROM portal_grants g LEFT JOIN portal_pool_links p ON p.account_id=g.account_id '
             'WHERE g.owner_id=? AND g.expires_at>? AND p.account_id IS NULL', (owner_id, at)).fetchone()[0]
         debt = conn.execute('SELECT amount_units FROM portal_debts WHERE owner_id=?', (owner_id,)).fetchone()
-        quarantined = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
-        quarantined = bool(quarantined and quarantined[0] == 'true')
-        pooled = {row[0] for row in conn.execute('SELECT account_id FROM portal_pool_links')}
+        pooled = {row[0] for row in conn.execute(
+            'SELECT p.account_id FROM portal_accounts a JOIN portal_pool_links p ON p.account_id=a.id '
+            'WHERE a.owner_id=?', (owner_id,))}
         for account in accounts:
             account['pool_state'] = 'public' if account['id'] in pooled else 'pending'
         from . import portalbilling, portalpolicy
-        return {'accounts': accounts, 'account_count': len(accounts),
+        return {'owner_id':owner_id,'accounts': accounts, 'account_count': len(accounts),
                 'active_account_count': sum(row['status'] == 'active' for row in accounts),
                 'balance_units': sum(row['remaining_units'] for row in grants),
                 'expiring_7d_units': sum(row['remaining_units'] for row in grants if row['expires_at'] <= at + 7 * 86400),

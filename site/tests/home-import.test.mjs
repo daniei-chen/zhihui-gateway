@@ -7,6 +7,18 @@ import {createPreviewServer, siteRoot, homeCsp, loginCsp, sceneCsp} from '../too
 
 const manifest = JSON.parse(fs.readFileSync(path.join(siteRoot, 'home-import.json'), 'utf8'));
 const prefix = manifest.asset_prefix;
+const retainedScenes = new Map((manifest.retained_scene_dependencies || []).map(row => [row.url,row]));
+
+test('embedded scenes retain the exact serving CSP and immutable predecessor', () => {
+  assert.equal(retainedScenes.size,2);
+  const html=fs.readFileSync(path.join(siteRoot,'home/index.html'),'utf8');
+  for(const match of html.matchAll(/<iframe[^>]+src="([^"]+)"/g)) {
+    if(!match[1].includes('/animations/'))continue;
+    const row=retainedScenes.get(match[1]);assert.ok(row,'new scene URLs need a reviewed serving CSP');
+    const bytes=fs.readFileSync(path.join(siteRoot,'home',row.url.slice('/home-assets/'.length)));
+    assert.equal(bytes.length,row.bytes);assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),row.sha256);
+  }
+});
 test('hero CJK spacing is scoped and preserves the approved copy and brand placement', () => {
   const css = fs.readFileSync(path.join(siteRoot, 'home', prefix.slice('/home-assets/'.length), 'styles/color-release.css'), 'utf8');
   assert.match(css, /#hero-title\s*\{[^}]*letter-spacing:\s*\.015em\s*;[^}]*font-kerning:\s*none\s*;/);
@@ -49,6 +61,9 @@ test('production-like routes serve every local reference with strict MIME and CS
       if (!/\.(html|css|js)$/.test(row.path)) continue;
       const text = fs.readFileSync(path.join(siteRoot, row.path), 'utf8');
       for (const match of text.matchAll(/\/home-assets\/[A-Za-z0-9_./-]+/g)) {
+        if(retainedScenes.has(match[0])) {
+          assert.equal(row.path,'home/index.html');urls.add(match[0]);continue;
+        }
         if (match[0].startsWith('/home-assets/console-flow-20261030-1/')) {
           assert.equal(row.path, 'home/index.html', 'Public demo links belong only to the parent page');
           assert.match(text, /sandbox="allow-scripts" referrerpolicy="no-referrer"/);

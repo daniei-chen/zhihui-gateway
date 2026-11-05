@@ -26,7 +26,13 @@ class KeysScopeTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory()
         d = Path(cls._tmp.name)
-        cls._orig = (config.DB_PATH, config.USERS_FILE, config.STATIC_DIR)
+        cls._orig = (config.DB_PATH, config.USERS_FILE, config.STATIC_DIR, config.DATA_DIR)
+        config.DATA_DIR = d / 'isolated-data'
+        # An unrelated test's unresolved receipt must not contaminate this
+        # clean DB's scope contract. The production reset guard stays enabled.
+        from unittest import mock
+        cls._spool = mock.patch.dict('os.environ', {'WB_LEDGER_SPOOL_DIR': str(d / 'isolated-spool')})
+        cls._spool.start()
         config.DB_PATH = d / 'keys-scope.db'
         config.USERS_FILE = d / 'users.json'
         config.STATIC_DIR = d / 'no-static'
@@ -46,7 +52,8 @@ class KeysScopeTest(unittest.TestCase):
         if db._conn is not None:
             db._conn.close()
         db._conn = None
-        config.DB_PATH, config.USERS_FILE, config.STATIC_DIR = cls._orig
+        config.DB_PATH, config.USERS_FILE, config.STATIC_DIR, config.DATA_DIR = cls._orig
+        cls._spool.stop()
         cls._tmp.cleanup()
 
     def _token(self, scope: str) -> dict:

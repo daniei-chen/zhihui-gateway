@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run the suite against a private, real loopback HTTP provider and temporary state.
 
-No provider account, API key, production database, or writable source tree is used.
+Uses synthetic credentials and temporary state. This is not an OS sandbox:
+test code still has the invoking user's filesystem and network privileges.
 Usage: dev/run_isolated_tests.py [pytest arguments...]
 """
 from __future__ import annotations
@@ -131,15 +132,23 @@ def main():
             (state / 'home').mkdir()
             upstream = state / 'config.json'
             upstream.write_text('{"server":{"listen":":7863"}}\n')
-            env = dict(os.environ, HOME=str(state / 'home'), USERPROFILE=str(state / 'home'),
+            # Never inherit application paths, credentials, proxies or provider
+            # settings. A private HOME alone cannot isolate WB_DB/WB_USERS_FILE.
+            system_names = {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+                            'TEMP', 'TMP', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE',
+                            'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'LANG', 'LC_ALL'}
+            env = {key: value for key, value in os.environ.items() if key.upper() in system_names}
+            env.update(HOME=str(state / 'home'), USERPROFILE=str(state / 'home'),
                 WB_DATA_DIR=name, WB_AUTH_DIR=str(state / 'auths'), WB_UPSTREAM_CONFIG=str(upstream),
                 OPENAI_BASE_URL=f'http://127.0.0.1:{provider.server_port}/v1',
                 WB2API_BASE=f'http://127.0.0.1:{provider.server_port}',
-                WB2API_KEY='isolated-upstream-test', PYTHONDONTWRITEBYTECODE='1')
+                ZH_FAKE_PROVIDER_BASE=f'http://127.0.0.1:{provider.server_port}',
+                WB2API_KEY='isolated-upstream-test', PYTHONDONTWRITEBYTECODE='1',
+                PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
             args = sys.argv[1:] or ['server/tests', '-q', '-p', 'no:cacheprovider',
-                                      '--timeout=60', '--timeout-method=thread']
+                                      '--tb=short']
             result = subprocess.run([sys.executable, '-m', 'pytest', *args], cwd=root, env=env)
-            print(json.dumps({'fixture': 'private-loopback-http',
+            print(json.dumps({'fixture': 'private-loopback-http', 'os_sandbox': False,
                               'provider_requests': sum(provider.counts.values()),
                               'exit_code': result.returncode}), flush=True)
             return result.returncode

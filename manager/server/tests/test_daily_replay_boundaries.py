@@ -115,7 +115,9 @@ class DailyReplayBoundariesTest(unittest.TestCase):
             for _ in range(ledgerreplay.MAX_ATTEMPTS):
                 result = ledgerreplay.replay_batch()
         self.assertEqual(result['dead_pending'], 1)
-        dead = ledgerreplay.dead_dir() / path.name
+        retained = list(ledgerreplay.dead_dir().glob(path.stem + '-*.json'))
+        self.assertEqual(len(retained), 1)
+        dead = retained[0]
         self.assertEqual(json.loads(dead.read_text(encoding='utf-8'))['facts'], original_facts)
         self.assert_totals(0, 0)
         for table in ('request_logs', 'usage_events', 'ledger_receipts', 'usage_daily'):

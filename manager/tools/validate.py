@@ -13,6 +13,9 @@ def module(name,directory):
     auth=directory/'auths';auth.mkdir(mode=0o700,exist_ok=True)
     config=directory/'upstream.json'
     config.write_text(json.dumps({'api_key':'synthetic-fixture','auth_dir':str(auth)}))
+    for name in list(os.environ):
+        if name.startswith(('WB_', 'WB2API_', 'QTG_', 'OPENAI_')) or name.upper().endswith('_PROXY'):
+            del os.environ[name]
     os.environ.update({'WB_DATA_DIR':str(directory),'WB_DB':str(directory/'manager.db'),
         'WB_USERS_FILE':str(directory/'users.json'),'WB_AUTH_DIR':str(auth),
         'WB_UPSTREAM_CONFIG':str(config),'WB_STATIC_DIR':str(ROOT/'web/out'),
@@ -37,6 +40,11 @@ def main():
         if os.readlink('/proc/self/ns/net')==os.readlink('/proc/1/ns/net'):
             raise RuntimeError('isolated verification requires a separate network namespace')
         subprocess.run(['ip','link','set','lo','up'],check=True)
+        addresses=json.loads(subprocess.check_output(['ip','-j','addr'],text=True))
+        if any(item.get('ifname')!='lo' for item in addresses):
+            raise RuntimeError('isolated verification requires loopback-only interfaces')
+        if subprocess.check_output(['ip','route','show','default'],text=True).strip():
+            raise RuntimeError('isolated verification must not have a default route')
     output=Path(options.output).resolve();output.mkdir(parents=True,exist_ok=True)
     def run(name):
         directory=output/name;directory.mkdir(mode=0o700,exist_ok=True)
@@ -51,7 +59,8 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(run,names))
     summary={'modules':len(results),**{key:sum(row[key] for row in results) for key in ('tests','failures','errors','skips')},
              'failed_modules':[row['module'] for row in results if row['exit_code']],
-             'production_model_calls':0,'network_namespace_isolated':options.isolated}
+             'production_model_calls':None,'model_calls_measured':False,
+             'os_filesystem_sandbox':False,'network_namespace_isolated':options.isolated}
     (output/'summary.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary))
     return int(bool(summary['failed_modules']))
 if __name__=='__main__':raise SystemExit(main())

@@ -41,6 +41,7 @@ class EdgeIdentityProbeTest(unittest.TestCase):
         self.client.cookies.clear()
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         Path(config.QTG_IDENTITY_SECRET_FILE).write_text('test-bridge-secret-' * 4)
         Path(config.QTG_IDENTITY_SECRET_FILE).chmod(0o600)
         security.save_users({'secret': 'manager-test-' * 8, 'api_keys': [],
@@ -50,6 +51,7 @@ class EdgeIdentityProbeTest(unittest.TestCase):
         self.client.cookies.clear()
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
 
     def cookie(self):
         return {'Cookie': f'{config.COOKIE_NAME}={security.issue_token("管理员", "admin")}'}

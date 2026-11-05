@@ -13,6 +13,7 @@ import WalletOperations from './WalletOperations';
 import BonusDialog from './BonusDialog';
 import PasswordDialog from './PasswordDialog';
 import CreateMemberDialog from './CreateMemberDialog';
+import RegistrationInvites from './RegistrationInvites';
 
 export default function PortalMembersPage() {
   const {isAdmin, me} = useAuth();
@@ -92,6 +93,7 @@ export default function PortalMembersPage() {
       <details><summary><CircleHelp size={14} />说明</summary><p>不提供信用或透支。每天签到的积分逐批到期；现有管理员身份和IP策略不变。只有超级管理员 admin 本人可以赠送实际积分。</p></details></div>
     {error && <p className="portal-error" role="alert">{error}{members !== null && ' · 当前显示上次读取的数据，操作前请刷新确认。'}</p>}
     {notice && <p className="member-success" role="status">{notice}</p>}
+    <RegistrationInvites />
     <Tabs value={tab} onValueChange={setTab} className="member-tabs">
       <TabsList aria-label="用户管理功能" className="member-tabs-list">
         <TabsTrigger value="users"><Users size={15} />用户管理</TabsTrigger>

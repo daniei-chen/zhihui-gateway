@@ -32,8 +32,10 @@
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
+import math
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -47,7 +49,11 @@ SPEND_CLASSES = (SPEND_SETTLED, SPEND_CANCELLED, SPEND_UNKNOWN, SPEND_REJECTED,
                  SPEND_NOT_BILLABLE)
 
 #: 不计费的端点（参考路由：`routers/models.py` 的 /v1/models 等）
-NON_BILLABLE_PATHS = ('/v1/models', '/v2/models', '/models')
+NON_BILLABLE_PATHS = ('/v1/models', '/v2/models', '/models', '/v1/key')
+
+# Match the supported storage/display domain; reject rather than clamp evidence.
+MAX_TOKEN_VALUE = 2**53 - 1
+MAX_CREDIT_VALUE = 9_000_000_000_000
 
 
 @dataclass(frozen=True)
@@ -63,11 +69,13 @@ class Usage:
     credit: float | None
     observed: bool                 # 上游是否返回了 usage 对象/字段
     malformed: bool = False        # 收到了但不是合法数字
+    reported_complete: bool | None = None  # stored usage_complete, when reading history
 
     @property
     def complete(self) -> bool:
         """两个 token 字段都拿到了 —— 只有这种才允许说「用量已知」。"""
-        return self.prompt_tokens is not None and self.completion_tokens is not None
+        return (self.reported_complete is not False and not self.malformed
+                and self.prompt_tokens is not None and self.completion_tokens is not None)
 
     @property
     def known_tokens(self) -> int | None:
@@ -92,11 +100,28 @@ def _int_or_none(raw: object) -> tuple[int | None, bool]:
         return None, False
     if isinstance(raw, bool):
         return None, True
-    try:
+    if type(raw) is int:
+        value = raw
+    elif isinstance(raw, str) and len(raw) <= 16 and raw.isascii() and raw.isdecimal():
         value = int(raw)
-    except (TypeError, ValueError):
+    else:
         return None, True
-    if value < 0:
+    if not 0 <= value <= MAX_TOKEN_VALUE:
+        return None, True
+    return value, False
+
+
+def parse_credit(raw: object) -> tuple[float | None, bool]:
+    """Return finite, storage-safe credit or unknown; never pass poison to a receipt."""
+    if raw is None:
+        return None, False
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None, True
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None, True
+    if not math.isfinite(value) or not 0 <= value <= MAX_CREDIT_VALUE:
         return None, True
     return value, False
 
@@ -104,24 +129,14 @@ def _int_or_none(raw: object) -> tuple[int | None, bool]:
 def parse_usage(usage: object) -> Usage:
     """解析上游 usage；**绝不把 absent 变成 0**。"""
     if not isinstance(usage, dict) or not usage:
-        return Usage(None, None, None, observed=False)
+        return Usage(None, None, None, observed=usage is not None and usage != {},
+                     malformed=usage is not None and usage != {})
     pt, bad_pt = _int_or_none(usage.get('prompt_tokens'))
     ct, bad_ct = _int_or_none(usage.get('completion_tokens'))
     raw_credit = usage.get('credit')
     if raw_credit is None:
         raw_credit = usage.get('credits')
-    credit: float | None = None
-    bad_credit = False
-    if raw_credit is not None:
-        if isinstance(raw_credit, bool):
-            bad_credit = True
-        else:
-            try:
-                value = float(raw_credit)
-                credit = value if value >= 0 else None
-                bad_credit = credit is None
-            except (TypeError, ValueError):
-                bad_credit = True
+    credit, bad_credit = parse_credit(raw_credit)
     return Usage(pt, ct, credit, observed=True,
                  malformed=bad_pt or bad_ct or bad_credit)
 
@@ -183,8 +198,8 @@ def spend_class(*, terminal_state: str | None, usage: Usage, credit: float | Non
 
     1. 终态 `client_cancelled` → 取消类（即使有部分 usage，也不并入「成功」）；
     2. 终态 `rejected` / 4xx 且没有观测到 usage → 拒绝无花费（不进成本分母）；
-    3. 终态成功且 usage 完整 → 已结算已知；
-    4. 非计费端点且没有 usage → 不计费；
+    3. 非计费端点的完成请求 → 不计费（包括附带空 usage 的元数据）；
+    4. 终态成功且 usage 完整 → 已结算已知；
     5. 其余（含 `unknown` 预算、usage 缺失的完成请求）→ 未知用量 —— **不是 0**。
     """
     terminal = (terminal_state or '').strip()
@@ -200,10 +215,12 @@ def spend_class(*, terminal_state: str | None, usage: Usage, credit: float | Non
         # upstream_error / transport_error / protocol_incomplete / interrupted：
         # 可能已经产生了（部分）用量，但无法证明 —— 归未知，不归 0
         return SPEND_UNKNOWN
+    if path in NON_BILLABLE_PATHS:
+        return SPEND_NOT_BILLABLE
+    if budget_state == 'unknown':
+        return SPEND_UNKNOWN
     if usage.complete and usage.observed:
         return SPEND_SETTLED
-    if path in NON_BILLABLE_PATHS and not usage.observed:
-        return SPEND_NOT_BILLABLE
     if budget_state == 'unknown':
         return SPEND_UNKNOWN
     return SPEND_UNKNOWN
@@ -235,38 +252,25 @@ def reconcile(conn: sqlite3.Connection, *, since_ts: int | None = None,
               limit: int = 2000, samples: int = 5) -> dict:
     """只读对账：按 `request_id` 把五张表串起来，输出分类差异。
 
-    `limit` 限制扫描的日志行数（默认最近 2000 条），保证在本地大库上也是秒级；
+    `limit` 限制日志和孤立终态的检查窗口（默认最近 2000 条）；关联表只读取
+    窗口内 request_id，不能因历史账本增长而加载全表。
     全量对账应由归档脚本按水位分批调用。
     """
+    tables = {name: _table_exists(conn, name) for name in (
+        'request_logs', 'usage_events', 'budget_reservations', 'forwarding_events',
+        'request_outcomes')}
     findings: dict[str, dict] = {name: {'count': 0, 'samples': []}
                                  for name in CATEGORY_DESCRIPTIONS}
     totals = {name: 0 for name in SPEND_CLASSES}
     scanned = 0
+    requested_limit = int(limit)
+    limit = max(0, min(5000, requested_limit))
+    samples = max(0, min(100, int(samples)))
 
     events: dict[str, dict] = {}
     budgets: dict[str, dict] = {}
     forwards: dict[str, dict] = {}
     outcomes: dict[str, dict] = {}
-
-    if _table_exists(conn, 'usage_events'):
-        for row in conn.execute(
-                'SELECT request_id,prompt_tokens,completion_tokens,credit_units,'
-                'counted,terminal_state FROM usage_events'):
-            events[str(row[0])] = {'pt': row[1], 'ct': row[2], 'units': row[3],
-                                   'counted': row[4], 'terminal': row[5]}
-    if _table_exists(conn, 'budget_reservations'):
-        for row in conn.execute(
-                'SELECT request_id,state,charged_tokens,charged_credit FROM budget_reservations'):
-            budgets[str(row[0])] = {'state': row[1], 'tokens': row[2], 'credit': row[3]}
-    if _table_exists(conn, 'forwarding_events'):
-        for row in conn.execute(
-                'SELECT request_id,upstream_id,resolved_model,realm FROM forwarding_events '
-                "WHERE attempt=1 AND phase='prepared'"):
-            forwards[str(row[0])] = {'upstream_id': row[1], 'model': row[2], 'realm': row[3]}
-    if _table_exists(conn, 'request_outcomes'):
-        for row in conn.execute(
-                'SELECT request_id,terminal_state,http_status FROM request_outcomes'):
-            outcomes[str(row[0])] = {'terminal': row[1], 'status': row[2]}
 
     def add(name: str, sample: dict) -> None:
         bucket = findings[name]
@@ -276,14 +280,14 @@ def reconcile(conn: sqlite3.Connection, *, since_ts: int | None = None,
 
     sql = ('SELECT request_id,ts,endpoint,protocol,platform,actual_platform,upstream_ref,'
            'status,http_status,terminal_state,prompt_tokens,completion_tokens,credit,'
-           'usage_source,usage_complete FROM request_logs WHERE request_id IS NOT NULL')
+           'usage_source,usage_complete FROM request_logs')
     args: list[object] = []
     if since_ts is not None:
-        sql += ' AND ts >= ?'
+        sql += ' WHERE ts >= ?'
         args.append(int(since_ts))
     sql += ' ORDER BY id DESC LIMIT ?'
     args.append(int(limit))
-    if _table_exists(conn, 'request_logs'):
+    if tables['request_logs']:
         # actual_platform/upstream_ref 是 v4 迁移的列；旧库可能还没有，动态兜底
         columns = {str(r[1]) for r in conn.execute('PRAGMA table_info(request_logs)')}
         if 'actual_platform' not in columns:
@@ -294,19 +298,48 @@ def reconcile(conn: sqlite3.Connection, *, since_ts: int | None = None,
     else:
         rows = []
 
+    ids = [str(row[0]) for row in rows if row[0] is not None]
+
+    def related(table, columns, *, conditions=''):
+        """Load only the selected request batch, including on legacy SQLite builds."""
+        if not ids or not _table_exists(conn, table):
+            return
+        for offset in range(0, len(ids), 400):
+            batch = ids[offset:offset + 400]
+            yield from conn.execute(
+                f'SELECT {columns} FROM {table} WHERE request_id IN '
+                f'({",".join("?" for _ in batch)}) {conditions} LIMIT ?', (*batch, len(batch)))
+
+    usage_columns = ({str(row[1]) for row in conn.execute('PRAGMA table_info(usage_events)')}
+                     if _table_exists(conn, 'usage_events') else set())
+    usage_condition = ("AND attempt=1 AND event_type='usage'"
+                       if {'attempt', 'event_type'} <= usage_columns else '')
+    for row in related('usage_events', 'request_id,prompt_tokens,completion_tokens,credit_units,counted,terminal_state',
+                       conditions=usage_condition):
+        events[str(row[0])] = {'pt': row[1], 'ct': row[2], 'units': row[3], 'counted': row[4], 'terminal': row[5]}
+    for row in related('budget_reservations', 'request_id,state,charged_tokens,charged_credit'):
+        budgets[str(row[0])] = {'state': row[1], 'tokens': row[2], 'credit': row[3]}
+    for row in related('forwarding_events', 'request_id,upstream_id,resolved_model,realm',
+                       conditions="AND attempt=1 AND phase='prepared'"):
+        forwards[str(row[0])] = {'upstream_id': row[1], 'model': row[2], 'realm': row[3]}
+    for row in related('request_outcomes', 'request_id,terminal_state,http_status'):
+        outcomes[str(row[0])] = {'terminal': row[1], 'status': row[2]}
+
     for row in rows:
         scanned += 1
+        if row[0] is None:
+            add('log_without_request_id', {'ts': row[1]})
+            continue
         rid = str(row[0])
         endpoint = row[2]
         platform = row[4]
         actual = row[5]
         upstream_ref = row[6]
         terminal = row[9]
-        usage = Usage(
-            prompt_tokens=row[10], completion_tokens=row[11],
-            credit=None if row[12] is None else float(row[12]),
-            observed=(row[13] == 'upstream'),
-        )
+        measured = parse_usage({'prompt_tokens': row[10], 'completion_tokens': row[11], 'credit': row[12]})
+        usage = Usage(measured.prompt_tokens, measured.completion_tokens, measured.credit,
+                      observed=(row[13] == 'upstream'), malformed=measured.malformed,
+                      reported_complete=(row[14] == 1))
         budget = budgets.get(rid)
         klass = spend_class(terminal_state=terminal, usage=usage, credit=usage.credit,
                             endpoint=endpoint,
@@ -322,7 +355,7 @@ def reconcile(conn: sqlite3.Connection, *, since_ts: int | None = None,
         if event is not None and event['counted'] and usage.complete:
             if (event['pt'] or 0) != (usage.prompt_tokens or 0) or \
                     (event['ct'] or 0) != (usage.completion_tokens or 0):
-                add('token_mismatch', {**sample, 'event_tokens': event['pt'] + event['ct']})
+                add('token_mismatch', {**sample, 'event_tokens': (event['pt'] or 0) + (event['ct'] or 0)})
         if actual and platform and actual != platform:
             add('platform_mismatch', sample)
         if not actual and (endpoint or '') not in NON_BILLABLE_PATHS and \
@@ -335,33 +368,46 @@ def reconcile(conn: sqlite3.Connection, *, since_ts: int | None = None,
         outcome = outcomes.get(rid)
         if outcome and outcome['terminal'] and terminal and outcome['terminal'] != terminal:
             add('terminal_mismatch', {**sample, 'outcome_terminal': outcome['terminal']})
-        if terminal == 'completed' and usage.complete is False and \
-                (row[14] or 0) == 0 and not usage.observed:
+        if (endpoint or '') not in NON_BILLABLE_PATHS and terminal == 'completed' and usage.complete is False and \
+                (row[14] or 0) == 0 and not (row[10] or row[11]):
             add('zero_token_completed', sample)
 
-    if _table_exists(conn, 'request_logs'):
-        legacy = conn.execute(
-            'SELECT COUNT(*) FROM request_logs WHERE request_id IS NULL').fetchone()
-        findings['log_without_request_id']['count'] = int(legacy[0] or 0)
-    if _table_exists(conn, 'request_logs') and outcomes:
-        known = {str(r[0]) for r in conn.execute(
-            'SELECT request_id FROM request_logs WHERE request_id IS NOT NULL')}
-        for rid in list(outcomes)[:limit]:
-            if rid not in known:
+    # Orphans are a separately bounded outcome window, never a full history load.
+    orphan_candidates = []
+    if limit and _table_exists(conn, 'request_logs') and _table_exists(conn, 'request_outcomes'):
+        where = ' WHERE ts >= ?' if since_ts is not None else ''
+        args = (int(since_ts), limit) if since_ts is not None else (limit,)
+        orphan_candidates = conn.execute(
+            'SELECT request_id,terminal_state,http_status FROM request_outcomes' + where
+            + ' ORDER BY ts DESC,rowid DESC LIMIT ?', args).fetchall()
+        known = set()
+        for offset in range(0, len(orphan_candidates), 400):
+            batch = [row[0] for row in orphan_candidates[offset:offset + 400]]
+            known.update(str(row[0]) for row in conn.execute(
+                'SELECT request_id FROM request_logs WHERE request_id IN '
+                f'({",".join("?" for _ in batch)}) LIMIT ?', (*batch, len(batch))))
+        for rid, terminal, status in orphan_candidates:
+            if str(rid) not in known:
                 add('outcome_without_log', {'request_id': rid,
-                                            'outcome': outcomes[rid]})
+                    'outcome': {'terminal': terminal, 'status': status}})
 
     return {
         'generated_at': int(time.time()),
         'scanned_logs': scanned,
+        'window_limit': limit,
+        'tables_seen_scope': 'selected_request_ids',
         'spend_classes': totals,
         'findings': {k: {'count': v['count'], 'samples': v['samples'],
                          'description': CATEGORY_DESCRIPTIONS[k]}
                      for k, v in findings.items()},
         'tables_seen': {'usage_events': len(events), 'budget_reservations': len(budgets),
                         'forwarding_events': len(forwards), 'request_outcomes': len(outcomes)},
+        'scope': {'requested_limit': requested_limit, 'effective_limit': limit,
+                  'since_ts': since_ts, 'orphan_candidates': len(orphan_candidates),
+                  'complete_history': False, 'legacy_count': 'selected_log_window'},
         'notes': [
             '未知用量不会计入 0：spend_class=unknown_usage 的行需要人工/上游对账',
             'actual_platform 为 NULL 表示该行未记录实际路由（不是 workbuddy）',
+            '差异数量仅覆盖有界日志/终态窗口，不代表全库总数；全历史核对应分批执行',
         ],
     }

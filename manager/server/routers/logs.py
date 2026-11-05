@@ -25,6 +25,16 @@ TERMINAL_STATES = ('completed', 'rejected', 'upstream_error', 'transport_error',
 TRAFFIC_CLASSES = ('inference', 'admin', 'probe', 'other')
 
 
+def _sqlite_integer(value, field: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail=f'{field} 必须是整数') from None
+    if not -(2**63) <= parsed <= 2**63 - 1:
+        raise HTTPException(status_code=400, detail=f'{field} 超出整数范围')
+    return parsed
+
+
 @router.get('')
 def list_logs(
     page: int = 1,
@@ -46,6 +56,8 @@ def list_logs(
 
     # 版本过滤（cn / global）。历史记录该列为 NULL —— 按 cn 归类，
     # 与 db.realm_of_model 的口径一致（无前缀即国内版）。
+    if realm not in (None, '', 'cn', 'global'):
+        raise HTTPException(status_code=400, detail='invalid_realm')
     if realm in ('cn', 'global'):
         if realm == 'cn':
             where.append('(l.realm = ? OR l.realm IS NULL)')
@@ -61,12 +73,8 @@ def list_logs(
         args.append(int(time.time()) - d * 86400)
     if key_id and key_id not in ('all', ''):
         # 非数字会 int() 抛错 → 500。这里显式拦成 400，避免用非法输入探测
-        try:
-            kid = int(key_id)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail='key_id 必须是数字或 all') from None
         where.append('l.key_id = ?')
-        args.append(kid)
+        args.append(_sqlite_integer(key_id, 'key_id'))
     if model:
         where.append('(l.model LIKE ? OR l.mapped_model LIKE ?)')
         args.extend([f'%{model}%', f'%{model}%'])
@@ -204,10 +212,10 @@ def list_outcomes(
         args.append(str(release_id)[:128])
     if since is not None:
         where.append('o.ts >= ?')
-        args.append(int(since))
+        args.append(_sqlite_integer(since, 'since'))
     if until is not None:
         where.append('o.ts <= ?')
-        args.append(int(until))
+        args.append(_sqlite_integer(until, 'until'))
     if days:
         d = min(3650, max(1, int(days)))
         where.append('o.ts >= ?')
@@ -223,7 +231,9 @@ def list_outcomes(
             if name not in TRAFFIC_CLASSES:
                 raise HTTPException(status_code=400,
                                     detail='traffic_class 必须是 ' + ' / '.join(TRAFFIC_CLASSES))
-        classes = wanted
+        if not wanted:
+            raise HTTPException(status_code=400, detail='traffic_class 不能为空')
+        classes = list(dict.fromkeys(wanted))
         placeholders = ','.join('?' * len(classes))
         where.append(f'({observability.traffic_class_sql("o.endpoint")}) IN ({placeholders})')
         args.extend(classes)

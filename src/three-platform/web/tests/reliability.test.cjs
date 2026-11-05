@@ -31,6 +31,11 @@ function hookHarness() {
       if (!same(slots[index]?.deps, deps)) slots[index] = {value: callback, deps};
       return slots[index].value;
     },
+    useMemo(factory, deps) {
+      const index = cursor++;
+      if (!same(slots[index]?.deps, deps)) slots[index] = {value: factory(), deps};
+      return slots[index].value;
+    },
     useEffect(effect, deps) {
       const index = cursor++;
       if (!same(slots[index]?.deps, deps)) {
@@ -58,7 +63,11 @@ function load(relative, mocks) {
   }}).outputText;
   const compiled = {exports: {}};
   const context = {module: compiled, exports: compiled.exports, Promise, Error, console,
-    require(name) { if (!(name in mocks)) throw new Error(`Unexpected dependency ${name}`); return mocks[name]; },
+    require(name) {
+      if (name === './account-export.mjs') return require('../lib/account-export.mjs');
+      if (!(name in mocks)) throw new Error(`Unexpected dependency ${name}`);
+      return mocks[name];
+    },
     ...mocks.globals,
   };
   vm.runInNewContext(code, context, {filename: relative});
@@ -583,7 +592,7 @@ test('logout failure keeps identity/cache/location; confirmed success clears the
   const {AuthProvider} = load('lib/auth-context.tsx', {
     react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
     '@/lib/use-hydrated': {useHydrated: () => true},
-    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window},
+    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
   });
   const render = () => harness.render(() => AuthProvider({children: null})).props.value;
   render(); harness.effects(); await flush();
@@ -920,6 +929,7 @@ function portalLoginFixture(login) {
   const h = hookHarness();
   const jsx = (type, props) => ({type, props});
   const {default: Login} = load('app/portal/PortalLogin.tsx', {
+    './PortalRegister': {default: 'registration-form'},
     react: {...h.react, useId: () => 'login-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
     'lucide-react': Object.fromEntries(['ArrowUpRight','CalendarCheck','Eye','EyeOff','ScanLine','ShieldCheck'].map(name => [name,name])),
     '@/components/ui/button': {Button: 'button'}, '@/components/ui/input': {Input: 'input'}, '@/components/ui/label': {Label: 'label'},
@@ -962,14 +972,14 @@ test('portal reuses console brand and stat components with accessible tabs and t
   assert.doesNotMatch(login,/localStorage|sessionStorage|console\.|maxLength/);
 });
 
-function portalPageFixture(fetch) {
+function portalPageFixture(fetch, extraGlobals = {}) {
   const h = hookHarness();
   const timers = new Map(); let timerId = 0;
   const jsx = (type, props) => ({type, props});
   class PortalError extends Error { constructor(status, message) { super(message); this.status = status; } }
   const api = {portalFetch: fetch, PortalError, points: String, portalTime: String, canCheckin: () => false, checkinLabel: String};
   const globals = {AbortController, URL, document: {hidden: false, activeElement: null, getElementById: () => null, addEventListener() {}, removeEventListener() {}},
-    window: {setInterval(fn) {timers.set(++timerId, fn); return timerId;}, clearInterval(id) {timers.delete(id);}}};
+    window: {setInterval(fn) {timers.set(++timerId, fn); return timerId;}, clearInterval(id) {timers.delete(id);}}, ...extraGlobals};
   const workspace = load('lib/use-portal-workspace.ts', {react: h.react,
     './portal-api': api, './use-heartbeat': {useHeartbeat() {}}, globals});
   const {default: Portal} = load('app/portal/page.tsx', {
@@ -978,6 +988,7 @@ function portalPageFixture(fetch) {
     './PortalKeys': {default: 'keys'}, './PortalLogin': {default: 'login'}, './PortalRequests': {default: 'requests'},
     '@/lib/use-portal-workspace': workspace, '@/lib/portal-display': {checkinSummary: () => ({total: 0,ready: 0,pending: 0,confirmed: 0})},
     '@/components/common/layout/BrandHome': {BrandHome: 'brand'}, '@/components/common/layout/StatCard': {StatCard: 'stat'},
+    '@/components/common/layout/ConsoleAtmosphere': {ConsoleAtmosphere: 'atmosphere'},
     '@/components/ui/tabs': Object.fromEntries(['Tabs','TabsContent','TabsList','TabsTrigger'].map(name => [name,name])),
     globals,
   });
@@ -989,8 +1000,7 @@ test('portal overview does not fetch inactive request history or depend on its a
   const calls = [];
   const f = portalPageFixture(async path => {
     calls.push(path);
-    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
-    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    if (path === 'portal/workspace') return workspacePacket({accounts: [], grants: [], events: [], held_units: 0});
     throw new Error('history unavailable');
   });
   f.render(); f.h.effects(); await flush();
@@ -1016,78 +1026,74 @@ function workspaceFixture(fetch) {
   return {h, render, PortalError, heartbeat: () => heartbeat()};
 }
 
-test('workspace partial failure retains confirmed identity and never marks network errors as anonymous', async () => {
-  let attempt = 0;
+function workspacePacket(data = {}, id = 'fixture') {
+  return {me: {id, username: id}, data: {owner_id: id, ...data}};
+}
+
+test('workspace failed snapshot is retryable without inventing an identity', async () => {
+  let attempt = 0; const calls=[];
   const f = workspaceFixture(async path => {
-    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
-    if (++attempt === 1) throw new Error('overview offline');
-    return {balance_units: 55};
+    calls.push(path); if (++attempt === 1) throw new Error('snapshot offline');
+    return workspacePacket({balance_units: 55});
   });
   f.render(); f.h.effects(); await flush();
-  let state = f.render(); assert.equal(state.me.id, 'fixture'); assert.equal(state.anonymous, false);
-  assert.equal(state.data, null); assert.equal(state.pending, false); assert.match(state.error, /overview offline/);
-  await state.reload(); state = f.render(); assert.equal(state.data.balance_units, 55); assert.equal(state.error, '');
+  let state = f.render(); assert.equal(state.me, null); assert.equal(state.anonymous, false);
+  assert.equal(state.data, null); assert.equal(state.pending, false); assert.match(state.error, /snapshot offline/);
+  await state.reload(); state = f.render(); assert.equal(state.me.id,'fixture');assert.equal(state.data.balance_units,55);
+  assert.equal(state.error,''); assert.deepEqual(calls,['portal/workspace','portal/workspace']);
 });
 
-test('workspace background reads coalesce, mutation reload supersedes old work, and reset rejects late data', async () => {
+test('workspace background reads coalesce and atomic B snapshot defeats late A', async () => {
   const reads = [], calls = [];
-  const f = workspaceFixture(path => {
-    calls.push(path);
-    if (path === 'portal/me') return Promise.resolve({id: 'fixture', username: 'fixture'});
-    const pending = deferred(); reads.push(pending); return pending.promise;
-  });
+  const f = workspaceFixture(path => {calls.push(path);const pending=deferred();reads.push(pending);return pending.promise;});
   f.render(); f.h.effects(); await flush();
-  const background = f.heartbeat(); await flush(); assert.equal(reads.length, 1);
-  const reload = f.render().reload(); await flush(); assert.equal(reads.length, 2);
-  reads[1].resolve({balance_units: 99}); await reload;
-  reads[0].resolve({balance_units: 1}); await background; await flush();
-  assert.equal(f.render().data.balance_units, 99);
-  const last = f.render().reload(); await flush(); f.render().reset(); reads[2].resolve({balance_units: 100}); await last;
-  assert.equal(f.render().me, null); assert.equal(f.render().data, null); assert.equal(f.render().anonymous, true);
-  assert.equal(calls.some(path => path.startsWith('portal/requests')), false);
+  const background=f.heartbeat();await flush();assert.equal(reads.length,1);
+  const reload=f.render().reload();await flush();assert.equal(reads.length,2);
+  reads[1].resolve(workspacePacket({balance_units:99},'B'));await reload;
+  reads[0].resolve(workspacePacket({balance_units:1},'A'));await background;await flush();
+  assert.equal(f.render().me.id,'B');assert.equal(f.render().data.owner_id,'B');assert.equal(f.render().data.balance_units,99);
+  const heartbeat=f.heartbeat();await flush();assert.equal(f.render().pending,false);
+  reads[2].resolve(workspacePacket({balance_units:101},'B'));await heartbeat;
+  const last=f.render().reload();await flush();f.render().reset();reads[3].resolve(workspacePacket({balance_units:100},'C'));await last;
+  assert.equal(f.render().me,null);assert.equal(f.render().data,null);assert.equal(f.render().anonymous,true);
+  assert.equal(calls.every(path=>path==='portal/workspace'),true);
+});
+
+test('workspace rejects a response combining two different owners', async () => {
+  const f=workspaceFixture(async()=>({me:{id:'A',username:'A'},data:{owner_id:'B',balance_units:100}}));
+  f.render();f.h.effects();await flush();
+  assert.equal(f.render().data,null);assert.equal(f.render().me,null);assert.match(f.render().error,/身份不一致/);
 });
 
 test('workspace authorization revocation clears retained state and aborts unmounted reads', async () => {
-  let rejected = false, f;
-  f = workspaceFixture(async path => {
-    if (rejected) throw new f.PortalError(403, 'session revoked');
-    return path === 'portal/me' ? {id: 'fixture', username: 'fixture'} : {balance_units: 99};
-  });
-  f.render(); f.h.effects(); await flush(); assert.equal(f.render().data.balance_units, 99);
-  rejected = true; await f.render().reload();
-  assert.equal(f.render().anonymous, true); assert.equal(f.render().data, null); assert.match(f.render().error, /revoked/);
-  const waiting = deferred(); let signal;
-  const other = workspaceFixture((path, options) => {signal = options.signal; return waiting.promise;});
-  other.render(); other.h.effects(); await flush(); other.h.unmount();
-  assert.equal(signal.aborted, true); waiting.resolve({id: 'late'}); await flush(); assert.equal(other.render().me, null);
+  let rejected=false,f;
+  f=workspaceFixture(async()=>{if(rejected)throw new f.PortalError(403,'session revoked');return workspacePacket({balance_units:99});});
+  f.render();f.h.effects();await flush();assert.equal(f.render().data.balance_units,99);
+  rejected=true;await f.render().reload();
+  assert.equal(f.render().anonymous,true);assert.equal(f.render().data,null);assert.match(f.render().error,/revoked/);
+  const waiting=deferred();let signal;
+  const other=workspaceFixture((path,options)=>{signal=options.signal;return waiting.promise;});
+  other.render();other.h.effects();await flush();other.h.unmount();
+  assert.equal(signal.aborted,true);waiting.resolve(workspacePacket({},'late'));await flush();assert.equal(other.render().me,null);
 });
 
-test('workspace login form remains mounted during anonymous background refresh and connect clears it deliberately', async () => {
-  let f, authenticated = false;
-  const pending = deferred();
-  f = workspaceFixture(async path => {
-    if (!authenticated) throw new f.PortalError(401,'anonymous');
-    if (path === 'portal/me') return pending.promise;
-    return {balance_units:9};
-  });
-  f.render(); f.h.effects(); await flush(); assert.equal(f.render().anonymous,true);
-  authenticated=true;
-  const work=f.heartbeat(); await flush();
-  assert.equal(f.render().anonymous,true); assert.equal(f.render().pending,true);
-  const connect=f.render().connect(); await flush(); assert.equal(f.render().anonymous,false);
-  pending.resolve({id:'fixture',username:'fixture'}); await work;await connect;
+test('workspace login form remains until connect explicitly changes state', async () => {
+  let f,authenticated=false;const pending=deferred();
+  f=workspaceFixture(async()=>{if(!authenticated)throw new f.PortalError(401,'anonymous');return pending.promise;});
+  f.render();f.h.effects();await flush();assert.equal(f.render().anonymous,true);
+  authenticated=true;const work=f.heartbeat();await flush();
+  assert.equal(f.render().anonymous,true);assert.equal(f.render().pending,true);
+  const connect=f.render().connect();await flush();assert.equal(f.render().anonymous,false);
+  pending.resolve(workspacePacket({balance_units:9}));await work;await connect;
   assert.equal(f.render().me.id,'fixture');assert.equal(f.render().data.balance_units,9);
 });
 
-test('workspace Strict Mode replay aborts first read and accepts replacement', async () => {
-  const calls=[];
-  const f=workspaceFixture((path,options)=>{
-    const work=deferred(); calls.push({path,signal:options.signal,work});return work.promise;
-  });
+test('workspace Strict Mode replay replaces the entire owned snapshot', async () => {
+  const calls=[];const f=workspaceFixture((path,options)=>{const work=deferred();calls.push({path,signal:options.signal,work});return work.promise;});
   f.render();f.h.effects();await flush();f.h.replayEffects();await flush();
   assert.equal(calls.length,2);assert.equal(calls[0].signal.aborted,true);
-  calls[0].work.resolve({id:'old'});calls[1].work.resolve({id:'new'});await flush();
-  assert.equal(calls[2].path,'portal/overview');calls[2].work.resolve({balance_units:22});await flush();
+  calls[0].work.resolve(workspacePacket({},'old'));calls[1].work.resolve(workspacePacket({balance_units:22},'new'));await flush();
+  assert.equal(calls.length,2);assert.equal(calls.every(call=>call.path==='portal/workspace'),true);
   assert.equal(f.render().me.id,'new');assert.equal(f.render().data.balance_units,22);
 });
 
@@ -1137,6 +1143,63 @@ test('request history never renders a previous page under failed new-page or aut
   revoked = true; await f.heartbeat(); assert.equal(f.revoked(), 1); assert.doesNotMatch(JSON.stringify(f.render()), /private-page-one/);
 });
 
+function portalRegisterFixture(fetch) {
+  const h=hookHarness(),jsx=(type,props)=>({type,props});let registered='',cancelled=0;
+  class PortalError extends Error {constructor(status,message){super(message);this.status=status;}}
+  const {default:Register}=load('app/portal/PortalRegister.tsx',{
+    react:h.react,'react/jsx-runtime':{jsx,jsxs:jsx},'@/lib/portal-api':{portalFetch:fetch,PortalError},
+    '@/components/ui/button':{Button:'button'},'@/components/ui/input':{Input:'input'},'@/components/ui/label':{Label:'label'},globals:{AbortController},
+  });
+  const props={onRegistered:name=>{registered=name;},onCancel:()=>{cancelled++;}};
+  const render=()=>h.render(()=>Register(props));
+  const form=(values={})=>({elements:{namedItem:name=>({value:({username:'alice',password:'Cobalt!river_Sample904',confirmation:'Cobalt!river_Sample904',invite:'synthetic-invite',...values})[name]})},reset(){}});
+  return {h,render,form,PortalError,registered:()=>registered,cancelled:()=>cancelled,submit:values=>descendants(render()).find(node=>node.type==='form').props.onSubmit({preventDefault(){},currentTarget:form(values)})};
+}
+
+test('signup server failure and used-device conflict block retries without depending on error wording',async()=>{
+  for(const status of [500,503,409,400]){
+    let writes=0;const f=portalRegisterFixture(async(path,options={})=>{
+      if(options.method==='POST'){writes++;throw new f.PortalError(status,'synthetic opaque failure');}
+      return {enabled:true,invite_required:true,device_registered:false};
+    });
+    f.render();f.h.effects();await flush();f.submit();await flush();f.submit();await flush();
+    assert.equal(writes,status===400?2:1);
+    if(status!==400)assert.match(JSON.stringify(f.render()),/结果待确认/);
+  }
+});
+
+test('registration waits for device policy and prevents duplicate submits',async()=>{
+  let writes=0;const pending=deferred();
+  const f=portalRegisterFixture(async(path,options={})=>{
+    if(options.method==='POST'){writes++;return pending.promise;}
+    return {enabled:true,invite_required:true,device_registered:false};
+  });
+  f.render();f.h.effects();await flush();
+  f.submit();f.submit();await flush();assert.equal(writes,1);
+  pending.resolve({registered:true,username:'alice'});await flush();assert.equal(f.registered(),'alice');
+});
+
+test('registered devices and mismatching passwords cannot post a registration',async()=>{
+  for(const registered of [true,false]){
+    let writes=0;const f=portalRegisterFixture(async(path,options={})=>{
+      if(options.method==='POST')writes++;
+      return {enabled:true,invite_required:true,device_registered:registered};
+    });
+    f.render();f.h.effects();await flush();f.submit({confirmation:'different'});await flush();assert.equal(writes,0);
+  }
+});
+
+test('uncertain signup never automatically retries and late completion cannot switch an unmounted page',async()=>{
+  let writes=0;const f=portalRegisterFixture(async(path,options={})=>{
+    if(options.method==='POST'){writes++;throw new Error('操作结果待确认，请核对');}
+    return {enabled:true,invite_required:true,device_registered:false};
+  });
+  f.render();f.h.effects();await flush();f.submit();await flush();f.submit();await flush();assert.equal(writes,1);
+  assert.match(JSON.stringify(f.render()),/结果待确认/);
+  const pending=deferred();const g=portalRegisterFixture(async(path,options={})=>options.method==='POST'?pending.promise:{enabled:true,invite_required:true,device_registered:false});
+  g.render();g.h.effects();await flush();g.submit();g.h.unmount();pending.resolve({registered:true,username:'late'});await flush();assert.equal(g.registered(),'');
+});
+
 function portalKeyFixture(fetch) {
   const h = hookHarness(); const jsx = (type, props) => ({type, props}); let revoked = 0;
   class PortalError extends Error {constructor(status, message) {super(message); this.status = status;}}
@@ -1150,14 +1213,25 @@ function portalKeyFixture(fetch) {
   return {h,render,PortalError,revoked:()=>revoked,form:()=>descendants(render()).find(node=>node.type==='form')};
 }
 
+test('existing default key displays username and removes all key creation controls',async()=>{
+  let writes=0;
+  const f=portalKeyFixture(async(path,options={})=>{
+    if(options.method==='POST')writes++;
+    return {items:[{id:7,label:'alice',prefix:'synthetic-prefix',enabled:true,created_at:1}],can_initialize:false,allowed_models:[]};
+  });
+  f.render();f.h.effects();await flush();assert.equal(f.form(),undefined);
+  const tree=JSON.stringify(f.render());assert.match(tree,/alice/);assert.match(tree,/默认密钥/);assert.equal(writes,0);
+  assert.doesNotMatch(tree,/最多.*5|生成密钥|密钥名称/);
+});
+
 test('portal key creation preserves one-time result and blocks duplicate creation if following list refresh fails', async () => {
   let reads=0,writes=0;
   const f=portalKeyFixture(async (path,options={})=>{
     if(options.method==='POST'){writes++;return {id:7,key:'synthetic-one-time-value'};}
-    if(++reads>1)throw new Error('list offline'); return {items:[],allowed_models:['deepseek-fixture']};
+    if(++reads>1)throw new Error('list offline'); return {items:[],can_initialize:true,allowed_models:['deepseek-fixture']};
   });
   f.render();f.h.effects();await flush(); f.form().props.onSubmit({preventDefault(){}});await flush();
-  const tree=JSON.stringify(f.render()); assert.match(tree,/synthetic-one-time-value/);assert.match(tree,/密钥已生成，但列表刷新失败/);
+  const tree=JSON.stringify(f.render()); assert.match(tree,/synthetic-one-time-value/);assert.match(tree,/默认密钥已就绪，但列表刷新失败/);
   f.form().props.onSubmit({preventDefault(){}}); await flush(); assert.equal(writes,1);
 });
 
@@ -1165,7 +1239,7 @@ test('revoked portal key sessions clear any one-time secret and prevent late ini
   let reads=0,f;
   f=portalKeyFixture(async (path,options={})=>{
     if(options.method==='POST')return {id:7,key:'synthetic-private-value'};
-    if(++reads>1)throw new f.PortalError(401,'revoked'); return {items:[],allowed_models:[]};
+    if(++reads>1)throw new f.PortalError(401,'revoked'); return {items:[],can_initialize:true,allowed_models:[]};
   });
   f.render();f.h.effects();await flush();f.form().props.onSubmit({preventDefault(){}});await flush();
   assert.equal(f.revoked(),1);assert.doesNotMatch(JSON.stringify(f.render()),/synthetic-private-value/);
@@ -1175,7 +1249,7 @@ test('uncertain portal key creation requires a list read before another mutation
   let writes=0;
   const f=portalKeyFixture(async (path,options={})=>{
     if(options.method==='POST'){writes++;throw new Error('synthetic connection lost');}
-    return {items:[],allowed_models:[]};
+    return {items:[],can_initialize:true,allowed_models:[]};
   });
   f.render();f.h.effects();await flush();f.form().props.onSubmit({preventDefault(){}});await flush();
   assert.match(JSON.stringify(f.render()),/操作结果待确认/);
@@ -1217,8 +1291,7 @@ test('successful portal key revocation remains disabled even if its follow-up li
 test('portal action authorization failure immediately clears private workspace instead of retaining it', async () => {
   let f;
   f = portalPageFixture(async path => {
-    if (path === 'portal/me') return {id: 'private-user', username: 'private-user'};
-    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    if (path === 'portal/workspace') return workspacePacket({accounts: [], grants: [], events: [], held_units: 0},'private-user');
     throw new f.PortalError(401, 'session expired');
   });
   f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
@@ -1231,8 +1304,7 @@ test('portal action authorization failure immediately clears private workspace i
 test('uncertain portal actions require a confirmed read before another submission', async () => {
   let writes = 0;
   const f = portalPageFixture(async path => {
-    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
-    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    if (path === 'portal/workspace') return workspacePacket({accounts: [], grants: [], events: [], held_units: 0});
     writes++; throw new Error('synthetic connection lost');
   });
   f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
@@ -1246,8 +1318,7 @@ test('uncertain portal actions require a confirmed read before another submissio
 test('scan polling pauses on failure, retries the same session only on demand, and cleans up on close', async () => {
   let polls = 0, starts = 0, cancelled = 0;
   const f = portalPageFixture(async path => {
-    if (path === 'portal/me') return {id: 'fixture', username: 'fixture'};
-    if (path === 'portal/overview') return {accounts: [], grants: [], events: [], held_units: 0};
+    if (path === 'portal/workspace') return workspacePacket({accounts: [], grants: [], events: [], held_units: 0});
     if (path === 'portal/auth/start') {starts++; return {session: 'synthetic-session', auth_url: 'https://example.invalid', expires_in: 300};}
     if (path === 'portal/auth/poll') {polls++; if (polls === 1) throw new Error('synthetic offline'); return {state: 'waiting'};}
     if (path === 'portal/auth/cancel') {cancelled++; return {ok: true};}
@@ -1267,13 +1338,53 @@ test('scan polling pauses on failure, retries the same session only on demand, a
   assert.equal(cancelled, 1); assert.equal(f.timers.size, 0);
 });
 
+test('QR expiry waits for an in-flight import and never starts another session', async () => {
+  let now=0,polls=0,starts=0,cancelled=0;const response=deferred();
+  const f=portalPageFixture(async path=>{
+    if(path==='portal/workspace')return workspacePacket({accounts:[],grants:[],events:[],held_units:0});
+    if(path==='portal/auth/start'){starts++;return {session:'synthetic-session',auth_url:'https://example.invalid',expires_in:1};}
+    if(path==='portal/auth/poll'){polls++;return response.promise;}
+    if(path==='portal/auth/cancel'){cancelled++;return {state:'cancelled'};}
+    throw new Error('unexpected operation');
+  },{Date:{now:()=>now}});
+  f.render();f.h.effects();await flush();f.render();f.h.effects();
+  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('扫码添加账号'));
+  add().props.onClick();await flush();f.render();f.h.effects();
+  const tick=[...f.timers.values()][0];const pending=tick();await flush();
+  now=2000;await tick();assert.equal(polls,1);assert.equal(cancelled,0);assert.equal(starts,1);
+  assert.equal(descendants(f.render()).some(n=>n.props?.role==='dialog'),true);
+  response.resolve({state:'complete'});await pending;f.render();f.h.effects();
+  assert.equal(descendants(f.render()).some(n=>n.props?.role==='dialog'),false);
+  assert.doesNotMatch(JSON.stringify(f.render()),/重新添加/);
+});
+
+test('QR expiry after uncertain polling requires a read before another mutation', async () => {
+  let now=0,polls=0,starts=0;
+  const f=portalPageFixture(async path=>{
+    if(path==='portal/workspace')return workspacePacket({accounts:[],grants:[],events:[],held_units:0});
+    if(path==='portal/auth/start'){starts++;return {session:'synthetic-session',auth_url:'https://example.invalid',expires_in:1};}
+    if(path==='portal/auth/poll'){polls++;throw new Error('synthetic offline');}
+    if(path==='portal/auth/cancel')return {state:'cancelled'};
+    throw new Error('unexpected operation');
+  },{Date:{now:()=>now}});
+  f.render();f.h.effects();await flush();f.render();f.h.effects();
+  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('扫码添加账号'));
+  add().props.onClick();await flush();f.render();f.h.effects();
+  const tick=[...f.timers.values()][0];await tick();now=2000;await tick();
+  assert.match(JSON.stringify(f.render()),/结果待核对/);
+  assert.equal(add().props.disabled,true);assert.equal(polls,1);assert.equal(starts,1);
+  assert.equal(descendants(f.render()).some(n=>n.type==='button'&&n.props.children==='重试当前二维码'),false);
+  descendants(f.render()).find(n=>n.type==='button'&&n.props.children==='关闭').props.onClick();await flush();
+  assert.equal(add().props.disabled,true);assert.equal(starts,1);
+});
+
 test('key page distinguishes enabled key, model discovery and paid dispatch without exposing other users', async () => {
   const f = portalKeyFixture(async () => ({items: [{id: 7, label: 'synthetic-owned', prefix: 'synthetic', enabled: true, created_at: 1}],
     allowed_models: ['deepseek-fixture'], model_discovery_enabled: true, pool_enabled: false, dispatch_enabled: false,
     dispatch_note: 'synthetic dispatch reason'}));
   f.render(); f.h.effects(); await flush();
   const view = JSON.stringify(f.render());
-  assert.match(view, /密钥已创建，不代表模型调用已开放/);
+  assert.match(view, /模型调用暂未开放/);
   assert.match(view, /可读取模型目录/);
   assert.match(view, /synthetic dispatch reason/);
   assert.match(view, /已启用/);
@@ -1284,8 +1395,379 @@ test('approved key page states wallet cap and does not show the unpaid-activatio
     model_discovery_enabled: true, pool_enabled: true, dispatch_enabled: true, dispatch_note: 'approved'}));
   f.render(); f.h.effects(); await flush();
   const view = JSON.stringify(f.render());
-  assert.doesNotMatch(view, /密钥已创建，不代表模型调用已开放/);
+  assert.doesNotMatch(view, /模型调用暂未开放/);
   assert.match(view, /余额为零拒绝新请求/);
   assert.match(view, /超出部分由平台承担/);
   assert.match(view, /不扣未来签到/);
+});
+
+function authRaceFixture() {
+  const harness = hookHarness();
+  const cache = new Map();
+  const reads = [];
+  const window = {sessionStorage: {
+    getItem: key => cache.get(key) ?? null,
+    setItem: (key, value) => cache.set(key, value),
+    removeItem: key => cache.delete(key),
+  }, location: {href: '/login'}};
+  const authApi = {
+    me: signal => {const read = {...deferred(), signal}; reads.push(read); return read.promise;},
+    login: async username => ({ok: true, username, role: 'viewer'}),
+    logout: async () => ({ok: true}),
+  };
+  const {AuthProvider} = load('lib/auth-context.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
+    '@/lib/use-hydrated': {useHydrated: () => true},
+    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
+  });
+  return {harness, cache, reads, window, authApi, render: () => harness.render(() => AuthProvider({children: null})).props.value};
+}
+
+for (const response of ['old identity', 'old unauthorized']) {
+  test(`a delayed identity read cannot replace a successful login with ${response}`, async () => {
+    const fixture = authRaceFixture();
+    fixture.render(); fixture.harness.effects(); await flush();
+    await fixture.render().login('new-user', 'fixture-password');
+    assert.equal(fixture.render().me.username, 'new-user');
+    if (response === 'old identity') fixture.reads[0].resolve({username: 'old-admin', role: 'admin'});
+    else fixture.reads[0].reject({response: {status: 401}});
+    await flush();
+    assert.equal(fixture.render().me.username, 'new-user');
+    assert.equal(fixture.render().isAdmin, false);
+    assert.equal(JSON.parse(fixture.cache.get('wb-me')).username, 'new-user');
+  });
+}
+
+test('confirmed logout fences an older identity read and cancels the request', async () => {
+  const fixture = authRaceFixture();
+  fixture.render(); fixture.harness.effects(); await flush();
+  await fixture.render().logout();
+  fixture.reads[0].resolve({username: 'old-admin', role: 'admin'}); await flush();
+  assert.equal(fixture.render().me, null);
+  assert.equal(fixture.cache.has('wb-me'), false);
+  assert.equal(fixture.reads[0].signal.aborted, true);
+});
+
+test('identity refresh coalesces reads and Strict Mode replay replaces an abandoned read', async () => {
+  const fixture = authRaceFixture();
+  fixture.render(); fixture.harness.effects(); await flush();
+  const joined = fixture.render().refresh(); await flush();
+  assert.equal(fixture.reads.length, 1);
+  fixture.harness.replayEffects(); await flush();
+  assert.equal(fixture.reads[0].signal.aborted, true);
+  assert.equal(fixture.reads.length, 2);
+  fixture.reads[1].resolve({username: 'current', role: 'viewer'}); await flush();
+  fixture.reads[0].resolve({username: 'obsolete', role: 'admin'}); await joined;
+  assert.equal(fixture.render().me.username, 'current');
+  fixture.harness.unmount();
+});
+
+function taskRunFixture() {
+  const harness = hookHarness(), reads = [], starts = [], scheduled = [];
+  let finished = 0;
+  const start = deferred();
+  const {useTaskRun} = load('lib/use-task-run.ts', {
+    react: harness.react,
+    '@/lib/api': {errText: String, accountApi: {
+      taskRunStatus() { const read = deferred(); reads.push(read); return read.promise; },
+      taskRunStart(...args) { starts.push(args); return start.promise; },
+      taskRunStop: async () => ({ok: true, message: 'stopped'}),
+    }},
+    '@/lib/i18n/provider': {useI18n: () => ({t: key => key, tp: key => key})},
+    '@/lib/toast': {notify: {ok() {}, err() {}, info() {}}},
+    globals: {
+      setTimeout(callback, delay) { const entry = {callback, delay}; scheduled.push(entry); return entry; },
+      clearTimeout(entry) { entry.cancelled = true; },
+    },
+  });
+  return {harness, reads, starts, start, scheduled, finished: () => finished,
+    render: () => harness.render(() => useTaskRun({target: 'ALL', onFinished: () => {finished++;}}))};
+}
+
+test('task status read failures preserve running cadence and never announce false completion', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.reads[0].resolve({running: true}); await flush();
+  assert.equal(fixture.scheduled[0].delay, 2000);
+  fixture.scheduled[0].callback();
+  fixture.reads[1].reject(new Error('temporary network outage')); await flush();
+  assert.equal(fixture.finished(), 0);
+  assert.equal(fixture.scheduled[1].delay, 2000);
+  fixture.scheduled[1].callback();
+  fixture.reads[2].resolve({running: false}); await flush();
+  assert.equal(fixture.finished(), 1);
+  assert.equal(fixture.scheduled[2].delay, 15000);
+  fixture.harness.unmount();
+});
+
+test('task status responses arriving after unmount cannot write state', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects(); fixture.harness.unmount();
+  fixture.reads[0].resolve({running: true}); await flush();
+  assert.equal(fixture.render().status, null);
+  assert.equal(fixture.scheduled.length, 0);
+});
+
+test('task actions coalesce same-tick clicks before React rerenders', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.reads[0].resolve({running: false}); await flush();
+  const actions = fixture.render();
+  const first = actions.run('preview');
+  const second = actions.run('preview');
+  assert.equal(fixture.starts.length, 1);
+  fixture.start.resolve({ok: true}); await flush();
+  fixture.reads[1].resolve({running: true});
+  await Promise.all([first, second]);
+  fixture.harness.unmount();
+});
+
+function playgroundRaceFixture() {
+  const harness = hookHarness(), streams = [];
+  const jsx = (type, props) => ({type, props});
+  const models = [{id: 'synthetic-model', efforts: []}];
+  let realm = 'international';
+  const {default: PlaygroundPage} = load('app/(main)/playground/page.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': new Proxy({}, {get: (_target, key) => key}),
+    '@/components/common/layout/PageHeader': {PageHeader: 'header'},
+    '@/components/common/layout/PageSectionTabs': {PageSectionTabs: 'tabs'},
+    '@/components/common/states/LoadError': {LoadError: 'load-error'},
+    '@/components/ui/button': {Button: 'button'}, '@/components/ui/badge': {Badge: 'badge'},
+    '@/components/ui/skeleton': {Skeleton: 'skeleton'},
+    '@/components/ui/ai-chat-input': {AiChatInput: 'chat-input'},
+    '@/components/ui/copy-button': {CopyButton: 'copy-button'},
+    '@/lib/api': {playgroundApi: {}, errText: String, channelRejectionText: String},
+    '@/lib/chat-stream': {streamChat(options) { const stream = {...deferred(), options}; streams.push(stream); return stream.promise; }},
+    '@/lib/use-async-data': {useAsyncAll: () => ({values: {models}, errors: {}, reload() {}})},
+    '@/lib/base-path': {withBasePath: value => value}, '@/lib/toast': {notify: {info() {}}},
+    '@/lib/i18n/provider': {useT: () => (key, params) => params ? `${key}:${JSON.stringify(params)}` : key},
+    '@/lib/format': {fmtCredit: String}, '@/lib/utils': {cn: (...values) => values.join(' ')},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: true})},
+    '@/lib/realm-context': {useRealm: () => ({realm, label: realm})},
+    '@/lib/platform-context': {usePlatform: () => ({platform: 'workbuddy'})},
+    globals: {AbortController},
+  });
+  const render = () => harness.render(PlaygroundPage);
+  const input = () => reviewNodes(render()).find(node => node.type === 'chat-input').props;
+  return {harness, streams, render, input, setRealm(value) {realm = value;}};
+}
+
+test('switching playground realm invalidates old stream callbacks, usage, and finalizers', async () => {
+  const fixture = playgroundRaceFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.input().onChange('old question');
+  const oldSend = fixture.input().onSend();
+  assert.equal(fixture.streams.length, 1);
+  fixture.setRealm('china'); fixture.render(); fixture.harness.effects();
+  assert.equal(fixture.streams[0].options.signal.aborted, true);
+  assert.equal(fixture.input().streaming, false);
+  fixture.input().onChange('new question');
+  const newSend = fixture.input().onSend();
+  assert.equal(fixture.streams.length, 2);
+  fixture.streams[0].options.onDelta('obsolete answer', 'obsolete answer');
+  fixture.streams[0].resolve({answer: 'obsolete answer', usage: {credit: 99}, aborted: true});
+  await oldSend;
+  assert.equal(fixture.input().streaming, true);
+  assert.doesNotMatch(JSON.stringify(fixture.render()), /obsolete answer|\\"v\\":\\"99\\"/);
+  fixture.streams[1].resolve({answer: 'current answer', usage: {credit: 2}, sawDone: true});
+  await newSend;
+  assert.equal(fixture.input().streaming, false);
+  assert.match(JSON.stringify(fixture.render()), /current answer/);
+  assert.match(JSON.stringify(fixture.render()), /\\"v\\":\\"2\\"/);
+  fixture.harness.unmount();
+});
+
+function accountCreditFixture() {
+  const harness = hookHarness(), snapshots = [], refreshes = [], actions = [], notices = [];
+  const jsx = (type, props) => ({type, props});
+  const t = key => key;
+  const refresh = async () => true;
+  const groups = [{id: null, name: 'Default', is_default: true, enabled: true, base_url: 'http://a.invalid'},
+    {id: 1, name: 'Pool B', is_default: false, enabled: true, base_url: 'http://b.invalid'}];
+  const mocks = {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'next/link': {default: 'Link'},
+    'lucide-react': new Proxy({}, {get: (_target, key) => key}),
+    '@/lib/api': {errText: String, upstreamApi: {}, upstreamsApi: {}, accountApi: {
+      proxies: async () => ({routes: []}),
+      cachedCredits(groupId) { const read = {...deferred(), groupId}; snapshots.push(read); return read.promise; },
+      refreshCredits(force, groupId, staleOnly) { const read = {...deferred(), force, groupId, staleOnly}; refreshes.push(read); return read.promise; },
+      checkin(file, groupId) { const action = {...deferred(), file, groupId}; actions.push(action); return action.promise; },
+    }},
+    '@/lib/use-heartbeat': {useHeartbeat() {}},
+    '@/lib/use-async-data': {useAsyncAll: (fetchers, deps) => ({errors: {}, reload: refresh, refresh,
+      values: 'pool' in fetchers ? {pool: {accounts: [{uid: 'shared-uid', file: 'workbuddy-shared.json',
+        nickname: deps[0] === null ? 'Default account' : 'Pool B account', realm: 'cn',
+        expires_at: 0, credits: 10}], manageable: true, upstream: {name: 'synthetic'}}}
+        : 'groups' in fetchers ? {groups: {items: groups}} : {upstream: null}})},
+    '@/lib/account-status': {AVAILABILITY_GROUPS: [], availabilityOf: () => 'healthy',
+      availabilityGroup: () => 'healthy', availabilityGroupLabelKey: String,
+      availabilityLabelKey: String, isDegraded: () => false, mergePoolStatus: value => value,
+      rateLimitedModels: () => []},
+    '@/lib/account-list': {groupCounts: rows => ({all: rows.length}), matchesQuery: () => true,
+      selectAccounts: rows => rows,
+      paginate: (rows, page) => ({rows, page, pages: 1, total: rows.length})},
+    '@/lib/format': {fmtNumber: value => `credit:${value}`, fmtDateTime: String, fmtAgo: String,
+      fmtRemain: String, expiryBarPercent: () => 0, expiryVisual: () => ({})},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: true, canAddAccounts: true, loading: false, me: {role: 'admin'}})},
+    '@/lib/realm-context': {useRealm: () => ({realm: 'cn', label: 'cn'}), realmLabel: String},
+    '@/lib/platform-context': {usePlatform: () => ({platform: 'workbuddy', label: 'WorkBuddy'})},
+    '@/lib/i18n/provider': {useT: () => t},
+    '@/lib/toast': {notify: Object.fromEntries(['ok', 'warn', 'err', 'info'].map(name =>
+      [name, (...args) => notices.push([name, ...args])]))},
+    globals: {window: {dispatchEvent() {}}, Event},
+  };
+  const source = fs.readFileSync(path.join(root, 'app/(main)/accounts/page.tsx'), 'utf8');
+  for (const [, name] of source.matchAll(/from '(@\/components\/[^']+)'/g)) {
+    mocks[name] = new Proxy({}, {get: (_target, key) => key});
+  }
+  const {default: AccountsPage} = load('app/(main)/accounts/page.tsx', mocks);
+  const render = () => harness.render(() => AccountsPage().type());
+  const nodes = () => reviewNodes(render()).flatMap(node => node.type === 'PageHeader'
+    ? [node, ...reviewNodes(node.props.actions)] : [node]);
+  const button = title => nodes().find(node => node.type === 'Button' && node.props.title === title).props;
+  const credits = () => nodes().filter(node => node.props?.title === 'accounts.creditsTitle').map(node => node.props.children);
+  const selectB = () => {
+    nodes().find(node => node.type === 'Button' && JSON.stringify(node.props.children)?.includes('Pool B')).props.onClick();
+    render(); harness.effects();
+  };
+  const response = value => ({credits: {'shared-uid': value},
+    meta: {'shared-uid': {cached: false, source: 'cache', expiries: []}}, failed: [], total: 1, succeeded: 1});
+  const settleAutomatic = async value => {
+    snapshots.at(-1).resolve(response(value)); await flush();
+    const read = refreshes.at(-1); assert.equal(read.force, false);
+    read.resolve(response(value)); await flush();
+  };
+  return {harness, snapshots, refreshes, actions, notices, render, button, credits, selectB, response, settleAutomatic};
+}
+
+test('old group manual credit responses cannot replace the selected group balances', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  const oldRead = fixture.refreshes.at(-1);
+  fixture.selectB(); await fixture.settleAutomatic(31);
+  oldRead.resolve(fixture.response(999)); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:31', 'credit:31']);
+  fixture.harness.unmount();
+});
+
+test('an older automatic credit read cannot overwrite a newer manual refresh', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.snapshots[0].resolve(fixture.response(10)); await flush();
+  const automatic = fixture.refreshes[0];
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  fixture.refreshes[1].resolve(fixture.response(200)); await pending;
+  automatic.resolve(fixture.response(11)); await flush();
+  assert.deepEqual(fixture.credits(), ['credit:200', 'credit:200']);
+  fixture.harness.unmount();
+});
+
+test('old group single-account action responses cannot change the new group credits', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.checkin').onClick();
+  fixture.selectB(); await fixture.settleAutomatic(31);
+  fixture.actions[0].resolve({ok: true, credits: 999, expiries: []}); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:31', 'credit:31']);
+  fixture.harness.unmount();
+});
+
+test('manual credit refresh cannot write or notify after the account page unmounts', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  fixture.harness.unmount();
+  fixture.refreshes.at(-1).resolve(fixture.response(999)); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:20', 'credit:20']);
+  assert.equal(fixture.notices.length, 0);
+});
+
+test('manual credit refresh prevents same-tick duplicate provider fanout', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const click = fixture.button('accounts.refreshCreditsTitle').onClick;
+  const first = click(), second = click();
+  assert.equal(fixture.refreshes.filter(read => read.force).length, 1);
+  fixture.refreshes.at(-1).resolve(fixture.response(25)); await Promise.all([first, second]);
+  fixture.harness.unmount();
+});
+
+function clipboardFixture() {
+  const harness = hookHarness(), pending = deferred(), timers = new Map(), notices = [], copies = [];
+  const jsx = (type, props, key) => ({type, props, key});
+  const {CopyButton} = load('components/ui/copy-button.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': {Check:'icon', Copy:'icon', Loader2:'icon', Share2:'icon'},
+    '@/components/ui/button': {Button:'button'}, '@/lib/utils': {cn: (...parts) => parts.join(' ')},
+    '@/lib/i18n/provider': {useT: () => key => key},
+    '@/lib/toast': {notify: {ok: value => notices.push(value), err: value => notices.push(value)}},
+    '@/lib/format': {copyText: value => { copies.push(value); return pending.promise; }},
+    globals: {window: {setTimeout: fn => { const id=timers.size+1;timers.set(id,fn);return id; },
+      clearTimeout: id => timers.delete(id)}},
+  });
+  const wrapper = CopyButton({value:'synthetic-value'});
+  const render = () => harness.render(() => wrapper.type(wrapper.props));
+  return {harness, pending, timers, notices, copies, render, wrapper, CopyButton};
+}
+
+test('clipboard double click performs one write and its feedback timer is owned by the mounted value', async () => {
+  const fixture=clipboardFixture();
+  const tree=fixture.render();fixture.harness.effects();
+  const first=tree.props.onClick(),second=tree.props.onClick();
+  assert.deepEqual(fixture.copies,['synthetic-value']);
+  fixture.pending.resolve(true);await Promise.all([first,second]);
+  assert.equal(fixture.timers.size,1);
+  fixture.harness.unmount();
+  assert.equal(fixture.timers.size,0);
+  assert.notEqual(fixture.wrapper.key,fixture.CopyButton({value:'replacement'}).key);
+});
+
+test('clipboard completion after unmount cannot show old-value feedback or schedule a new timer', async () => {
+  const fixture=clipboardFixture();
+  const tree=fixture.render();fixture.harness.effects();
+  const pending=tree.props.onClick();fixture.harness.unmount();
+  fixture.pending.resolve(true);await pending;
+  assert.equal(fixture.notices.length,0);
+  assert.equal(fixture.timers.size,0);
+});
+
+test('IME Enter in the actual account, whitelist and chat handlers does not submit', () => {
+  for (const relative of ['components/common/accounts/AccountNoteDialog.tsx',
+    'components/common/accounts/AccountWeightDialog.tsx','components/common/keys/ModelWhitelistInput.tsx',
+    'components/ui/ai-chat-input.tsx']) {
+    const source=ts.createSourceFile(relative,fs.readFileSync(path.join(root,relative),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+    let handler;
+    const visit = node => {
+      if (ts.isJsxAttribute(node) && node.name.getText(source)==='onKeyDown' && node.initializer?.expression) handler ??= node.initializer.expression.getText(source);
+      ts.forEachChild(node,visit);
+    };
+    visit(source);assert.ok(handler,relative);
+    let submitted=0;
+    const context={module:{exports:null},save:()=>submitted++,submit:()=>submitted++,add:()=>submitted++,
+      draft:'synthetic',names:[],remove:()=>{},};
+    vm.runInNewContext(ts.transpileModule(`module.exports=(${handler})`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+    const event={key:'Enter',shiftKey:false,preventDefault(){},nativeEvent:{isComposing:true,keyCode:229}};
+    context.module.exports(event);assert.equal(submitted,0,relative);
+    event.nativeEvent={isComposing:false,keyCode:13};
+    context.module.exports(event);assert.equal(submitted,1,relative);
+  }
+});
+
+test('placeholder rotation honors reduced motion and cleans its only timer', () => {
+  const relative='components/ui/ai-chat-input.tsx';
+  const source=ts.createSourceFile(relative,fs.readFileSync(path.join(root,relative),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let effect;
+  const visit=node=>{ if(ts.isCallExpression(node)&&node.expression.getText(source)==='useEffect') effect??=node.arguments[0].getText(source);ts.forEachChild(node,visit); };
+  visit(source);assert.ok(effect);
+  for(const reducedMotion of [false,true]) {
+    const timers=new Set();
+    const context={module:{exports:null},expanded:false,reducedMotion,hints:['a','b'],setPhIndex:()=>{},
+      setInterval:()=>{timers.add(1);return 1;},clearInterval:id=>timers.delete(id)};
+    vm.runInNewContext(ts.transpileModule(`module.exports=(${effect})`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+    const cleanup=context.module.exports();
+    assert.equal(timers.size,reducedMotion?0:1);
+    cleanup?.();assert.equal(timers.size,0);
+  }
 });

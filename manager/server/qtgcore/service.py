@@ -334,8 +334,8 @@ class Aggregate:
 def _aggregate_cache_key(scope: Any = None) -> str:
     """聚合缓存的 key（U17）。
 
-    `aggregate` 一次就含三个平台的权威数据，所以作用域固定为
-    `platform=all / realm=all / authority=mixed`；但 **config_generation 必须进
+    缺省聚合三个平台；显式 scope 只读取所选平台，缓存互相隔离。
+    **config_generation 必须进
     key** —— 上游 config.json 或模型映射一变，旧条目就不该再命中（此前 key 是
     字面量 `"aggregate"`，配置改了还会命中旧值，表现为"改了不生效"）。
     """
@@ -344,7 +344,7 @@ def _aggregate_cache_key(scope: Any = None) -> str:
 
 
 async def build_aggregate(rt: Any, *, force: bool = False,
-                          scope: Any = None) -> Aggregate:
+                          scope: Any = None, usage_days: int = 14) -> Aggregate:
     """并行拉取两平台的核心数据；单点失败只记录不抛出。
 
     `scope`（U17）：调用方传入的作用域；缺省 = 全平台/全版本的聚合作用域。
@@ -355,19 +355,31 @@ async def build_aggregate(rt: Any, *, force: bool = False,
         agg = Aggregate()
         q, t = rt.qoder, rt.trae
 
-        days = 14
+        days = max(1,min(90,int(usage_days)))
         errs = agg.errors
+        selected=getattr(scope,'platform','all') if scope is not None else 'all'
+        if selected not in ('all','qoder','trae','workbuddy'):
+            raise UpstreamError('invalid aggregate platform scope')
+        need_q=selected in ('all','qoder')
+        need_t=selected in ('all','trae')
+        w=getattr(rt,'wb',None)
+        need_w=selected in ('all','workbuddy') and w is not None
+        async def skipped():return {}
         results = await asyncio.gather(
-            _safe(q.accounts(), {}, errs, "qoder.accounts"),
-            _safe(q.usage(days), {}, errs, "qoder.usage"),
-            _safe(q.usage_analytics(), {}, errs, "qoder.analytics"),
-            _safe(q.credits_flow(7), {}, errs, "qoder.credits"),
-            _safe(q.scheduler(), {}, errs, "qoder.scheduler"),
-            _safe(t.overview(), {}, errs, "trae.overview"),
-            _safe(t.usage(days), {}, errs, "trae.usage"),
-            _safe(t.settings(), {}, errs, "trae.settings"),
-            _safe(q.health(), {}, None, ""),
-            _safe(t.health(), {}, None, ""),
+            (_safe(q.accounts(), {}, errs, "qoder.accounts") if need_q else skipped()),
+            (_safe(q.usage(days), {}, errs, "qoder.usage") if need_q else skipped()),
+            (_safe(q.usage_analytics(), {}, errs, "qoder.analytics") if need_q else skipped()),
+            (_safe(q.credits_flow(7), {}, errs, "qoder.credits") if need_q else skipped()),
+            (_safe(q.scheduler(), {}, errs, "qoder.scheduler") if need_q else skipped()),
+            (_safe(t.overview(), {}, errs, "trae.overview") if need_t else skipped()),
+            (_safe(t.usage(days), {}, errs, "trae.usage") if need_t else skipped()),
+            (_safe(t.settings(), {}, errs, "trae.settings") if need_t else skipped()),
+            (_safe(q.health(), {}, None, "") if need_q else skipped()),
+            (_safe(t.health(), {}, None, "") if need_t else skipped()),
+            (_safe(w.overview(), {}, errs, "wb.overview") if need_w else skipped()),
+            (_safe(w.usage(days), {}, errs, "wb.usage") if need_w else skipped()),
+            (_safe(w.settings(), {}, errs, "wb.settings") if need_w else skipped()),
+            (_safe(w.health(), {}, None, "") if need_w else skipped()),
             return_exceptions=False,
         )
         (
@@ -381,67 +393,43 @@ async def build_aggregate(rt: Any, *, force: bool = False,
             agg.trae_settings,
             qh,
             th,
-        ) = results
+        ) = results[:10]
+        agg.wb_raw,agg.wb_usage,agg.wb_settings,wh=results[10:]
 
         for raw in (agg.qoder_raw.get("accounts") or []):
             agg.qoder_accounts.append(map_qoder_account(raw))
         for raw in (agg.trae_raw.get("accounts") or []):
             agg.trae_accounts.append(map_trae_account(raw))
 
-        # workbuddy：只读聚合，engine=off 时整段跳过（w 为 None）
-        w = getattr(rt, "wb", None)
-        wh: Dict[str, Any] = {}
-        if w is not None:
-            agg.wb_raw = await _safe(w.overview(), {}, errs, "wb.overview")
-            agg.wb_usage = await _safe(w.usage(days), {}, errs, "wb.usage")
-            agg.wb_settings = await _safe(w.settings(), {}, errs, "wb.settings")
-            wh = await _safe(w.health(), {}, None, "")
+        if need_w:
             for raw in (agg.wb_raw.get("accounts") or []):
                 agg.wb_accounts.append(map_wb_account(raw))
 
         # 两个上游都不可达时明确失败，绝不返回「全 0 的健康面板」
         q_up = bool((qh or {}).get("up"))
         t_up = bool((th or {}).get("up"))
-        if not q_up and not t_up:
+        if not q_up and not t_up and not (wh or {}).get("up"):
             detail = "; ".join(agg.errors[:3]) or "两个上游 BFF 均不可达"
             raise UpstreamError(f"上游控制面不可用：{detail}")
 
-        # 健康条目的名字与地址跟随**实际在用的适配器**：qoder 数据面可能是
-        # 旧 Go BFF（qoder-bff / :8791），也可能是 qoder2 引擎（:8799），
-        # 写死会让「设置 → 服务信息」显示成没在用的那个。
-        q_name = str(getattr(rt.qoder, "name", "qoder"))
-        t_name = str(getattr(rt.trae, "name", "trae"))
-        q_url = str(getattr(rt.qoder, "base_url", rt.settings.qoder_base))
-        t_url = str(getattr(rt.trae, "base_url", rt.settings.trae_base))
-        agg.health = [
-            HealthStatus(
-                name=q_name,
-                url=q_url,
-                up=bool((qh or {}).get("up")),
-                latency_ms=(qh or {}).get("latency_ms"),
-                error=str((qh or {}).get("last_error") or "")[:200],
-            ),
-            HealthStatus(
-                name=t_name,
-                url=t_url,
-                up=bool((th or {}).get("up")),
-                latency_ms=(th or {}).get("latency_ms"),
-                error=str((th or {}).get("last_error") or "")[:200],
-            ),
-        ]
-        if w is not None:
-            agg.health.append(HealthStatus(
-                name=str(getattr(w, "name", "workbuddy")),
-                url=str(getattr(w, "base_url", rt.settings.wb_api_base)),
-                up=bool(wh.get("up")),
-                latency_ms=wh.get("latency_ms"),
-                error=str(wh.get("error") or "")[:200],
-            ))
+        # Do not report unqueried platforms as unhealthy or gate a selected
+        # platform on unrelated credentials, analytics or retry loops.
+        agg.health=[]
+        for platform,adapter,health,needed in (
+                ('qoder',q,qh,need_q),('trae',t,th,need_t),('workbuddy',w,wh,need_w)):
+            if needed:
+                fallback=getattr(rt.settings,'wb_api_base' if platform=='workbuddy' else platform+'_base','')
+                agg.health.append(HealthStatus(
+                    name=str(getattr(adapter,'name',platform)),
+                    url=str(getattr(adapter,'base_url',fallback)),
+                    up=bool((health or {}).get('up')),
+                    latency_ms=(health or {}).get('latency_ms'),
+                    error=str((health or {}).get('last_error') or (health or {}).get('error') or '')[:200]))
         _apply_pool_flags(agg)
         return agg
 
     try:
-        return await cache.get_or_set(_aggregate_cache_key(scope), ttl, _build,
+        return await cache.get_or_set(_aggregate_cache_key(scope) + ':days=' + str(max(1,min(90,int(usage_days)))), ttl, _build,
                                       force=force)
     except UpstreamError:
         raise

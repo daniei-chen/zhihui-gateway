@@ -108,7 +108,7 @@ class SharedBudgetSourceTest(unittest.TestCase):
             with self.subTest(router=name):
                 src = _src(name)
                 for needle in ('deadline_mod.await_headers(',
-                               'deadline_mod.await_total(',
+                               'deadline_mod.buffered_post(',
                                'deadline_mod.iterate_with_budgets(',
                                'deadline_mod.BudgetExceeded',
                                'deadline_mod.close_timeout('):
@@ -252,7 +252,7 @@ class BudgetEnforcedTest(unittest.TestCase):
                             headers={'Authorization': f'Bearer {self._key()}'})
         self.assertEqual(r.status_code, 200, r.text)
         text = r.content.decode()
-        self.assertIn('stream_incomplete', text)
+        self.assertIn('upstream_timeout', text)
         self.assertIn('时间预算', text)
 
 

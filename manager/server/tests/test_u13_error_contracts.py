@@ -238,9 +238,8 @@ class ErrorContractEndpointTest(unittest.TestCase):
         self.assertEqual(payload['error']['gateway_hint'], 'check /status or retry later')
         self.assertEqual(payload['request_id'], r.headers['x-request-id'])
         self.assertEqual(payload['upstream_request_id'], UPSTREAM_ID)
-        self.assertLess(r.content.decode().find('event: error'),
-                        r.content.decode().find('event: message_stop'),
-                        'error 必须在 message_stop 之前')
+        self.assertNotIn('event: message_stop',r.content.decode(),
+                         'error 终止传输，不追加成功 message_stop')
 
     def test_responses_midstream_error_frame_is_contracted(self) -> None:
         upstream = (_sse({'choices': [{'delta': {'content': 'partial'},

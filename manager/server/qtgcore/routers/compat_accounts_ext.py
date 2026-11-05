@@ -119,13 +119,20 @@ async def compat_clear_cooling(request: Request, file: str) -> Dict[str, Any]:
     if not path.exists():
         return JSONResponse(status_code=404, content={"detail": "未找到该账号文件"})
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        had = data.get("cooldownUntil") or 0
-        data["cooldownUntil"] = 0
-        data["lastError"] = ""
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        from ...services import credentiallease
+        from ...services.filelock import file_lock
+        from ...services.tencent import _atomic_write_json
+        # Same cross-process credential lease as refresh; read only AFTER it is
+        # acquired. Preserve freshly rotated tokens and private owner/group.
+        async with credentiallease.acquire(path):
+            with file_lock(path, writing=True):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError('invalid credential object')
+                had = data.get("cooldownUntil") or 0
+                data["cooldownUntil"] = 0
+                data["lastError"] = ""
+                _atomic_write_json(path, data)
     except Exception as exc:  # noqa: BLE001
         # K18：业务失败不自动重启无关容器。重启是运维动作，必须显式执行，
         # 否则一次"清冷却失败"会把 Qoder 数据面一起打断。
@@ -197,9 +204,9 @@ async def compat_account_force_cooling(request: Request, file: str) -> JSONRespo
 # 补一层转发而不是改前端：前端已构建部署，别名最稳。
 @router.get("/accounts/{file:path}/credits")
 async def compat_account_credits_get(request: Request, file: str) -> Dict[str, Any]:
-    from .compat import compat_account_credits
+    from .compat import _account_credits
 
-    return await compat_account_credits(request, file)
+    return await _account_credits(request, file, force=False)
 
 
 @router.post("/accounts/{file:path}/disabled")

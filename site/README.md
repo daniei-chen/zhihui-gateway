@@ -21,12 +21,14 @@ README 的首页截图由本目录真实页面本地渲染，控制台截图仅�
 检查清单、资源闭包、路由冲突与本地凭据隔离。真正的登录、账号与密钥验收须在隔离业务环境另做。
 
 首页需要 `frame-src 'self'` 承载 scripts-only 沙箱插画；雕塑 Draco 解码需要
-`worker-src 'self' blob:` 与 `script-src 'self' 'wasm-unsafe-eval'`。原版登录保留内联脚本，预览 CSP 使用该脚本的精确 SHA256，不需要通用 `unsafe-eval` 或脚本 `unsafe-inline`，也不能放宽其 `frame-ancestors 'none'`。正式 Nginx 尚未修改。
+`worker-src 'self' blob:` 与 `script-src 'self' 'wasm-unsafe-eval'`。原版登录保留内联脚本，预览 CSP 使用该脚本的精确 SHA256，不需要通用 `unsafe-eval` 或脚本 `unsafe-inline`，也不能放宽其 `frame-ancestors 'none'`。发布前核验实际 Nginx 策略；本轮两个插画保留已有窄 CSP 许可的旧 r-bb0b5ad4c7a0582efcf4 URL，摘要列在 retained_scene_dependencies，不修改登录页或放宽其它资源的嵌入限制。
 
 任务/骑行插画保留来源记录，但尚未确认再分发许可；不要把它们描述为原创 MIT 素材。
 雕塑及衍生海报保留 CC BY-SA 4.0，Three.js 和 Draco 保留各自许可。上线前必须处理素材权利边界。
 
 ## 历史浏览器回归
+
+当前验收入口为 `node qa/home_browser.mjs <输出目录>`；`PLAYWRIGHT_CORE_PATH` 指向现有 Playwright，`PUBLIC_DEMO_ROOT` 指向隔离的公开静态演示副本，不允许代理生产 API。覆盖 1440/430/390/320 宽度、实际点击及命中、两类登录入口、无 JS、减少动态效果、插画和公开演示加载、可选三维失败保留海报。测试不等于生产性能基准，下面旧脚本的历史结果不能代替它。
 
 旧版布局的回归脚本 `site/tests/home-browser.cjs`、`site/tests/home-mobile.cjs` 正在迁移到新版，
 不能把其历史结果当作当前页面通过。它们使用已有 Playwright 安装，或通过

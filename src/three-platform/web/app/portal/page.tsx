@@ -11,6 +11,7 @@ import PortalKeys from './PortalKeys';
 import PortalLogin from './PortalLogin';
 import PortalRequests from './PortalRequests';
 import {BrandHome} from '@/components/common/layout/BrandHome';
+import {ConsoleAtmosphere} from '@/components/common/layout/ConsoleAtmosphere';
 import {StatCard} from '@/components/common/layout/StatCard';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 
@@ -30,6 +31,7 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
   const [needsReview, setNeedsReview] = useState(false);
   const [qr, setQr] = useState<{session: string; auth_url: string; expires_in: number} | null>(null);
   const [qrError, setQrError] = useState('');
+  const [qrExpired, setQrExpired] = useState(false);
   const qrPaused = useRef(false);
   const actionFlight = useRef(false);
   const requiresRead = useRef(false);
@@ -42,8 +44,9 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
   }, [reload]);
   const closeQr = useCallback(async () => {
     const current = qr;
-    setQr(null); setQrError(''); qrPaused.current = false;
+    setQr(null); setQrError(''); setQrExpired(false); qrPaused.current = false;
     if (!current) return;
+    requiresRead.current=true;setNeedsReview(true);
     try {
       const result = await portalFetch<{state?: string}>('portal/auth/cancel', {method: 'POST', body: JSON.stringify({session: current.session})});
       if (mounted.current && result.state === 'complete') {setNotice('授权已经完成，正在核对账号列表。'); await load();}
@@ -62,8 +65,15 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
     const deadline = Date.now() + qr.expires_in * 1000;
     const timer = window.setInterval(async () => {
       if (!active) return;
-      if (Date.now() >= deadline) { setNotice('二维码已到期，请重新添加'); setQr(null); return; }
-      if (polling || qrPaused.current) return;
+      // An expiry of the displayed QR is not proof that an in-flight import
+      // stopped. Let that exact poll finish before changing local ownership.
+      if (polling) return;
+      if (Date.now() >= deadline) {
+        qrPaused.current=true;requiresRead.current=true;setNeedsReview(true);setQrExpired(true);
+        setQrError('二维码已到期，授权结果待核对。请关闭后刷新账号列表，不要重复扫码。');
+        return;
+      }
+      if (qrPaused.current) return;
       polling = true;
       try {
         const result = await portalFetch<{state: string; message?: string}>('portal/auth/poll', {
@@ -71,13 +81,13 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
         });
         if (!active) return;
         if (result.state === 'complete') { setQr(null); setNotice(result.message || '账号已添加'); await load(); }
-        else if (result.state === 'expired') { setQr(null); setNotice('二维码已失效，请重新添加'); }
+        else if (result.state === 'expired') {setQr(null);requiresRead.current=true;setNeedsReview(true);setNotice('二维码已失效，请先刷新核对账号列表。');}
         else if (result.state === 'failed') {setQr(null); requiresRead.current = true; setNeedsReview(true); setError(result.message || '授权结果待核对，请刷新账号列表。');}
         else if (result.message) setNotice(result.message);
       } catch (err) {
         if (active) {
           if (err instanceof PortalError && (err.status === 401 || err.status === 403)) reset();
-          else {qrPaused.current = true; setQrError('扫码连接中断，已暂停轮询。可以重试当前二维码；若关闭，请先核对账号列表，不要重复扫码。');}
+          else {qrPaused.current = true; requiresRead.current=true;setNeedsReview(true);setQrError('扫码连接中断，已暂停轮询。可以重试当前二维码；若关闭，请先核对账号列表，不要重复扫码。');}
         }
       } finally { polling = false; }
     }, 2500);
@@ -127,7 +137,7 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
       const result = await portalFetch<NonNullable<typeof qr>>('portal/auth/start', {method: 'POST'});
       const url = new URL(result.auth_url);
       if (url.protocol !== 'https:') throw new Error('授权链接异常，请联系管理员');
-      if (mounted.current) {qrPaused.current = false; setQrError(''); setQr(result);}
+      if (mounted.current) {qrPaused.current = false;setQrExpired(false);setQrError('');setQr(result);}
     });
   }
   async function checkin(id: string) {
@@ -138,7 +148,7 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
     });
   }
 
-  return <div className="user-portal"><a className="skip-link" href="#portal-main">跳转到工作台内容</a><div className="portal-wrap">
+  return <div className="user-portal"><ConsoleAtmosphere /><a className="skip-link" href="#portal-main">跳转到工作台内容</a><div className="portal-wrap">
     <header className="portal-head"><div className="portal-brand-group"><BrandHome href="/portal" /><span className="portal-workspace-label">用户工作台</span></div>
       {me ? <div className="portal-actions"><span className="portal-session"><UserRound size={14} />{me.username}</span><button className="portal-button portal-logout" disabled={!!busy} onClick={() => void action('logout', async () => {
         await portalFetch('portal/logout', {method: 'POST'});
@@ -149,7 +159,7 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
     <main id="portal-main" tabIndex={-1}>
     {!data && pending && !anonymous ? <div className="portal-loading" role="status" aria-busy="true"><span>正在读取你的工作台…</span><div className="portal-loading-cards" aria-hidden="true">{[0,1,2,3].map(index => <i key={index} />)}</div></div>
       : anonymous ? <PortalLogin login={login} /> : me && data ? <>
-      <section className="portal-hero"><div><p className="portal-eyebrow">Personal workspace</p><h1 className="portal-title">你好，{me.username}。</h1><p className="portal-muted">账号、签到、积分，在这里一目了然。总台代签的结果也会同步显示。</p></div>
+      <section className="portal-hero"><div><p className="portal-eyebrow">你的日常，尽在智汇</p><h1 className="portal-title">你好，{me.username}。</h1><p className="portal-muted">查看账号、积分和每一次调用。自动签到的结果，也会同步到这里。</p></div>
         <div className="portal-actions"><button className="portal-button" onClick={() => void load()} disabled={!!busy || pending}><RefreshCw size={15} className={pending ? 'portal-spinning' : ''} />{pending ? '正在同步' : '刷新'}</button><button className="portal-button" disabled={actionBlocked || !data.accounts.some(canCheckin)} onClick={() => void action('batch', async () => {
           const result = await portalFetch<{message: string}>('portal/checkin-all', {method: 'POST'}); if (!mounted.current) return; setNotice(result.message); await load();
         })}><CalendarCheck size={15} />{busy === 'batch' ? '正在签到…' : summary?.ready ? `一键签到 · ${summary.ready}` : summary?.pending ? '签到待核对' : summary?.total ? '今日已签到' : '暂无可签到账号'}</button><button className="portal-button primary" onClick={() => void add()} disabled={actionBlocked}><Plus size={16} />扫码添加账号</button></div></section>
@@ -168,7 +178,7 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
       {data.pending_pool_units > 0 && <p className="portal-small">待加入公共池的账号积分 {points(data.pending_pool_units, data.scale)}；这部分已记录，但暂不能用于调用。当前已入池可调用积分 {points(data.callable_units, data.scale)}。</p>}
       {data.pool_enabled && data.callable_units <= 0 && !data.held_units && !data.debt_units && <div className="portal-notice" role="status">额度已用尽，请联系管理员赠送额度。不支持信用或透支。</div>}
       {tab === 'keys' && <PortalKeys key={me.id} onUnauthorized={reset} />}
-      {(tab === 'overview' || tab === 'accounts') && <div className={tab === 'overview' ? 'portal-grid' : ''}><section className="portal-panel"><div className="portal-panel-heading"><div><h2>我的账号 <span className="portal-count">{data.account_count}</span></h2><p className="portal-small">WorkBuddy 国内个人账号 · 总台代签结果同步显示</p></div></div>
+      {(tab === 'overview' || tab === 'accounts') && <div className={tab === 'overview' ? 'portal-grid' : ''}><section className="portal-panel"><div className="portal-panel-heading"><div><h2>我的账号 <span className="portal-count">{data.account_count}</span></h2><p className="portal-small">已绑定的 WorkBuddy 国内账号，签到状态会自动同步。</p></div></div>
         {!!summary?.total && <div className="portal-checkin-summary"><CalendarCheck size={15} /><span>今日签到 <strong>{summary.confirmed} / {summary.total}</strong></span><span>{summary.pending ? `${summary.pending} 个待核对` : summary.ready ? `${summary.ready} 个待签到` : '全部已核实到账'}</span></div>}
         {!data.accounts.length ? <div className="portal-empty"><ScanLine size={30} style={{margin: '0 auto 14px', color: '#8fa9c5'}} />还没有账号。扫码添加后，先核实余额与到期明细。<br /><button className="portal-button" onClick={() => void add()} disabled={actionBlocked}>添加第一个账号</button></div> : data.accounts.map(account => <article key={account.id} className="portal-account"><div><div className="portal-account-name">{account.label}</div><span className={`portal-badge ${account.checkin_state === 'confirmed' ? '' : 'pending'}`}>{account.checkin_state === 'confirmed' ? <Check size={12} /> : <Clock3 size={12} />}{checkinLabel(account.checkin_state)}</span><p className="portal-small">{portalTime(account.created_at)} 加入 · {account.initial_state === 'confirmed' ? '初始积分已核实' : '初始积分待核实'} · {account.pool_state === 'public' ? '已贡献公共池' : '待加入公共池'}</p></div>
           <div className="portal-actions">{account.initial_state === 'confirmed' && account.pool_state !== 'public' && <button className="portal-button" disabled={actionBlocked || !data.pool_enabled} onClick={() => void action(account.id, async () => { const result = await portalFetch<{message: string}>(`portal/accounts/${account.id}/join-public-pool`, {method: 'POST'}); if (!mounted.current) return; setNotice(result.message); await load(); })}>加入公共池</button>}{account.checkin_state === 'confirmed_uncredited' && <button className="portal-button" disabled={actionBlocked} onClick={() => void action(account.id, async () => { const result = await portalFetch<{message: string}>(`portal/accounts/${account.id}/reconcile-checkin`, {method: 'POST'}); if (!mounted.current) return; setNotice(result.message); await load(); })}>核对到账</button>}{account.initial_state !== 'confirmed' ? <button className="portal-button" disabled={actionBlocked} onClick={() => void action(account.id, async () => { const result = await portalFetch<{message: string}>(`portal/accounts/${account.id}/verify-initial`, {method: 'POST'}); if (!mounted.current) return; setNotice(result.message); await load(); })}>核实初始积分</button> : <button className="portal-button" disabled={actionBlocked || !canCheckin(account)} onClick={() => void checkin(account.id)}>{busy === account.id ? '处理中…' : canCheckin(account) ? '今日签到' : '状态已同步'}</button>}</div></article>)}</section>
@@ -179,6 +189,6 @@ function PortalView({workspace}: {workspace: ReturnType<typeof usePortalWorkspac
       <footer className="portal-data-footer"><span><ShieldCheck size={13} />仅显示你的账号、积分和请求记录</span><span>更新于 {portalTime(data.snapshot_at)} · 北京时间</span></footer>
     </> : <section className="portal-connection" aria-labelledby="portal-connection-title"><WifiOff size={30} /><h1 id="portal-connection-title">暂时无法读取工作台</h1><p>没有将读取失败当作退出登录，也没有更改你的账号和积分。</p><button className="portal-button primary" disabled={pending} onClick={() => void load()}>重新连接</button></section>}
     </main>
-    {qr && <div className="portal-overlay"><section id="portal-qr-dialog" className="portal-dialog" role="dialog" aria-modal="true" aria-labelledby="portal-qr-title"><p className="portal-eyebrow">Connect an account</p><h2 id="portal-qr-title" style={{fontSize: 21, fontWeight: 650}}>扫码添加你的账号</h2><p className="portal-small">只使用平台官方授权，不接收账号密码。</p><div className="portal-qr"><QRCodeSVG value={qr.auth_url} size={196} /></div><p className="portal-small">授权完成后自动同步。初始积分核实前不会赠送每日积分。</p>{qrError && <div className="portal-error" role="alert">{qrError}<button className="portal-button" onClick={() => {qrPaused.current = false; setQrError('');}}>重试当前二维码</button></div>}<div className="portal-actions" style={{justifyContent: 'center', marginTop: 20}}><a className="portal-button primary" href={qr.auth_url} target="_blank" rel="noopener noreferrer">打开官方授权<ArrowUpRight size={14} /></a><button className="portal-button" onClick={() => void closeQr()}>关闭</button></div></section></div>}
+    {qr && <div className="portal-overlay"><section id="portal-qr-dialog" className="portal-dialog" role="dialog" aria-modal="true" aria-labelledby="portal-qr-title"><p className="portal-eyebrow">Connect an account</p><h2 id="portal-qr-title" style={{fontSize: 21, fontWeight: 650}}>扫码添加你的账号</h2><p className="portal-small">只使用平台官方授权，不接收账号密码。</p><div className="portal-qr"><QRCodeSVG value={qr.auth_url} size={196} /></div><p className="portal-small">授权完成后自动同步。初始积分核实前不会赠送每日积分。</p>{qrError && <div className="portal-error" role="alert">{qrError}{!qrExpired&&<button className="portal-button" onClick={() => {qrPaused.current = false; setQrError('');}}>重试当前二维码</button>}</div>}<div className="portal-actions" style={{justifyContent: 'center', marginTop: 20}}><a className="portal-button primary" href={qr.auth_url} target="_blank" rel="noopener noreferrer">打开官方授权<ArrowUpRight size={14} /></a><button className="portal-button" onClick={() => void closeQr()}>关闭</button></div></section></div>}
   </div></div>;
 }

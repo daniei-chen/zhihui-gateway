@@ -324,7 +324,8 @@ class ErrorLifetimeTest(_Fixture):
                 return httpx.Response(503, stream=stream)
             with self.mock_transport(respond, clients):
                 result = self.post(protocol, stream=True)
-            self.assertEqual(result.status_code, 502, result.text)
+            self.assertEqual(result.status_code, 503, result.text)
+            self.assertEqual(result.json()['error']['code'], 'upstream_error_body_too_large')
             self.assertEqual(len(streams), 1)
             self.assertTrue(streams[0].closed)
             self.assertTrue(clients[0].is_closed)
@@ -418,13 +419,21 @@ class ErrorLifetimeTest(_Fixture):
         self.assertTrue(all(c.is_closed for c in clients))
 
     def test_safe_retry_sleep_cannot_extend_request_total_budget(self):
+        from server import deadline
+        real_deadline=deadline.Deadline
+        sent_at=[None]
+        def transport_clock():
+            return 0.0 if sent_at[0] is None else time.monotonic()-sent_at[0]
         clients, calls = [], []
         def respond(request):
             calls.append(request)
+            if sent_at[0] is None:sent_at[0]=time.monotonic()
             return httpx.Response(503, json={'error': {'code': 'no_healthy_account'}}, headers={'x-wb-provider-attempts': '1'})
         for stream in (False, True):
             calls.clear()
+            sent_at[0]=None
             with self.mock_transport(respond, clients), \
+                    mock.patch.object(deadline,'Deadline',side_effect=lambda budgets:real_deadline(budgets,clock=transport_clock)), \
                     mock.patch.object(gateway, '_REJECTION_RETRY_DELAY_S', 10), \
                     mock.patch.dict(os.environ, {'WB_TOTAL_TIMEOUT_S': '0.03'}):
                 started = time.monotonic()

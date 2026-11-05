@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -40,10 +41,11 @@ class TestInstanceRuntime(unittest.IsolatedAsyncioTestCase):
     async def test_start_renews_and_close_is_idempotent(self) -> None:
         real_heartbeat = instancelease.heartbeat
         renewed = asyncio.Event()
+        loop = asyncio.get_running_loop()
 
         def observing_heartbeat(*args, **kwargs):
             result = real_heartbeat(*args, **kwargs)
-            renewed.set()
+            loop.call_soon_threadsafe(renewed.set)
             return result
 
         with patch.object(
@@ -266,3 +268,105 @@ class TestInstanceRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['lease_until'], 0)
         self.assertEqual(row['fence'], fence)
         self.assertTrue(runtime.task.done())
+
+    async def wait_for_thread(self, signal):
+        async def poll():
+            while not signal.is_set():
+                await asyncio.sleep(.001)
+        await asyncio.wait_for(poll(), 5)
+
+    async def test_slow_heartbeat_does_not_stall_other_coroutines(self):
+        entered, finish, returned = threading.Event(), threading.Event(), threading.Event()
+        real = instancelease.heartbeat
+
+        def slow(*args, **kwargs):
+            entered.set()
+            finish.wait(2)
+            try:
+                return real(*args, **kwargs)
+            finally:
+                returned.set()
+
+        runtime = instance_runtime.InstanceRuntime(heartbeat_sec=.001, ttl_sec=30)
+        with patch.object(instancelease, 'heartbeat', side_effect=slow):
+            try:
+                await runtime.start()
+                await self.wait_for_thread(entered)
+                for _ in range(5):
+                    await asyncio.sleep(.005)
+                self.assertFalse(returned.is_set(), 'event loop only resumed after the blocking heartbeat')
+                self.assertFalse(runtime.lost)
+            finally:
+                finish.set()
+                await runtime.close()
+
+    async def test_repeated_cancellation_joins_renewal_before_releasing_lease(self):
+        entered, finish = threading.Event(), threading.Event()
+        order = []
+        real_heartbeat, real_release = instancelease.heartbeat, instancelease.release
+
+        def slow(*args, **kwargs):
+            entered.set()
+            finish.wait(3)
+            result = real_heartbeat(*args, **kwargs)
+            order.append('renewed')
+            return result
+
+        def release(*args, **kwargs):
+            order.append('released')
+            return real_release(*args, **kwargs)
+
+        runtime = instance_runtime.InstanceRuntime(heartbeat_sec=.001, ttl_sec=30)
+        closing = None
+        with patch.object(instancelease, 'heartbeat', side_effect=slow), \
+                patch.object(instancelease, 'release', side_effect=release):
+            try:
+                await runtime.start()
+                await self.wait_for_thread(entered)
+                closing = asyncio.create_task(runtime.close())
+                await asyncio.sleep(.01)
+                closing.cancel()
+                runtime.task.cancel()
+                await asyncio.sleep(.01)
+                self.assertFalse(closing.done())
+                self.assertNotIn('released', order)
+            finally:
+                finish.set()
+                if closing is not None:
+                    await closing
+                else:
+                    await runtime.close()
+        self.assertEqual(order, ['renewed', 'released'])
+        self.assertEqual(instancelease.describe(runtime.identity['instance_id'])['lease_until'], 0)
+        await asyncio.sleep(.01)
+        self.assertEqual(order, ['renewed', 'released'])
+
+    async def test_deadline_stops_admission_while_renewal_thread_is_still_blocked(self):
+        entered, finish, returned = threading.Event(), threading.Event(), threading.Event()
+        real = instancelease.heartbeat
+
+        def slow(*args, **kwargs):
+            entered.set()
+            finish.wait(3)
+            try:
+                return real(*args, **kwargs)
+            finally:
+                returned.set()
+
+        runtime = instance_runtime.InstanceRuntime(heartbeat_sec=.001, ttl_sec=2)
+        with patch.object(instancelease, 'heartbeat', side_effect=slow), \
+                patch.object(drain, '_sync_instance_role') as persist:
+            try:
+                await runtime.start()
+                await self.wait_for_thread(entered)
+                deadline = time.monotonic() + 2
+                while not runtime.lost and time.monotonic() < deadline:
+                    await asyncio.sleep(.01)
+                self.assertTrue(runtime.lost)
+                self.assertTrue(drain.is_draining())
+                self.assertFalse(drain.resume())
+                self.assertFalse(returned.is_set())
+                persist.assert_not_called()
+            finally:
+                finish.set()
+                await runtime.close()

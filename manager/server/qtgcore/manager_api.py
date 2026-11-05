@@ -217,7 +217,7 @@ def _client(timeout: float) -> httpx.AsyncClient:
     `httpx.MockTransport` 替换它，从而真实走 `_request` 的状态码/载荷翻译逻辑，
     而不需要起端口、也不影响生产路径。
     """
-    return httpx.AsyncClient(timeout=timeout)
+    return httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False)
 
 
 def _as_dict(data: Any, what: str) -> dict:

@@ -73,7 +73,8 @@ def _write(path, content):
 
 
 def _allowed(name):
-    if name in FIXED or name in ('.spool-used', 'spool/.spool-used', 'spool/dead/dispositions.jsonl'):
+    if name in FIXED or name in ('.spool-used', '.spool-channel.json', '.spool-adoption.json',
+                                'spool/.spool-channel', 'spool/.spool-used', 'spool/dead/dispositions.jsonl'):
         return True
     if re.fullmatch(r'auths/workbuddy[0-9A-Za-z_-]{0,80}\.json(?:\.disabled)?', name):
         return True
@@ -160,7 +161,8 @@ def _check_pair(root):
         if receipts:
             for receipt in main.execute('SELECT request_id,owner_id,payload FROM portal_spend_receipts'):
                 settlement = settlements.get(receipt['request_id'])
-                amount = json.loads(receipt['payload']).get('amount_units')
+                payload=json.loads(receipt['payload'])
+                amount = payload.get('supplier_units',payload.get('amount_units'))
                 if settlement and (settlement['owner_id'] != receipt['owner_id']
                                    or amount is not None and amount != settlement['supplier_units']):
                     raise ValueError('双账本费用回执与结算不一致，禁止恢复放行')
@@ -169,6 +171,17 @@ def _check_pair(root):
             resolution = portal.execute('SELECT amount_units FROM portal_spend_resolutions WHERE request_id=?', (settlement['request_id'],)).fetchone()
             if not receipt and not resolution:
                 raise ValueError('钱包已结算但主账本缺少费用证据，禁止恢复放行')
+        if portal.execute("SELECT 1 FROM sqlite_master WHERE name='portal_unknown_supplier_costs'").fetchone():
+            for item in portal.execute('SELECT * FROM portal_unknown_supplier_costs'):
+                resolution=portal.execute('SELECT amount_units FROM portal_spend_resolutions WHERE request_id=?',(item['request_id'],)).fetchone()
+                spend=portal.execute('SELECT * FROM portal_spends WHERE request_id=?',(item['request_id'],)).fetchone()
+                receipt=main.execute('SELECT payload FROM portal_spend_receipts WHERE request_id=?',(item['request_id'],)).fetchone() if receipts else None
+                if receipt and json.loads(receipt[0]).get('supplier_units') is not None:
+                    raise ValueError('未知供应商成本已有确定费用回执，须先核对')
+                if (item['request_id'] in settlements or not spend or not resolution or resolution[0]!=0
+                        or spend['owner_id']!=item['owner_id'] or spend['key_id']!=item['key_id']
+                        or spend['state']!='settled' or spend['charged_units']!=0):
+                    raise ValueError('供应商未知费用与用户释放证据不一致')
 
 
 def _copy_database(source, destination, *, verify=True):
@@ -212,7 +225,7 @@ def _no_live_workers(main_db):
                 raise ValueError('仍存在存活或无法核实的worker，拒绝离线快照') from exc
 
 
-def _source_files(users, auths, isolated, spool):
+def _source_files(users, auths, isolated, spool, *, data_root=None):
     sources = {'users.json': users}
     total = _regular(users).st_size
     for base, prefix in ((auths, 'auths'), (isolated, 'user-portal-auths'), (spool, 'spool')):
@@ -229,6 +242,9 @@ def _source_files(users, auths, isolated, spool):
                 if total > MAX_TOTAL or len(sources) >= MAX_FILES:
                     raise ValueError('源文件数量或总体积超出快照上限')
                 sources[relative] = path
+    for name in ('.spool-channel.json','.spool-adoption.json'):
+        path=Path(data_root if data_root is not None else Path(users).parent)/name
+        if path.exists() or path.is_symlink():sources[name]=path
     return sources
 
 
@@ -242,7 +258,7 @@ def create_snapshot(*, main_db, portal_db, users, auths, isolated, spool, destin
     if any(destination == p or destination.is_relative_to(p) or p.is_relative_to(destination) for p in paths[:-1]):
         raise ValueError('快照目标与源目录不能重叠')
     _no_live_workers(main_db)
-    sources = _source_files(users, auths, isolated, spool)
+    sources = _source_files(users, auths, isolated, spool, data_root=portal_db.parent)
     used_marker = portal_db.parent / '.spool-used'
     if used_marker.exists() or used_marker.is_symlink():
         sources['.spool-used'] = used_marker
@@ -257,7 +273,7 @@ def create_snapshot(*, main_db, portal_db, users, auths, isolated, spool, destin
         _copy_database(portal_db, destination / 'user-portal.sqlite3')
         for name, path in sources.items():
             _write(destination / name, path.read_bytes())
-        after_sources = _source_files(users, auths, isolated, spool)
+        after_sources = _source_files(users, auths, isolated, spool, data_root=portal_db.parent)
         if used_marker.exists() or used_marker.is_symlink():
             after_sources['.spool-used'] = used_marker
         after = {name: _digest(path) for name, path in after_sources.items()}
@@ -281,7 +297,7 @@ def create_paired_snapshot(*, main_db, portal_db, users, auths, isolated, spool,
         raise ValueError('配对快照必须使用不重叠的新目录')
     for directory in (auths, isolated, spool):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    before_sources = _source_files(users, auths, isolated, spool)
+    before_sources = _source_files(users, auths, isolated, spool, data_root=portal_db.parent)
     used_marker = portal_db.parent / '.spool-used'
     if used_marker.exists() or used_marker.is_symlink():
         before_sources['.spool-used'] = used_marker
@@ -297,7 +313,7 @@ def create_paired_snapshot(*, main_db, portal_db, users, auths, isolated, spool,
         _copy_database(portal_db, destination / 'user-portal.sqlite3', verify=False)
         for name, path in before_sources.items():
             _write(destination / name, path.read_bytes())
-        after_sources = _source_files(users, auths, isolated, spool)
+        after_sources = _source_files(users, auths, isolated, spool, data_root=portal_db.parent)
         if used_marker.exists() or used_marker.is_symlink():
             after_sources['.spool-used'] = used_marker
         after = {name: _digest(path) for name, path in after_sources.items()}

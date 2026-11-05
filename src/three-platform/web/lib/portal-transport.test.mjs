@@ -57,7 +57,7 @@ test('read deadline covers response body and clears its timer without retrying',
   assert.equal(signal.aborted, true); assert.equal(calls, 1); assert.equal(cleared, 1);
 });
 
-test('caller abort propagates and mutation failure is uncertain, with no retry or deadline', async () => {
+test('caller abort propagates and mutation failure is uncertain, with no retry', async () => {
   const controller = new AbortController(); controller.abort(new Error('caller aborted'));
   let calls = 0, timers = 0;
   const cancelled = api(async (url, options) => {calls++; throw options.signal.reason;});
@@ -67,7 +67,20 @@ test('caller abort propagates and mutation failure is uncertain, with no retry o
     setTimeout() {timers++; return 1;}, clearTimeout() {},
   });
   await assert.rejects(mutation.portalFetch('portal/keys', {method: 'POST'}), /结果待确认/);
-  assert.equal(calls, 1); assert.equal(timers, 0);
+  assert.equal(calls, 1); assert.equal(timers, 1);
+});
+
+test('mutation deadline bounds waiting and reports uncertainty without replay', async () => {
+  let expire, wait, calls=0, cleared=0;
+  const mutation=api((url,options)=>{
+    calls++;
+    return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
+  },{setTimeout(fn,ms){expire=fn;wait=ms;return 7;},clearTimeout(){cleared++;}});
+  const work=mutation.portalFetch('portal/register',{method:'POST'});
+  await flush();
+  assert.equal(wait,45000);expire();
+  await assert.rejects(work,/结果待确认.*不要重复提交.*没有自动重试/);
+  assert.equal(calls,1);assert.equal(cleared,1);
 });
 
 test('valid read contracts preserve zero and null, but reject unsafe page and key shapes', async () => {
@@ -78,4 +91,17 @@ test('valid read contracts preserve zero and null, but reject unsafe page and ke
     await assert.rejects(api(async () => Response.json(body)).portalFetch('portal/requests?page=1'), /响应|数据/);
   }
   await assert.rejects(api(async () => Response.json({items: null, allowed_models: []})).portalFetch('portal/keys'), /响应|数据/);
+});
+
+test('workspace transport accepts only a complete overview bound to its authenticated owner', async () => {
+  const data={owner_id:'A',scale:1000000,balance_units:0,account_count:0,active_account_count:0,
+    expiring_7d_units:0,today_checkin_units:0,held_units:0,debt_units:0,callable_units:0,
+    pending_pool_units:0,snapshot_at:1,dispatch_enabled:false,pool_enabled:false,dispatch_note:'fixture',
+    allowed_models:[],accounts:[],grants:[],events:[]};
+  const packet={me:{id:'A',username:'fixture-A'},data};
+  assert.equal((await api(async()=>Response.json(packet)).portalFetch('portal/workspace')).data.balance_units,0);
+  for(const body of [{...packet,data:{...data,owner_id:'B'}},{...packet,data:{...data,owner_id:null}},
+    {...packet,me:{id:7,username:'fixture-A'}},{...packet,data:{...data,balance_units:null}}]){
+    await assert.rejects(api(async()=>Response.json(body)).portalFetch('portal/workspace'),/响应|数据/);
+  }
 });

@@ -36,6 +36,7 @@ class _ReplayFixture(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_db = config.DB_PATH
+        self._orig_data = config.DATA_DIR
         self._orig_users = config.USERS_FILE
         self._orig_spool = os.environ.get('WB_LEDGER_SPOOL_DIR')
         self._orig_backpressure = os.environ.get('WB_LEDGER_BACKPRESSURE')
@@ -43,6 +44,7 @@ class _ReplayFixture(unittest.TestCase):
         self._orig_spool_failed = operational.ledger_spool_failed
         self._orig_streak = operational._ledger_replay_streak
         root = pathlib.Path(self._tmp.name)
+        config.DATA_DIR = root
         config.DB_PATH = root / 'm.db'
         config.USERS_FILE = root / 'users.json'
         os.environ['WB_LEDGER_SPOOL_DIR'] = str(root / 'spool')
@@ -60,6 +62,7 @@ class _ReplayFixture(unittest.TestCase):
             db._conn.close()
         db._conn = None
         config.DB_PATH = self._orig_db
+        config.DATA_DIR = self._orig_data
         config.USERS_FILE = self._orig_users
         if self._orig_spool is None:
             os.environ.pop('WB_LEDGER_SPOOL_DIR', None)
@@ -131,9 +134,85 @@ class LedgerReplayTest(_ReplayFixture):
         self.assertEqual(ledgerreplay.backlog(), 1)
 
     def test_spill_is_idempotent_per_request(self) -> None:
-        self._spill(self._facts('req-dup'))
-        self._spill(self._facts('req-dup'))
+        facts = self._facts('req-dup')
+        self._spill(facts)
+        self._spill(facts)
         self.assertEqual(ledgerreplay.backlog(), 1)
+
+    def test_conflicting_spill_retains_both_facts_and_blocks_admission(self) -> None:
+        facts = self._facts('req-conflict')
+        path = pathlib.Path(self._spill(facts))
+        before = path.read_bytes()
+        entry = ledgerreplay.build_entry(dict(facts, credit=2, completion_tokens=20), release_id='test-release')
+        self.assertIsNone(ledgerreplay.spill(entry))
+        self.assertEqual(path.read_bytes(), before)
+        dead = list((path.parent / 'dead').glob('*.json'))
+        self.assertEqual(len(dead), 1)
+        evidence = json.loads(dead[0].read_text(encoding='utf-8'))
+        self.assertEqual(evidence['schema'], 'spill-conflict-v1')
+        self.assertEqual(evidence['incoming']['facts']['credit'], 2)
+        self.assertTrue(ledgerreplay.admission_block()['blocked'])
+        self.assertEqual(self._units(), 0, 'retaining evidence never applies a charge')
+
+    def test_replay_bookkeeping_and_measured_timing_do_not_make_a_conflict(self) -> None:
+        entry = ledgerreplay.build_entry(self._facts('req-bookkeeping'))
+        first = ledgerreplay.spill(entry)
+        entry.update(attempts=3, spilled_at=entry['spilled_at']+3)
+        entry['facts']['latency_ms'] = 999
+        self.assertEqual(ledgerreplay.spill(entry), first)
+        self.assertEqual(ledgerreplay.dead_letters(), 0)
+
+    def test_corrupt_existing_spill_is_not_overwritten_or_accepted(self) -> None:
+        path = pathlib.Path(self._spill(self._facts('req-corrupt')))
+        path.write_bytes(b'{invalid')
+        self.assertIsNone(ledgerreplay.spill(ledgerreplay.build_entry(self._facts('req-corrupt'))))
+        self.assertEqual(path.read_bytes(), b'{invalid')
+        self.assertEqual(ledgerreplay.dead_letters(), 1)
+
+    def test_spill_refuses_path_traversal(self) -> None:
+        self.assertIsNone(ledgerreplay.spill(ledgerreplay.build_entry(self._facts('../escaped'))))
+        self.assertFalse((pathlib.Path(config.DATA_DIR)/'escaped.json').exists())
+
+    def test_publication_failure_keeps_synced_bytes_and_cannot_be_cleared_by_probe(self):
+        import errno
+        from unittest import mock
+        from server import spoolidentity
+        directory=ledgerreplay.spool_dir()
+        self.assertTrue(spoolidentity.check(directory, create=True)['ok'])
+        real_link=os.link
+        def full(source,target,*args,**kwargs):
+            if pathlib.Path(source).name.startswith('.receipt-'):
+                raise OSError(errno.ENOSPC,'synthetic exhausted directory')
+            return real_link(source,target,*args,**kwargs)
+        with mock.patch.object(ledgerreplay.os,'link',side_effect=full):
+            self.assertIsNone(ledgerreplay.spill(ledgerreplay.build_entry(self._facts('req-unpublished'))))
+        pending=list(directory.glob('.receipt-*.tmp'))
+        self.assertEqual(len(pending),1)
+        self.assertEqual(json.loads(pending[0].read_text(encoding='utf-8'))['facts']['credit'],.5)
+        for _ in range(3):
+            self.assertEqual(ledgerreplay.channel_state(force_probe=True)['state'],'degraded')
+            self.assertTrue(ledgerreplay.admission_block()['blocked'])
+
+    def test_another_replayer_cannot_read_a_receipt_owned_by_the_first(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        from unittest import mock
+        entered,release=threading.Event(),threading.Event()
+        self._spill(self._facts('req-concurrent-replay'))
+        def hold(*args):
+            entered.set()
+            if not release.wait(5):raise AssertionError('synthetic replay was not released')
+            return 'duplicate'
+        with ThreadPoolExecutor(max_workers=1) as pool, mock.patch.object(ledgerreplay,'apply',side_effect=hold) as apply:
+            first=pool.submit(ledgerreplay.replay_batch)
+            self.assertTrue(entered.wait(3))
+            try:
+                second=ledgerreplay.replay_batch()
+                self.assertTrue(second['replay_busy_or_unavailable'])
+                self.assertEqual(apply.call_count,1)
+            finally:
+                release.set()
+                first.result(timeout=5)
 
     # ── 2. 重放：应用、清空、幂等 ─────────────────────────────────────
     def test_replay_applies_once_and_clears_backlog(self) -> None:
@@ -156,14 +235,45 @@ class LedgerReplayTest(_ReplayFixture):
         self.assertEqual(int(row['charged_tokens']), 15)
 
     def test_replay_twice_does_not_double_count(self) -> None:
-        self._spill(self._facts('req-2'))
+        facts = self._facts('req-2')
+        self._spill(facts)
         ledgerreplay.replay_batch()
         after_first = self._units()
         # 同一请求再次失败：同一条回执可能被重新写回 spool
-        self._spill(self._facts('req-2'))
+        self._spill(facts)
         result = ledgerreplay.replay_batch()
         self.assertEqual(result['duplicate'], 1)
         self.assertEqual(self._units(), after_first)
+
+    def test_conflicting_receipt_after_replay_is_retained_not_treated_as_duplicate(self):
+        facts = self._facts('req-late-conflict')
+        self._spill(facts)
+        ledgerreplay.replay_batch()
+        charged = self._units()
+        self._spill(dict(facts, credit=2, completion_tokens=20))
+        result = ledgerreplay.replay_batch()
+        self.assertEqual(result['duplicate'], 0)
+        self.assertEqual(result['failed'], 1)
+        self.assertEqual(result['backlog'], 0)
+        self.assertEqual(self._units(), charged)
+        self.assertEqual(ledgerreplay.dead_letters(), 1)
+        self.assertTrue(ledgerreplay.admission_block()['blocked'])
+
+        self._spill(dict(facts, credit=3, completion_tokens=30))
+        ledgerreplay.replay_batch()
+        self.assertEqual(ledgerreplay.dead_letters(), 2)
+        saved = [json.loads(p.read_text(encoding='utf-8'))['facts']['credit']
+                 for p in ledgerreplay.dead_dir().glob('*.json')]
+        self.assertEqual(sorted(saved), [2, 3], 'a later conflict cannot overwrite the earlier evidence')
+        self.assertEqual(self._units(), charged)
+
+    def test_legacy_missing_timestamp_is_part_of_idempotent_evidence(self):
+        facts = self._facts('req-no-timestamp')
+        facts.pop('ts')
+        entry = ledgerreplay.build_entry(facts)
+        self.assertIsNotNone(ledgerreplay.spill(entry))
+        entry['spilled_at'] += 86400
+        self.assertIsNone(ledgerreplay.spill(entry))
 
     def test_existing_log_only_backfills_events(self) -> None:
         """事务已提交但回执残留时，只补不可变事件，不重复累计用量。"""
@@ -229,24 +339,32 @@ class LedgerReplayTest(_ReplayFixture):
         """
         directory = pathlib.Path(os.environ['WB_LEDGER_SPOOL_DIR'])
         directory.mkdir(parents=True, exist_ok=True)
+        from server import spoolidentity
+        self.assertTrue(spoolidentity.check(directory, create=True)['ok'])
         (directory / 'bad.json').write_text('{"schema": 99}', encoding='utf-8')
         result = ledgerreplay.replay_batch()
         self.assertEqual(result['failed'], 1)
         self.assertEqual(result['dead'], 1)
         self.assertEqual(result['backlog'], 0)
-        self.assertTrue((directory / 'dead' / 'bad.json').exists())
+        saved = list((directory / 'dead').glob('bad-*.json'))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding='utf-8'), '{"schema": 99}')
         self.assertEqual(operational._ledger_replay_streak, 0)
 
     def test_unparseable_receipt_also_moves_to_dead(self) -> None:
         """JSON 都解析不了（写半截/外部损坏）同样立即进 dead。"""
         directory = pathlib.Path(os.environ['WB_LEDGER_SPOOL_DIR'])
         directory.mkdir(parents=True, exist_ok=True)
+        from server import spoolidentity
+        self.assertTrue(spoolidentity.check(directory, create=True)['ok'])
         (directory / 'broken.json').write_text('{"schema": 1, "facts"', encoding='utf-8')
         result = ledgerreplay.replay_batch()
         self.assertEqual(result['failed'], 1)
         self.assertEqual(result['dead'], 1)
         self.assertEqual(result['backlog'], 0)
-        self.assertTrue((directory / 'dead' / 'broken.json').exists())
+        saved = list((directory / 'dead').glob('broken-*.json'))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding='utf-8'), '{"schema": 1, "facts"')
 
 
 CHILD_SCRIPT = '''

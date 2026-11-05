@@ -1,5 +1,7 @@
 # Enterprise Account Support for WorkBuddy Manager
 
+> **Retired historical reference.** `apply.sh` rejects every target, including sourced calls, with status 2 before reading credentials, copying files, or operating containers. The manual install, rebuild, rollback, and upgrade commands below are historical records and must not be used on current managed instances. Follow the [current product release contract](../../../docs/PRODUCT-RELEASE.md) and [current signing requirements](../../../docs/release-signing.md).
+
 Patches that add **Tencent CodeBuddy / WorkBuddy enterprise account** support to
 [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager) and
 its upstream gateway `workbuddy2api`.
@@ -24,26 +26,17 @@ its upstream gateway `workbuddy2api`.
 
 ```
 ├── README.md / README.en.md                 Docs (zh / en)
-├── apply.sh                                 One-shot apply script
+├── apply.sh                                 Retired script (execution rejected)
 ├── workbuddy2api-enterprise-support.patch   Upstream Go patch (6 files / 307 lines)
 ├── manager-tencent.py.patch                 Manager credit-query patch
 ├── manager-wb2api.py.patch                  Manager check-in gating patch
-└── verified/                                Pre-verified drop-in files
-    ├── manager-tencent.py
-    ├── manager-wb2api.py
+└── verified/                                Historical upstream reference only
     └── upstream-enterprise_usage.go
 ```
 
-## Quick start
+## One-shot installation is retired
 
-```bash
-sudo bash apply.sh all        # upstream + manager
-sudo bash apply.sh upstream   # upstream only
-sudo bash apply.sh manager    # manager only
-```
-
-The script backs up existing binaries/files, applies patches, builds, runs tests,
-rebuilds images and restarts containers.
+This directory no longer provides an installation entry point. The historical script cannot preserve the full container environment, image identity, and mount attributes when rebuilding a container. Its two Manager drop-in files are also absent from this public tree. Do not restore those old files or bypass the rejection guard. Use the managed release process linked above; the old implementation remains only for code review.
 
 ## The key gotcha
 

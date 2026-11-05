@@ -425,11 +425,22 @@ def ensure_outcome_schema() -> bool:
     return ready
 
 
-def admission_snapshot() -> dict | None:
+def admission_snapshot(*, probe=False) -> dict | None:
     """当前全局/大请求准入占用（in-flight）；未启动时返回 None。"""
     inst = _middleware_ref
     if inst is None:
         return None
+    if getattr(inst, 'shared', None) is not None:
+        try:
+            result = inst.shared.probe() if probe else inst.shared.snapshot()
+            return {**result, 'maximum': inst.maximum, 'large_maximum': inst.large_maximum,
+                    'process_active': inst.active, 'process_preauth': inst.preauth_active,
+                    'inflight_body_bytes': result['body_bytes'],
+                    'maximum_body_bytes': inst.maximum_body_bytes,
+                    'capacity_rejections': inst.capacity_rejections}
+        except Exception:
+            return {'scope': 'same_host_shared', 'healthy': False, 'active': None,
+                    'inflight_body_bytes': None, 'reason': 'coordination_unavailable'}
     return {'active': int(getattr(inst, 'active', 0)),
             'preauth_active': int(getattr(inst, 'preauth_active', 0)),
             'large': int(getattr(inst, 'large', 0)),
@@ -456,6 +467,15 @@ def admit_key(key):
         limit=_env_int('WB_KEY_CONCURRENCY_QUOTA', 1)
     else:
         limit=_env_int('WB_KEY_CONCURRENCY', 4)
+    shared = getattr(state, 'shared_admission', None)
+    if shared is not None:
+        try:
+            granted = shared.key(state.request_id, key_id, limit)
+        except Exception:
+            raise CapacityError('shared key coordination unavailable') from None
+        if granted:
+            state.key_slot = key_id
+        return granted
     with _key_lock:
         if _key_slots.get(key_id,0)>=limit: return False
         _key_slots[key_id]=_key_slots.get(key_id,0)+1; state.key_slot=key_id
@@ -463,6 +483,10 @@ def admit_key(key):
 
 def release_key(state):
     if state.key_slot is None: return
+    if getattr(state, 'shared_admission', None) is not None:
+        # The middleware releases the entire lease after owned response cleanup.
+        state.key_slot = None
+        return
     with _key_lock:
         key=state.key_slot; _key_slots[key]=max(0,_key_slots.get(key,0)-1)
         if not _key_slots[key]: _key_slots.pop(key,None)
@@ -473,6 +497,30 @@ def usage_int(value):
         return min(2**53-1,max(0,int(value or 0)))
     except (ValueError,TypeError,OverflowError):
         return 0
+
+
+def merge_usage(target: dict, incoming: dict) -> None:
+    """Retain only bounded numeric evidence, never arbitrary provider metadata.
+
+    A stream can send a new unknown usage key in every event. Updating a dict
+    verbatim retains that entire history even when every event is small.
+    Malformed known values remain present (as None/empty text) and cannot become
+    evidence of valid zero usage.
+    """
+    def scalar(value):
+        if isinstance(value, str):
+            return value if len(value) <= 128 else ''
+        return value if value is None or isinstance(value, (int, float, bool)) else ''
+
+    for field in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'credit', 'credits',
+                  'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens', 'prompt_cache_write_tokens'):
+        if field in incoming:
+            target[field] = scalar(incoming[field])
+    for field, keys in (('prompt_tokens_details', ('cached_tokens',)),
+                        ('completion_tokens_details', ('reasoning_tokens',))):
+        value = incoming.get(field)
+        if isinstance(value, dict):
+            target[field] = {key: scalar(value[key]) for key in keys if key in value}
 
 #: U13：流中错误要携带的上游细节（业务 code / hint / 上游请求 ID）。
 #:
@@ -592,7 +640,7 @@ class StreamAudit:
             code=obj['error'].get('code')
             self.error_code=str(code)[:64] if code else None
         if isinstance(obj.get("usage"), dict):
-            self.usage.update(obj["usage"])
+            merge_usage(self.usage, obj["usage"])
         choices = obj.get("choices")
         if isinstance(choices, list):
             for choice in choices:
@@ -609,17 +657,28 @@ class StreamAudit:
     def _consume(self, text):
         self.pending += text
         out = []
-        while "\n" in self.pending:
-            line, self.pending = self.pending.split("\n", 1)
-            line = line.rstrip("\r")
+        cursor = 0
+        while True:
+            end = self.pending.find("\n", cursor)
+            if end < 0:
+                break
+            if end - cursor > self.maximum:
+                raise ValueError("上游 SSE 行超过审计缓冲上限")
+            line = self.pending[cursor:end].rstrip("\r")
+            cursor = end + 1
             if not line:
                 out.extend(self._event())
             elif line.startswith("data:"):
                 item = line[5:].lstrip(" ")
-                self.event_size += len(item)
+                # Empty data lines still occupy memory and add a newline when
+                # joined. Account for each retained string/list entry as well.
+                self.event_size += len(item) + 64
+                if self.event_size > self.maximum:
+                    raise ValueError("上游 SSE 事件超过审计缓冲上限")
                 self.data.append(item)
-            if self.event_size > self.maximum:
-                raise ValueError("上游 SSE 事件超过审计缓冲上限")
+        # Slice the remaining suffix once; repeatedly splitting a coalesced
+        # network chunk copies its entire remainder for every SSE line.
+        self.pending = self.pending[cursor:]
         if len(self.pending) + self.event_size > self.maximum:
             raise ValueError("上游 SSE 事件超过审计缓冲上限")
         return out
@@ -696,7 +755,8 @@ async def close_stream(response, client, *, timeout: float = 5.0):
                 if response is not None:
                     await response.aclose()
             finally:
-                await client.aclose()
+                if client is not None:
+                    await client.aclose()
         if close_scope.cancel_called:
             mark_cleanup_unconfirmed()
     except BaseException as exc:
@@ -763,7 +823,7 @@ def _env_int(name, default):
 
 class RequestAuditMiddleware:
     """Pure ASGI wrapper; mutable context survives streaming tasks and is reset per request."""
-    def __init__(self, app):
+    def __init__(self, app, shared=None):
         self.app = app
         from .fairadmission import FairGate, wait_seconds
         self.fair_gate = FairGate()
@@ -786,8 +846,18 @@ class RequestAuditMiddleware:
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
+        from . import config
+        self.shared = shared
+        if self.shared is None and config.SHARED_ADMISSION:
+            from .sharedadmission import Coordinator
+            self.shared = Coordinator(config.DB_PATH.parent / 'admission-cohort.db', {
+                'active': self.maximum, 'large': self.large_maximum,
+                'bytes': self.maximum_body_bytes, 'preauth': self.maximum,
+                'queue': self.fair_gate.maximum, 'queue_per_key': self.fair_gate.per_key,
+                'key_default': _env_int('WB_KEY_CONCURRENCY', 4),
+                'key_quota': _env_int('WB_KEY_CONCURRENCY_QUOTA', 1)})
         global _middleware_ref
-        if _middleware_ref is None:
+        if _middleware_ref is None or config.SHARED_ADMISSION:
             _middleware_ref = self
         print('[admission] 全局并发上限 maximum=%d large_maximum=%d（源码直读 env）'
               % (self.maximum, self.large_maximum), file=sys.stderr, flush=True)
@@ -795,7 +865,11 @@ class RequestAuditMiddleware:
     async def __call__(self, scope, receive, send):
         global _outcome_writes
         if scope["type"] != "http":
-            return await self.app(scope, receive, send)
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                if scope['type'] == 'lifespan' and self.shared is not None:
+                    self.shared.close()
         path = scope.get("path", "")
         from . import config
         if config.BASE_PATH and (path == config.BASE_PATH or path.startswith(config.BASE_PATH + '/')):
@@ -815,11 +889,12 @@ class RequestAuditMiddleware:
         scope_state["client_request_id"] = state.client_request_id
         tracked = path.startswith(("/v1/", "/v2/", "/api/", "/qoder/v1/", "/trae/v1/")) or path in ("/responses", "/messages")
         inference=state.protocol!='http' and state.method=='POST'
+        state.shared_admission = self.shared if inference else None
         from . import requestperf
         if inference:
             state.performance = requestperf.Trace(state.started)
         admitted=False; large=False; received=0; reserved=0
-        inbound_retained=0; wire_reserved=0
+        inbound_retained=0; wire_reserved=0; output_reserved=0
         reading_body=False
         per_request_limit=None
         if inference:
@@ -827,11 +902,21 @@ class RequestAuditMiddleware:
         try: declared=max(0,int(headers.get(b'content-length',b'0')))
         except ValueError: declared=0
         initial_reservation = max(declared, self.minimum_body_bytes)
+        def shared_reserve(size, is_large):
+            if self.shared is None:
+                return True
+            try:
+                return self.shared.reserve(state.request_id, size, is_large)
+            except Exception:
+                # No local fallback: losing the coordinator must not double limits.
+                return False
         def reserve_capacity():
             nonlocal admitted, reserved, large
             if (self.active >= self.maximum
                     or declared > 1024*1024 and self.large >= self.large_maximum
                     or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+                return False
+            if not shared_reserve(initial_reservation, declared > 1024*1024):
                 return False
             self.active += 1
             admitted = True
@@ -851,11 +936,12 @@ class RequestAuditMiddleware:
                 return
             if size <= wire_reserved:
                 return
-            needed = max(reserved, inbound_retained + size)
+            needed = max(reserved, inbound_retained + size + output_reserved)
             extra = needed - reserved
             needs_large = size > 1024*1024 and not large
             if (self.inflight_body_bytes + extra > self.maximum_body_bytes
-                    or needs_large and self.large >= self.large_maximum):
+                    or needs_large and self.large >= self.large_maximum
+                    or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                 capacity_rejected()
                 raise CapacityError('aggregate transformed-body capacity exceeded')
             self.inflight_body_bytes += extra
@@ -863,17 +949,31 @@ class RequestAuditMiddleware:
             if needs_large:
                 self.large += 1; large=True
         state.reserve_wire_body = reserve_wire_body
+        def reserve_output_body(size):
+            nonlocal reserved, output_reserved
+            if not admitted or not inference or size<=output_reserved:
+                return
+            needed=max(reserved,inbound_retained+wire_reserved+size)
+            extra=needed-reserved
+            if (self.inflight_body_bytes+extra>self.maximum_body_bytes
+                    or extra>0 and not shared_reserve(needed,large)):
+                capacity_rejected()
+                raise CapacityError('aggregate response-body capacity exceeded')
+            self.inflight_body_bytes+=extra
+            reserved,output_reserved=needed,size
+        state.reserve_output_body=reserve_output_body
         def reserve_input(size):
             nonlocal received,large,reserved
             received=size
             if inference:
-                needed = max(reserved, received)
+                needed = max(reserved, received + output_reserved)
                 extra = needed - reserved
                 needs_large = received > 1024*1024 and not large
                 # No await between checking and reserving: atomic within this
                 # ASGI worker, including chunked or understated-length requests.
                 if (self.inflight_body_bytes + extra > self.maximum_body_bytes
-                        or needs_large and self.large >= self.large_maximum):
+                        or needs_large and self.large >= self.large_maximum
+                        or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                     capacity_rejected()
                     raise CapacityError('aggregate request-body capacity exceeded')
                 self.inflight_body_bytes += extra
@@ -907,7 +1007,32 @@ class RequestAuditMiddleware:
                                                status_code=503, headers={'Retry-After':'1'}))
         async def acquire_capacity():
             with requestperf.measure('admission_wait'):
-                return await self.fair_gate.acquire(state.key_id, reserve_capacity, self.queue_wait)
+                if self.shared is None:
+                    return await self.fair_gate.acquire(state.key_id, reserve_capacity, self.queue_wait)
+                # A peer's release does not notify this process's local asyncio queue.
+                if not self.fair_gate.pending and reserve_capacity():
+                    return True
+                if self.queue_wait <= 0:
+                    return False
+                try:
+                    if not self.shared.queue(state.request_id):
+                        return False
+                except Exception:
+                    return False
+                async def wake_peers():
+                    while True:
+                        await asyncio.sleep(0.05)
+                        self.fair_gate.notify()
+                notifier = asyncio.create_task(wake_peers())
+                try:
+                    return await self.fair_gate.acquire(state.key_id, reserve_capacity, self.queue_wait)
+                finally:
+                    notifier.cancel()
+                    await asyncio.gather(notifier, return_exceptions=True)
+                    try:
+                        self.shared.end_queue(state.request_id)
+                    except Exception:
+                        log.warning('shared admission queue cleanup deferred')
         async def reject_response(response):
             if protocol == 'anthropic':
                 payload=json.loads(response.body)
@@ -930,6 +1055,14 @@ class RequestAuditMiddleware:
                 if self.preauth_active >= self.maximum:
                     await reject_capacity()
                     return
+                if self.shared is not None:
+                    try:
+                        permitted = self.shared.preauthorize(state.request_id)
+                    except Exception:
+                        permitted = False
+                    if not permitted:
+                        await reject_capacity()
+                        return
                 self.preauth_active += 1
                 try:
                     with requestperf.measure('preauthorization'):
@@ -937,6 +1070,11 @@ class RequestAuditMiddleware:
                                                          anthropic=protocol == 'anthropic')
                 finally:
                     self.preauth_active -= 1
+                    if self.shared is not None:
+                        try:
+                            self.shared.end_preauthorize(state.request_id)
+                        except Exception:
+                            log.warning('shared preauthorization cleanup deferred')
             if inference and auth_error is None:
                 per_request_limit = gateway.max_body_bytes()
             if auth_error is not None:
@@ -1107,11 +1245,17 @@ class RequestAuditMiddleware:
                     log.warning('request performance persistence unavailable')
                 finally:
                     release_key(state)
+                    if inference and self.shared is not None:
+                        try:
+                            self.shared.release(state.request_id)
+                        except Exception:
+                            log.error('shared admission release deferred; capacity retained')
                     if admitted:
                         self.active-=1
                         self.inflight_body_bytes -= reserved
                     if large: self.large-=1
                     self.fair_gate.notify()
                     state.reserve_wire_body = None
+                    state.reserve_output_body = None
                     current.reset(token)
 

@@ -84,8 +84,8 @@
     },
     {
       "path": "home/index.html",
-      "bytes": 34690,
-      "sha256": "7bc752e096bfc721d0bb5385d45b0994c8e71fc5aedffcf639c785c55b61e20b",
+      "bytes": 34884,
+      "sha256": "c727e1ee6e153e2d0865f7d34f1c8ceae72dcedc9fa2d5feb6ad47ce7df7a1c1",
       "source_sha256": "fa39c0133e3d4b6a01cc7d9f49087d4078edf05a53404cd91b18e9312287f3f8"
     },
     {
@@ -381,6 +381,20 @@
       "bytes": 1081,
       "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
       "source_sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc"
+    }
+  ],
+  "retained_scene_dependencies": [
+    {
+      "url": "/home-assets/r-bb0b5ad4c7a0582efcf4/animations/task-workspace.html",
+      "sha256": "8050281a1c5207187386181da5420c34e1778a92807420fa48b9b2ee4bee7759",
+      "bytes": 3645,
+      "contract": "existing exact Nginx scene CSP; retain immutable URL"
+    },
+    {
+      "url": "/home-assets/r-bb0b5ad4c7a0582efcf4/animations/velo-coast.html",
+      "sha256": "f54d3fcf230d1f623057e7a1bea59de1593ab5a4c147948497c6874beb6a7bdc",
+      "bytes": 3229,
+      "contract": "existing exact Nginx scene CSP; retain immutable URL"
     }
   ]
 }

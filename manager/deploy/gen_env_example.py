@@ -128,7 +128,16 @@ def main(argv: list[str]) -> int:
                 note.append('最小 %s' % spec['minimum'])
             if note:
                 lines.append('# %s' % '；'.join(note))
-            lines.append('%s=%s' % (name, value))
+            if value and '://' in value:
+                from urllib.parse import urlsplit
+                try:
+                    parsed = urlsplit(value)
+                    if parsed.username is not None or parsed.password is not None or parsed.query:
+                        value = ''
+                        lines.append('# URL 含认证信息或查询参数，示例中已省略')
+                except ValueError:
+                    value = ''
+            lines.append('%s=%s' % (name, json.dumps(value, ensure_ascii=False)))
         lines.append('')
 
     Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')

@@ -88,6 +88,7 @@ export function AccountNoteDialog({
               maxLength={100}
               autoFocus
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (e.key === 'Enter') void save();
               }}
             />

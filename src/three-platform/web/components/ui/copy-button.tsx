@@ -1,6 +1,6 @@
 'use client';
 
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {Check, Copy, Loader2, Share2} from 'lucide-react';
 import {copyText} from '@/lib/format';
 import {notify} from '@/lib/toast';
@@ -20,7 +20,12 @@ import {cn} from '@/lib/utils';
  *  - 默认 32×32 的触控区域，满足移动端最小点击尺寸
  *  - 复制成功短暂显示对勾，给出即时反馈（移动端看不到 toast 时也明确）
  */
-export function CopyButton({
+export function CopyButton(props: Parameters<typeof CopyAction>[0]) {
+  // A new copied value owns a new lifecycle, including pending clipboard work.
+  return <CopyAction key={props.value} {...props} />;
+}
+
+function CopyAction({
   value,
   label,
   title,
@@ -46,14 +51,33 @@ export function CopyButton({
   const t = useT();
   const [state, setState] = useState<'idle' | 'done' | 'busy'>('idle');
 
+  const alive = useRef(false);
+  const busy = useRef(false);
+  const reset = useRef<number | null>(null);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (reset.current !== null) window.clearTimeout(reset.current);
+    };
+  }, []);
+
   async function onCopy() {
-    if (!value || state === 'busy') return;
+    if (!value || disabled || busy.current) return;
+    busy.current = true;
     setState('busy');
-    const ok = await copyText(value);
+    let ok = false;
+    try { ok = await copyText(value); } catch { /* Report the same bounded failure. */ }
+    finally { busy.current = false; }
+    if (!alive.current) return;
     if (ok) {
       setState('done');
       notify.ok(t('common.copiedToClipboard'));
-      window.setTimeout(() => setState('idle'), 1500);
+      if (reset.current !== null) window.clearTimeout(reset.current);
+      reset.current = window.setTimeout(() => {
+        if (alive.current) setState('idle');
+        reset.current = null;
+      }, 1500);
     } else {
       setState('idle');
       notify.err(t('common.copyFailed'), t('common.manualCopy'));
@@ -67,7 +91,7 @@ export function CopyButton({
       type="button"
       variant={variant}
       size={size}
-      disabled={disabled || !value}
+      disabled={disabled || !value || state === 'busy'}
       title={text}
       aria-label={text}
       onClick={onCopy}

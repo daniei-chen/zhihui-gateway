@@ -35,9 +35,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 import shutil
+import stat
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -74,6 +77,8 @@ def latest_snapshot_name() -> str | None:
         data = json.loads(LATEST.read_text())
     except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
     for key in ('snapshot', 'snapshot_dir', 'snapshot_path', 'path'):
         value = data.get(key)
         if isinstance(value, str) and value:
@@ -96,9 +101,48 @@ def parse_stamp(name: str) -> datetime | None:
 
 
 def snapshot_dirs() -> list:
-    if not SNAPSHOTS.is_dir():
+    if not _plain_directory(SNAPSHOTS):
         return []
-    return sorted((p for p in SNAPSHOTS.iterdir() if p.is_dir()), key=lambda p: p.name)
+    return sorted((p for p in SNAPSHOTS.iterdir() if _plain_directory(p)), key=lambda p: p.name)
+
+
+def _plain_directory(path: Path) -> bool:
+    """Do not traverse a snapshot directory or ancestor supplied as a link."""
+    try:
+        return all(stat.S_ISDIR(part.lstat().st_mode) and not part.is_symlink()
+                   for part in (path, *path.parents))
+    except OSError:
+        return False
+
+
+@contextmanager
+def _snapshot_handle(path: Path):
+    # Keep verification and unlink operations anchored to the same directory,
+    # even if a path is renamed/replaced while this offline tool is running.
+    if path.parent != SNAPSHOTS or not _plain_directory(path):
+        raise OSError('unsafe snapshot directory')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    base = os.open(SNAPSHOTS, flags)
+    try:
+        directory = os.open(path.name, flags, dir_fd=base)
+        try:
+            yield directory
+        finally:
+            os.close(directory)
+    finally:
+        os.close(base)
+
+
+def _open_regular(directory: int, name: str):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError('snapshot entry is not a private regular file')
+        return os.fdopen(descriptor, 'rb')
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def token_for(paths: list) -> str:
@@ -161,30 +205,62 @@ def build_plan(keep: int, days: int) -> dict:
 # 校验通过才允许删明文；校验不过、缺分片、缺 snapshot.json 一律保留并报错。
 
 
-def snapshot_meta(path: Path) -> dict | None:
+def snapshot_meta(path: Path, *, directory: int | None = None) -> dict | None:
     try:
-        return json.loads((path / 'snapshot.json').read_text())
+        if directory is None:
+            with _snapshot_handle(path) as opened:
+                return snapshot_meta(path, directory=opened)
+        with _open_regular(directory, 'snapshot.json') as handle:
+            result = json.load(handle)
+        return result if isinstance(result, dict) else None
     except (OSError, ValueError):
         return None
 
 
-def cipher_matches(path: Path, meta: dict) -> tuple:
+def cipher_matches(path: Path, meta: dict, *, directory: int | None = None) -> tuple:
     """复算密文分片的 SHA-256，与 snapshot.json 记录比对。"""
+    if directory is None:
+        try:
+            with _snapshot_handle(path) as opened:
+                return cipher_matches(path, meta, directory=opened)
+        except OSError:
+            return False, '快照目录不安全或无法读取'
+    if not isinstance(meta, dict):
+        return False, 'snapshot.json 必须是对象'
     expected = meta.get('cipher_sha256')
     parts = meta.get('parts') or []
-    if not expected or not parts:
+    if (not isinstance(expected, str) or len(expected) != 64
+            or any(c not in '0123456789abcdef' for c in expected)
+            or not isinstance(parts, list) or not parts):
         return False, 'snapshot.json 缺 cipher_sha256 或 parts'
     digest = hashlib.sha256()
+    names = set()
+    total = 0
     for part in parts:
         name = part.get('name') if isinstance(part, dict) else None
-        if not name:
-            return False, 'parts 条目缺 name'
-        target = path / name
-        if not target.is_file():
+        if (not isinstance(name, str) or not name or Path(name).name != name
+                or '\\' in name or '\x00' in name or not name.endswith('.age') or name in names):
+            return False, 'parts 条目路径不安全或重复'
+        names.add(name)
+        part_digest = hashlib.sha256()
+        size = 0
+        try:
+            with _open_regular(directory, name) as handle:
+                for block in iter(lambda: handle.read(1 << 20), b''):
+                    digest.update(block)
+                    part_digest.update(block)
+                    size += len(block)
+        except FileNotFoundError:
             return False, '缺少分片 %s' % name
-        with target.open('rb') as handle:
-            for block in iter(lambda: handle.read(1 << 20), b''):
-                digest.update(block)
+        except OSError:
+            return False, '分片不安全或无法读取 %s' % name
+        if 'bytes' in part and (type(part['bytes']) is not int or part['bytes'] != size):
+            return False, '分片大小不符 %s' % name
+        if 'sha256' in part and part['sha256'] != part_digest.hexdigest():
+            return False, '分片校验不符 %s' % name
+        total += size
+    if 'cipher_bytes' in meta and (type(meta['cipher_bytes']) is not int or meta['cipher_bytes'] != total):
+        return False, '密文总大小不符'
     actual = digest.hexdigest()
     if actual != expected:
         return False, '密文校验不符（记录 %s… 实际 %s…）' % (expected[:12], actual[:12])
@@ -205,7 +281,7 @@ def plaintext_files(path: Path) -> list:
     """快照目录里**确实是明文中间包**的文件（白名单，不是「其他都算」）。"""
     found = []
     for item in path.iterdir():
-        if not item.is_file():
+        if item.is_symlink() or not item.is_file():
             continue
         if item.name in PROTECTED_NAMES or item.name.endswith('.age'):
             continue
@@ -269,37 +345,34 @@ def apply_plaintext_plan(plan: dict, token: str) -> int:
             continue
         path = Path(item['path'])
         directory = path.parent
-        if directory.parent != SNAPSHOTS:
+        if directory.parent != SNAPSHOTS or not _plain_directory(directory):
             print('SKIP %s（不在 %s 下）' % (path, SNAPSHOTS), file=sys.stderr)
             continue
-        # 删除前再算一次密文，防止审计之后分片被改动
-        meta = snapshot_meta(directory)
-        if meta is None:
-            print('SKIP %s（snapshot.json 消失）' % directory, file=sys.stderr)
-            continue
-        ok, detail = cipher_matches(directory, meta)
-        if not ok:
-            print('SKIP %s（%s）' % (directory, detail), file=sys.stderr)
-            continue
-        for name in item['files']:
-            target = Path(name)
-            if not target.is_file() or target.parent != directory:
-                continue
-            if target.name in PROTECTED_NAMES or target.name.endswith('.age'):
-                print('SKIP %s（受保护文件）' % target, file=sys.stderr)
-                continue
-            if target.name not in PLAINTEXT_NAMES:
-                print('SKIP %s（不在明文白名单）' % target, file=sys.stderr)
-                continue
-            try:
-                size = target.stat().st_size
-                target.unlink()
-            except OSError as exc:
-                print('FAIL %s（%s）' % (target, exc), file=sys.stderr)
-                continue
-            removed += 1
-            freed += size
-            print('removed %-10s %s/%s' % (human(size), directory.name, target.name))
+        try:
+            with _snapshot_handle(directory) as opened:
+                # Metadata, ciphertext and deletions share one no-follow directory fd.
+                meta = snapshot_meta(directory, directory=opened)
+                ok, detail = cipher_matches(directory, meta, directory=opened)
+                if not ok:
+                    print('SKIP %s（%s）' % (directory, detail), file=sys.stderr)
+                    continue
+                for name in item['files']:
+                    target = Path(name)
+                    if (target.parent != directory or target.name in PROTECTED_NAMES
+                            or target.name not in PLAINTEXT_NAMES):
+                        continue
+                    try:
+                        with _open_regular(opened, target.name) as handle:
+                            size = os.fstat(handle.fileno()).st_size
+                        os.unlink(target.name, dir_fd=opened)
+                    except OSError as exc:
+                        print('FAIL %s（%s）' % (target, exc), file=sys.stderr)
+                        continue
+                    removed += 1
+                    freed += size
+                    print('removed %-10s %s/%s' % (human(size), directory.name, target.name))
+        except OSError as exc:
+            print('SKIP %s（%s）' % (directory, exc), file=sys.stderr)
     print('\n完成：%d 个文件 / %s' % (removed, human(freed)))
     return 0 if removed else 4
 
@@ -331,6 +404,20 @@ def apply_plan(plan: dict, token: str) -> int:
         print('令牌不匹配：拒绝执行。当前令牌 %s' % plan['confirm_token'], file=sys.stderr)
         return 2
 
+    # An absent marker is permitted for older/offline backup sets. An existing
+    # but unreadable/invalid marker must not silently erase protection of latest.
+    try:
+        marker = LATEST.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        print('latest.json 无法读取，拒绝删除快照。', file=sys.stderr)
+        return 3
+    else:
+        if not stat.S_ISREG(marker.st_mode) or latest_snapshot_name() is None:
+            print('latest.json 无效，拒绝删除快照。', file=sys.stderr)
+            return 3
+
     # 安全闸门：重新算一遍，防止两次之间目录变化
     fresh = build_plan(plan['keep_count'], plan['keep_days'])
     if fresh['confirm_token'] != plan['confirm_token']:
@@ -348,7 +435,7 @@ def apply_plan(plan: dict, token: str) -> int:
         if referenced and path.name == referenced:
             print('SKIP %s（latest.json 引用）' % path, file=sys.stderr)
             continue
-        if not path.is_dir() or path.parent != SNAPSHOTS:
+        if not _plain_directory(path) or path.parent != SNAPSHOTS:
             print('SKIP %s（不在 %s 下）' % (path, SNAPSHOTS), file=sys.stderr)
             continue
         try:
@@ -389,7 +476,7 @@ def main(argv: list) -> int:
             print_plaintext_plan(plain)
         if not (args.apply or args.auto):
             return 0
-        token = args.confirm_destroy or plain['confirm_token']
+        token = args.confirm_destroy or (plain['confirm_token'] if args.auto else '')
         return apply_plaintext_plan(plain, token)
 
     if args.keep < 1:
@@ -406,7 +493,7 @@ def main(argv: list) -> int:
         print_plan(plan)
     if not (args.apply or args.auto):
         return 0
-    token = args.confirm_destroy or plan['confirm_token']
+    token = args.confirm_destroy or (plan['confirm_token'] if args.auto else '')
     return apply_plan(plan, token)
 
 

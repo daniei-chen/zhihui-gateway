@@ -208,7 +208,7 @@ async def _catalog(rt) -> Dict[str, List[str]]:
                 out[platform] = []
                 continue
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=False) as client:
                     resp = await client.get(
                         _base(rt, platform) + "/v1/models",
                         headers={"Authorization": f"Bearer {token}"},
