@@ -450,7 +450,19 @@ async def build_pool_snapshot(rt: Any, platform: str, *, force: bool = False) ->
             raise UpstreamError('当前平台未启用')
         # Account data is required. A healthy /health cannot turn a failed list
         # into an authoritative empty pool. Health failures are visible separately.
-        account_call = adapter.accounts() if platform == 'qoder' else adapter.overview()
+        # Trae2.overview also reads optional local check-in history. Its
+        # credentials/analytics directory may intentionally be inaccessible to
+        # this process; account pages need only the engine's real account list.
+        pool_reader = getattr(adapter, 'diagnostic_pool', None) if platform == 'trae' else None
+        if callable(pool_reader):
+            async def read_pool():
+                try:
+                    return await pool_reader()
+                except ValueError as error:
+                    raise UpstreamError('当前平台账号列表暂不可用') from error
+            account_call = read_pool()
+        else:
+            account_call = adapter.accounts() if platform == 'qoder' else adapter.overview()
         calls = [account_call, _safe(adapter.health(), {}, None, '')]
         if platform == 'trae':
             calls.append(_safe(adapter.settings(), {}, agg.errors, 'trae.settings'))
