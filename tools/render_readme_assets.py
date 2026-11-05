@@ -212,13 +212,13 @@ def release(mobile=False):
         body += text(x + 65, y + 105, second, 24 if mobile else 18, MUTED)
     baseline = 659 if mobile else 292
     body += path(f'M36 {baseline} H{width - 36}', LINE, 1)
-    metrics = [('4,403', 'Manager'), ('1,764', '引擎'), ('15', '发布补充')]
+    metrics = [('完整门禁', '零失败才可切换'), ('来源绑定', '核验源码与制品'), ('保留', '业务账本不回退')]
     for index, (value, label) in enumerate(metrics):
         x = 36 + index * (201 if mobile else 395)
         body += text(x, baseline + 42, value, 30 if mobile else 25, INK, 700)
-        body += text(x + (0 if mobile else 105), baseline + (70 if mobile else 41), label + '通过', 22 if mobile else 16, MUTED)
+        body += text(x + (0 if mobile else 105), baseline + (70 if mobile else 41), label, 22 if mobile else 16, MUTED)
     return canvas(width, height, f'智汇 {VERSION} 发布与验收',
-                  '客户端兼容、流式与容量、准确诊断。数字是本次 Linux 验收记录，不是实时状态或长期保证。', body)
+                  '客户端兼容、流式与容量、准确诊断。具体构建的测试与部署分别留证，不把历史数字当本轮验收。', body)
 
 
 def assets():

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import ipaddress
 import json
 import os
 import socket
@@ -209,6 +210,20 @@ def _install_net_guard(policy: str) -> None:
     def guarded_getaddrinfo(host, port, *args, **kwargs):  # type: ignore[no-untyped-def]
         if host not in (None, "", b""):
             text = host.decode("utf-8", "replace") if isinstance(host, bytes) else str(host)
+            try:
+                ipaddress.ip_address(text)
+                numeric = True
+            except ValueError:
+                numeric = False
+            if numeric and not is_loopback(text) and (port is None or type(port) is int):
+                # Numeric parsing performs no DNS or service-name lookup. Let
+                # the application's SSRF policy reject the literal itself;
+                # connect/connect_ex/create_connection stay strictly blocked.
+                args=list(args)
+                flags=socket.AI_NUMERICHOST|socket.AI_NUMERICSERV
+                if len(args)>3:args[3]|=flags
+                else:kwargs['flags']=kwargs.get('flags',0)|flags
+                return orig_gai(host,port,*args,**kwargs)
             _decide(text, "socket.getaddrinfo")
         return orig_gai(host, port, *args, **kwargs)
 

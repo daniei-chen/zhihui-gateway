@@ -93,6 +93,24 @@ class NetworkEvidenceTest(unittest.TestCase):
             finally:
                 plugin.pytest_unconfigure(None)
 
+    def test_numeric_address_parsing_cannot_make_an_external_connection(self):
+        import socket
+        from zhihui_harness import pytest_plugin as plugin
+        with (mock.patch.dict(plugin._STATE,self._state(),clear=True),mock.patch.object(plugin,'_PATCHES',[]),
+              mock.patch.object(socket,'getaddrinfo',return_value=[]) as parse,
+              mock.patch.object(socket.socket,'connect') as connect):
+            try:
+                plugin._install_net_guard('block')
+                socket.getaddrinfo('169.254.169.254',443)
+                self.assertEqual(parse.call_count,1)
+                self.assertEqual(parse.call_args.kwargs['flags']&(socket.AI_NUMERICHOST|socket.AI_NUMERICSERV),socket.AI_NUMERICHOST|socket.AI_NUMERICSERV)
+                with socket.socket() as client:
+                    with self.assertRaises(plugin.NetworkBlocked):client.connect(('169.254.169.254',443))
+                with self.assertRaises(plugin.NetworkBlocked):socket.create_connection(('203.0.113.4',443))
+                with self.assertRaises(plugin.NetworkBlocked):socket.getaddrinfo('metadata.invalid',443)
+                connect.assert_not_called()
+            finally:plugin.pytest_unconfigure(None)
+
     def test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted(self):
         from zhihui_harness import pytest_plugin as plugin
         state = self._state()
