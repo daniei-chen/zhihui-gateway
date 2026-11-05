@@ -1,0 +1,74 @@
+{
+  "scope": "Synthetic local proofs; no provider/network/production DB",
+  "baseline_commit": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+  "interpretation": "dailyplan/keyimport/notify are pre-fix counterexamples; PG uses current source; run the named regression tests through tests/zhihui_harness/run_tests.py to verify fixed behavior, not through this script",
+  "source_versions_and_sha256": {
+    "manager/server/ledger.py": {
+      "version": "current_worktree",
+      "sha256": "0b880243f4cf8f1df32d2eb031cb7015ce49627512a4966572ecb1ac6fb6f22e"
+    },
+    "manager/server/notify.py": {
+      "version": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+      "sha256": "34374bf90a39708a00056c2ed790ea6db1449174c9edfac4d3fea866e364bb00"
+    },
+    "manager/server/services/dailyplan.py": {
+      "version": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+      "sha256": "30ada917ca159e82941a627eac524e76eaf1960bc56f44f4dec5981b2085fedb"
+    },
+    "manager/server/services/keyimport.py": {
+      "version": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+      "sha256": "4cecc8411cec2509d62d273aba4627fb1638dbbfa7aef65de6ba05442882d98a"
+    },
+    "manager/server/services/pgsync.py": {
+      "version": "current_worktree",
+      "sha256": "33c37cfa03e65b559db08a1bf3872d0ec3a24f239f8df72e9f88d699ca682be7"
+    }
+  },
+  "fixed_regression_tests": {
+    "manager/server/tests/test_audit_dailyplan_lifecycle.py": {
+      "sha256": "9729f32722fc5929ccc84a28f3933e28a97af02abae3ae1b848873cf15ae95c4",
+      "executed_by_this_script": false
+    },
+    "manager/server/tests/test_audit_local_import_files.py": {
+      "sha256": "d8c1be8a3bf44757882ad06b977f744667b0eb995a1895e69261054a0554d73b",
+      "executed_by_this_script": false
+    },
+    "manager/server/tests/test_audit_notify_config.py": {
+      "sha256": "fc64ad99ef6d51405bb55fb66de655512c5c438a656afa32a48b2d0064e593c4",
+      "executed_by_this_script": false
+    }
+  },
+  "dailyplan_lost_lease": {
+    "tested_source": "pre_fix_git_object",
+    "events": [
+      "lease_renew_returned_false",
+      "upstream_side_effect_after_lease_loss",
+      "lease_released"
+    ],
+    "work_continues_after_loss": true
+  },
+  "dailyplan_background_lease": {
+    "tested_source": "pre_fix_git_object",
+    "events": [
+      "background_work_started",
+      "lease_released",
+      "background_work_completed"
+    ],
+    "lease_released_while_work_running": true
+  },
+  "pgsync_immutable_restore": {
+    "tested_source": "current_worktree",
+    "error": "IntegrityError: admin events are immutable",
+    "replace_called": false,
+    "original_unchanged": true,
+    "transport": "temporary SQLite adapter; no PostgreSQL/network call",
+    "actual_immutable_trigger_and_import_code": true
+  },
+  "keyimport_and_notify": {
+    "tested_source": "pre_fix_git_object",
+    "posix_mode_semantics": true,
+    "keyimport_original_mode": "0600",
+    "keyimport_result_mode": "0o644",
+    "notify_list_config_error": "AttributeError: 'list' object has no attribute 'get'"
+  }
+}

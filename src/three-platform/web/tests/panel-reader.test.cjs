@@ -24,8 +24,10 @@ test('settings and task pages show actual read data while writes remain disabled
   const tokens = read('components/common/settings/TokensPanel.tsx');
   assert.doesNotMatch(tokens, /if \(!isAdmin\)|if \(isAdmin\) void load/);
   assert.match(tokens, /isAdmin && <TableCell/);
-  for (const file of ['components/common/settings/ProxyPanel.tsx',
-    'components/common/accounts/RefreshPlanCard.tsx', 'components/common/tasks/TaskRunnerPanel.tsx']) {
+  const proxy = read('components/common/settings/ProxyPanel.tsx');
+  assert.match(proxy, /const writable = isAdmin &&/);
+  assert.match(proxy, /<fieldset disabled=\{!writable\}/);
+  for (const file of ['components/common/accounts/RefreshPlanCard.tsx', 'components/common/tasks/TaskRunnerPanel.tsx']) {
     assert.match(read(file), /<fieldset disabled=\{!isAdmin\}/, file);
   }
   const tasks = read('app/(main)/tasks/page.tsx');

@@ -11,7 +11,7 @@ import os
 import time
 from datetime import date, timedelta
 from decimal import Decimal
-from . import db, observability, budgetowner, ledger, config, outputlimits
+from . import db, observability, budgetowner, ledger, config, outputlimits, metering
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS budget_reservations (
@@ -269,7 +269,12 @@ def settle(usage, pt, ct, credit):
     if not _owned(row, state):
         raise BudgetRejected('预算预留已被恢复进程隔离', 'budget_fenced')
     fresh = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (state.key_id,))
-    known = state.terminal_state == 'completed' and isinstance(usage,dict) and all(k in usage for k in ('prompt_tokens','completion_tokens'))
+    evidence = metering.parse_usage(usage)
+    # Field presence is not a usage receipt. Invalid values previously became
+    # storage zeroes and released the reservation as "settled", despite unknown
+    # supplier spending. Keep malformed, absent or inconsistent evidence held.
+    known = (state.terminal_state == 'completed' and evidence.complete
+             and not evidence.malformed and evidence.storage_tokens() == (pt, ct))
     if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
     next_state = 'settled' if known else 'released' if row['state']=='reserved' else 'unknown'
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',

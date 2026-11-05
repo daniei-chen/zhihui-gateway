@@ -1,6 +1,6 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {CalendarClock, Loader2, Play, Save, TriangleAlert} from 'lucide-react';
 import {accountApi, errText} from '@/lib/api';
 import type {DailyPlan, DailyTask, DailyTaskConfig, RefreshPlan} from '@/lib/types';
@@ -8,6 +8,8 @@ import {fmtDateTime} from '@/lib/format';
 import {notify} from '@/lib/toast';
 import {useT} from '@/lib/i18n/provider';
 import {useAuth} from '@/lib/auth-context';
+import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
+import {LoadError} from '@/components/common/states/LoadError';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
@@ -35,13 +37,14 @@ const DAILY_TASKS: {key: DailyTask; labelKey: string; noteKey: string; warn?: bo
   {key: 'full', labelKey: 'accounts.dailyFull', noteKey: 'accounts.dailyFullWarn', warn: true},
 ];
 
-function HourSelect({value, onChange, ariaLabel}: {
+function HourSelect({value, onChange, ariaLabel, disabled}: {
   value: number;
   onChange: (h: number) => void;
   ariaLabel: string;
+  disabled?: boolean;
 }) {
   return (
-    <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
+    <Select value={String(value)} onValueChange={(v) => onChange(Number(v))} disabled={disabled}>
       <SelectTrigger className="h-8 w-24 bg-background" aria-label={ariaLabel}>
         <SelectValue />
       </SelectTrigger>
@@ -69,9 +72,8 @@ function HourSelect({value, onChange, ariaLabel}: {
  */
 export function RefreshPlanCard({onRan}: {onRan?: () => void}) {
   const t = useT();
-  const {isAdmin} = useAuth();
   return (
-    <fieldset disabled={!isAdmin} className="min-w-0 space-y-3 rounded-[20px] bg-muted px-3.5 py-3">
+    <div className="min-w-0 space-y-3 rounded-[20px] bg-muted px-3.5 py-3">
       <div className="flex items-center gap-2">
         <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="text-sm font-medium">{t('tasks.planCardTitle')}</div>
@@ -80,20 +82,24 @@ export function RefreshPlanCard({onRan}: {onRan?: () => void}) {
       <div className="border-t border-border/60 pt-3">
         <DailyTasksSection onRan={onRan} />
       </div>
-    </fieldset>
+    </div>
   );
 }
 
 /** 令牌刷新计划：每 N 天自动全量续期一次所有账号。 */
 function TokenPlanSection({onRan}: {onRan?: () => void}) {
   const t = useT();
+  const {isAdmin} = useAuth();
   const [plan, setPlan] = useState<RefreshPlan | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [days, setDays] = useState(5);
   const [hour, setHour] = useState(3);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const lifecycle = useRef({active: false, writing: false});
+  const readGeneration = useRef(0);
 
   const apply = useCallback((p: RefreshPlan) => {
     setPlan(p);
@@ -103,18 +109,30 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
   }, []);
 
   const load = useCallback(async () => {
+    const scope = lifecycle.current;
+    if (!scope.active) return;
+    const generation = ++readGeneration.current;
+    const current = () => scope.active && generation === readGeneration.current;
     setLoading(true);
     try {
-      apply(await accountApi.refreshPlan());
+      const next = await accountApi.refreshPlan();
+      if (!current()) return;
+      apply(next);
+      setLoadError(false);
     } catch (e) {
+      if (!current()) return;
+      setLoadError(true);
       notify.err(errText(e));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [apply]);
 
   useEffect(() => {
-    load();
+    const scope = {active: true, writing: false};
+    lifecycle.current = scope;
+    void load();
+    return () => { scope.active = false; };
   }, [load]);
 
   // 有未保存改动才允许点保存：避免「点了没反应」，也让「已生效」可判。
@@ -123,21 +141,35 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
     (plan.enabled !== enabled || plan.interval_days !== days || plan.hour !== hour);
 
   const save = useCallback(async () => {
+    const scope = lifecycle.current;
+    if (!isAdmin || !plan || loading || loadError || !scope.active || scope.writing) return;
+    scope.writing = true;
+    const current = () => scope.active;
     setSaving(true);
     try {
-      apply(await accountApi.saveRefreshPlan(enabled, days, hour));
+      const next = await accountApi.saveRefreshPlan(enabled, days, hour);
+      if (!current()) return;
+      apply(next);
       notify.ok(t('tasks.planSaved'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      if (current()) {
+        scope.writing = false;
+        setSaving(false);
+      }
     }
-  }, [apply, enabled, days, hour, t]);
+  }, [apply, enabled, days, hour, isAdmin, plan, loading, loadError, t]);
 
   const runNow = useCallback(async () => {
+    const scope = lifecycle.current;
+    if (!isAdmin || !plan || loading || loadError || !scope.active || scope.writing) return;
+    scope.writing = true;
+    const current = () => scope.active;
     setRunning(true);
     try {
       const r = await accountApi.runRefreshPlan();
+      if (!current()) return;
       const detail = t('tasks.planRunDetail', {ok: r.renewed, total: r.checked});
       if (r.failed === 0) {
         notify.ok(t('tasks.planRunDone'), detail);
@@ -145,15 +177,18 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
         notify.warn(t('tasks.planRunPartial', {failed: r.failed}), detail);
       }
       await load();
-      onRan?.();
+      if (current()) onRan?.();
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setRunning(false);
+      if (current()) {
+        scope.writing = false;
+        setRunning(false);
+      }
     }
-  }, [load, onRan, t]);
+  }, [isAdmin, plan, loading, loadError, load, onRan, t]);
 
-  if (loading) {
+  if (loading && !plan) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -162,11 +197,19 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
     );
   }
 
+  if (!plan) {
+    return <LoadError onRetry={() => void load()} message={t('tasks.planTokenSection') + ': ' + t('state.loadFailed')} />;
+  }
+
+  const disabled = !isAdmin || loading || loadError || saving || running;
+
   return (
-    <div>
+    <div aria-busy={loading}>
+      {loadError && <LoadError onRetry={loading ? undefined : () => void load()} />}
+      <fieldset disabled={!isAdmin} className="min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Switch checked={enabled} onCheckedChange={setEnabled}
+          <Switch checked={enabled} onCheckedChange={setEnabled} disabled={disabled}
                   aria-label={t('tasks.planTokenSection')} />
           <div className="min-w-0">
             <div className="text-xs font-medium">{t('tasks.planTokenSection')}</div>
@@ -179,7 +222,7 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
         <div className="space-y-1">
           <Label className="text-[11px] text-muted-foreground">{t('tasks.planInterval')}</Label>
           <div className="flex items-center gap-1.5">
-            <Input type="number" min={1} max={365} value={days}
+            <Input type="number" min={1} max={365} value={days} disabled={disabled}
                    onChange={(e) => setDays(Number(e.target.value))}
                    className="h-8 w-20 bg-background" aria-label={t('tasks.planInterval')} />
             <span className="text-xs text-muted-foreground">{t('tasks.planDays')}</span>
@@ -187,16 +230,16 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
         </div>
         <div className="space-y-1">
           <Label className="text-[11px] text-muted-foreground">{t('tasks.planHour')}</Label>
-          <HourSelect value={hour} onChange={setHour} ariaLabel={t('tasks.planHour')} />
+          <HourSelect value={hour} onChange={setHour} ariaLabel={t('tasks.planHour')} disabled={disabled} />
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" className="rounded-full"
-                  disabled={!dirty || saving} onClick={save}>
+                  disabled={disabled || !dirty} onClick={save}>
             {saving ? <Loader2 className="animate-spin" /> : <Save />}
             {t('common.save')}
           </Button>
           <Button size="sm" variant="outline" className="rounded-full"
-                  disabled={running} onClick={runNow} title={t('tasks.planRunNowTitle')}>
+                  disabled={disabled} onClick={runNow} title={t('tasks.planRunNowTitle')}>
             {running ? <Loader2 className="animate-spin" /> : <Play />}
             {t('tasks.planRunNow')}
           </Button>
@@ -213,6 +256,7 @@ function TokenPlanSection({onRan}: {onRan?: () => void}) {
           {plan?.next_run ? fmtDateTime(plan.next_run) : t('tasks.planDisabled')}
         </span>
       </div>
+      </fieldset>
     </div>
   );
 }
@@ -227,27 +271,42 @@ function draftOf(p: DailyPlan): DailyPlan {
 /** 每日任务：签到 / 领取补偿 / 领奖 / 做任务，各自一个开关 + 整点。 */
 function DailyTasksSection({onRan}: {onRan?: () => void}) {
   const t = useT();
+  const {isAdmin} = useAuth();
   const [plan, setPlan] = useState<DailyPlan | null>(null);
   const [draft, setDraft] = useState<DailyPlan | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState<DailyTask | null>(null);
+  const lifecycle = useRef({active: false, writing: false});
+  const readGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const scope = lifecycle.current;
+    if (!scope.active) return;
+    const generation = ++readGeneration.current;
+    const current = () => scope.active && generation === readGeneration.current;
     setLoading(true);
     try {
       const p = await accountApi.dailyPlan();
+      if (!current()) return;
       setPlan(p);
       setDraft(draftOf(p));
+      setLoadError(false);
     } catch (e) {
+      if (!current()) return;
+      setLoadError(true);
       notify.err(errText(e));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
+    const scope = {active: true, writing: false};
+    lifecycle.current = scope;
+    void load();
+    return () => { scope.active = false; };
   }, [load]);
 
   const dirty =
@@ -260,39 +319,54 @@ function DailyTasksSection({onRan}: {onRan?: () => void}) {
   }, []);
 
   const save = useCallback(async () => {
-    if (!draft) return;
+    const scope = lifecycle.current;
+    if (!isAdmin || !plan || !draft || loading || loadError || !scope.active || scope.writing) return;
+    scope.writing = true;
+    const current = () => scope.active;
     setSaving(true);
     try {
       const p = await accountApi.saveDailyPlan(draft);
+      if (!current()) return;
       setPlan(p);
       setDraft(draftOf(p));
       notify.ok(t('tasks.dailySaved'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      if (current()) {
+        scope.writing = false;
+        setSaving(false);
+      }
     }
-  }, [draft, t]);
+  }, [isAdmin, plan, draft, loading, loadError, t]);
 
   const runNow = useCallback(async (task: DailyTask) => {
+    const scope = lifecycle.current;
+    if (!isAdmin || !plan || !draft || loading || loadError || !scope.active || scope.writing) return;
+    scope.writing = true;
+    const current = () => scope.active;
     setRunning(task);
     try {
       const r = await accountApi.runDailyTask(task);
+      if (!current()) return;
       if (r.ok) {
         notify.ok(t('tasks.dailyRunDone'), r.message);
       } else {
         notify.warn(t('tasks.dailyRunFailed'), r.message);
       }
       await load();
-      onRan?.();
+      if (current()) onRan?.();
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setRunning(null);
+      if (current()) {
+        scope.writing = false;
+        setRunning(null);
+      }
     }
-  }, [load, onRan, t]);
+  }, [isAdmin, plan, draft, loading, loadError, load, onRan, t]);
 
-  if (loading || !draft) {
+  if (loading && !draft) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -301,11 +375,19 @@ function DailyTasksSection({onRan}: {onRan?: () => void}) {
     );
   }
 
+  if (!plan || !draft) {
+    return <LoadError onRetry={() => void load()} message={t('tasks.dailyTitle') + ': ' + t('state.loadFailed')} />;
+  }
+
+  const disabled = !isAdmin || loading || loadError || saving || running !== null;
+
   // 「今天是否已经跑过」——last_run 是 `YYYY-MM-DD-HH`，比对日期部分即可
   const today = new Date().toLocaleDateString('sv-SE'); // sv-SE = YYYY-MM-DD
 
   return (
-    <div>
+    <div aria-busy={loading}>
+      {loadError && <LoadError onRetry={loading ? undefined : () => void load()} />}
+      <fieldset disabled={!isAdmin} className="min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs font-medium">{t('tasks.dailyTitle')}</div>
         <div className="text-[11px] text-muted-foreground">{t('tasks.dailyHint')}</div>
@@ -317,7 +399,7 @@ function DailyTasksSection({onRan}: {onRan?: () => void}) {
           const ranToday = (plan?.[key].last_run || '').startsWith(today);
           return (
             <div key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <Switch checked={cfg.enabled}
+              <Switch checked={cfg.enabled} disabled={disabled}
                       onCheckedChange={(v) => patch(key, {enabled: v})}
                       aria-label={t(labelKey)} />
               <div className="min-w-[9rem] flex-1">
@@ -339,13 +421,29 @@ function DailyTasksSection({onRan}: {onRan?: () => void}) {
                   {t(noteKey)}
                 </div>
               </div>
-              <HourSelect value={cfg.hour} onChange={(h) => patch(key, {hour: h})}
+              <HourSelect value={cfg.hour} onChange={(h) => patch(key, {hour: h})} disabled={disabled}
                           ariaLabel={t(labelKey)} />
-              <Button size="sm" variant="outline" className="rounded-full"
-                      disabled={running !== null} onClick={() => runNow(key)}>
-                {running === key ? <Loader2 className="animate-spin" /> : <Play />}
-                {t('tasks.planRunNow')}
-              </Button>
+              {key === 'full' ? (
+                <ConfirmDialog
+                  title={t('tasks.runFullConfirmTitle')}
+                  description={t('tasks.runFullConfirmBody').replace(/\*\*/g, '')}
+                  confirmText={t('tasks.runFullConfirmOk')}
+                  confirmDisabled={disabled}
+                  onConfirm={() => runNow(key)}
+                  trigger={
+                    <Button size="sm" variant="outline" className="rounded-full" disabled={disabled}>
+                      {running === key ? <Loader2 className="animate-spin" /> : <Play />}
+                      {t('tasks.planRunNow')}
+                    </Button>
+                  }
+                />
+              ) : (
+                <Button size="sm" variant="outline" className="rounded-full"
+                        disabled={disabled} onClick={() => runNow(key)}>
+                  {running === key ? <Loader2 className="animate-spin" /> : <Play />}
+                  {t('tasks.planRunNow')}
+                </Button>
+              )}
             </div>
           );
         })}
@@ -353,11 +451,12 @@ function DailyTasksSection({onRan}: {onRan?: () => void}) {
 
       <div className="mt-2.5">
         <Button size="sm" variant="outline" className="rounded-full"
-                disabled={!dirty || saving} onClick={save}>
+                disabled={disabled || !dirty} onClick={save}>
           {saving ? <Loader2 className="animate-spin" /> : <Save />}
           {t('common.save')}
         </Button>
       </div>
+      </fieldset>
     </div>
   );
 }

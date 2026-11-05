@@ -1,0 +1,18 @@
+{
+  "review_levels": {
+    "full": 77,
+    "partial": 13,
+    "automated": 278
+  },
+  "total_files": 368,
+  "total_lines": 91003,
+  "check_types": {
+    "risky-operation text scan": 368,
+    "Python compile without import/execution": 207,
+    "bash -n; no script execution": 12,
+    "text/line-ending scan only; no native Windows parser/runtime": 23,
+    "node --check; no script execution": 36
+  },
+  "parse_failures": [],
+  "missing_expected": []
+}

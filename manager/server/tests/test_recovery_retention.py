@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -175,6 +176,23 @@ class ArgumentTest(RetentionBase):
         self.assertEqual(retention.main(['--keep', '1', '--days', '0']), 0)
         self.assertEqual(sorted(p.name for p in self.snapshots.iterdir()), before)
 
+    def test_apply_without_confirm_token_does_not_self_approve(self):
+        for age in (40, 30, 20):
+            self.make(self.name(age))
+        before = sorted(p.name for p in self.snapshots.iterdir())
+        self.assertEqual(retention.main(['--keep', '1', '--days', '0', '--apply']), 2)
+        self.assertEqual(sorted(p.name for p in self.snapshots.iterdir()), before)
+
+    def test_invalid_existing_latest_marker_blocks_deletion(self):
+        for age in (40, 30, 20):
+            self.make(self.name(age))
+        before = sorted(p.name for p in self.snapshots.iterdir())
+        for marker in ('not json', '[]', '{}', '{"snapshot": null}'):
+            self.latest.write_text(marker)
+            plan = self.plan(keep=1, days=0)
+            self.assertEqual(retention.apply_plan(plan, plan['confirm_token']), 3)
+            self.assertEqual(sorted(p.name for p in self.snapshots.iterdir()), before)
+
 
 class PlaintextPurgeTest(RetentionBase):
     """加密后残留的明文 tar 必须能安全清掉，且只有在密文复算通过时才允许删。"""
@@ -270,6 +288,84 @@ class PlaintextPurgeTest(RetentionBase):
         (snap / 'snapshot.tar.gz').unlink()
         plan = retention.build_plaintext_plan()
         self.assertEqual(plan['prune_count'], 0)
+
+    def test_plaintext_apply_without_token_is_read_only(self):
+        snap = self._snapshot('20261028-010111', b'q' * 64)
+        self.assertEqual(retention.main(['--purge-plaintext', '--apply']), 2)
+        self.assertTrue((snap / 'snapshot.tar.gz').is_file())
+
+    def test_cipher_part_must_be_unique_and_local_ciphertext(self):
+        snap = self._snapshot('20261028-010112', b'q' * 64)
+        outside = self.root / 'outside.age'
+        outside.write_bytes(b'q' * 64)
+        for name in ('../../outside.age', str(outside), 'snapshot.tar.gz', 'part\\outside.age'):
+            meta = {'cipher_sha256': hashlib.sha256(outside.read_bytes()).hexdigest(),
+                    'parts': [{'name': name}]}
+            ok, _ = retention.cipher_matches(snap, meta)
+            self.assertFalse(ok, name)
+        part = {'name': 'snapshot.part-000.age'}
+        ok, _ = retention.cipher_matches(snap, {'cipher_sha256': 'a' * 64, 'parts': [part, part]})
+        self.assertFalse(ok)
+
+    def test_linked_cipher_parts_do_not_authorize_plaintext_deletion(self):
+        snap = self._snapshot('20261028-010113', b'q' * 64)
+        part = snap / 'snapshot.part-000.age'
+        outside = self.root / 'outside.age'
+        outside.write_bytes(part.read_bytes())
+        for kind in ('symlink', 'hardlink'):
+            part.unlink()
+            if kind == 'symlink':
+                part.symlink_to(outside)
+            else:
+                os.link(outside, part)
+            plan = retention.build_plaintext_plan()
+            self.assertEqual(plan['prune_count'], 0, kind)
+            self.assertTrue((snap / 'snapshot.tar.gz').is_file())
+
+    def test_non_object_metadata_is_conservatively_kept(self):
+        snap = self._snapshot('20261028-010114', b'q' * 64)
+        for contents in ('[]', 'null', '123'):
+            (snap / 'snapshot.json').write_text(contents)
+            self.assertIsNone(retention.snapshot_meta(snap))
+            self.assertEqual(retention.build_plaintext_plan()['prune_count'], 0)
+
+    def test_snapshot_directory_symlink_is_never_followed(self):
+        snap = self._snapshot('20261028-010115', b'q' * 64)
+        plan = retention.build_plaintext_plan()
+        outside = self.root / 'outside-snapshot'
+        snap.rename(outside)
+        snap.symlink_to(outside, target_is_directory=True)
+        self.assertEqual(retention.snapshot_dirs(), [])
+        self.assertEqual(retention.apply_plaintext_plan(plan, plan['confirm_token']), 4)
+        self.assertTrue((outside / 'snapshot.tar.gz').is_file())
+
+    def test_directory_replacement_after_cipher_check_cannot_redirect_unlink(self):
+        snap = self._snapshot('20261028-010116', b'q' * 64)
+        plan = retention.build_plaintext_plan()
+        outside = self.root / 'outside-snapshot'
+        outside.mkdir()
+        protected = outside / 'snapshot.tar.gz'
+        protected.write_bytes(b'outside must survive')
+        moved = self.root / 'original-snapshot'
+        original = retention.cipher_matches
+
+        def replace_directory(path, meta, **kwargs):
+            result = original(path, meta, **kwargs)
+            snap.rename(moved)
+            snap.symlink_to(outside, target_is_directory=True)
+            return result
+
+        with mock.patch.object(retention, 'cipher_matches', side_effect=replace_directory):
+            self.assertEqual(retention.apply_plaintext_plan(plan, plan['confirm_token']), 0)
+        self.assertEqual(protected.read_bytes(), b'outside must survive')
+        self.assertFalse((moved / 'snapshot.tar.gz').exists())
+
+    def test_wrong_recorded_part_size_or_digest_is_rejected(self):
+        snap = self._snapshot('20261028-010117', b'q' * 64)
+        for field, value in (('bytes', 0), ('bytes', True), ('sha256', '0' * 64)):
+            meta = retention.snapshot_meta(snap)
+            meta['parts'][0][field] = value
+            self.assertFalse(retention.cipher_matches(snap, meta)[0])
 
 
 class AutoModeTest(RetentionBase):

@@ -27,7 +27,7 @@ test('workbench uses near-white surfaces without fading readable text or semanti
   assert.match(css, /--accent: #f4f8fd/);
   assert.match(css, /--zh-action: #2469d6/);
   assert.match(css, /--muted-foreground: #687285/);
-  assert.match(css, /html:not\(\.dark\):has\(#main-content\) body/);
+  assert.match(css, /html:not\(\.dark\):is\(:has\(#main-content\), :has\(\.user-portal\)\) body/);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(css, /--destructive:/);
   assert.match(css, /outline: 2px solid var\(--zh-blue\)/);

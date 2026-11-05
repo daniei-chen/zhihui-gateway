@@ -1,0 +1,5033 @@
+{
+  "schema": "zhihui-control-plane-inventory/2",
+  "generated_at": "2026-11-05T20:49:47.313023+09:00",
+  "source": "manager/server/main.py::app",
+  "reference_only_paths": [
+    "src/three-platform/server"
+  ],
+  "interpretation": "Mechanisms describe source-visible gates, not proof of enforcement. public=null means review required; missing Depends never proves anonymous access. /__qtg routes require the Manager rewrite middleware; public API aliases are separate.",
+  "totals": {
+    "routes": 291,
+    "public": 10,
+    "admin_required": 101,
+    "authenticated": 281,
+    "review_required": 0
+  },
+  "by_prefix": {
+    "/api": 224,
+    "/__qtg": 55,
+    "/v1": 7,
+    "/healthz": 1,
+    "/metrics": 1,
+    "/readyz": 1,
+    "/responses": 1,
+    "/v2": 1
+  },
+  "routes": [
+    {
+      "path": "/__qtg/api/accounts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_accounts",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/checkin-all",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_checkin_all",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/credits-cached",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.cached_pool_credits",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/daily-plan",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_daily_plan",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/daily-plan",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_daily_plan_save",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/daily-plan/run",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_daily_plan_run",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/export",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_accounts_export",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/refresh-credits",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_refresh_credits",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/refresh-plan",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_refresh_plan2",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/refresh-plan",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_refresh_plan_save",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/refresh-plan/run",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_refresh_plan_run",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/refresh-tokens",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_refresh_tokens",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/upload",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_accounts_upload",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_delete",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_detail",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_checkin",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/clear-cooling",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_clear_cooling",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/credits",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_credits_get",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/credits",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_credits",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/disabled",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_disabled_post",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/disabled",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_disabled",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/force-cooling",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_force_cooling",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/move",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_move",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/note",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_note",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/proxy",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_set_proxy",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/refresh",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_account_refresh",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/test",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_test",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/accounts/{file:path}/weight",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.qtgcore.routers.compat_accounts_ext.compat_account_set_weight",
+      "module": "server.qtgcore.routers.compat_accounts_ext",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/checkin-logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_checkin_logs",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/checkin-logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_checkin_logs_clear",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_logs",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_logs_clear",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/model-catalog",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_model_catalog",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_models",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/platforms",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.platform_capabilities",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/playground/chat",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_playground_chat",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/playground/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_playground_models",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/by-key",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_by_key",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/by-model",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_by_model",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/credits",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_credits",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/credits-flow",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_credits_flow",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/daily",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_daily",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/hourly",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_hourly",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/rebuild",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_stats_rebuild_legacy",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/rebuild-usage",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_stats_rebuild_usage",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/repair",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_stats_repair_legacy",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/repair-usage",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_stats_repair_usage",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/summary",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_stats.stats_summary",
+      "module": "server.qtgcore.routers.compat_stats",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/stats/upstream",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat.compat_stats_upstream",
+      "module": "server.qtgcore.routers.compat",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_status",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/upstreams",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.qtgcore.routers.compat_fixes.fixed_upstreams",
+      "module": "server.qtgcore.routers.compat_fixes",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/upstreams",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_settings.compat_upstreams_create",
+      "module": "server.qtgcore.routers.compat_settings",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/upstreams/{uid}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.qtgcore.routers.compat_settings.compat_upstreams_delete",
+      "module": "server.qtgcore.routers.compat_settings",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/upstreams/{uid}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.qtgcore.routers.compat_settings.compat_upstreams_update",
+      "module": "server.qtgcore.routers.compat_settings",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/__qtg/api/upstreams/{uid}/probe",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.qtgcore.routers.compat_settings.compat_upstreams_probe",
+      "module": "server.qtgcore.routers.compat_settings",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_rewrite_middleware",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.list_accounts",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/checkin-all",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.checkin_all",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/claim-compensation",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.claim_compensation_all",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/credits-cached",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.cached_group_credits",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/credits-snapshot",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.credits_snapshot",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/daily-plan",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.get_daily_plan",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/daily-plan",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.save_daily_plan",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/daily-plan/run",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.run_daily_task_now",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/export",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.export_accounts",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_recent_session_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/refresh-credits",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.refresh_all_credits",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/refresh-plan",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.get_refresh_plan",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/refresh-plan",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.save_refresh_plan",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/refresh-plan/run",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.run_refresh_plan_now",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/refresh-tokens",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.refresh_all_tokens",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/upload",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.upload_accounts",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.accounts.account_delete",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_checkin",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/clear-cooling",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_clear_cooling",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/credits",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.account_credits",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/disabled",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_set_disabled",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/force-cooling",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_force_cooling",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/move",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_move",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/note",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.account_set_note",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/proxy",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.account_set_proxy",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/refresh",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_refresh",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/test",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.account_test",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/accounts/{filename}/weight",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.account_set_weight",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/audit-logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.audit_logs",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin_or_read_scope"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": true,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/auth/cancel",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.auth_cancel",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_account_adder"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/auth/finish",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.auth_finish",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_account_adder"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/auth/poll",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.auth_poll",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_account_adder"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/auth/review",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.auth_review",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_account_adder"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/auth/start",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.auth_start",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_account_adder"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/authz/probe",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.auth.identity_probe",
+      "module": "server.routers.auth",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/budgets/review",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.budgets.review",
+      "module": "server.routers.budgets",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/budgets/review/evidence",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.budgets.review_evidence",
+      "module": "server.routers.budgets",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/budgets/unresolved",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.budgets.unresolved",
+      "module": "server.routers.budgets",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/budgets/{request_id}/resolve",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.budgets.resolve",
+      "module": "server.routers.budgets",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_recent_session_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/checkin-logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.checkin_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/checkin-logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.clear_checkin_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/claim/{code}",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.redpackets.claim_info",
+      "module": "server.routers.redpackets",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_claim_capability",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/claim/{code}",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.redpackets.claim_draw",
+      "module": "server.routers.redpackets",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_claim_capability",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/engine/overview",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.engine.overview",
+      "module": "server.routers.engine",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/healthz",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.auth.healthz",
+      "module": "server.routers.auth",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/keys",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.keys.list_keys",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.keys.create_key",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_keys_writer"
+      ],
+      "admin_required": false,
+      "write_scope_required": true,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/check-models",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.keys.check_models",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/export",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.keys.export_key",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/import-local",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.keys.import_local",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/import-local/detect",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.keys.import_local_detect",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/import-local/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.keys.import_local_status",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/{key_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.keys.delete_key",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_keys_writer"
+      ],
+      "admin_required": false,
+      "write_scope_required": true,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/{key_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.routers.keys.update_key",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_keys_writer"
+      ],
+      "admin_required": false,
+      "write_scope_required": true,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/keys/{key_id}/reset-usage",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.keys.reset_usage",
+      "module": "server.routers.keys",
+      "guards": [
+        "current_user",
+        "require_keys_writer"
+      ],
+      "admin_required": false,
+      "write_scope_required": true,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/login",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.auth.login",
+      "module": "server.routers.auth",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/logout",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.auth.logout",
+      "module": "server.routers.auth",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.list_logs",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/attempts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.attempts",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/attempts/billing",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.attempts_billing",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/attempts/explain",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.attempts_explain",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.logs.clear_logs",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/outcomes",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.list_outcomes",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/provider-attempts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.provider_attempts",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/provider-evidence-health",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.provider_evidence_health",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/logs/retention/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.logs.retention_status",
+      "module": "server.routers.logs",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/me",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.auth.me",
+      "module": "server.routers.auth",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/model-catalog",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.models.model_catalog",
+      "module": "server.routers.models",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.models",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/operations/health",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.auth.operations_health",
+      "module": "server.routers.auth",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/playground/chat",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.playground.chat",
+      "module": "server.routers.playground",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/playground/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.playground.playground_models",
+      "module": "server.routers.playground",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/accounts/{account_id}/checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.admin_checkin",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/accounts/{account_id}/reconcile-checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.admin_reconcile_checkin",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/automatic-checkin",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.portal.automatic_checkin",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/checkin-all",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.admin_checkin_all",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/users",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.users",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/users",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.create_user",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/users/{owner_id}/bonus",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.give_bonus",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_bonus_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/users/{user_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.routers.portal.update_user",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-debts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.wallet_debts",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-debts/{owner_id}/adjust",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.wallet_adjust",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-history",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.wallet_history",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-pending",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.wallet_pending",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-pending/{request_id}/resolve",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.wallet_resolve",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal-admin/wallet-platform-costs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.wallet_platform_costs",
+      "module": "server.routers.portal",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/accounts/{account_id}/checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.checkin",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/accounts/{account_id}/join-public-pool",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.join_public_pool",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/accounts/{account_id}/reconcile-checkin",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.reconcile_checkin",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/accounts/{account_id}/verify-initial",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.verify_initial",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/auth/cancel",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.auth_cancel",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/auth/poll",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.auth_poll",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/auth/start",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.auth_start",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/checkin-all",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.checkin_all",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/keys",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.keys",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/keys",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.create_key",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/keys/{key_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.portal.revoke_key",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/login",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.login",
+      "module": "server.routers.portal",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/portal/logout",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.portal.logout",
+      "module": "server.routers.portal",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/portal/me",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.me",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/overview",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.overview",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/portal/requests",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.portal.requests",
+      "module": "server.routers.portal",
+      "guards": [
+        "current"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "portal_session_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxies",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.available_proxies",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.proxies.list_proxy_routes",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.create_proxy_route",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/bindings",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.proxies.list_bindings",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/import",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.import_proxy_routes",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/probe",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.probe_proxy_route",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/{name}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.proxies.delete_proxy_route",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/{name}",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.proxies.update_proxy_route",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/{name}/accounts",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.bind_route_accounts",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/proxy-routes/{name}/auto-assign",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.auto_assign_route_accounts",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/read-api/health",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.read_api.read_api_health",
+      "module": "server.routers.read_api",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/read-api/usage-matrix",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.read_api.usage_matrix",
+      "module": "server.routers.read_api",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/read-api/usage-totals",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.read_api.usage_totals",
+      "module": "server.routers.read_api",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/read-api/version",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.read_api.read_api_version",
+      "module": "server.routers.read_api",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/readyz",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.auth.readyz",
+      "module": "server.routers.auth",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/api/red-packets",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.redpackets.list_packets",
+      "module": "server.routers.redpackets",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/red-packets",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.redpackets.create_packet",
+      "module": "server.routers.redpackets",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/red-packets/{packet_id}",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.redpackets.packet_detail",
+      "module": "server.routers.redpackets",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/red-packets/{packet_id}/revoke",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.redpackets.revoke_packet",
+      "module": "server.routers.redpackets",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/restart",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.restart",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/config",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.security.read_config",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/config",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.security.write_config",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.security.access_logs",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.security.clear_logs",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/rules",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.security.list_rules",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/rules",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.security.add_rule",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/security/rules/{rule_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.security.delete_rule",
+      "module": "server.routers.security",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/sessions/revoke",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.auth.revoke_own_sessions",
+      "module": "server.routers.auth",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/github-mirror",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.get_github_mirror",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/github-mirror",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.settings.save_github_mirror",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/github-token",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.get_github_token",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/github-token",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.settings.save_github_token",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/model-map",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.get_model_map",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/model-map",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.settings.save_model_map",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/panel",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.settings_panel",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.pgsync.get_config",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.pgsync.save_config",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync/export",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.pgsync.start_export",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync/import",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.pgsync.start_import",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.pgsync.get_status",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/pg-sync/test",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.pgsync.test_connection",
+      "module": "server.routers.pgsync",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/proxy",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.proxies.get_proxy_settings",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/proxy",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.proxies.save_proxy_settings",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/proxy-pool",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.proxies.save_proxy_pool",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/proxy/probe",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.proxies.probe_global_proxy",
+      "module": "server.routers.proxies",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/upstash/reload",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.settings.reload_upstream",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/upstash/test",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.settings.test_upstash",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/upstream",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.get_upstream",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/settings/upstream",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.settings.save_upstream",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/by-key",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.by_key",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/by-model",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.by_model",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/credit-reconcile",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.credit_reconcile",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/credit-reconcile/adjust",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.stats.credit_reconcile_adjust",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/credits",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.credits_flow",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/daily",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.daily",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/hourly",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.hourly",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/outcomes",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.outcomes",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/rebuild-usage",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.stats.rebuild_usage",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/repair-usage",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.stats.repair_usage",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/summary",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.summary",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/stats/upstream",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.stats.upstream_stats",
+      "module": "server.routers.stats",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.upstream_status",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/alerts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.steward.alerts",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/chat",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.steward.chat",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/settings",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.steward.settings",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/settings",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.steward.save_settings",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/settings/recipients",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.steward.add_recipient",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/settings/recipients/remove",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.steward.remove_recipient",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.steward.status",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/steward/test-mail",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.steward.test_mail",
+      "module": "server.routers.steward",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/sysinfo",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.main.sysinfo",
+      "module": "server.main",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/changelog",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.get_changelog",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/check-update",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.check_update",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/config",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.configuration_drift",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/configuration",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.configuration_snapshot",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/drain",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.drain_status",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/drain",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.system.change_drain",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/internal-session-verify",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.internal_session_verify",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/performance",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.performance_snapshot",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/protocol-contracts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.protocol_contracts",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.system.start_update",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update-package",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.system.delete_update_package",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update-package",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.get_update_package",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update-package",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.system.upload_update_package",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update-status",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.system.clear_update_status",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/update-status",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.update_status",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/system/versions",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.system.versions",
+      "module": "server.routers.system",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-claim-schedule",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.task_claim_schedule_get",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-claim-schedule",
+      "methods": [
+        "PUT"
+      ],
+      "handler": "server.routers.accounts.task_claim_schedule_put",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.task_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-logs/clear",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.clear_task_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-logs/collect",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.collect_task_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-run",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.task_run_status",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_panel_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-run",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.task_run_start",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/task-run/stop",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.accounts.task_run_stop",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/tokens",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.tokens.list_tokens",
+      "module": "server.routers.tokens",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/tokens",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.tokens.create_token",
+      "module": "server.routers.tokens",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/tokens/{token_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.tokens.delete_token",
+      "module": "server.routers.tokens",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/tokens/{token_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.routers.tokens.update_token",
+      "module": "server.routers.tokens",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstream/logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.accounts.upstream_logs",
+      "module": "server.routers.accounts",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstream/reload-state",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.reload_state",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstreams",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.upstreams.list_upstreams",
+      "module": "server.routers.upstreams",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstreams",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.upstreams.create_upstream",
+      "module": "server.routers.upstreams",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstreams/{upstream_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.upstreams.delete_upstream",
+      "module": "server.routers.upstreams",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstreams/{upstream_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.routers.upstreams.update_upstream",
+      "module": "server.routers.upstreams",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/upstreams/{upstream_id}/probe",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.upstreams.probe_upstream",
+      "module": "server.routers.upstreams",
+      "guards": [
+        "current_user",
+        "require_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/users",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.settings.list_users",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_panel_reader",
+        "require_session_reader"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/users",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.settings.add_user",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/users/{username}",
+      "methods": [
+        "DELETE"
+      ],
+      "handler": "server.routers.settings.delete_user",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/users/{username}",
+      "methods": [
+        "PATCH"
+      ],
+      "handler": "server.routers.settings.update_user",
+      "module": "server.routers.settings",
+      "guards": [
+        "current_user",
+        "require_admin",
+        "require_session_admin"
+      ],
+      "admin_required": true,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/accounts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.accounts",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/alerts",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.alerts",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/audit",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.audit",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/cache/invalidate",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.qtg_panel.invalidate_cache",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user",
+        "require_same_origin"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/keys",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.keys",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/logs",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.logs",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.models",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/ops",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.ops",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/overview",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.overview",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/requests",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.requests_rows",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/settings",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.settings",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/tasks",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.tasks",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/api/v1/usage",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.qtg_panel.usage",
+      "module": "server.routers.qtg_panel",
+      "guards": [
+        "current_user"
+      ],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "manager_auth_dependency",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/healthz",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.gateway.gateway_health",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_health",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/metrics",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.main.prometheus_metrics",
+      "module": "server.main",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_metrics_token",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/readyz",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.main.public_ready",
+      "module": "server.main",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "public_session_or_health_entry",
+      "authenticated": false,
+      "public": true
+    },
+    {
+      "path": "/responses",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.responses.responses_root",
+      "module": "server.routers.responses",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.gateway.chat_v1",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/key",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.gateway.key_usage",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/messages",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.anthropic.messages",
+      "module": "server.routers.anthropic",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/messages/count_tokens",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.anthropic.count_tokens",
+      "module": "server.routers.anthropic",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/models",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.gateway.list_models",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/responses",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.responses.responses_v1",
+      "module": "server.routers.responses",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v1/usage",
+      "methods": [
+        "GET"
+      ],
+      "handler": "server.routers.gateway.usage_v1",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    },
+    {
+      "path": "/v2/chat/completions",
+      "methods": [
+        "POST"
+      ],
+      "handler": "server.routers.gateway.chat_v2",
+      "module": "server.routers.gateway",
+      "guards": [],
+      "admin_required": false,
+      "write_scope_required": false,
+      "read_scope_accepted": false,
+      "auth_mechanism": "handler_api_key_validation",
+      "authenticated": true,
+      "public": false
+    }
+  ]
+}

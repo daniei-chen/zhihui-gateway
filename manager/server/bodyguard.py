@@ -51,14 +51,18 @@ class APIBodyGuard:
         if declared is not None and declared > limit:
             return await reject(413, f'请求体超过 {limit // 1024 // 1024} MiB 上限')
         method = str(scope.get('method') or 'GET').upper()
-        # 只有「可能带 body」的请求才占并发名额（见类文档）
-        counts = declared is not None or method not in ('GET', 'HEAD', 'OPTIONS')
+        # Read methods may also carry a chunked/HTTP2 body. Reserve from the
+        # headers when possible, and otherwise before retaining the first frame.
+        # Truly bodyless dashboard reads continue to bypass this upload limit.
+        counts = (declared is not None or method not in ('GET', 'HEAD', 'OPTIONS')
+                  or any(k.lower() == b'transfer-encoding'
+                         for k, _ in scope.get('headers', [])))
         if counts and self.active >= self.concurrency:
             return await reject(503, '管理请求容量已满，请稍后重试')
         if counts:
             self.active += 1
         try:
-            chunks, size = [], 0
+            buffer, size, frames = bytearray(), 0, 0
             try:
                 async with asyncio.timeout(self.timeout):
                     while True:
@@ -66,18 +70,30 @@ class APIBodyGuard:
                         if msg['type'] == 'http.disconnect':
                             return
                         chunk = msg.get('body', b'')
+                        if not counts and (chunk or msg.get('more_body', False)):
+                            if self.active >= self.concurrency:
+                                return await reject(503, '管理请求容量已满，请稍后重试')
+                            self.active += 1
+                            counts = True
                         size += len(chunk)
                         if size > limit:
                             return await reject(413, f'请求体超过 {limit // 1024 // 1024} MiB 上限')
-                        chunks.append(chunk)
+                        # Per-frame list entries and b''.join's temporary views
+                        # otherwise amplify tiny uploads far beyond the byte cap.
+                        buffer.extend(chunk)
                         if not msg.get('more_body', False):
                             break
+                        frames += 1
+                        if frames % 64 == 0:
+                            # A buffered ASGI receive can complete synchronously;
+                            # give the timeout and other requests a chance to run.
+                            await asyncio.sleep(0)
             except TimeoutError:
                 return await reject(408, '请求体读取超时')
             if declared is not None and declared != size:
                 return await reject(400, 'Content-Length 与实际请求体不一致')
-            body = b''.join(chunks)
-            chunks.clear()
+            body = bytes(buffer)
+            buffer.clear()
             delivered = False
             async def replay():
                 nonlocal delivered, body

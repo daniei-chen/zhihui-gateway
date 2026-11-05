@@ -1,0 +1,40 @@
+{
+  "sha": "32ad580c1d455243d64672f424c9dbd8e8275c35",
+  "node_id": "C_kwDOVWclZ9oAKDMyYWQ1ODBjMWQ0NTUyNDNkNjQ2NzJmNDI0YzlkYmQ4ZTgyNzVjMzU",
+  "url": "https://api.github.com/repos/daniei-chen/zhihui-gateway/git/commits/32ad580c1d455243d64672f424c9dbd8e8275c35",
+  "html_url": "https://github.com/daniei-chen/zhihui-gateway/commit/32ad580c1d455243d64672f424c9dbd8e8275c35",
+  "author": {
+    "name": "Daniei Chen",
+    "email": "2421873411@qq.com",
+    "date": "2026-11-05T12:51:18Z"
+  },
+  "committer": {
+    "name": "GitHub",
+    "email": "noreply@github.com",
+    "date": "2026-11-05T12:51:18Z"
+  },
+  "tree": {
+    "sha": "1076a402dda2e7322a9954d50d5313e44b94bf63",
+    "url": "https://api.github.com/repos/daniei-chen/zhihui-gateway/git/trees/1076a402dda2e7322a9954d50d5313e44b94bf63"
+  },
+  "message": "Merge a6664aeeb5567f9cbcb0ca10d45a381662622962 into 4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+  "parents": [
+    {
+      "sha": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+      "url": "https://api.github.com/repos/daniei-chen/zhihui-gateway/git/commits/4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+      "html_url": "https://github.com/daniei-chen/zhihui-gateway/commit/4c6b4cb8cb790698e0753909745dfe8a7c78dd9f"
+    },
+    {
+      "sha": "a6664aeeb5567f9cbcb0ca10d45a381662622962",
+      "url": "https://api.github.com/repos/daniei-chen/zhihui-gateway/git/commits/a6664aeeb5567f9cbcb0ca10d45a381662622962",
+      "html_url": "https://github.com/daniei-chen/zhihui-gateway/commit/a6664aeeb5567f9cbcb0ca10d45a381662622962"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq7HvGCRC1aQ7uu5UhlAAA5TYQAGtROcKe/RwFh9tME/3qQiS6\nhSTSzE+9Dqw9xsyAObV0uo0N/DeUAbzDPf/9xIM8ITdCb0vJky6iMNs4BMuEzoXo\ndvjY3Q+BRTo+K6mFk9ereuwM0j9alM3lt0hKRSvhjVD4ITLHww7CIEv/LRXnNFbJ\nZMHKWvvuJXs20Zd8VbgcprbbY+JC9PUN3D6nvWXahRec+fbdIBeTXK8wHRYm1vh9\n2YnIh7NyJXBbeaWdBtEJQvwgl4goaviDOXMGujKQi3Wb/fbxxHS+9HxiLhVQ1OSU\naaiy0a+N85JUuVDqzguknzfjrCkQBoM1N7v3dNy1IbX53QdqRBm42RD1O5tpJ+yv\nRX7UOh0LVoZED8YJ/TJwWSCoHgo8fpyZywmbbFxs+tdamr7S3N+r9TNUoAoOBkI+\nfWJiclA3iJgJ4t5VP5mAQPf6njEelM7sQnCkH76cSOZZ+LHIujoV5G74Ytj9cfji\nVM06lBa2gzm4TI/p/bLda6Ar+ghwwNQC46g4F97IlTzZazY30nv2pXHsjXp0pF21\niew+mwH/PHT8a4bnf2zDRaZ0wqd/Y7zH3LcikQtvk2IC7aIGD2mvYSnEr86mle8l\n7XRtSFHCjgGvw4aMabGYZr1qmJhvzKQOmAomR2h0rO7E0m2anlJJLG5d/DLCwGSR\ntk6kvCZNxIejVl0hQjM1\n=SmS5\n-----END PGP SIGNATURE-----\n",
+    "payload": "tree 1076a402dda2e7322a9954d50d5313e44b94bf63\nparent 4c6b4cb8cb790698e0753909745dfe8a7c78dd9f\nparent a6664aeeb5567f9cbcb0ca10d45a381662622962\nauthor Daniei Chen <2421873411@qq.com> 1793883078 +0800\ncommitter GitHub <noreply@github.com> 1793883078 +0800\n\nMerge a6664aeeb5567f9cbcb0ca10d45a381662622962 into 4c6b4cb8cb790698e0753909745dfe8a7c78dd9f\n",
+    "verified_at": "2026-11-05T12:51:19Z"
+  }
+}

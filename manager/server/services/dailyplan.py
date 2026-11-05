@@ -38,6 +38,7 @@ from pathlib import Path
 
 from .. import db, tasklease
 from . import taskrun
+from .asyncwork import joined_task, joined_thread
 
 logger = logging.getLogger(__name__)
 
@@ -124,21 +125,29 @@ def claim_task(task: str) -> tuple[bool, int]:
                            detail='dailyplan scheduler')
 
 
-async def _lease_heartbeat(task: str, fence: int, ttl: int) -> None:
+async def _lease_heartbeat(task: str, fence: int, ttl: int, *,
+                           on_lost=None, on_renewed=None) -> None:
     """执行期间续租：任务可能比 TTL 长，不续租就会被另一个进程合法接管。"""
-    interval = max(1.0, ttl / 3.0)
+    interval = max(0.1, ttl / 3.0)
     while True:
         await asyncio.sleep(interval)
+        started = time.monotonic()
         try:
-            held = tasklease.renew(task, fence, ttl)
+            held = await joined_thread(tasklease.renew, task, fence, ttl)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 —— 数据库忙就下一轮再试
+        except Exception as exc:  # noqa: BLE001 —— 失去续租证据就停止本次动作
             logger.warning('每日任务续租失败 task=%s: %s', task, exc)
-            continue
+            if on_lost is not None:
+                on_lost('renewal_failed')
+            return
         if not held:
             logger.warning('每日任务租约已被接管，停止续租 task=%s fence=%s', task, fence)
+            if on_lost is not None:
+                on_lost('ownership_rejected')
             return
+        if on_renewed is not None:
+            on_renewed(started)
 
 
 # 公开别名：路由层要用它校验「立即执行」的 task 参数与本文件保持一致。
@@ -263,11 +272,12 @@ def mark_ran_fenced(task: str, fence: int, now: int | None = None) -> bool:
         return True
 
 
-async def run_task(task: str) -> tuple[bool, str]:
+async def run_task(task: str, *, wait_for_completion: bool = False) -> tuple[bool, str]:
     """执行一次任务，返回 `(是否触发成功, 说明)`。
 
     `taskrun` 一次只允许一个任务在跑：claim / full 若撞上正在执行的任务会返回
-    False（如实转达，不假装成功）。
+    False（如实转达，不假装成功）。调度器传 wait_for_completion=True，把租约
+    保留到脚本实际结束；手动路由仍立即返回「已开始」。
     """
     if task not in _TASKS:
         raise ValueError(f'未知任务：{task}')
@@ -299,6 +309,8 @@ async def run_task(task: str) -> tuple[bool, str]:
         # 全都「无可领」是正常态（补偿是一次性的），不算失败
         return not out.get('failed'), message
     mode = 'claim' if task == 'claim' else 'full'
+    if wait_for_completion:
+        return await taskrun.run_and_wait(mode, 'ALL')
     return await taskrun.start_async(mode, 'ALL')
 
 
@@ -312,40 +324,96 @@ async def _run_claimed(task: str, plan: dict) -> bool:
       3. `finally` 里先带 fence 写 last_run（租约失效则不写），再释放租约。
          进程崩溃走不到 finally，但租约会在 TTL 后自然过期，下一轮可被接管。
     """
-    claimed, fence = claim_task(task)
-    if not claimed:
-        logger.debug('每日任务未取得执行权，跳过 task=%s lease=%s',
-                     task, tasklease.describe(task))
-        return False
-    logger.info('每日任务触发：%s（%s 点档，fence=%s）', task, plan[task]['hour'], fence)
-    heartbeat = asyncio.create_task(_lease_heartbeat(task, fence, LEASE_TTL))
+    claimed, fence = False, 0
+    claim_started = 0.0
+    heartbeat = owned = expiry = None
+    closing = dispatched = False
+    lost_reason = ''
+
+    def acquire() -> None:
+        nonlocal claimed, fence, claim_started
+        claim_started = time.monotonic()
+        claimed, fence = claim_task(task)
+
+    def lose(reason: str) -> None:
+        nonlocal lost_reason
+        if closing or lost_reason:
+            return
+        lost_reason = reason
+        if owned is not None and not owned.done():
+            owned.cancel()
+
+    def renewed(started: float) -> None:
+        nonlocal expiry
+        if closing or lost_reason:
+            return
+        if expiry is not None:
+            expiry.cancel()
+        # DB lease_until truncates wall time to a whole second. Starting the
+        # monotonic budget before the write and reserving one second is
+        # conservative even while a renewal thread waits on the SQLite lock.
+        remaining = started + LEASE_TTL - 1.0 - time.monotonic()
+        if remaining <= 0:
+            lose('lease_budget_exhausted')
+        else:
+            expiry = asyncio.get_running_loop().call_later(
+                remaining, lose, 'lease_budget_exhausted')
+
     try:
-        ok, msg = await run_task(task)
+        # Capture the result inside the owned thread: cancellation after a late
+        # successful claim must still release that exact fence in finally.
+        await joined_thread(acquire)
+        if not claimed:
+            logger.debug('每日任务未取得执行权，跳过 task=%s', task)
+            return False
+        renewed(claim_started)
+        if lost_reason:
+            logger.warning('每日任务取租约耗尽本地预算，跳过 task=%s', task)
+            return False
+        logger.info('每日任务触发：%s（%s 点档，fence=%s）', task, plan[task]['hour'], fence)
+        owned = asyncio.create_task(run_task(task, wait_for_completion=True))
+        dispatched = True
+        heartbeat = asyncio.create_task(_lease_heartbeat(
+            task, fence, LEASE_TTL, on_lost=lose, on_renewed=renewed))
+        ok, msg = await asyncio.shield(owned)
         logger.info('每日任务 %s：ok=%s %s', task, ok, msg)
     except asyncio.CancelledError:
-        raise
+        if asyncio.current_task().cancelling() or not lost_reason:
+            raise
+        logger.warning('每日任务失去租约，已停止执行 task=%s reason=%s', task, lost_reason)
     except Exception as exc:  # noqa: BLE001
         # 单个任务出错不该拖垮整轮巡检（下一个任务照常判）
         logger.warning('每日任务 %s 执行异常：%s', task, exc)
     finally:
-        heartbeat.cancel()
-        try:
-            await asyncio.wait({heartbeat})
-        except asyncio.CancelledError:
-            # 心跳是我们自己取消的；外层的取消仍会继续向上传播，不能在这里打断清理。
-            pass
-        try:
-            if not mark_ran_fenced(task, fence):
-                logger.warning('每日任务租约已失效，跳过 last_run 写入 task=%s fence=%s',
-                               task, fence)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning('每日任务 last_run 写入失败 task=%s: %s', task, exc)
-        finally:
+        closing = True
+        if expiry is not None:
+            expiry.cancel()
+
+        async def finish_claim() -> None:
+            pending = [item for item in (owned, heartbeat) if item is not None]
+            for item in pending:
+                if not item.done():
+                    item.cancel()
+            # _run and joined_thread retain their own child/DB work through
+            # repeated cancellation. Do not release while either is alive.
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            if not claimed:
+                return
             try:
-                tasklease.release(task, fence)
+                if dispatched and not await joined_thread(mark_ran_fenced, task, fence):
+                    logger.warning('每日任务租约已失效，跳过 last_run 写入 task=%s fence=%s',
+                                   task, fence)
             except Exception as exc:  # noqa: BLE001
-                logger.warning('每日任务租约释放失败 task=%s: %s', task, exc)
-    return True
+                logger.warning('每日任务 last_run 写入失败 task=%s: %s', task, exc)
+            finally:
+                try:
+                    await joined_thread(tasklease.release, task, fence)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning('每日任务租约释放失败 task=%s: %s', task, exc)
+
+        await joined_task(asyncio.create_task(finish_claim()))
+    return dispatched
 
 
 async def _loop() -> None:
@@ -356,10 +424,10 @@ async def _loop() -> None:
             # K28：发布期间不自愈。放在整轮最前面能省掉整轮无效 claim；真正的
             # 竞态由 `_publish_block` 在 claim 事务内再查一次（那里才与发布方
             # 的写事务串行化）。
-            if release_in_progress():
+            if await joined_thread(release_in_progress):
                 logger.info('发布锁被持有，本轮每日任务跳过')
             else:
-                plan = get_plan()
+                plan = await joined_thread(get_plan)
                 for task in _TASKS:
                     if not is_due(task, plan):
                         continue
@@ -387,3 +455,17 @@ def stop_scheduler() -> None:
     global _loop_task
     if _loop_task and not _loop_task.done():
         _loop_task.cancel()
+
+
+async def close_scheduler() -> None:
+    """Stop the captured scheduler and join its leased work before shutdown."""
+    owned = _loop_task
+    if owned is None:
+        return
+    if not owned.done():
+        owned.cancel()
+    try:
+        await joined_task(owned)
+    except asyncio.CancelledError:
+        if asyncio.current_task().cancelling():
+            raise

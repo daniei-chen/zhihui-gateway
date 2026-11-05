@@ -93,6 +93,7 @@ class GatewayPassthroughTest(unittest.TestCase):
     """确认网关没有「改写 SSE」的代码路径 —— 这是上面结论的前提。"""
 
     def test_gateway_source_does_not_rewrite_sse(self) -> None:
+        import inspect
         src = (Path(__file__).resolve().parents[2] / 'server' / 'routers' / 'gateway.py'
                ).read_text(encoding='utf-8')
         # 转发热路径只 yield 上游 chunk；不应出现「重新构造/替换帧」的迹象
@@ -101,7 +102,11 @@ class GatewayPassthroughTest(unittest.TestCase):
         # 所有 yield 出来的都必须是上游原样的 chunk（不能有第二个变量名混进来）
         # 注意：这里按**出现次数**断言，只查包含太弱——文件里有两处 yield，
         # 改掉其中一处仍会通过（这个弱点是被反证试出来的）。
-        yields = [ln.strip() for ln in src.splitlines() if ln.strip().startswith('yield ')]
+        # Inspect the complete forwarding handler, including its async stream.
+        # The module also has a synchronous Unicode-tree iterator whose yields
+        # are unrelated to response bytes and must not count as SSE rewrites.
+        forwarding_src = inspect.getsource(gateway._chat)
+        yields = [ln.strip() for ln in forwarding_src.splitlines() if ln.strip().startswith('yield ')]
         self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text)','yield observability.sse_error(error_text)'],
                          f'转发热路径出现了非透传的 yield：{yields}')
 

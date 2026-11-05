@@ -474,6 +474,30 @@ def usage_int(value):
     except (ValueError,TypeError,OverflowError):
         return 0
 
+
+def merge_usage(target: dict, incoming: dict) -> None:
+    """Retain only bounded numeric evidence, never arbitrary provider metadata.
+
+    A stream can send a new unknown usage key in every event. Updating a dict
+    verbatim retains that entire history even when every event is small.
+    Malformed known values remain present (as None/empty text) and cannot become
+    evidence of valid zero usage.
+    """
+    def scalar(value):
+        if isinstance(value, str):
+            return value if len(value) <= 128 else ''
+        return value if value is None or isinstance(value, (int, float, bool)) else ''
+
+    for field in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'credit', 'credits',
+                  'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens', 'prompt_cache_write_tokens'):
+        if field in incoming:
+            target[field] = scalar(incoming[field])
+    for field, keys in (('prompt_tokens_details', ('cached_tokens',)),
+                        ('completion_tokens_details', ('reasoning_tokens',))):
+        value = incoming.get(field)
+        if isinstance(value, dict):
+            target[field] = {key: scalar(value[key]) for key in keys if key in value}
+
 #: U13：流中错误要携带的上游细节（业务 code / hint / 上游请求 ID）。
 #:
 #: 用 contextvar 而不是给 `sse_error` 加必填参数，是因为 `gateway.py` 的转发
@@ -592,7 +616,7 @@ class StreamAudit:
             code=obj['error'].get('code')
             self.error_code=str(code)[:64] if code else None
         if isinstance(obj.get("usage"), dict):
-            self.usage.update(obj["usage"])
+            merge_usage(self.usage, obj["usage"])
         choices = obj.get("choices")
         if isinstance(choices, list):
             for choice in choices:
@@ -609,17 +633,28 @@ class StreamAudit:
     def _consume(self, text):
         self.pending += text
         out = []
-        while "\n" in self.pending:
-            line, self.pending = self.pending.split("\n", 1)
-            line = line.rstrip("\r")
+        cursor = 0
+        while True:
+            end = self.pending.find("\n", cursor)
+            if end < 0:
+                break
+            if end - cursor > self.maximum:
+                raise ValueError("上游 SSE 行超过审计缓冲上限")
+            line = self.pending[cursor:end].rstrip("\r")
+            cursor = end + 1
             if not line:
                 out.extend(self._event())
             elif line.startswith("data:"):
                 item = line[5:].lstrip(" ")
-                self.event_size += len(item)
+                # Empty data lines still occupy memory and add a newline when
+                # joined. Account for each retained string/list entry as well.
+                self.event_size += len(item) + 64
+                if self.event_size > self.maximum:
+                    raise ValueError("上游 SSE 事件超过审计缓冲上限")
                 self.data.append(item)
-            if self.event_size > self.maximum:
-                raise ValueError("上游 SSE 事件超过审计缓冲上限")
+        # Slice the remaining suffix once; repeatedly splitting a coalesced
+        # network chunk copies its entire remainder for every SSE line.
+        self.pending = self.pending[cursor:]
         if len(self.pending) + self.event_size > self.maximum:
             raise ValueError("上游 SSE 事件超过审计缓冲上限")
         return out

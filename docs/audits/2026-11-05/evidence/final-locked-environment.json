@@ -1,0 +1,305 @@
+{
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.39",
+  "all_lock_versions_match": true,
+  "required_packages": 37,
+  "packages": [
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "annotated-doc",
+      "expected": "0.0.5",
+      "installed": "0.0.5",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "annotated-types",
+      "expected": "0.8.0",
+      "installed": "0.8.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "anyio",
+      "expected": "4.15.1",
+      "installed": "4.15.1",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "certifi",
+      "expected": "2026.10.19",
+      "installed": "2026.10.19",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "click",
+      "expected": "8.5.0",
+      "installed": "8.5.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "fastapi",
+      "expected": "0.141.1",
+      "installed": "0.141.1",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "h11",
+      "expected": "0.16.0",
+      "installed": "0.16.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "httpcore",
+      "expected": "1.0.9",
+      "installed": "1.0.9",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "httptools",
+      "expected": "0.8.0",
+      "installed": "0.8.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "httpx",
+      "expected": "0.28.1",
+      "installed": "0.28.1",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "idna",
+      "expected": "3.19",
+      "installed": "3.19",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "psycopg",
+      "expected": "3.3.6",
+      "installed": "3.3.6",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "psycopg-binary",
+      "expected": "3.3.6",
+      "installed": "3.3.6",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "pydantic",
+      "expected": "2.13.5",
+      "installed": "2.13.5",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "pydantic-core",
+      "expected": "2.46.5",
+      "installed": "2.46.5",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "python-dotenv",
+      "expected": "1.2.3",
+      "installed": "1.2.3",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "pyyaml",
+      "expected": "6.0.3",
+      "installed": "6.0.3",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "starlette",
+      "expected": "1.6.0",
+      "installed": "1.6.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "typing-extensions",
+      "expected": "4.16.0",
+      "installed": "4.16.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "typing-inspection",
+      "expected": "0.4.4",
+      "installed": "0.4.4",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "tzdata",
+      "expected": "2026.5",
+      "installed": "2026.5",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "uvicorn",
+      "expected": "0.53.0",
+      "installed": "0.53.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "uvloop",
+      "expected": "0.22.1",
+      "installed": "0.22.1",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "watchfiles",
+      "expected": "1.2.0",
+      "installed": "1.2.0",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "websockets",
+      "expected": "17.1",
+      "installed": "17.1",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "python-multipart",
+      "expected": "0.0.32",
+      "installed": "0.0.32",
+      "match": true
+    },
+    {
+      "lock": "manager/server/requirements.hashes.txt",
+      "lock_sha256": "39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb",
+      "package": "socksio",
+      "expected": "1.0.0",
+      "installed": "1.0.0",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "pytest",
+      "expected": "9.1.1",
+      "installed": "9.1.1",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "pytest-asyncio",
+      "expected": "1.4.0",
+      "installed": "1.4.0",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "iniconfig",
+      "expected": "2.3.0",
+      "installed": "2.3.0",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "packaging",
+      "expected": "26.3",
+      "installed": "26.3",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "pluggy",
+      "expected": "1.6.0",
+      "installed": "1.6.0",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "Pygments",
+      "expected": "2.21.0",
+      "installed": "2.21.0",
+      "match": true
+    },
+    {
+      "lock": "tests/linux_lab/requirements-dev.hashes.txt",
+      "lock_sha256": "992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e",
+      "package": "pydantic-settings",
+      "expected": "2.15.0",
+      "installed": "2.15.0",
+      "match": true
+    },
+    {
+      "lock": "tests/requirements-audit.hashes.txt",
+      "lock_sha256": "6d6eef2846f78587487fa9a72d98f9108d772223bb59db5a1d800810b45cecd0",
+      "package": "cryptography",
+      "expected": "50.0.2",
+      "installed": "50.0.2",
+      "match": true
+    },
+    {
+      "lock": "tests/requirements-audit.hashes.txt",
+      "lock_sha256": "6d6eef2846f78587487fa9a72d98f9108d772223bb59db5a1d800810b45cecd0",
+      "package": "cffi",
+      "expected": "2.1.1",
+      "installed": "2.1.1",
+      "match": true
+    },
+    {
+      "lock": "tests/requirements-audit.hashes.txt",
+      "lock_sha256": "6d6eef2846f78587487fa9a72d98f9108d772223bb59db5a1d800810b45cecd0",
+      "package": "pycparser",
+      "expected": "3.12",
+      "installed": "3.12",
+      "match": true
+    }
+  ],
+  "note": "Hash-verified wheel reinstall completed for these locks; additional audit-only utilities may be installed. Prior baseline used pytest9.2.0; final full uses exact QA lock pytest9.1.1."
+}

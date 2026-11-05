@@ -81,6 +81,9 @@ def set_account_proxy(filename: str, proxy: str, auth_dir: Path | None = None) -
             raw['proxy'] = proxy
         else:
             raw.pop('proxy', None)
+        # Remove the retired multi-binding field in the same locked edit. A
+        # second unlocked read/write could overwrite a concurrently renewed token.
+        raw.pop('proxy_pool', None)
         _atomic_write_json(path, raw)
     return {'file': filename, 'proxy': proxy}
 
@@ -99,7 +102,7 @@ def _weight_of(raw: dict) -> float:
     """
     try:
         value = float(raw.get('weight') or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     if value != value or value in (float('inf'), float('-inf')) or value < 0:
         return 0.0
@@ -118,7 +121,7 @@ def set_account_weight(filename: str, weight: float,
 
     try:
         value = float(weight)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError('权重必须是数字') from exc
     if value != value or value in (float('inf'), float('-inf')):
         raise ValueError('权重必须是有限数字')
@@ -214,9 +217,16 @@ def list_auth_accounts(auth_dir: Path | None = None) -> list[dict]:
             raw = json.loads(path.read_text(encoding='utf-8'))
         except Exception:
             continue
+        if not isinstance(raw, dict):
+            continue
         acct = raw.get('account', {}) or {}
         auth = raw.get('auth', {}) or {}
-        exp = int(auth.get('expiresAt', 0) or 0)
+        if not isinstance(acct, dict) or not isinstance(auth, dict):
+            continue
+        try:
+            exp = int(auth.get('expiresAt', 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            exp = 0
         token = str(auth.get('accessToken') or '')
 
         # 上游 `Parse` 明确拒绝的情形：accessToken 为空时直接返回
@@ -1934,6 +1944,13 @@ def save_upstream_config(patch: dict) -> dict:
             with portalstore.transaction() as conn:
                 if conn.execute('SELECT 1 FROM portal_pool_links LIMIT 1').fetchone():
                     raise ValueError('已有用户账号贡献公共池，请使用总台共享签到；不能重新启用引擎独立签到')
+    # Hold the same path lock as proxy-route edits from the read through replace.
+    # Atomic rename alone prevents torn JSON but cannot prevent lost updates.
+    with file_lock(config.UPSTREAM_CONFIG):
+        return _save_upstream_config_locked(patch)
+
+
+def _save_upstream_config_locked(patch: dict) -> dict:
     path = config.UPSTREAM_CONFIG
     if not path.is_file():
         raise FileNotFoundError(f'未找到上游配置文件 {path}，已取消保存')
@@ -2193,6 +2210,8 @@ async def _resp_read_reply(reader: asyncio.StreamReader) -> tuple[str, str]:
         size = int(body or -1)
         if size < 0:
             return kind, ''
+        if size > 65536:
+            raise ValueError('Redis 探测响应超过 64 KiB 上限')
         data = await reader.readexactly(size + 2)
         return kind, data[:-2].decode('utf-8', 'replace')
     if kind == '*':                               # 数组：这里只关心有没有报错

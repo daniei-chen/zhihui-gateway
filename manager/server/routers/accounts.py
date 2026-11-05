@@ -290,23 +290,42 @@ _login_ready: dict[str, tuple[dict, str, str, float]] = {}      # state → 国�
 _login_owner: dict[str, str] = {}        # state → 发起人，用于收掉同一用户的旧轮询
 _login_scopes: dict[str, tuple[str, str, int | None, float]] = {}
 _login_bindings: dict[str, str] = {}
+_login_group_bindings: dict[str, tuple[str, str, str]] = {}
 _login_locks: dict[str, asyncio.Lock] = {}
 
 
-def _bind_login(state, user, realm, upstream_id):
+def _login_group_binding(group: dict) -> tuple[str, str, str]:
+    """Bind a grant to its actual credential directory and upstream instance."""
+    return (str(_require_dir(group).resolve()), str(group.get('base_url') or '').rstrip('/'),
+            str(group.get('container') or ''))
+
+
+def _login_group_id(upstream_id):
+    # Both supported spellings of the default group must refer to one scope.
+    return upstream_id if isinstance(upstream_id, int) and upstream_id != 0 else None
+
+
+def _bind_login(state, user, realm, upstream_id, *, expected_group=None):
     user = security.authorization_owner(user)
+    upstream_id = _login_group_id(upstream_id)
+    binding = _login_group_binding(_group(upstream_id))
+    if expected_group is not None and binding != expected_group:
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
     _login_scopes[state] = (user['username'], realm, upstream_id, time.time())
     _login_bindings[state] = user['_authorization_binding']
+    _login_group_bindings[state] = binding
     return user
 
 
 def _check_login_scope(state, user, realm, upstream_id):
     user = security.authorization_owner(user)
     scope = _login_scopes.get(state)
-    if (scope is None or scope[:3] != (user['username'], realm, upstream_id)
+    if (scope is None or scope[:3] != (user['username'], realm, _login_group_id(upstream_id))
             or _login_bindings.get(state) != user['_authorization_binding']
             or time.time() - scope[3] > _LOGIN_RESULT_TTL):
         raise HTTPException(status_code=404, detail='授权会话不存在或与当前平台、版本不匹配')
+    if _login_group_binding(_group(scope[2])) != _login_group_bindings.get(state):
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
     return user
 
 
@@ -322,7 +341,7 @@ def _discard_login(state: str) -> None:
     task = _login_tasks.pop(state, None)
     if task is not None and not task.done():
         task.cancel()
-    for mapping in (_login_scopes, _login_bindings, _login_locks, _login_ready,
+    for mapping in (_login_scopes, _login_bindings, _login_group_bindings, _login_locks, _login_ready,
                     _login_polls, _login_regions, _login_owner, _provisioned_states):
         mapping.pop(state, None)
     tencent.drop_state(state)
@@ -667,9 +686,9 @@ async def auth_start(
         if region:
             raise HTTPException(status_code=409, detail='当前平台不支持 WorkBuddy 的注册地区选项')
         return await platformauth.start(request, user, platform, r, upstream_id, body or {})
-    # 分组在这里只做**提前校验**：真正的落盘发生在 auth/poll（那里也要带
-    # 同一个分组）。先拒掉不存在的分组，用户不会扫完码才发现目标分组没了。
-    _group(upstream_id)
+    # 发码前就要求可管理目录；缺目录不能在最终写入时回落到默认账号池。
+    # 保存解析后的路径，避免取链期间修改目录/实例或重定向目录符号链接。
+    group_binding = _login_group_binding(_group(upstream_id))
     raw_region = region
     if isinstance(body, dict) and body.get('region') is not None:
         raw_region = str(body.get('region'))
@@ -690,7 +709,11 @@ async def auth_start(
         # 起后台轮询：前端是否被节流都不影响检测节奏（见文件上方说明）
         st = str(out.get('state') or '')
         if st:
-            _bind_login(st, user, r, upstream_id)
+            try:
+                _bind_login(st, user, r, upstream_id, expected_group=group_binding)
+            except HTTPException:
+                tencent.drop_state(st)
+                raise
             if reg:
                 _login_regions[st] = reg
             if st not in _login_tasks or _login_tasks[st].done():
@@ -732,7 +755,7 @@ async def auth_poll(
     lock = _login_locks.setdefault(state, asyncio.Lock())
     async with lock:
         user = _check_login_scope(state, user, realm, upstream_id)
-        with tencent.authorization_scope(lambda: security.authorization_owner(user)):
+        with tencent.authorization_scope(lambda: _check_login_scope(state, user, realm, upstream_id)):
             result = await _poll_workbuddy(state, realm, region, upstream_id, user)
         if result.get('status') == 'success':
             # Commit the memo while still serialized; concurrent foreground polls
@@ -784,7 +807,7 @@ async def _poll_workbuddy(state, realm, region, upstream_id, user):
     if result.get('status') != 'ready':
         security.authorization_owner(user)
         return result
-    security.authorization_owner(user)
+    _check_login_scope(state, user, realm, upstream_id)
 
     realm_of_result = result.get('realm') or 'cn'
     if provisioned:
@@ -1073,13 +1096,21 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     # 把它包起来是为了给出可执行的提示 —— 失败的一个常见成因是 auths 目录
     # 权限不对（宝塔/1Panel 用 root 装、却以别的 uid 跑），而那个错误的原文
     # 只有一行 PermissionError，用户看不出「该 chown 哪个目录」。
-    group = group or upstreamsvc.default_upstream()
-    auth_dir = _group_dir(group)
+    auth_dir = None
     try:
         if owner is None:
             raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
         with security.authorization_guard(owner):
-            filename, existed = tencent.write_auth_file(result, auth_dir)
+            # A foreground/background poll may have awaited a provider while the
+            # group was edited or deleted. Re-read under the DB writer lock so a
+            # concurrent settings mutation cannot redirect the final file write.
+            with db.transaction():
+                scope = _login_scopes.get(state)
+                upstream_id = scope[2] if scope is not None else None
+                _check_login_scope(state, owner, realm_of_result, upstream_id)
+                group = _group(upstream_id)
+                auth_dir = Path(_login_group_bindings[state][0])
+                filename, existed = tencent.write_auth_file(result, auth_dir)
     except ValueError as exc:
         # uid 形态异常（`write_auth_file` 会校验后才拼文件名）。这不是权限问题，
         # 给「去 chown」的提示会把用户引到错方向 —— 如实说明是上游返回的数据异常。

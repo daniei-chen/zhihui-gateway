@@ -1,0 +1,29 @@
+test_blocked_host_is_recorded_after_loopback_sample_limit (test_harness_contracts.NetworkEvidenceTest.test_blocked_host_is_recorded_after_loopback_sample_limit) ... FAIL
+test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted (test_harness_contracts.NetworkEvidenceTest.test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted) ... FAIL
+test_guards_are_restored_before_runner_persists_evidence (test_harness_contracts.PathBoundaryTest.test_guards_are_restored_before_runner_persists_evidence) ... ok
+test_isolation_subtree_overrides_system_location (test_harness_contracts.PathBoundaryTest.test_isolation_subtree_overrides_system_location) ... ok
+test_native_system_roots_are_classified_without_accessing_them (test_harness_contracts.PathBoundaryTest.test_native_system_roots_are_classified_without_accessing_them) ... ok
+test_only_null_sink_is_allowed_among_system_device_paths (test_harness_contracts.PathBoundaryTest.test_only_null_sink_is_allowed_among_system_device_paths) ... ok
+test_production_markers_outside_isolation_are_protected (test_harness_contracts.PathBoundaryTest.test_production_markers_outside_isolation_are_protected) ... ok
+test_symlink_escape_is_classified_by_resolved_destination (test_harness_contracts.PathBoundaryTest.test_symlink_escape_is_classified_by_resolved_destination) ... ok
+
+======================================================================
+FAIL: test_blocked_host_is_recorded_after_loopback_sample_limit (test_harness_contracts.NetworkEvidenceTest.test_blocked_host_is_recorded_after_loopback_sample_limit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/913dc6e1a7c0/zhihui-gateway/tests/test_harness_contracts.py", line 86, in test_blocked_host_is_recorded_after_loopback_sample_limit
+    self.assertEqual(plugin._STATE['net_attempt_count'], plugin._MAX_SAMPLES + 6)
+AssertionError: 0 != 306
+
+======================================================================
+FAIL: test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted (test_harness_contracts.NetworkEvidenceTest.test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/913dc6e1a7c0/zhihui-gateway/tests/test_harness_contracts.py", line 112, in test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted
+    self.assertEqual(network['attempt_count'], 2)
+AssertionError: 1 != 2
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.008s
+
+FAILED (failures=2)

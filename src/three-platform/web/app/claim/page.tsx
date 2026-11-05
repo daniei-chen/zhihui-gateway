@@ -15,7 +15,7 @@
  * **密钥**（怎么认证）、**调用地址**（往哪儿发请求）。前两样来自接口，
  * 调用地址只能由浏览器自己算（`origin + basePath`），见 `endpoint`。
  */
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Gift, Copy, Check, Loader2, Sparkles} from 'lucide-react';
 import {notify} from '@/lib/toast';
 import {claimApi, errText} from '@/lib/api';
@@ -97,6 +97,9 @@ export default function ClaimPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const generation = useRef(0);
+  // 成功后继续锁住旧按钮回调，直到切换页面上下文；失败才允许重试领取。
+  const claimLocked = useRef(false);
 
   // 下游调用地址：只有浏览器知道当前 origin（静态导出阶段为空）。
   // 子路径部署时网关也挂在前缀下，所以必须带上 basePath，否则会给一个 404 的地址。
@@ -104,38 +107,67 @@ export default function ClaimPage() {
     typeof window !== 'undefined' ? `${window.location.origin}${BASE_PATH}/v1` : '';
 
   useEffect(() => {
+    const request = ++generation.current;
+    const current = () => request === generation.current;
     const c = new URLSearchParams(window.location.search).get('code') || '';
     setCode(c);
+    setInfo(null);
+    setGot(null);
+    setErr('');
+    setLoading(true);
+    setBusy(false);
+    claimLocked.current = false;
     if (!c) {
       setErr(t('claim.noCode'));
       setLoading(false);
-      return;
+    } else {
+      claimApi.info(c)
+        .then((next) => { if (current()) setInfo(next); })
+        .catch((e) => { if (current()) setErr(errText(e)); })
+        .finally(() => { if (current()) setLoading(false); });
     }
-    claimApi.info(c)
-      .then(setInfo)
-      .catch((e) => setErr(errText(e)))
-      .finally(() => setLoading(false));
+    return () => { if (current()) generation.current = request + 1; };
   }, [t]);
 
   const draw = useCallback(async () => {
+    if (!code || loading || !info || info.claimed || info.expired || info.left <= 0 || claimLocked.current) return;
+    claimLocked.current = true;
+    const request = generation.current;
+    const current = () => request === generation.current;
     setBusy(true);
     try {
-      setGot(await claimApi.draw(code));
+      const result = await claimApi.draw(code);
+      if (!current()) return;
+      setGot(result);
+      // draw 的返回值没有剩余份数；只更新已确认的本人领取信息，不猜测全局余额。
+      setInfo((previous) => previous && ({
+        ...previous,
+        claimed: true,
+        my_key: result.key,
+        my_amount: result.amount,
+        quota_kind: result.quota_kind,
+        models: result.models,
+        expires_at: result.expires_at,
+      }));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) {
+        claimLocked.current = false;
+        notify.err(errText(e));
+      }
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
-  }, [code]);
+  }, [code, info, loading]);
 
   const closeAndCopy = useCallback(async () => {
+    const request = generation.current;
+    setGot(null);
     if (got && navigator.clipboard) {
       await navigator.clipboard.writeText(got.key).then(
-        () => notify.ok(t('claim.autoCopied'), t('claim.autoCopiedDetail')),
-        () => notify.err(t('claim.autoCopyFailed')),
+        () => { if (request === generation.current) notify.ok(t('claim.autoCopied'), t('claim.autoCopiedDetail')); },
+        () => { if (request === generation.current) notify.err(t('claim.autoCopyFailed')); },
       );
     }
-    setGot(null);
   }, [got, t]);
 
   /** 复制「上次领到的那份」（第二次打开时用）。 */
@@ -207,15 +239,7 @@ export default function ClaimPage() {
             </div>
 
             <div className="mt-5">
-              {info.expired ? (
-                <div className="text-xs text-amber-600 dark:text-amber-400">
-                  {t('claim.expired')}
-                </div>
-              ) : info.left <= 0 ? (
-                <div className="text-xs text-amber-600 dark:text-amber-400">
-                  {t('claim.empty')}
-                </div>
-              ) : info.claimed && info.my_key ? (
+              {info.claimed && info.my_key ? (
                 /* 已经领过：把上次那份**直接显示出来**。
                    关掉弹窗才想起没存是很常见的，而明文只显示那一次 ——
                    刷新就能找回来，比「请联系发红包的人」有用得多。
@@ -245,6 +269,14 @@ export default function ClaimPage() {
                 </div>
               ) : info.claimed ? (
                 <div className="text-xs text-muted-foreground">{t('claim.already')}</div>
+              ) : info.expired ? (
+                <div className="text-xs text-amber-600 dark:text-amber-400">
+                  {t('claim.expired')}
+                </div>
+              ) : info.left <= 0 ? (
+                <div className="text-xs text-amber-600 dark:text-amber-400">
+                  {t('claim.empty')}
+                </div>
               ) : (
                 <Button
                   size="lg"

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import threading
 import time
 
 from . import config
@@ -143,6 +144,30 @@ CREATE TABLE IF NOT EXISTS portal_debt_bonus_allocations(
 '''
 
 
+_schema_lock = threading.Lock()
+_schema_ready: tuple | None = None
+
+
+def _ensure_schema(conn: sqlite3.Connection, path: Path) -> None:
+    """Skip repeated DDL only for the same process, file and SQLite schema.
+
+    Every portal read used to execute the complete schema before BEGIN, even
+    when all tables already existed. A bounded one-database cache avoids that
+    work; inode and schema_version changes still force the idempotent bootstrap
+    after a replacement, restore or schema change. No credential/value is cached.
+    """
+    global _schema_ready
+    with _schema_lock:
+        stat = path.stat()
+        identity = (os.getpid(), str(path.resolve()), stat.st_dev, stat.st_ino)
+        version = conn.execute('PRAGMA schema_version').fetchone()[0]
+        if _schema_ready == (*identity, version):
+            return
+        conn.executescript(SCHEMA)
+        version = conn.execute('PRAGMA schema_version').fetchone()[0]
+        _schema_ready = (*identity, version)
+
+
 def now() -> int:
     return int(time.time())
 
@@ -169,7 +194,7 @@ def transaction():
     try:
         conn.execute('PRAGMA foreign_keys=ON')
         conn.execute('PRAGMA synchronous=FULL')
-        conn.executescript(SCHEMA)
+        _ensure_schema(conn, path)
         conn.execute('BEGIN IMMEDIATE')
         yield conn
         conn.commit()
@@ -381,7 +406,9 @@ def overview(owner_id: str) -> dict:
         debt = conn.execute('SELECT amount_units FROM portal_debts WHERE owner_id=?', (owner_id,)).fetchone()
         quarantined = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
         quarantined = bool(quarantined and quarantined[0] == 'true')
-        pooled = {row[0] for row in conn.execute('SELECT account_id FROM portal_pool_links')}
+        pooled = {row[0] for row in conn.execute(
+            'SELECT p.account_id FROM portal_accounts a JOIN portal_pool_links p ON p.account_id=a.id '
+            'WHERE a.owner_id=?', (owner_id,))}
         for account in accounts:
             account['pool_state'] = 'public' if account['id'] in pooled else 'pending'
         from . import portalbilling, portalpolicy

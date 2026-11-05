@@ -1,0 +1,7 @@
+# Preserve audit receipts byte-for-byte, including terminal output and TSV rows.
+# Whitespace in raw evidence is data; application source checks remain unchanged.
+evidence/** -text -whitespace
+reviews/*.tsv -text -whitespace
+reviews/*.txt -text -whitespace
+coverage.tsv -text -whitespace
+evidence-index.tsv -text -whitespace

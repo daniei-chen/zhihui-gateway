@@ -1,0 +1,68 @@
+Gateway audit coverage — 2026-11-05; agent /root/gateway_audit
+Baseline 4c6b4cb8cb790698e0753909745dfe8a7c78dd9f; working branch audit/strict-review-20261105
+FULL = complete source read and manual control/data-flow review in this audit, including relevant edits. It does not claim formal verification or all possible states.
+PARTIAL = named call paths/contracts or modified ranges read, not an all-line review.
+AUTOMATED = executed regression/semantic drift check; not a substitute for manual reading.
+Line counts are from the final shared working tree when this inventory was written.
+
+FULL	2586	manager/server/routers/gateway.py
+FULL	2060	manager/server/routers/responses.py
+FULL	1403	manager/server/routers/anthropic.py
+FULL	234	manager/server/routers/playground.py
+FULL	42	manager/server/routers/models.py
+FULL	220	manager/server/routers/qtg_panel.py
+FULL	56	manager/server/routers/engine.py
+FULL	96	manager/server/fairadmission.py
+FULL	134	manager/server/requestbody.py
+FULL	108	manager/server/bodyguard.py
+FULL	219	manager/server/drain.py
+FULL	439	manager/server/deadline.py
+FULL	50	manager/server/sseheartbeat.py
+FULL	16	manager/server/pooledhttp.py
+FULL	290	manager/server/http_pool.py
+FULL	116	manager/server/requestperf.py
+FULL	1152	manager/server/observability.py
+FULL	37	manager/server/protocolcontracts.py
+FULL	84	manager/server/promptcompat.py
+FULL	109	manager/server/platformpolicy.py
+FULL	387	manager/server/metering.py
+FULL	323	manager/server/upstreamsvc.py
+FULL	39	manager/server/keylimits.py
+FULL	49	manager/server/dailyquota.py
+FULL	2333	manager/server/services/wb2api.py
+FULL	86	manager/server/services/modelmap.py
+FULL	24	manager/server/services/native_modality.py
+FULL	610	manager/server/services/proxyroutes.py
+FULL	64	manager/server/services/cooling.py
+FULL	750	manager/server/config.py
+FULL	156	manager/server/upstreambody.py
+FULL	27	manager/server/services/asyncwork.py
+FULL	126	tools/build_config_contracts.py
+
+PARTIAL	manager/server/keysvc.py
+PARTIAL	manager/server/budget.py
+PARTIAL	manager/server/db.py
+PARTIAL	manager/server/portalwallet.py
+PARTIAL	manager/server/config-schema.json
+PARTIAL	manager/server/configcontract.py
+PARTIAL	manager/server/services/filelock.py
+PARTIAL	manager/server/services/tencent.py
+PARTIAL	manager/server/upstreamschema.py
+PARTIAL	tests/fake_provider/server.py
+PARTIAL	tests/zhihui_harness/isolation.py
+PARTIAL	tests/zhihui_harness/pytest_plugin.py
+PARTIAL	tests/zhihui_harness/run_tests.py
+
+FULL-DOC	tests/README.md
+FULL-DOC	docs/gateway-response-limits.md
+AUTOMATED	manager/server/config-schema.json (JSON semantic comparison: only WB_GATEWAY_MAX_RESPONSE_MB added; source-default/schema tests passed)
+AUTOMATED	manager/server/tests/test_audit_bodyguard_resources.py
+AUTOMATED	manager/server/tests/test_audit_gateway_boundaries.py
+AUTOMATED	manager/server/tests/test_audit_upstreambody.py
+AUTOMATED	manager/server/tests/test_audit_protocol_limits.py
+AUTOMATED	manager/server/tests/test_audit_management_boundaries.py
+AUTOMATED	manager/server/tests/test_audit_usage_evidence.py (parent-owned)
+AUTOMATED	tests/benchmarks/gateway_resources.py (pure-source before/after benchmark; no server imports)
+
+ABSENT from assigned optional list: manager/server/sseutil.py; manager/server/wbstat.py
+All-repository coverage, QTG core, frontend, deployment, auth and DB ownership are tracked by parent/other agents.

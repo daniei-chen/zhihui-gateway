@@ -1,0 +1,17 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> zhihui-home-upgrade@1.0.0 check
+> node --check server.mjs && node --check public/scripts/upgrade.js && node --check public/scripts/motion.js && node --check public/scripts/ride.js && node --check public/scripts/sculpture.js && node --check public/scripts/sculpture-viewer.js && node --check public/animations/task-workspace.js && node --check public/scripts/login.js && node --check public/scripts/gateway.js && node --check public/scripts/gateway-viewer.js && python verify.py && node --test tests/*.test.mjs
+
+node:internal/modules/cjs/loader:1568
+  throw err;
+  ^
+
+Error: Cannot find module '/workspace/scratch/913dc6e1a7c0/zhihui-gateway/site/home-source/public/scripts/upgrade.js'
+    at node:internal/modules/cjs/loader:1564:15
+    at node:internal/main/check_syntax:33:20 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+
+Node.js v24.22.1

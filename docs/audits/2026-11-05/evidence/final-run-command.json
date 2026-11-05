@@ -1,0 +1,21 @@
+{
+  "description": "Final exact-lock full-directory validation with per-test output and diagnostic-only pytest option. No -k, test-path or --pytest-arg selection.",
+  "command": [
+    "/workspace/scratch/913dc6e1a7c0/audit-venv/bin/python",
+    "-X",
+    "utf8",
+    "tests/zhihui_harness/run_tests.py",
+    "--target",
+    "manager-assets",
+    "--require-built-web",
+    "--keep",
+    "--verbose"
+  ],
+  "environment": {
+    "PYTEST_ADDOPTS": "-o faulthandler_timeout=60"
+  },
+  "pytest_version": "9.1.1",
+  "pytest_asyncio_version": "1.4.0",
+  "log": "manager-locked-final-verbose.log",
+  "note": "Diagnostic faulthandler_timeout emits thread stacks after 60s; it does not itself terminate a test or alter selection/skip/assertions."
+}

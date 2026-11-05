@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import time
 import uuid
 from decimal import Decimal
@@ -77,25 +78,44 @@ def _dead_dir() -> Path:
 
 
 def _fsync_dir(path: Path) -> None:
-    try:
-        fd = os.open(str(path), os.O_RDONLY)
-    except OSError:
+    # POSIX rename durability requires the directory entry to be synced too.
+    # A failed fsync is unknown persistence, not a successful spill receipt.
+    if os.name == 'nt':
         return
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
         os.fsync(fd)
-    except OSError:
-        pass
     finally:
         os.close(fd)
 
 
-def backlog() -> int:
-    """待重放回执条数；目录不可读时返回 0（就绪判定另有 database_writable）。"""
-    directory = spool_dir()
+def _receipt_count(directory: Path) -> int:
+    """Distinguish an absent directory from unreadable/unsafe evidence.
+
+    pathlib.glob may suppress directory access errors. Those errors cannot be
+    interpreted as an empty ledger or a zero-dead-letter admission proof.
+    """
     try:
-        return sum(1 for _ in directory.glob('*.json'))
-    except OSError:
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            return -1
+        count = 0
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name.endswith('.json'):
+                    if not entry.is_file(follow_symlinks=False):
+                        return -1
+                    count += 1
+        return count
+    except FileNotFoundError:
         return 0
+    except OSError:
+        return -1
+
+
+def backlog() -> int:
+    """待重放回执条数；不存在为 0，不可读为 -1（未知，禁止放行）。"""
+    return _receipt_count(spool_dir())
 
 
 def backpressure_limit() -> int:
@@ -103,7 +123,8 @@ def backpressure_limit() -> int:
 
 
 def should_backpressure() -> bool:
-    return backlog() >= backpressure_limit()
+    pending = backlog()
+    return pending < 0 or pending >= backpressure_limit()
 
 
 def build_entry(facts: dict, *, config_hash: str | None = None,
@@ -466,11 +487,7 @@ def dead_letters() -> int:
     读不到就返回 -1（= 不确定），由调用方按"不健康"处理 —— **不能**返回 0：
     0 的意思是"确认没有死信"，而读不到并不等于没有。
     """
-    directory = _dead_dir()
-    try:
-        return sum(1 for _ in directory.glob('*.json'))
-    except OSError:
-        return -1
+    return _receipt_count(_dead_dir())
 
 
 def dead_dispositions() -> int:
@@ -520,7 +537,7 @@ def channel_probe(*, force: bool = False) -> dict:
     return {'ok': ok, 'reason': reason}
 
 
-def channel_state(*, force_probe: bool = False) -> dict:
+def channel_state(*, force_probe: bool = False, include_dispositions: bool = True) -> dict:
     """回执通道的**持久**状态（给就绪判定与准入用）。
 
     `state`：
@@ -561,7 +578,9 @@ def channel_state(*, force_probe: bool = False) -> dict:
         'writable': bool(probe['ok']),
         'pending': pending,
         'dead': dead,
-        'dead_dispositions': dead_dispositions(),
+        # Historical disposition counts are a diagnostics field, not an
+        # admission predicate. Do not reread this unbounded history per request.
+        'dead_dispositions': dead_dispositions() if include_dispositions else None,
         'reason': reason or None,
         'checked_at': int(time.time()),
     }
@@ -573,10 +592,10 @@ def admission_block() -> dict:
     返回 `{'blocked', 'code', 'reason'}`；`code` 是稳定可分支的字符串，且三类
     都是**可恢复**的（积压会重放掉、死信可处置、目录可修复后探测通过即恢复）。
     """
-    state = channel_state()
-    if not state['writable']:
+    state = channel_state(include_dispositions=False)
+    if not state['writable'] or state['pending'] < 0 or state['dead'] < 0:
         return {'blocked': True, 'code': CODE_SPOOL_UNWRITABLE,
-                'reason': ('账本回执通道不可写（%s），暂停新生成以免事实丢失；'
+                'reason': ('账本回执通道无法核实读写状态（%s），暂停新生成以免事实丢失；'
                            '修复目录/磁盘后可自动恢复' % (state['reason'] or '写探测失败'))}
     if state['dead'] > 0:
         return {'blocked': True, 'code': CODE_DEAD_PENDING,
@@ -631,6 +650,7 @@ def dispose_dead_letters(actor: str, reason: str) -> dict:
                 disposed += 1
             except OSError:
                 log.exception('dispose dead letter failed file=%s', path.name)
+    _fsync_dir(processed)
     _fsync_dir(directory)
     return {'disposed': disposed, 'remaining': dead_letters(),
             'dispositions': dead_dispositions(), 'ledger': str(ledger_path)}

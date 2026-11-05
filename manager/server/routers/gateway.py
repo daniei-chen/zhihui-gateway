@@ -7,6 +7,8 @@ import os
 import sys
 from urllib.parse import urlsplit
 import logging
+import math
+import re
 import threading
 import time
 import uuid
@@ -653,9 +655,11 @@ def _usage_credit(usage: dict | None) -> float | None:
         return None
     try:
         val = float(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    return val if val >= 0 else None
+    # The immutable ledger uses a finite, bounded micro-unit representation.
+    # Invalid provider evidence must stay unknown, not abort request settlement.
+    return val if math.isfinite(val) and 0 <= val <= 9_000_000_000_000 else None
 
 
 def _usage_cache(usage: dict | None) -> tuple[int | None, int | None, int | None]:
@@ -678,9 +682,11 @@ def _usage_cache(usage: dict | None) -> tuple[int | None, int | None, int | None
             return None
         try:
             val = int(raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
-        return val if val >= 0 else None
+        if isinstance(raw, float) and raw != val:
+            return None
+        return val if 0 <= val <= 2**53 - 1 else None
 
     return (_one('prompt_cache_hit_tokens'),
             _one('prompt_cache_miss_tokens'),
@@ -806,9 +812,18 @@ def normalize_chat_images(body: object) -> int:
 
 @requestperf.timed('settlement')
 def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None, effort: str | None = None, session_key: str | None = None) -> None:
-    pt,ct=observability.usage_int(pt),observability.usage_int(ct)
+    from .. import metering
+    parsed_usage = metering.parse_usage(usage)
+    # Original provider fields are the evidence. A caller's coercion of NaN,
+    # overflow or a fractional count to zero must not turn into known zero use.
+    if parsed_usage.observed:
+        pt, ct = parsed_usage.storage_tokens()
+    else:
+        pt, ct = observability.usage_int(pt), observability.usage_int(ct)
     if credit is None:
-        credit = _usage_credit(usage)
+        credit = parsed_usage.credit
+    else:
+        credit = _usage_credit({'credit': credit})
     cache_hit, cache_miss, cache_write = _usage_cache(usage)
     state = observability.current.get()
     http_status = state.http_status if state and state.http_status else status
@@ -851,8 +866,8 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         'error_stage': state.error_stage if state else None,
         'release_id': observability.RELEASE_ID,
         'account': state.account if state else None,
-        'usage_source': 'upstream' if usage else 'unknown' if stream else 'not_reported',
-        'usage_complete': 1 if isinstance(usage, dict) and 'prompt_tokens' in usage and 'completion_tokens' in usage else 0,
+        'usage_source': 'upstream' if parsed_usage.observed else 'unknown' if stream else 'not_reported',
+        'usage_complete': int(parsed_usage.complete and not parsed_usage.malformed),
         'first_byte_ms': state.first_byte_ms if state else None,
         # K27：实际路由到的平台/上游。NULL = 本请求没有记录到路由结果
         # （例如鉴权阶段就被拒），**不是** workbuddy —— 对账时单独归类。
@@ -1126,7 +1141,8 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)', (dispatch_id, state.request_id, int(time.time())))
         headers['X-Manager-Dispatch-ID'] = dispatch_id
         headers['X-WB-Compatibility'] = 'manager-scoped-v1'
-        if (getattr(state, 'forced_platform', None) or 'workbuddy') == 'workbuddy':
+        platform = getattr(state, 'actual_platform', None) or forced_platform.get() or up.get('name')
+        if platform not in ('qoder', 'trae'):
             state.provider_budget_enabled = True
             headers['X-WB-Attempt-Budget'] = str(state.provider_attempts_remaining)
             from .. import deadline as provider_deadline
@@ -1139,6 +1155,13 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
             namespace = f'key:{state.key_id}/upstream:{up.get("id") or 0}'
             headers['X-WB-Tenant'] = namespace
     return headers
+
+
+async def _upstream_headers_async(upstream: dict | None = None) -> dict:
+    # The dispatch marker is a durable SQLite write. Keep lock/fsync contention
+    # away from every active SSE stream, and join the write on cancellation.
+    from ..services.asyncwork import joined_thread
+    return await joined_thread(_upstream_headers, upstream)
 
 
 def _consume_attempt_budget(response) -> bool:
@@ -1270,7 +1293,7 @@ def _scan_sse(pending: str, usage: dict) -> tuple[str, bool]:
         if not isinstance(obj, dict):
             continue
         if isinstance(obj.get('usage'), dict):
-            usage.update(obj['usage'])
+            observability.merge_usage(usage, obj['usage'])
         choices = obj.get('choices')
         if isinstance(choices, list):
             for choice in choices:
@@ -1327,6 +1350,18 @@ def key_usage(request: Request):
             'remaining': max(0, limit_n - used_n) if limit_n else None,
         }
 
+    def credit_allowance(limit, used):
+        from .. import ledger
+        # Subtract whole micro-units: int(0.3) would incorrectly claim unlimited
+        # credit, and floating subtraction would expose 0.09999999999999998.
+        limit_units = ledger.units(limit or 0)
+        used_units = ledger.units(used or 0)
+        return {
+            'used': used_units / ledger.SCALE,
+            'limit': limit_units / ledger.SCALE if limit_units else None,
+            'remaining': max(0, limit_units - used_units) / ledger.SCALE if limit_units else None,
+        }
+
     now = int(time.time())
     expires_at = int(key.get('expires_at') or 0)
     # 记一行**请求日志**（与 `/v1/models` 同口径，0 token）：否则一把密钥被
@@ -1346,7 +1381,7 @@ def key_usage(request: Request):
             'models': list(key.get('models') or []),
         },
         'tokens': allowance(key.get('quota'), key.get('used_tokens')),
-        'credits': allowance(key.get('quota_credit'), key.get('used_credit')),
+        'credits': credit_allowance(key.get('quota_credit'), key.get('used_credit')),
         'last_used_at': int(key.get('last_used_at') or 0),
         # 这几个数字是面板**已记录**的值，读取时刻即 snapshot_at；不是向上游现问的。
         'snapshot_at': now,
@@ -1553,13 +1588,22 @@ async def usage_v1(request: Request):
     响应恒含 by_model（规范模型 → today/last_7d/last_30d 全窗口拆分）与
     live_by_model（规范模型 → 实时速度），新模型自动出现。
     """
+    ip = iputil.client_ip(request)
+    ua = request.headers.get('user-agent')
     token = _bearer(request)
     if not token:
+        _log_ip(ip, request.url.path, True, ua, 'missing_key')
         return _oai_error('缺少 API Key，请在 Authorization 头中提供 Bearer 令牌', 401,
                           'authentication_error', 'missing_api_key')
     key = keysvc.resolve(token)
     if not key:
+        _log_ip(ip, request.url.path, True, ua, 'invalid_key')
         return _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
+    if _global_ip_blocked(ip):
+        _log_ip(ip, request.url.path, True, ua, 'ip_blocked')
+        observability.mark_error('ip_blocked')
+        _record(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        return _oai_error('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
     if not key['enabled']:
         return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
     if key['expires_at'] and key['expires_at'] < time.time():
@@ -1572,16 +1616,23 @@ async def usage_v1(request: Request):
     except (TypeError, ValueError):
         live_window = 3
     live_window = min(300, max(2, live_window))
-    resp = {
-        'key': {'name': key['name'], 'prefix': key['prefix']},
-        'today': _usage_window(key['id'], today),
-        'last_7d': _usage_window(key['id'], _usage_since(7)),
-        'last_30d': _usage_window(key['id'], _usage_since(30)),
-        'live': _usage_live(key['id'], live_window),
-    }
+    by_model = _usage_by_model_windows(key['id'], today, _usage_since(7), _usage_since(30))
+    live_by_model = _usage_live_model(key['id'], live_window)
+    # Totals and breakdowns describe the same read, and each history table is
+    # scanned once instead of independently for each window and total.
+    resp = {'key': {'name': key['name'], 'prefix': key['prefix']}}
+    for window in ('today', 'last_7d', 'last_30d'):
+        totals = {name: sum(windows[window][name] for windows in by_model.values())
+                  for name in ('requests', 'tokens', 'cache_hit_tokens', 'cache_miss_tokens')}
+        cached = totals['cache_hit_tokens'] + totals['cache_miss_tokens']
+        totals['hit_rate'] = round(totals['cache_hit_tokens'] / cached, 4) if cached else None
+        resp[window] = totals
+    live_tokens = sum(row['tokens'] for row in live_by_model.values())
+    resp['live'] = {'window_seconds': live_window, 'tokens': live_tokens,
+                    'tokens_per_second': round(live_tokens / live_window, 1)}
     # by_model / live_by_model：恒返回的增量字段（需求信 A2，向后兼容）。
-    resp['by_model'] = _usage_by_model_windows(key['id'], today, _usage_since(7), _usage_since(30))
-    resp['live_by_model'] = _usage_live_model(key['id'], live_window)
+    resp['by_model'] = by_model
+    resp['live_by_model'] = live_by_model
     for _name in resp['by_model']:
         resp['live_by_model'].setdefault(
             _name, {'window_seconds': live_window, 'tokens': 0, 'tokens_per_second': 0.0})
@@ -1603,7 +1654,7 @@ async def list_models(request: Request):
     try:
         async with config.http_client(30, connect=3) as client:
             resp = await client.get(f'{upstream["base_url"]}/v1/models',
-                                    headers=_upstream_headers(upstream))
+                                    headers=await _upstream_headers_async(upstream))
         latency = int((time.time() - started) * 1000)
         from .. import portalpolicy
         if portalpolicy.is_portal(key):
@@ -2107,9 +2158,8 @@ async def _prepare_forward_async(key, body, *, request=None):
         requestperf.mark('forward_prepared')
         return result
 
-    task = asyncio.create_task(asyncio.to_thread(work))
-    try:
-        result = await asyncio.shield(task)
+    def validate_dispatch(result):
+        check_cancelled()
         if request is not None and not isinstance(result, JSONResponse):
             # A key can be revoked/rotated while blocking preparation is running.
             # Recheck without consuming a second rate/concurrency allowance.
@@ -2136,6 +2186,12 @@ async def _prepare_forward_async(key, body, *, request=None):
             if fresh.get('upstream_id') != key.get('upstream_id'):
                 return _oai_error('密钥路由在准备期间已变更，请重试', 409,
                                   'invalid_request_error', 'key_configuration_changed')
+            check_cancelled()
+            reason = keysvc.claim_ip(fresh, ip)
+            if reason:
+                observability.mark_error(reason.code)
+                return _oai_error(reason, reason.status, reason.err_type, reason.code)
+        check_cancelled()
         if not isinstance(result, JSONResponse):
             from .. import budget
             try:
@@ -2144,6 +2200,17 @@ async def _prepare_forward_async(key, body, *, request=None):
                 observability.mark_error(error.code)
                 return _oai_error(str(error), error.status, 'server_error' if error.status >= 500 else 'insufficient_quota', error.code)
         return result
+
+    task = asyncio.create_task(asyncio.to_thread(work))
+    try:
+        result = await asyncio.shield(task)
+        if isinstance(result, JSONResponse):
+            return result
+        # Revalidation, IP binding and durable dispatch marking can wait for the
+        # SQLite writer. Keep that wait off the event loop, while retaining the
+        # same joined cancellation ownership as request encoding above.
+        task = asyncio.create_task(asyncio.to_thread(validate_dispatch, result))
+        return await asyncio.shield(task)
     except asyncio.CancelledError:
         cancelled.set()
         # Never release body bytes or key/budget ownership while a worker lives.
@@ -2240,9 +2307,9 @@ async def _chat(request: Request, upstream_path: str):
             attempt = 1
             while True:
                 try:
-                    async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream))) as client:
+                    async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream), bounded_response=True)) as client:
                         resp = await deadline_mod.await_total(
-                            client.post(url, content=wire, headers=_upstream_headers(upstream)),
+                            client.post(url, content=wire, headers=await _upstream_headers_async(upstream)),
                             request_deadline)
                     # 2026-10-28：上游「明确拒绝且未处理」的有界重试。
                     # 判据见 _is_not_processed_rejection()：这类响应没有生成、
@@ -2320,14 +2387,14 @@ async def _chat(request: Request, upstream_path: str):
             return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
 
     # 流式转发
-    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream), bounded_response=True)
     rejection_limit = _rejection_retry_limit()
     attempt = 1
     resp = None
     handed_off = False
     try:
         while True:
-            req = client.build_request('POST', url, content=wire, headers=_upstream_headers(upstream))
+            req = client.build_request('POST', url, content=wire, headers=await _upstream_headers_async(upstream))
             resp = await deadline_mod.await_headers(
                 client.send(req, stream=True), request_deadline)
             budget_available = _consume_attempt_budget(resp)
@@ -2343,7 +2410,7 @@ async def _chat(request: Request, upstream_path: str):
                 attempt += 1
                 await deadline_mod.await_total(asyncio.sleep(_REJECTION_RETRY_DELAY_S), request_deadline)
                 client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'],
-                                            identity=_forwarding_identity(key, upstream))
+                                            identity=_forwarding_identity(key, upstream), bounded_response=True)
                 continue
             try:
                 data = json.loads(early)
@@ -2489,17 +2556,31 @@ async def gateway_health() -> dict:
         # 不回异常详情：那会暴露上游地址与网络拓扑
         return {'service': 'zhihui-gateway', 'upstream_ok': False}
 
+_SURROGATE = re.compile('[\ud800-\udfff]')
+
+
 def _invalid_unicode_path(value, path='$'):
-    pending=[(value,path)]
+    def children(item, location):
+        if isinstance(item, dict):
+            for index, (key, child) in enumerate(item.items()):
+                yield key, f'{location}.key[{index}]'
+                yield child, f'{location}.value[{index}]'
+        else:
+            for index, child in enumerate(item):
+                yield child, f'{location}[{index}]'
+
+    # Iterator frames retain only the current depth. A wide JSON array must not
+    # allocate another tuple and diagnostic path for every element at once.
+    pending = [iter(((value, path),))]
     while pending:
-        item, location=pending.pop()
-        if isinstance(item,str):
-            if any(0xD800 <= ord(c) <= 0xDFFF for c in item):
+        try:
+            item, location = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(item, str):
+            if _SURROGATE.search(item):
                 return location[:256]
-        elif isinstance(item,dict):
-            for index,(key,child) in enumerate(item.items()):
-                pending.append((key,f'{location}.key[{index}]'))
-                pending.append((child,f'{location}.value[{index}]'))
-        elif isinstance(item,list):
-            pending.extend((child,f'{location}[{index}]') for index,child in enumerate(item))
+        elif isinstance(item, (dict, list)):
+            pending.append(children(item, location))
     return None

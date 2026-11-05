@@ -1,0 +1,57 @@
+{
+  "baseline_commit": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+  "baseline_paths": 1799,
+  "candidate_source_paths": 1836,
+  "source_union_paths": 1836,
+  "excludes": "docs/audits/2026-11-05/",
+  "interpretation": "manual-full means entire public file read, not formal proof; patches do not cover private engine source; test execution is not human review",
+  "review_levels": {
+    "inventory-only": 517,
+    "manual-full": 543,
+    "automated-only": 754,
+    "manual-targeted": 22
+  },
+  "categories": {
+    "docs-config-and-other-assets": {
+      "inventory-only": 200,
+      "manual-full": 14,
+      "manual-targeted": 2,
+      "automated-only": 56
+    },
+    "frontend-other": {
+      "manual-full": 2,
+      "inventory-only": 31
+    },
+    "frontend-source-and-config": {
+      "manual-full": 190
+    },
+    "frontend-tests": {
+      "automated-only": 32,
+      "manual-full": 9,
+      "manual-targeted": 3
+    },
+    "historical-site-source-and-assets": {
+      "manual-full": 8,
+      "inventory-only": 271,
+      "automated-only": 105
+    },
+    "manager-production-python": {
+      "manual-full": 176
+    },
+    "other-tools-and-runtime-source": {
+      "automated-only": 91,
+      "manual-full": 79
+    },
+    "public-patches-not-complete-engine": {
+      "manual-full": 27
+    },
+    "tests-and-fixtures": {
+      "automated-only": 470,
+      "inventory-only": 15,
+      "manual-targeted": 17,
+      "manual-full": 38
+    }
+  },
+  "manager_production_python_lines": 63977,
+  "human_full_lines_all_file_types": 132774
+}

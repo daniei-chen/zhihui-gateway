@@ -1,0 +1,724 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> zhihui-gateway-web@0.0.7 test
+> node --test lib/*.test.mjs tests/*.test.cjs
+
+(node:25) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/account-list.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  空关键词命中一切（调用方不必在外面判空）
+  ok  只有空格的关键词也命中一切
+  ok  命中昵称
+  ok  命中 uid
+  ok  命中账号文件名
+  ok  命中备注
+  ok  大小写不敏感
+  ok  关键词前后空格忽略
+  ok  都不命中就是 false
+  ok  不搜 enterprise_id（界面上看不到，搜出来无从对照）
+  ok  状态筛选 all → 全留
+  ok  状态筛选 attention → 只留需处理的
+  ok  状态筛选 + 搜索是「与」的关系
+  ok  搜索命中 uid 时也走同一套筛选
+  ok  默认排序 = 后端给的顺序，原样不动
+  ok  按剩余有效期升序（有效期近的在前）
+  ok  按积分升序，**没有积分数据的排最后**（不是当成 0 分排最前）
+  ok  键值相同的保持原顺序（排序稳定）
+  ok  排序不改动入参数组
+  ok  各状态组的条数（含 all）
+  ok  空列表时每个组都是 0（不是缺键）
+  ok  第 1 页取前 3 条
+  ok  第 2 页
+  ok  total 是**全部**条数而不是这一页的条数
+  ok  pages 向上取整（10 / 3 → 4 页）
+  ok  页码越界 → 夹回最后一页，而不是给一张空表
+  ok  页码小于 1 → 夹到第 1 页
+  ok  空列表 → 1 页、第 1 页、没有行（不是 0 页）
+  ok  整除时不留空页
+
+all passed
+✔ lib/account-list.test.mjs (187.341157ms)
+(node:26) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/account-status.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+mergePoolStatus / availabilityOf：上游状态取不到时**不能**判成「不在池里」
+  ok  上游连不上（connected: false）→ 标 poolUnknown
+  ok  上游连不上 → 分档是「未知」而不是「未加载」
+  ok  upstream 整个为 null 也一样（不能因为「没有池」就说账号不在池里）
+  ok  上游连上了但池里没这个号 → 才是真的「未加载」
+  ok  在池里 → 在线
+  ok  面板主动停用要早于「不在池里」判定（否则会显示成故障）
+  ok  上游手动停用位要早于「不在池里」判定
+  ok  「看不到上游」要早于「冷却中」——否则会凭一份过时快照说账号在冷却
+
+accountGroups：只取「配了本地账号目录」的分组
+  ok  默认分组 + 一个新分组（都配了目录）都留下
+  ok  没配目录的分组被剔除（它只做密钥转发，账号接口会 409）
+  ok  只有空白的目录也算没配
+
+tagGroup：逐组合并池状态，并打上分组标记
+  ok  每条都带上分组（id 与名字）
+  ok  在池里的账号标 in_pool: true
+  ok  不在池里的账号标 in_pool: false
+  ok  池状态取不到时标 poolUnknown（而不是 in_pool: false）
+  ok  池状态取不到时**不**说它不在池里
+  ok  upstream 为 null 也走「未知」这一支
+  ok  逐组合并：B 组的账号不会被 A 组的池快照判成「不在池里」
+
+accountKey：同名账号文件在不同分组里必须是两个 key
+  ok  默认分组用 default 前缀
+  ok  非默认分组用 id 前缀
+  ok  同一个文件名、不同分组 → key 不同（否则 React 会把两条当成一条）
+
+interleave：按分组交错，避免某一组把前 9 格占满
+  ok  两组等长 → 轮流取
+  ok  两组不等长 → 短的取完后剩下的接着出
+  ok  空切片不影响
+  ok  全空 → 空数组
+
+degradedCount：只数当前版本里「窗口还没过」的连败降权
+  ok  只数当前版本、且窗口还没过的
+  ok  切到另一个版本时数的是另一条
+
+poolTotals：优先用按版本分好的计数，老上游退回顶层并如实标注
+  ok  有 realm_totals 时用它（不是顶层那份含两个版本的）
+  ok  老上游没有 realm_totals → 退回顶层并标 globalOnly
+  ok  realm_totals 里没有这个版本 → 同样退回顶层（不能给 0）
+  ok  status 为 null → known 为假（界面据此显示「—」而不是 0）
+  ok  9 个细分档全部归到 4 组里（没有漏掉的档位）
+  ok  4 组都至少有一个档位映射过来（没有永远是 0 的死按钮）
+  ok  在线 → 可用
+  ok  冷却中 → 冷却中
+  ok  用户自己摘的号 → 已停用（不是「需处理」：那是他故意的，不是故障）
+  ok  上游硬禁用 / 过期 / 一直失败 / 不在池里 / 状态未知 → 需处理
+  ok  4 组的文案键是字面量（可检索），且与组名一一对应
+
+all passed
+✔ lib/account-status.test.mjs (172.118294ms)
+(node:27) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/async-state.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+splitSettled:
+  ok  all fulfilled
+  ok  failed keys go to errors
+  ok  succeeded keys keep their values
+  ok  failed keys are absent from values
+  ok  all rejected
+  ok  empty
+  ok  extra results ignored
+asyncFlags:
+  ok  first load
+  ok  heartbeat refresh
+  ok  first load failed
+  ok  refresh failed, data kept
+  ok  ready
+  ok  flags are mutually exclusive
+  ok  naive criterion would flash the skeleton every heartbeat
+  ok  real criterion stays quiet
+  ok  a fetcher that swallows its failure still counts as "has data"
+  ok  …so the page renders content instead of the error state
+  ok  …and the trap is gone once that fetcher is in its own group
+depMode:
+  ok  first run
+  ok  nothing changed
+  ok  completed paused scope resumes without replacing a form
+  ok  interrupted paused request is silently refreshed
+  ok  a new context still clears interrupted old values
+  ok  context changed
+  ok  query changed
+  ok  context wins when both change
+  ok  naive "any dep change resets" would flash the skeleton on paging
+  ok  real criterion keeps it a silent refresh
+  ok  paging: rows stay on screen, no skeleton
+
+all passed
+✔ lib/async-state.test.mjs (155.745516ms)
+(node:28) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/chat-stream.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+正常终态：
+协议终态与截断：
+取消：
+错误分支：
+分片与编码：
+
+all passed（58 条）
+✔ lib/chat-stream.test.mjs (229.855043ms)
+(node:29) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/command-palette.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  href 唯一（重复的话 React key 会撞、点了也不知道去哪）
+  ok  id 唯一
+  ok  每一项都带 keywords（至少要有英文名/别名，否则只能按中文搜）
+  ok  href 都是站内绝对路径
+  ok  section-nav 的每一页都在面板里，且标签键一致
+  ok  设置页 8 个 Tab 都在面板里，且标签键与清单模块一致
+  ok  不在 section-nav / settings-tabs 里的项，正好是那 5 个底栏专属页
+  ok  被吸收的三页紧跟在它们所属的那一节后面（扫一眼就能看出归属）
+  ok  被吸收的页面的 groupKey 是它所属的那一节（不是「运营」那种更粗的分组）
+  ok  普通管理员不展示用户管理入口
+  ok  超级管理员可搜索用户管理入口
+  ok  条目数与清单一致
+  ok  每一条都有非空的显示名与归属（漏一个键就会显示裸键名）
+  ok  id 用 href（导航项唯一的稳定标识）
+  ok  keywords 里含路径（渲染层不显示它，只用于匹配）
+  ok  不改动传入的种子
+  ok  空查询返回全部（打开面板不该是一片空白）
+  ok  只有空格也算空查询
+  ok  空查询保持原顺序
+  ok  空查询返回的是**新数组**（不能把内部数组交出去）
+  ok  按中文名精确命中
+  ok  归属提示也参与匹配（「测试台」的归属是「模型」，所以排在最后）
+  ok  大小写不敏感
+  ok  中英混排：中文名 + 英文关键词
+  ok  搜不到就是空
+  ok  多个词是 AND（不是 OR）：「设置」只在归属里，「用户」在名字里
+  ok  多词 AND 不会退化成 OR
+  ok  排序：精确 > 前缀 > 关键词
+  ok  同分时按清单原顺序（不依赖 sort 的实现）
+  ok  redpackets 能搜到「红包」（写作 red-packets）
+  ok  red packets 也一样
+  ok  red-packets 也一样
+  ok  路径可直接搜（/settings/tokens）
+  ok  同一次输入两次给同一个顺序（否则列表在眼前跳）
+  ok  「设置」能搜到设置页与它的 8 个 Tab
+  ok  不改动入参
+  ok  结果里没有重复项
+
+all passed
+✔ lib/command-palette.test.mjs (235.43865ms)
+(node:35) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/dashboard-credits.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+collectScopedExpiries:
+  ok  international keeps its own package
+  ok  domestic keeps its own packages
+  ok  international urgency ignores the other realm
+  ok  domestic urgency follows its own earliest
+  ok  same local day sums only the selected packages
+  ok  empty account list yields nothing
+  ok  missing metadata yields nothing
+  ok  omitted expiries yield nothing
+  ok  empty expiries yield nothing
+  ok  metadata for an account outside the list stays out
+  ok  unique uids, chronological, no double count
+  ok  does not mutate accounts
+  ok  does not mutate metadata
+  ok  does not reorder stored expiries
+  ok  refresh replaces the selected package
+  ok  an unrelated uid cannot change the selected list
+  ok  grouping in UTC
+  ok  grouping in Asia/Shanghai
+
+all passed
+✔ lib/dashboard-credits.test.mjs (535.70791ms)
+(node:41) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/display-prefs.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+groupExpiriesByDay:
+  ok  merges same day
+  ok  keeps days apart, sorted
+  ok  takes earliest of the day
+  ok  empty input
+  ok  does not mutate input
+  ok  same local day collapses
+  ok  sums to 3
+
+all passed
+✔ lib/display-prefs.test.mjs (189.794622ms)
+(node:81) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/dock-groups.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  空数组切出零组
+  ok  全都没写 groupKey → 一组（键为空串）
+  ok  相邻同键并成一组
+  ok  相邻不同键就断开
+  ok  组名取该组第一条的 groupLabel
+  ok  同一键散落两处 → 切成两组，不静默合并
+  ok  组名只认第一条（后面几条即使写了别的标签也不改组名）
+  ok  不写 groupLabel 的组 → 标签为空串（调用方据此画不带标签的分隔线）
+  ok  返回的是**新数组**，不改动入参
+  ok  组内条目的顺序与入参一致
+  ok  全都同组时只有一组，第一条之前不会有分隔线
+  ok  真实底栏切成 4 组，组名依次是 总览/运营/治理/（无）
+  ok  真实底栏共 10 项（8 个目的地 + 2 个动作），一项都不能丢
+  ok  被吸收的三页不再出现在底栏
+
+all passed
+✔ lib/dock-groups.test.mjs (267.690045ms)
+(node:88) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/err-envelope.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+all passed（32 条）
+✔ lib/err-envelope.test.mjs (247.50762ms)
+(node:94) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/i18n/dicts.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+注册与查找：
+回退规则（源语言兜底）：
+加载前后同键不同值（模拟「先回退、加载后切换」）：
+
+all passed（14 条）
+✔ lib/i18n-dicts.test.mjs (271.234869ms)
+(node:100) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/key-limit-form.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ invalid key limits cannot turn into unlimited in the browser (1.423731ms)
+✔ invalid stored policies are visibly blocked and need explicit repair confirmation (0.895488ms)
+✔ account hot-load uncertainty is not silently displayed as confirmed (0.940475ms)
+✔ all locales explain policy repair and non-disruptive account observation (13.909996ms)
+(node:115) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/managed-user-password.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ managed user passwords accept at least eight unmodified Unicode code points (1.216548ms)
+✔ only the protected admin account retains the existing minimum-length reset rule (0.240752ms)
+(node:117) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/platform-store.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+默认值与显式选择：
+水合：不重复请求的关键：
+用户切换：
+跨标签页（storage 事件）：
+存储被禁 / 无痕：
+隔离性：
+
+all passed（42 条）
+✔ lib/platform-store.test.mjs (204.344102ms)
+✔ portal displays only confirmed daily credit and blocks repeated effects (18.824065ms)
+✔ portal fetch stays separate from manager session interceptors (0.476146ms)
+✔ request history pages and password reset preserve visible security boundaries (0.611453ms)
+✔ checkin progress counts only confirmed eligible accounts and keeps unknown rewards pending (2.316455ms)
+✔ request presentation keeps zero distinct from unknown and never fabricates measurements (42.05806ms)
+✔ portal character count matches backend without trimming or normalizing secrets (1.212252ms)
+✔ portal username checks match creation and search does not mutate the member list (1.463058ms)
+✔ user management is primary and wallet exceptions load only in their tab (0.617543ms)
+✔ operator amounts preserve six decimal places without rounding away a debt (5.737063ms)
+✔ debt waiver is distinct from adding credits and requests keep explicit confirmation (3.382342ms)
+✔ admin bonus requires exact root identity and retry-stable actual grants, not credit lines (0.595621ms)
+✔ dispatch hold and request-end proof are displayed without a force-unlock affordance (0.624642ms)
+✔ portal rejects successful non-JSON, null, array and malformed workspace responses (32.127263ms)
+✔ authorization status survives invalid JSON and valid business errors remain exact (3.275336ms)
+✔ known authorization rejection is not hidden by a stalled error body (2.674387ms)
+✔ read deadline covers response body and clears its timer without retrying (1.560861ms)
+✔ caller abort propagates and mutation failure is uncertain, with no retry or deadline (2.011659ms)
+✔ valid read contracts preserve zero and null, but reject unsafe page and key shapes (5.924706ms)
+(node:183) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/reload-state.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  四档相位
+  ok  每一档都有确定的延迟（漏一档会拿到 undefined → setTimeout 当 0 → 疯狂轮询）
+  ok  只有「应用中」需要跟紧（其余用慢档）
+  ok  跟紧的间隔必须**严格快于**慢档（否则等于没跟）
+  ok  idle 不占位，其余三档都要在界面上出现
+  ok  从没重载过 → idle（不能凭空说「已生效」）
+  ok  last_ok=null 且没在跑 → idle
+  ok  running → applying
+  ok  pending → applying（合并窗口里还没轮到它）
+  ok  上一次失败、这一次正在跑 → applying（不能拿上一次的结论盖住这一次）
+  ok  上一次成功、这一次正在跑 → applying（同理，不能说「已生效」）
+  ok  排队中同样优先于上一次的结论
+  ok  上次失败、现在没在跑 → failed
+  ok  失败发生在**打开页面之前**也要报（基线比 last_at 大也一样）
+  ok  失败是本会话期间发生的，当然也要报
+  ok  本会话期间落地了一次成功 → ok
+  ok  成功发生在本会话之前 → idle（否则页面会永远挂着「配置已生效」）
+  ok  基线比 last_at 还大（时钟异常 / 状态被重置）→ idle，不能算成本次
+  ok  ok 的判据是 last_at **严格大于**基线（相等不算）
+  ok  优先级顺序：正在跑盖过失败，失败盖过成功
+  ok  不改动入参
+  ok  同一个输入永远给同一个结果（没有内部状态）
+
+all passed
+✔ lib/reload-state.test.mjs (155.318887ms)
+(node:186) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/schedule-validation.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+schedule form validation passed: bounds, integer types, merged ranges, zero defaults
+✔ lib/schedule-validation.test.mjs (216.503919ms)
+(node:201) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/section-nav.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  三节
+  ok  每节两项（只有一项就不该叫「二级导航」）
+  ok  每节第一项是该节的落点，且 href 与节名一致
+  ok  所有 key 唯一
+  ok  所有 href 唯一
+  ok  所有 iconKey 唯一（映射表里不该有两项共用同一个图标）
+  ok  href 都是站内绝对路径（不带 basePath）
+  ok  labelKey 都指向 nav.* 下的键
+  ok  sectionNavItems 与 SECTION_NAV 一致
+  ok  isSectionKey 认三节
+  ok  isSectionKey 不认别的
+  ok  /accounts
+  ok  /tasks
+  ok  /keys
+  ok  /red-packets
+  ok  /models
+  ok  /playground
+  ok  /accounts/ 也认
+  ok  /tasks/ 也认
+  ok  /red-packets/// 也认
+  ok  /workbuddy-manager/tasks 也认（子路径部署）
+  ok  前缀 + 尾斜杠
+  ok  前缀本身不是任何一项
+  ok  前缀 + 未知页
+  ok  /wb 前缀下 /wb/tasks 认
+  ok  前缀不在场时按原样比（传错前缀不该让导航整排消失）
+  ok  /wbtasks 不是任务记录页（前缀后面不是 `/`，剥完也对不上）
+  ok  /dashboard 认不出
+  ok  /stats 认不出
+  ok  /logs 认不出
+  ok  /security 认不出
+  ok  / 认不出
+  ok  空串认不出
+  ok  null 认不出
+  ok  undefined 认不出
+  ok  设置页认不出（它有自己的 settings-tabs.ts，两套清单不混）
+  ok  /tasksx 不该认（不是按前缀匹配）
+  ok  /my-tasks 不该认
+  ok  /keys2 不该认
+  ok  /models/playground 不该认（该页不存在，是**有意**留空）
+  ok  /settings/models 不该认（曾因后缀匹配被误认成 models 节）
+  ok  /some/prefix/tasks 不该认（只剥调用方给的那一个前缀）
+  ok  /keys/red-packets 不该认（平级路径，没有嵌套）
+  ok  /accounts/tasks 不该认（平级路径，没有嵌套）
+  ok  每一项的 href 都能认出自己（往返一致）
+  ok  加了部署前缀后仍然往返一致
+
+all passed
+✔ lib/section-nav.test.mjs (190.750334ms)
+(node:209) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/settings-tabs.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  清单包含原有导航和末尾管家、预警，顺序固定
+  ok  清单里没有重复项
+  ok  默认 Tab 是清单第一项
+  ok  每一项的 href 互不相同
+  ok  href 形状：/settings/<tab>
+  ok  isSettingsTab('upstream') → true
+  ok  isSettingsTab('proxy') → true
+  ok  isSettingsTab('models') → true
+  ok  isSettingsTab('users') → true
+  ok  isSettingsTab('tokens') → true
+  ok  isSettingsTab('system') → true
+  ok  isSettingsTab('backup') → true
+  ok  isSettingsTab('changelog') → true
+  ok  isSettingsTab('about') → true
+  ok  isSettingsTab('steward') → true
+  ok  isSettingsTab('alerts') → true
+  ok  isSettingsTab("") → false
+  ok  isSettingsTab("nope") → false
+  ok  isSettingsTab("Upstream") → false
+  ok  isSettingsTab("upstream ") → false
+  ok  isSettingsTab(" upstream") → false
+  ok  isSettingsTab("SETTINGS") → false
+  ok  isSettingsTab("0") → false
+  ok  isSettingsTab(undefined) → false（非字符串）
+  ok  isSettingsTab(null) → false（非字符串）
+  ok  isSettingsTab(0) → false（非字符串）
+  ok  isSettingsTab(1) → false（非字符串）
+  ok  isSettingsTab(true) → false（非字符串）
+  ok  isSettingsTab([]) → false（非字符串）
+  ok  isSettingsTab({}) → false（非字符串）
+  ok  isSettingsTab(["upstream"]) → false（非字符串）
+  ok  settingsTabFromPath("/settings/upstream") → "upstream"
+  ok  settingsTabFromPath("/settings/models") → "models"
+  ok  settingsTabFromPath("/settings/changelog") → "changelog"
+  ok  settingsTabFromPath("/settings/users/") → "users"
+  ok  settingsTabFromPath("/settings/users///") → "users"
+  ok  settingsTabFromPath("/workbuddy-manager/settings/tokens") → "tokens"
+  ok  settingsTabFromPath("/workbuddy-manager/settings/tokens/") → "tokens"
+  ok  settingsTabFromPath("/settings") → null
+  ok  settingsTabFromPath("/settings/") → null
+  ok  settingsTabFromPath("/workbuddy-manager/settings") → null
+  ok  settingsTabFromPath("/settings/nope") → null
+  ok  settingsTabFromPath("/settings/UPSTREAM") → null
+  ok  settingsTabFromPath("/dashboard") → null
+  ok  settingsTabFromPath("/") → null
+  ok  settingsTabFromPath("") → null
+  ok  settingsTabFromPath(null) → null
+  ok  settingsTabFromPath(undefined) → null
+  ok  settingsTabFromPath("/settings/models/extra") → null
+  ok  settingsTabFromPath("/workbuddy-settings/models") → null
+  ok  settingsTabFromPath("/settingsx/models") → null
+  ok  刻意放宽的一处：只要后缀是 /settings/<tab> 就认（不依赖 basePath）
+  ok  每个 href 都能被 settingsTabFromPath 解析回自己（导航高亮不会错位）
+
+all passed
+✔ lib/settings-tabs.test.mjs (224.728405ms)
+(node:216) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/sse.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+基本事件：
+行结束符：
+分片与 UTF-8：
+多行 data / 注释 / 字段：
+半截关闭：
+防御：
+
+all passed（37 条）
+✔ lib/sse.test.mjs (288.242612ms)
+(node:225) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/stale-build.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+错误识别：
+自动刷新防环：
+
+all passed（27 条）
+✔ lib/stale-build.test.mjs (254.586658ms)
+(node:231) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/sse.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ SSE bounds an unterminated "data: " line and stays terminal (2.547322ms)
+✔ SSE bounds an unterminated ": " line and stays terminal (0.279829ms)
+✔ SSE bounds an unterminated "unknown: " line and stays terminal (0.182036ms)
+✔ SSE bounds an unterminated "event: " line and stays terminal (0.181225ms)
+✔ SSE bounds an unterminated "id: " line and stays terminal (0.186172ms)
+✔ SSE bounds cumulative data across otherwise legal lines (0.393495ms)
+✔ SSE counts UTF-8 bytes across codepoint and surrogate boundaries (0.552087ms)
+✔ SSE parsing is invariant at every byte and string split with CRLF, BOM and Unicode (6.505907ms)
+✔ SSE ignores only the initial BOM and keeps a later BOM as part of its field (0.28771ms)
+✔ SSE rejects invalid limits and ignores a retry too large for an exact integer (0.87598ms)
+✔ stream releases its reader at done without another read or retry (0.934155ms)
+✔ stream releases its reader at error without another read or retry (0.454945ms)
+✔ stream releases its reader at overflow without another read or retry (32.118511ms)
+✔ stream answer and display callback never exceed the declared answer cap (0.527762ms)
+{"synthetic_structural_sharing":[{"size":100,"milliseconds":0.11},{"size":500,"milliseconds":4.151},{"size":2000,"milliseconds":1.205}],"inference_benchmark":false}
+✔ unchanged responses and rows retain identity without mutating either input (2.000764ms)
+✔ changed values, removed fields and non-JSON objects are not hidden (2.253813ms)
+✔ oversized arrays fall back to the new value instead of walking beyond the budget (10.599287ms)
+✔ synthetic account scales preserve stable row references with a bounded traversal (11.870535ms)
+(node:247) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/lib/usage-chart.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /workspace/scratch/913dc6e1a7c0/zhihui-gateway/src/three-platform/web/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+chartSpecFor：范围决定粒度与形态
+  ok  今日 → 按小时（不然只有一根柱子） -- {"granularity":"hour","shape":"bar","tickEvery":3}
+  ok  今日 → 柱状（每小时一根，读起来自然）
+  ok  今日 → 每 3 小时一个刻度（24 个标签会糊）
+  ok  近 7 天 → 按天柱状、每天都标 -- {"granularity":"day","shape":"bar","tickEvery":1}
+  ok  近 30 天 → 面积（30 根柱子太密） -- {"granularity":"day","shape":"area","tickEvery":5}
+  ok  近 90 天 → 面积 + 稀疏刻度 -- {"granularity":"day","shape":"area","tickEvery":15}
+hourlySeries：固定 24 个点
+  ok  24 个点（后端补零 + 这里兜底） -- 实得 24
+  ok  标签是 HH:00
+  ok  第 9 小时数值正确（token 为 prompt+completion） -- {"label":"09:00","full":"2026-09-29 09:00","tokens":140,"requests":3,"failed":1,"isNow":false}
+  ok  当前小时被标记出来（UI 会高亮）
+  ok  没有数据的时段是 0，不是缺格
+  ok  输入乱序也按小时归位
+dailySeries：未知「今天」时用数据里最新一天锚定（hydration 安全）
+  ok  窗口长度仍为 3
+  ok  窗口末尾锚到数据最新一天 -- ["10-01","10-02","10-03"]
+  ok  最新一天的数据落在最后一格 -- 2
+  ok  无数据时长度仍为 2
+  ok  无数据时全为 0
+  ok  同输入两次结果一致（无隐藏时间依赖）
+dailySeries：窗口内定长、缺的天补零
+  ok  7 天窗口 = 7 个点 -- 实得 7
+  ok  窗口是「今天往前数 7 天」 -- 09-23 … 09-29
+  ok  今天的数据对得上
+  ok  没有请求的那天补 0（不补的话那天会从图上消失）
+  ok  中间那天有数据 -- {"label":"09-27","full":"2026-09-27","tokens":30,"requests":2,"failed":0}
+  ok  跨月补齐正确 -- 09-29,09-30,10-01
+  ok  跨年补齐正确 -- 12-31,01-01
+  ok  窗口之外的点被丢掉（定长承诺）
+todayKeyLocal：本地时区，不是 UTC
+  ok  本地日期（UTC 会退到 09-28） -- 2026-09-29
+
+all passed（27 条）
+✔ lib/usage-chart.test.mjs (218.214989ms)
+✔ successful confirmation clears the real password dialog and rejects same-turn duplicate clicks (185.454069ms)
+✔ an unknown model map cannot be displayed as empty or sent as a destructive replacement (381.84437ms)
+✔ model map writes preserve existing aliases, serialize replacement and retain a failed draft (220.860302ms)
+✔ model map results from an obsolete permission scope cannot restore optimistic data (170.647816ms)
+✔ duration input normalization uses empty values without inventing undefined or null strings (167.269619ms)
+✔ security switch and mode cannot concurrently replace the same whole policy (59.418882ms)
+✔ a late security save cannot alter a new read-only scope (57.890668ms)
+✔ proxy partial initial failure exposes retry, never a writable blank fallback config (88.47022ms)
+✔ proxy probing cannot erase an unsaved global draft or turn a read failure into a writable state (92.991361ms)
+✔ proxy save ignores completion after unmount (60.050804ms)
+✔ a proxy save callback captured before refresh cannot invalidate the refresh and strand loading (50.387014ms)
+✔ failed upstream directory blocks both creating and submitting a default-bound key (103.945136ms)
+✔ export target changes drop old payloads and old finalizers cannot unlock a newer export (122.55631ms)
+✔ closing a one-time key dialog removes results and rejects late secret material in a new dialog (93.011475ms)
+✔ local import keeps one real mutation in flight and never attributes its result to another target (82.329407ms)
+✔ backup polling has one in-flight read, pauses hidden tabs and rejects canceled late progress (39.525435ms)
+✔ starting backup invalidates an earlier idle poll without allowing duplicate actions (44.77236ms)
+✔ backup unmount aborts configuration and progress reads and never schedules retries (77.753685ms)
+✔ backup does not treat a status invalidated while hidden as proof of an idle job (46.897851ms)
+✔ token plan load failure is persistent and retryable, without an invented configuration (287.600432ms)
+✔ token plan rejects a superseded read and a late unmounted read (228.843099ms)
+✔ token plan preserves confirmed data but blocks actions after a failed post-run refresh (92.059179ms)
+✔ token plan serializes saves and runs and ignores a write completing after unmount (78.394152ms)
+✔ daily plan load failure is persistent and retryable, without an invented configuration (82.694069ms)
+✔ daily plan rejects a superseded read and a late unmounted read (131.348883ms)
+✔ daily plan preserves confirmed data but blocks actions after a failed post-run refresh (45.589423ms)
+✔ daily plan serializes saves and runs and ignores a write completing after unmount (59.625273ms)
+✔ daily full task requires confirmation and its promise includes the post-run read (41.471597ms)
+✔ a claimant can recover their own key when left=0 and expired=false (47.816767ms)
+✔ a claimant can recover their own key when left=1 and expired=true (55.622565ms)
+✔ successful draw becomes recoverable immediately and closing does not reopen the draw action (59.332054ms)
+✔ failed draws can be retried and late reads or draws cannot update an unmounted claim page (105.275646ms)
+✔ red packet share URL keeps the deployment prefix and encodes the code in displayed and copied links (80.674893ms)
+✔ console carries the homepage mint and apricot side atmosphere without tinting semantic chart colors (1.315813ms)
+✔ console logo retains the homepage exact gradient and unique SVG ids (113.173131ms)
+✔ chart palette separates traffic, income, expense and failures without recoloring SVGs (1.558507ms)
+✔ Trae presents the official HTTPS link to copy, not a fabricated working callback (13.70799ms)
+✔ new user controls share a row, with password guidance outside the control grid (1.405574ms)
+✔ workbench uses near-white surfaces without fading readable text or semantic errors (0.228083ms)
+✔ the visible language control is mounted exactly once beside platform and realm (1.386997ms)
+✔ language options have native labels, programmatic names, and validated values (129.697329ms)
+✔ a late startup dictionary cannot overwrite an explicit language selection (102.61957ms)
+✔ rapid choices remain last-selection-wins with out-of-order dictionary responses (78.37606ms)
+✔ a source-language choice cancels startup restoration even when already loaded (57.505886ms)
+✔ storage denial does not disable switching and stale completion after unmount is ignored (53.822504ms)
+✔ failed startup dictionary preserves source-language fallback without throwing (72.943963ms)
+✔ every identity uses the Zhihui release center, never an inherited installer (9.218671ms)
+✔ old updater commands cannot masquerade as current release results (1.353698ms)
+✔ only matching structured phases are shown and viewers never see publisher events (4.635974ms)
+✔ release links are owned by Zhihui, not receipt or cached URLs (1.613828ms)
+✔ account administrators retain full navigation and never get forced into intake (2.300742ms)
+✔ settings and task pages show actual read data while writes remain disabled (0.976647ms)
+✔ role descriptions state visibility separately from action authority in all languages (9.134888ms)
+✔ steward and alerts navigation scrolls inside its own mobile width (0.596491ms)
+✔ public demo renders finite synthetic data entirely inside the client (6.641063ms)
+✔ public demo denies every write and unknown route without network fallback (1.569804ms)
+✔ account pages do not mount or poll the internal reward history (2.095142ms)
+✔ reward history scopes reads to realm and never presents zero/unknown as green rewards (219.024867ms)
+✔ failed and loading history never masquerades as an empty successful query (113.178593ms)
+✔ engine ownership and unverified takeover have distinct truthful notices (126.272521ms)
+✔ reward history hides retained evidence after permission loss and marks network staleness (136.998302ms)
+✔ reward evidence labels are defined in every supported locale (7.804524ms)
+✔ the WorkBuddy-only tasks tab is not offered in Qoder or Trae (79.265735ms)
+✔ credit tiles keep unknown and known zero neutral, without fabricated totals (69.823434ms)
+✔ actual usage table renders provider totals and unknown splits without inventing zero (88.896443ms)
+✔ realm help belongs to the selected platform, never to another provider (28.988868ms)
+✔ release center local metadata is not held behind a slow GitHub check and does not poll (300.976998ms)
+✔ release center preserves independent good metadata but reports incomplete loads (117.013972ms)
+✔ release checks never turn stale/error metadata into up-to-date or pending assets into an installer (179.002979ms)
+✔ budget review rejects late reads after filter change and never reads for non-admins (83.620204ms)
+✔ budget review preserves independent successful page and clears evidence on authorization denial (29.422231ms)
+✔ usage cache rates preserve missing data, true zero and provider denominator (13.203954ms)
+✔ request cache incidence never falls back to token-weighted efficiency (11.606259ms)
+✔ provider total tokens never becomes a fabricated output count or unknown zero (36.569064ms)
+✔ Qoder hourly highlight follows the engine calendar, not the browser timezone (0.469035ms)
+✔ user password reset keeps root policy distinct, preserves raw input and clears on close (33.460461ms)
+✔ five languages explain managed password minimum and translate the backend rejection (14.352351ms)
+✔ output speed never displays absent or nonfinite measurements as zero (16.053007ms)
+✔ usage page contains no operational or process-lifetime stats fetches (0.590332ms)
+✔ pausing a completed scope neither refetches nor replaces its form source on resume (53.145084ms)
+✔ pausing an in-flight scope rejects late writes and resumes a replacement (47.697584ms)
+✔ slow initial success is not starved by repeated background refreshes (23.667031ms)
+✔ fast cards render before slow billing finishes and stale partial writes cannot win (55.622043ms)
+✔ only audited dashboard opts into incremental fields and pending pool is not displayed as zero (0.562472ms)
+✔ explicit post-mutation reload supersedes old work; stale result cannot win (29.761316ms)
+✔ changed data context clears old values and rejects late previous-context results (30.181395ms)
+✔ synchronous fetch failure becomes a visible error and unmounted work is ignored (27.252766ms)
+✔ heartbeat is single-flight, resumes after rejection, and skips hidden tabs (5.87829ms)
+✔ Strict Mode effect replay starts a replacement load and cannot settle stale data (28.335953ms)
+✔ partial refresh preserves a previously successful field and exposes the failed field (36.25804ms)
+✔ queued heartbeat does not call an unmounted page (3.933828ms)
+✔ API platform query defaults preserve explicit values and storage failure does not break 401 (83.236452ms)
+✔ authorization popup nulls its opener and never reads a cross-origin location (3.615042ms)
+✔ logout failure keeps identity/cache/location; confirmed success clears them (14.021889ms)
+✔ all periodic page hooks use coalescing refresh, not explicit reload (1.830364ms)
+✔ dashboard reads group snapshots without billing POSTs and labels freshness (6.019845ms)
+✔ backend error details remain authoritative and server diagnostics get localized context (75.407945ms)
+✔ selectively hydrated consumers retain their server snapshot before becoming live (35.689924ms)
+✔ evidence preserves unknowns, zero, stale and authorization boundaries (9.576614ms)
+✔ configuration display redacts secrets, unknown names, objects and credential-bearing URL parts (6.799844ms)
+✔ operational API stays on Manager routing and uses actual-platform ledger filter (4.243449ms)
+✔ evidence frame hides retained data on 403/501 but labels a failed refresh as stale (18.047851ms)
+✔ create user keeps raw password and guards immediate duplicate submissions (47.134905ms)
+✔ eight-character weak passwords show exact server reason instead of fake length error (19.457857ms)
+✔ creation remains successful when following user-list refresh fails (18.619953ms)
+✔ creation cannot dismiss while the request is pending (19.202061ms)
+✔ creation confirmation waits for its refresh before allowing completion (21.624193ms)
+✔ animated dialog keeps Radix lifecycle handlers off the motion DOM element (30.552212ms)
+✔ controlled dialogs stay open when the owner rejects dismissal (17.986095ms)
+✔ uncontrolled dialogs still track their own open and close requests (18.505665ms)
+✔ password reset stays successful and clears secrets when the list refresh fails (22.408894ms)
+✔ password reset shows authoritative rejection and cannot dismiss or submit twice while pending (38.457389ms)
+✔ portal login uses actual autofilled form values, preserves password and submits once (13.295091ms)
+✔ portal login exposes errors, does not erase rejected input, and rejects empty submissions locally (9.296993ms)
+✔ portal reuses console brand and stat components with accessible tabs and truthful dispatch state (0.615888ms)
+✔ portal overview does not fetch inactive request history or depend on its availability (48.461905ms)
+✔ unreachable portal session is a retryable connection state, not a sign-in form (45.640349ms)
+✔ workspace partial failure retains confirmed identity and never marks network errors as anonymous (8.578659ms)
+✔ workspace background reads coalesce, mutation reload supersedes old work, and reset rejects late data (7.343265ms)
+✔ workspace authorization revocation clears retained state and aborts unmounted reads (14.723554ms)
+✔ workspace login form remains mounted during anonymous background refresh and connect clears it deliberately (6.938158ms)
+✔ workspace Strict Mode replay aborts first read and accepts replacement (8.966085ms)
+✔ request history stays page-bound, exposes load errors and retries without touching overview (14.620794ms)
+✔ request history never renders a previous page under failed new-page or authorization state (12.062575ms)
+✔ portal key creation preserves one-time result and blocks duplicate creation if following list refresh fails (18.555688ms)
+✔ revoked portal key sessions clear any one-time secret and prevent late initial responses (16.032442ms)
+✔ uncertain portal key creation requires a list read before another mutation (16.325805ms)
+✔ request page change aborts obsolete work and late response cannot replace the current page (12.074263ms)
+✔ successful portal key revocation remains disabled even if its follow-up list read fails (13.087835ms)
+✔ portal action authorization failure immediately clears private workspace instead of retaining it (31.146057ms)
+✔ uncertain portal actions require a confirmed read before another submission (56.525461ms)
+✔ scan polling pauses on failure, retries the same session only on demand, and cleans up on close (37.489468ms)
+✔ key page distinguishes enabled key, model discovery and paid dispatch without exposing other users (14.805625ms)
+✔ approved key page states wallet cap and does not show the unpaid-activation warning (18.838425ms)
+✔ a delayed identity read cannot replace a successful login with old identity (8.907108ms)
+✔ a delayed identity read cannot replace a successful login with old unauthorized (7.850192ms)
+✔ confirmed logout fences an older identity read and cancels the request (8.17494ms)
+✔ identity refresh coalesces reads and Strict Mode replay replaces an abandoned read (8.707354ms)
+✔ task status read failures preserve running cadence and never announce false completion (8.192826ms)
+✔ task status responses arriving after unmount cannot write state (7.120607ms)
+✔ task actions coalesce same-tick clicks before React rerenders (7.289906ms)
+✔ switching playground realm invalidates old stream callbacks, usage, and finalizers (25.84222ms)
+✔ old group manual credit responses cannot replace the selected group balances (85.242705ms)
+✔ an older automatic credit read cannot overwrite a newer manual refresh (103.397213ms)
+✔ old group single-account action responses cannot change the new group credits (57.015382ms)
+✔ manual credit refresh cannot write or notify after the account page unmounts (51.864756ms)
+✔ manual credit refresh prevents same-tick duplicate provider fanout (57.137822ms)
+✔ inference logs do not offer a bulk clear that bypasses archive verification (2.733645ms)
+✔ Windows RSC segment normalization preserves bytes and is idempotent (3.4972ms)
+✔ RSC segment normalization fails closed on different destination bytes (1.229867ms)
+✔ steward permits only current super-admin metered analysis with fresh evidence (487.96521ms)
+✔ steward hides retained snapshot on permission/unavailable errors; network failure is marked stale (225.593841ms)
+✔ alerts hide retained recipients and event evidence after permission loss (234.104822ms)
+✔ alert editor never renders retained recipients to a demoted administrator (127.142599ms)
+✔ chat transcript is bounded and scrollable; composer cannot grow the page (23.817252ms)
+✔ recipient dialog validates one address, rejects duplicates and enforces the ten-address limit (52.195543ms)
+✔ recipient conflict retains every existing address and never retries a stale whole-list save (32.786148ms)
+✔ removing an email targets one address instead of replacing the stored recipient list (57.962637ms)
+✔ conversation carries bounded long assistant history without downgrading it to the user limit (42.045264ms)
+✔ failed chat restores the draft and prior history instead of leaving a false unanswered turn (26.166998ms)
+✔ ability cards reflect the exact backend allowlist, never invented administrative powers (49.702401ms)
+✔ alert analysis is readable in the bounded panel, not an extra email promise or HTML (51.031178ms)
+✔ demotion hides a draft email immediately, even before cleanup effects run (35.055599ms)
+✔ a saved alert policy stays saved when its subsequent refresh fails (79.19295ms)
+✔ demotion immediately masks retained conversation drafts and errors (27.121559ms)
+✔ all steward dynamic status and analysis labels exist with matching placeholders in five languages (26.577398ms)
+ℹ tests 226
+ℹ suites 0
+ℹ pass 226
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5046.289629

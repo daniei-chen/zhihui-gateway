@@ -91,6 +91,7 @@ class _ToolBridge:
         self._forward: dict[str, str] = {}
         self._reverse: dict[str, tuple[str, str, str | None]] = {}
         self._taken: set[str] = set()
+        self._next_suffix: dict[str, int] = {}
         self.search_names: set[str] = set()
         self.search_name = ''
         self._seen: set[tuple[str, ...]] = set()
@@ -125,12 +126,13 @@ class _ToolBridge:
 
     def _unique(self, preferred: str, fallback: str) -> str:
         base = _sanitize_tool_name(preferred) if preferred else _sanitize_tool_name(fallback)
-        name, n = base, 2
+        name, n = base, self._next_suffix.get(base, 2)
         while name in self._taken:
             suffix = '_' + str(n)
             name = (base[:64 - len(suffix)] + suffix) if len(base) + len(suffix) > 64 else base + suffix
             n += 1
         self._taken.add(name)
+        self._next_suffix[base] = n
         return name
 
     def _walk(self, tools: list, path: tuple[str, ...], *, loaded: bool = False) -> None:
@@ -267,9 +269,13 @@ def _custom_input(raw: object) -> str:
 
 
 def _as_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
     try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        result = int(value)  # type: ignore[arg-type]
+        return result if 0 <= result <= 2**53 - 1 and not (
+            isinstance(value, float) and value != result) else 0
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -1179,6 +1185,8 @@ def to_responses_object(
     if isinstance(text, str) and text:
         output.append(_message_item(text, 'msg_' + uuid.uuid4().hex[:20],
                                     _message_phase(finish, bool(calls))))
+    if len(output) + len(calls) > MAX_OUTPUT_ITEMS:
+        raise ValueError('Upstream response exceeds the output item limit.')
     custom_calls = [
         call for call in calls
         if isinstance(call.get('function'), dict)
@@ -1270,11 +1278,11 @@ class _StreamTranslator:
 
         self.reason_index: int | None = None
         self.reason_id = ''
-        self.reason_buf = ''
+        self.reason_buf: list[str] = []
 
         self.text_index: int | None = None
         self.text_id = ''
-        self.text_buf = ''
+        self.text_buf: list[str] = []
 
         # 上游工具序号 → 输出项（上游可能并发给多个工具，各自编号）
         self.tools: dict[int, dict] = {}
@@ -1313,10 +1321,16 @@ class _StreamTranslator:
             },
         })]
 
-    def _open_reason(self) -> list[bytes]:
-        self.reason_buf = ''
-        self.reason_index = self.next_index
+    def _allocate_index(self) -> int:
+        if self.next_index >= MAX_OUTPUT_ITEMS:
+            raise ValueError('Upstream response exceeds the output item limit.')
+        index = self.next_index
         self.next_index += 1
+        return index
+
+    def _open_reason(self) -> list[bytes]:
+        self.reason_buf = []
+        self.reason_index = self._allocate_index()
         self.reason_id = 'rs_' + uuid.uuid4().hex[:20]
         return [_event('response.output_item.added', {
             'type': 'response.output_item.added',
@@ -1336,7 +1350,8 @@ class _StreamTranslator:
         # 凭据 `encrypted_content` 只能在这里补上——它要等推理全文到齐才能算出。
         # 客户端在 `output_item.done` 上取这个字段（issue #36：此前从没发过，
         # 于是客户端拿不到凭据，下一轮不带推理痕迹，上游报 11155）。
-        item = _reasoning_item(self.reason_buf, self.reason_id)
+        item = _reasoning_item(''.join(self.reason_buf), self.reason_id)
+        self.reason_buf.clear()
         self._record_item(index, item)
         return [_event('response.output_item.done', {
             'type': 'response.output_item.done',
@@ -1345,9 +1360,8 @@ class _StreamTranslator:
         })]
 
     def _open_text(self) -> list[bytes]:
-        self.text_buf = ''
-        self.text_index = self.next_index
-        self.next_index += 1
+        self.text_buf = []
+        self.text_index = self._allocate_index()
         self.text_id = 'msg_' + uuid.uuid4().hex[:20]
         index = self.text_index
         return [
@@ -1376,8 +1390,10 @@ class _StreamTranslator:
         if self.text_index is None:
             return []
         index, self.text_index = self.text_index, None
-        part = {'type': 'output_text', 'text': self.text_buf, 'annotations': []}
-        item = _message_item(self.text_buf, self.text_id, phase)
+        text = ''.join(self.text_buf)
+        self.text_buf.clear()
+        part = {'type': 'output_text', 'text': text, 'annotations': []}
+        item = _message_item(text, self.text_id, phase)
         self._record_item(index, item)
         return [
             _event('response.output_text.done', {
@@ -1385,7 +1401,7 @@ class _StreamTranslator:
                 'output_index': index,
                 'content_index': 0,
                 'item_id': self.text_id,
-                'text': self.text_buf,
+                'text': text,
             }),
             _event('response.content_part.done', {
                 'type': 'response.content_part.done',
@@ -1402,14 +1418,14 @@ class _StreamTranslator:
         ]
 
     def _open_tool(self, seq: int, call_id: str, name: str) -> list[bytes]:
-        index = self.next_index
-        self.next_index += 1
+        index = self._allocate_index()
         state = {
             'index': index,
             'id': 'fc_' + uuid.uuid4().hex[:20],
             'call_id': call_id,
             'name': name,
-            'args': '',
+            'args': [],
+            'args_bytes': 0,
         }
         self.tools[seq] = state
         self.tool_order.append(seq)
@@ -1514,7 +1530,7 @@ class _StreamTranslator:
 
         usage = obj.get('usage')
         if isinstance(usage, dict):
-            self.usage.update(usage)
+            observability.merge_usage(self.usage, usage)
         if self.pending_finish is not None:
             # Chat stream_options.include_usage sends a separate final usage
             # chunk after finish_reason. Keep it, but ignore any later content.
@@ -1533,7 +1549,7 @@ class _StreamTranslator:
             if self.reason_index is None:
                 out += self._close_text()
                 out += self._open_reason()
-            self.reason_buf += reasoning
+            self.reason_buf.append(reasoning)
             out.append(_event('response.reasoning_summary_text.delta', {
                 'type': 'response.reasoning_summary_text.delta',
                 'output_index': self.reason_index,
@@ -1548,7 +1564,7 @@ class _StreamTranslator:
                 out += self._close_reason()
             if self.text_index is None:
                 out += self._open_text()
-            self.text_buf += text
+            self.text_buf.append(text)
             out.append(_event('response.output_text.delta', {
                 'type': 'response.output_text.delta',
                 'output_index': self.text_index,
@@ -1564,9 +1580,6 @@ class _StreamTranslator:
             fn = call.get('function') or {}
             name = fn.get('name')
             if seq not in self.tools:
-                if len(self.tools) >= MAX_OUTPUT_ITEMS:
-                    logger.warning('工具调用数量超过 %d，忽略后续项', MAX_OUTPUT_ITEMS)
-                    continue
                 if self.text_index is not None:
                     out += self._close_text()
                 if self.reason_index is not None:
@@ -1591,10 +1604,11 @@ class _StreamTranslator:
             args = fn.get('arguments')
             if isinstance(args, str) and args:
                 if not self.tool_error:
-                    state['args'] += args
-                if self.bridge.search_names and len(state['args'].encode()) > MAX_SSE_BUFFER:
+                    state['args'].append(args)
+                    state['args_bytes'] += len(args.encode())
+                if self.bridge.search_names and state['args_bytes'] > MAX_SSE_BUFFER:
                     self.tool_error = ToolSearchArgumentsError('Buffered tool arguments exceed the supported limit.')
-                    state['args'] = ''
+                    state['args'].clear()
                 if not self.buffer_tool_events:
                     out.append(_event('response.function_call_arguments.delta', {
                         'type': 'response.function_call_arguments.delta',
@@ -1617,6 +1631,8 @@ class _StreamTranslator:
             return []
         finish_reason = finish_reason or self.pending_finish
         self.finished = True
+        for state in self.tools.values():
+            state['args'] = ''.join(state['args'])
         self.finish_reason = finish_reason
         out: list[bytes] = []
         if not self.started:
@@ -1785,10 +1801,10 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
 
     if not stream:
         try:
-            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))) as client:
+            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)) as client:
                 resp = await deadline_mod.await_total(
                     client.post(url, content=wire,
-                                headers=gateway._upstream_headers(upstream)),
+                                headers=await gateway._upstream_headers_async(upstream)),
                     request_deadline)
             state=observability.current.get()
             if state:
@@ -1849,11 +1865,11 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             return _failed(f'上游不可用：{exc}', 502)
 
     # ── 流式 ──
-    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
     resp = None
     try:
         req = client.build_request('POST', url, content=wire,
-                                   headers=gateway._upstream_headers(upstream))
+                                   headers=await gateway._upstream_headers_async(upstream))
         # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
         resp = await deadline_mod.await_headers(client.send(req, stream=True),
                                                 request_deadline)

@@ -1275,13 +1275,93 @@ def _package_expiry(item: dict) -> int | None:
     return int(naive.replace(tzinfo=_PACKAGE_END_TZ).timestamp())
 
 
+async def _probe_response(resp) -> tuple[bool, int | str, str, bool]:
+    """Require bounded OpenAI stream evidence; comments/HTTP 200 prove nothing."""
+    from ..observability import StreamAudit
+
+    # This one-token diagnostic requests identity encoding. Reject an unexpected
+    # compressed body before HTTPX can expand it outside the small probe budget.
+    encoding = resp.headers.get('content-encoding', '').strip().lower()
+    if encoding not in ('', 'identity'):
+        raise ValueError('上游探测响应未遵循 identity 压缩协商')
+    maximum = 256 * 1024
+    audit = StreamAudit(64 * 1024)
+    captured = bytearray()
+
+    def rejection(obj):
+        if not isinstance(obj, dict):
+            return None
+        if obj.get('error') is None and obj.get('code') in (None, 0, '0'):
+            return None
+        raw = json.dumps(obj, ensure_ascii=False)
+        code, message = _parse_error_body(raw, resp.status_code)
+        return False, code, message, _is_channel_check(code, raw)
+
+    def evidence(events):
+        # A coalesced network chunk may contain content followed by a rejection.
+        # Inspect every parsed error before declaring the probe healthy.
+        for obj in events:
+            failed = rejection(obj)
+            if failed is not None:
+                return failed
+        if audit.error:
+            return False, audit.error_code or 'probe.protocol', audit.error, False
+        for obj in events:
+            choices = obj.get('choices')
+            if not isinstance(choices, list):
+                continue
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get('delta', choice.get('message'))
+                if not isinstance(delta, dict):
+                    continue
+                if any(delta.get(key) is not None and not isinstance(delta[key], str)
+                       for key in ('content', 'reasoning_content', 'reasoning')):
+                    continue
+                if (any(isinstance(delta.get(key), str) and delta[key]
+                        for key in ('content', 'reasoning_content', 'reasoning'))
+                        or choice.get('finish_reason') in ('stop', 'length')):
+                    return True, 0, '', False
+        if audit.done_seen or audit.finish_seen:
+            return False, 'probe.protocol', '上游未返回有效的推理响应', False
+        return None
+
+    async for chunk in resp.aiter_bytes():
+        if len(captured) + len(chunk) > maximum:
+            raise ValueError('上游探测响应超过 256 KiB 上限')
+        captured.extend(chunk)
+        if resp.status_code < 400:
+            result = evidence(audit.feed(chunk))
+            if result is not None:
+                return result
+
+    raw = captured.decode('utf-8', errors='replace')
+    if resp.status_code >= 400:
+        code, message = _parse_error_body(raw, resp.status_code)
+        return False, code, message, _is_channel_check(code, raw)
+    result = evidence(audit.finish())
+    if result is not None:
+        return result
+    # Some provider failures use JSON despite HTTP 200. Preserve their business
+    # code, but never treat a non-SSE JSON success object as a streaming response.
+    try:
+        failed = rejection(json.loads(raw))
+        if failed is not None:
+            return failed
+    except ValueError:
+        pass
+    return False, 'probe.protocol', '上游未返回有效的推理响应', False
+
+
 async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
     """以最小**流式**对话请求探测账号可用性。
 
     必须用流式：上游强制要求 stream=true，非流式会返回
     code=11101「Non-stream chat request is currently not supported」
     （见 workbuddy2api payload.go 中强制 obj["stream"]=true 的处理）。
-    因此这里发起流式请求，读到首个数据块即判定可用，随即断开。
+    因此这里发起流式请求，读到有效正文或成功结束事件才判定可用，随即断开。
+    心跳、角色声明、[DONE] 和 HTTP 200 本身都不能证明账号可用。
 
     请求头复刻上游 ChatHeaders：缺失字段用 X-No-* 约定。
     国内版带 X-Enterprise-Id / X-Domain（有值则带、否则 X-No-*）；
@@ -1305,6 +1385,7 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
     # chat 是流式路径：Accept 覆盖为流式形态（对齐上游 D6 —— 非流式默认收紧为
     # application/json，只有 chat 才声明 text/event-stream）
     headers['Accept'] = 'application/json, text/event-stream'
+    headers['Accept-Encoding'] = 'identity'
     headers['X-User-Id' if uid else 'X-No-User-Id'] = uid or '1'
     if realm == GLOBAL:
         # 镜像上游：国际版声明「个人账号无企业 ID」并断言国际域
@@ -1352,7 +1433,7 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
         'stream': True,
     }
 
-    started = _time.time()
+    started = _time.monotonic()
     # 路径候选：/v2 优先、/console 兜底（见 realm.chat_paths 的注释）。这里逐个尝试，
     # 触发回落的条件是**渠道校验**或 404/405：2026-10-17 上游给 /v2 加了渠道强校验，
     # 被校验到的请求回「没通过渠道校验」，而官方客户端走的 /console 正常放行 ——
@@ -1361,15 +1442,18 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
         paths = chat_paths(realm)
         # lane='probe'：测活是**用户正在等**的那一次请求，给它独立连接池，
         # 不被并发的批量任务（刷积分/签到）挤到 pool 超时（issue #161）。
-        async with _account_http_client(auth, lane='probe') as client:
-            for idx, path in enumerate(paths):
-                async with client.stream(
-                    'POST', f'{base}{path}', json=payload, headers=headers,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        raw = (await resp.aread()).decode('utf-8', errors='replace')
-                        code, msg = _parse_error_body(raw, resp.status_code)
-                        channel_check = _is_channel_check(code, raw)
+        # HTTP read timeouts reset after every heartbeat. Bound the entire probe,
+        # including any alternate path, so a silent model cannot hold it forever.
+        async with asyncio.timeout(config.TENCENT_TIMEOUT):
+            async with _account_http_client(auth, lane='probe') as client:
+                for idx, path in enumerate(paths):
+                    async with client.stream(
+                        'POST', f'{base}{path}', json=payload, headers=headers,
+                    ) as resp:
+                        ok, code, msg, channel_check = await _probe_response(resp)
+                        if ok:
+                            elapsed = int((_time.monotonic() - started) * 1000)
+                            return True, f'连通正常（{model}，{elapsed}ms）'
                         if channel_check and idx < len(paths) - 1:
                             continue  # 换下一条路径再试，别当成账号问题
                         if channel_check:
@@ -1378,13 +1462,9 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
                                            '/'.join(paths) + '）—— 账号本身没问题；'
                                            '请先升级到最新版本，仍不行就把这句反馈给维护者')
                         return False, _explain_code(code, msg)
-                    # 读到首个非空数据块即可确认账号可用，无需等流结束
-                    async for chunk in resp.aiter_bytes():
-                        if chunk:
-                            elapsed = int((_time.time() - started) * 1000)
-                            return True, f'连通正常（{model}，{elapsed}ms）'
-                    return False, '上游未返回任何数据'
         return False, '所有候选路径均不可用'
+    except TimeoutError:
+        return False, '探测超时：未在限定时间内收到有效推理响应'
     except Exception as exc:  # noqa: BLE001
         return False, f'请求异常: {err_text(exc)}'
 
@@ -1409,7 +1489,12 @@ def _parse_error_body(raw: str, status: int) -> tuple[int | str, str]:
     try:
         env = json.loads(raw)
         if isinstance(env, dict):
-            return env.get('code', status), str(env.get('msg') or env.get('message') or '')
+            payload = env.get('error') if isinstance(env.get('error'), dict) else env
+            code = payload.get('code', env.get('code', status))
+            if isinstance(code, bool) or not isinstance(code, (int, str)):
+                code = status
+            message = payload.get('msg') or payload.get('message') or env.get('error') or ''
+            return str(code)[:64] if isinstance(code, str) else code, str(message)[:500]
     except Exception:  # noqa: BLE001
         pass
     return status, raw.strip()[:200]

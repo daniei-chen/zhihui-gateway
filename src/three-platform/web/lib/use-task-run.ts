@@ -34,15 +34,19 @@ export function useTaskRun({
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasRunning = useRef(false);
+  const active = useRef(false);
+  const generation = useRef(0);
+  const actionPending = useRef(false);
   // 回调放进 ref：调用方每次渲染都可能传一个新函数，若放进 effect 依赖，
   // 轮询会被反复推倒重来（多发请求、丢失「刚刚跑完」的边沿）。
   const finishedRef = useRef(onFinished);
   finishedRef.current = onFinished;
 
   const load = useCallback(async () => {
+    const requestGeneration = generation.current;
     try {
       const s = await accountApi.taskRunStatus();
-      setStatus(s);
+      if (active.current && generation.current === requestGeneration) setStatus(s);
       return s;
     } catch {
       return null; // 拉状态失败不打扰用户（按钮自然处于不可点状态）
@@ -50,27 +54,37 @@ export function useTaskRun({
   }, []);
 
   useEffect(() => {
+    // 动作可能在弹窗关闭期间结束；重新开启时同步其实际忙碌状态。
+    setBusy(actionPending.current);
     if (!enabled) return;
+    active.current = true;
     let alive = true;
     wasRunning.current = false;
     const tick = async () => {
       const s = await load();
       if (!alive) return;
-      const nowRunning = s?.running === true;
-      if (wasRunning.current && !nowRunning) finishedRef.current?.();
-      wasRunning.current = nowRunning;
+      // 读取失败不等于任务停止：保留最后一次成功状态及其轮询频率。
+      if (s !== null) {
+        const nowRunning = s.running === true;
+        if (wasRunning.current && !nowRunning) finishedRef.current?.();
+        wasRunning.current = nowRunning;
+      }
       // 跑的时候高频看输出；空闲时低频，避免无意义的轮询。
-      timer.current = setTimeout(tick, nowRunning ? 2000 : 15000);
+      timer.current = setTimeout(tick, wasRunning.current ? 2000 : 15000);
     };
     tick();
     return () => {
       alive = false;
+      active.current = false;
+      generation.current += 1;
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
     };
   }, [enabled, load]);
 
   const run = useCallback(async (mode: TaskRunMode, confirm = false) => {
+    if (actionPending.current) return;
+    actionPending.current = true;
     setBusy(true);
     try {
       await accountApi.taskRunStart(mode, target, confirm);
@@ -80,11 +94,14 @@ export function useTaskRun({
     } catch (e) {
       notify.err(errText(e));
     } finally {
-      setBusy(false);
+      actionPending.current = false;
+      if (active.current) setBusy(false);
     }
   }, [load, t, target]);
 
   const stop = useCallback(async () => {
+    if (actionPending.current) return;
+    actionPending.current = true;
     setBusy(true);
     try {
       const r = await accountApi.taskRunStop();
@@ -94,7 +111,8 @@ export function useTaskRun({
     } catch (e) {
       notify.err(errText(e));
     } finally {
-      setBusy(false);
+      actionPending.current = false;
+      if (active.current) setBusy(false);
     }
   }, [load, tp]);
 

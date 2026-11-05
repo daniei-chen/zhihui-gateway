@@ -20,18 +20,20 @@ _shutdown_started = False
 _lock = RLock()
 
 
-def begin(*, shutdown: bool = False) -> None:
+def begin(*, shutdown: bool = False, persist: bool = True) -> None:
     """进入 draining（幂等）。
 
     与实例租约联动：本进程若持有 `instance_leases` 行，role 变 `draining`
     并写入四类在途计数快照（供交接时间线复核）。**readyz 语义不变**。
+    失租截止保护可传 persist=False：先拒绝新请求，不等待可能已阻塞的数据库。
     """
     global _started_at, _shutdown_started
     with _lock:
         if _started_at is None:
             _started_at = time.time()
         _shutdown_started = _shutdown_started or shutdown
-    _sync_instance_role('draining')
+    if persist:
+        _sync_instance_role('draining')
 
 
 def resume() -> bool:

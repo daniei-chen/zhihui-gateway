@@ -1,0 +1,55 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> zhihui-gateway-web@0.0.7 build:export
+> cross-env NEXT_OUTPUT_EXPORT=1 next build --webpack && node scripts/normalize-static-export.cjs
+
+▲ Next.js 16.4.3 (webpack)
+✓ Running next.config.ts took 31ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 7.4s
+  Running TypeScript ...
+  Finished TypeScript in 3.6s ...
+  Collecting page data using 8 workers ...
+  Generating static pages using 8 workers (0/30) ...
+  Generating static pages using 8 workers (7/30) 
+  Generating static pages using 8 workers (14/30) 
+  Generating static pages using 8 workers (22/30) 
+✓ Generating static pages using 8 workers (30/30) in 657ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /accounts
+├ ○ /claim
+├ ○ /dashboard
+├ ○ /keys
+├ ○ /login
+├ ○ /logs
+├ ○ /members
+├ ○ /models
+├ ○ /playground
+├ ○ /portal
+├ ○ /red-packets
+├ ○ /security
+├ ○ /settings
+├ ○ /settings/about
+├ ○ /settings/alerts
+├ ○ /settings/backup
+├ ○ /settings/changelog
+├ ○ /settings/models
+├ ○ /settings/proxy
+├ ○ /settings/steward
+├ ○ /settings/system
+├ ○ /settings/tokens
+├ ○ /settings/upstream
+├ ○ /settings/users
+├ ○ /stats
+└ ○ /tasks
+
+
+○  (Static)  prerendered as static content
+
+Normalized 0 Windows RSC segment filenames; file contents unchanged.

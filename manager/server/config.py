@@ -72,6 +72,7 @@ SCHEMA_DRIFT_ALLOWED: dict[str, str] = {}
 DRAIN_TIMEOUT_SEC = _env_int('WB_DRAIN_TIMEOUT_SEC', 25)
 GATEWAY_BODY_READ_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_READ_TIMEOUT_S', 180)
 GATEWAY_BODY_IDLE_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_IDLE_TIMEOUT_S', 60)
+GATEWAY_MAX_RESPONSE_MB = _env_int('WB_GATEWAY_MAX_RESPONSE_MB', 64)
 
 # 上游 workbuddy2api（Go）
 WB2API_BASE = _env('WB2API_BASE', 'http://127.0.0.1:7863').rstrip('/')
@@ -656,9 +657,15 @@ def _build_transport(proxy: str | None):
     return httpx.AsyncHTTPTransport(trust_env=False, limits=_http_limits())
 
 
-def _build_client(tmo, proxy: str | None):
+def _build_client(tmo, proxy: str | None, *, bounded_response: bool = False):
     import httpx
-    return httpx.AsyncClient(timeout=tmo, transport=_build_transport(proxy), trust_env=False)
+    transport = _build_transport(proxy)
+    headers = None
+    if bounded_response:
+        from .upstreambody import BoundedTransport
+        transport = BoundedTransport(transport, GATEWAY_MAX_RESPONSE_MB * 1024**2)
+        headers = {'Accept-Encoding': 'identity'}
+    return httpx.AsyncClient(timeout=tmo, transport=transport, headers=headers, trust_env=False)
 
 
 async def close_clients() -> None:
@@ -691,7 +698,7 @@ def effective_http_proxy() -> str:
 
 
 def http_client(timeout, *, connect: float | None = None, proxy: str | None = None,
-                lane: str = '', identity: str | None = None):
+                lane: str = '', identity: str | None = None, bounded_response: bool = False):
     """统一的 httpx 客户端：默认忽略系统/环境代理，避免内网请求被代理劫持。
 
     需要走代理时显式设置 WB_HTTP_PROXY。
@@ -704,6 +711,10 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     transport 按循环、超时、代理、lane 和身份复用。容量耗尽等待 pool 预算，
     不关闭在途响应；流的引用一直持有到正文完成或关闭。短生命周期循环退出时
     自动关闭其传输，主服务使用 close_clients + 应用排空。
+
+    推理入口显式传 bounded_response=True：wire 与解压后累计正文受
+    WB_GATEWAY_MAX_RESPONSE_MB 约束，SSE 也计入累计值。其它管理下载保留
+    各自的大小/压缩策略，不因推理响应配置而截断合法的大文件。
     """
     import httpx
 
@@ -720,7 +731,7 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     except RuntimeError:
         # 事件循环外（同步夹具/脚本场景）：不缓存，按老样子建一个即用即弃的，
         # 免得把一个绑在未知循环上的客户端留在池里。
-        return _build_client(tmo, selected_proxy)
+        return _build_client(tmo, selected_proxy, bounded_response=bounded_response)
 
     import hashlib
     from .http_pool import LeaseTransport
@@ -730,5 +741,10 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     key = (*_timeout_key(tmo), proxy_key, lane, identity_key)
     transport = LeaseTransport(_transport_pool(), key,
                                lambda: _build_transport(selected_proxy), lambda: _CLIENTS_MAX)
-    return httpx.AsyncClient(transport=transport, timeout=tmo,
+    headers = None
+    if bounded_response:
+        from .upstreambody import BoundedTransport
+        transport = BoundedTransport(transport, GATEWAY_MAX_RESPONSE_MB * 1024**2)
+        headers = {'Accept-Encoding': 'identity'}
+    return httpx.AsyncClient(transport=transport, timeout=tmo, headers=headers,
                              trust_env=False, follow_redirects=False)

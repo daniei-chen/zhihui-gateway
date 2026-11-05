@@ -1,0 +1,118 @@
+Collecting annotated-doc==0.0.5 (from -r manager/server/requirements.hashes.txt (line 2))
+  Downloading annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+Collecting annotated-types==0.8.0 (from -r manager/server/requirements.hashes.txt (line 3))
+  Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+Collecting anyio==4.15.1 (from -r manager/server/requirements.hashes.txt (line 4))
+  Downloading anyio-4.15.1-py3-none-any.whl (132 kB)
+Collecting certifi==2026.10.19 (from -r manager/server/requirements.hashes.txt (line 5))
+  Downloading certifi-2026.10.19-py3-none-any.whl (136 kB)
+Collecting click==8.5.0 (from -r manager/server/requirements.hashes.txt (line 6))
+  Downloading click-8.5.0-py3-none-any.whl (125 kB)
+Collecting fastapi==0.141.1 (from -r manager/server/requirements.hashes.txt (line 7))
+  Downloading fastapi-0.141.1-py3-none-any.whl (131 kB)
+Collecting h11==0.16.0 (from -r manager/server/requirements.hashes.txt (line 8))
+  Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Collecting httpcore==1.0.9 (from -r manager/server/requirements.hashes.txt (line 9))
+  Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+Collecting httptools==0.8.0 (from -r manager/server/requirements.hashes.txt (line 10))
+  Downloading httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (523 kB)
+Collecting httpx==0.28.1 (from -r manager/server/requirements.hashes.txt (line 11))
+  Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+Collecting idna==3.19 (from -r manager/server/requirements.hashes.txt (line 12))
+  Downloading idna-3.19-py3-none-any.whl (68 kB)
+Collecting psycopg==3.3.6 (from -r manager/server/requirements.hashes.txt (line 13))
+  Downloading psycopg-3.3.6-py3-none-any.whl (215 kB)
+Collecting psycopg-binary==3.3.6 (from -r manager/server/requirements.hashes.txt (line 14))
+  Downloading psycopg_binary-3.3.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.2 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 47.0 MB/s eta 0:00:00
+Collecting pydantic==2.13.5 (from -r manager/server/requirements.hashes.txt (line 15))
+  Downloading pydantic-2.13.5-py3-none-any.whl (472 kB)
+Collecting pydantic-core==2.46.5 (from -r manager/server/requirements.hashes.txt (line 16))
+  Downloading pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 19.7 MB/s eta 0:00:00
+Collecting python-dotenv==1.2.3 (from -r manager/server/requirements.hashes.txt (line 17))
+  Downloading python_dotenv-1.2.3-py3-none-any.whl (22 kB)
+Collecting pyyaml==6.0.3 (from -r manager/server/requirements.hashes.txt (line 18))
+  Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 807.9/807.9 kB 9.6 MB/s eta 0:00:00
+Collecting starlette==1.6.0 (from -r manager/server/requirements.hashes.txt (line 19))
+  Downloading starlette-1.6.0-py3-none-any.whl (75 kB)
+Collecting typing-extensions==4.16.0 (from -r manager/server/requirements.hashes.txt (line 20))
+  Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Collecting typing-inspection==0.4.4 (from -r manager/server/requirements.hashes.txt (line 21))
+  Downloading typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+Collecting tzdata==2026.5 (from -r manager/server/requirements.hashes.txt (line 22))
+  Downloading tzdata-2026.5-py2.py3-none-any.whl (347 kB)
+Collecting uvicorn==0.53.0 (from -r manager/server/requirements.hashes.txt (line 23))
+  Downloading uvicorn-0.53.0-py3-none-any.whl (87 kB)
+Collecting uvloop==0.22.1 (from -r manager/server/requirements.hashes.txt (line 24))
+  Downloading uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 42.3 MB/s eta 0:00:00
+Collecting watchfiles==1.2.0 (from -r manager/server/requirements.hashes.txt (line 25))
+  Downloading watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+Collecting websockets==17.1 (from -r manager/server/requirements.hashes.txt (line 26))
+  Downloading websockets-17.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (224 kB)
+Collecting python-multipart==0.0.32 (from -r manager/server/requirements.hashes.txt (line 27))
+  Downloading python_multipart-0.0.32-py3-none-any.whl (30 kB)
+Collecting socksio==1.0.0 (from -r manager/server/requirements.hashes.txt (line 28))
+  Downloading socksio-1.0.0-py3-none-any.whl (12 kB)
+Collecting pytest==9.1.1 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 2))
+  Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
+Collecting pytest-asyncio==1.4.0 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 3))
+  Downloading pytest_asyncio-1.4.0-py3-none-any.whl (16 kB)
+Collecting iniconfig==2.3.0 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 4))
+  Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Collecting packaging==26.3 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 5))
+  Downloading packaging-26.3-py3-none-any.whl (129 kB)
+Collecting pluggy==1.6.0 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 6))
+  Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Collecting Pygments==2.21.0 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 7))
+  Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 14.8 MB/s eta 0:00:00
+Collecting pydantic-settings==2.15.0 (from -r tests/linux_lab/requirements-dev.hashes.txt (line 8))
+  Downloading pydantic_settings-2.15.0-py3-none-any.whl (69 kB)
+Collecting cryptography==50.0.2 (from -r tests/requirements-audit.hashes.txt (line 4))
+  Downloading cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl (4.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.8/4.8 MB 50.0 MB/s eta 0:00:00
+Collecting cffi==2.1.1 (from -r tests/requirements-audit.hashes.txt (line 5))
+  Downloading cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+Collecting pycparser==3.12 (from -r tests/requirements-audit.hashes.txt (line 6))
+  Downloading pycparser-3.12-py3-none-any.whl (62 kB)
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/annotated_doc-0.0.5-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/annotated_types-0.8.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/anyio-4.15.1-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/certifi-2026.10.19-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/click-8.5.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/fastapi-0.141.1-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/h11-0.16.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httpcore-1.0.9-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httpx-0.28.1-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/idna-3.19-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/psycopg-3.3.6-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/psycopg_binary-3.3.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic-2.13.5-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/python_dotenv-1.2.3-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/starlette-1.6.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/typing_extensions-4.16.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/typing_inspection-0.4.4-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/tzdata-2026.5-py2.py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/uvicorn-0.53.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/websockets-17.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/python_multipart-0.0.32-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/socksio-1.0.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pytest-9.1.1-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pytest_asyncio-1.4.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/iniconfig-2.3.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/packaging-26.3-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pluggy-1.6.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pygments-2.21.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic_settings-2.15.0-py3-none-any.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+Saved /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pycparser-3.12-py3-none-any.whl
+Successfully downloaded annotated-doc annotated-types anyio certifi click fastapi h11 httpcore httptools httpx idna psycopg psycopg-binary pydantic pydantic-core python-dotenv pyyaml starlette typing-extensions typing-inspection tzdata uvicorn uvloop watchfiles websockets python-multipart socksio pytest pytest-asyncio iniconfig packaging pluggy Pygments pydantic-settings cryptography cffi pycparser

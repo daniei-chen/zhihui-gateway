@@ -1,0 +1,214 @@
+{
+  "baseline_commit": "4c6b4cb8cb790698e0753909745dfe8a7c78dd9f",
+  "synthetic_only": true,
+  "production_keys_read": false,
+  "network_calls": false,
+  "patched_input_sha256": {
+    "manager/deploy/purge_credentials.py": "c00c3cbd28bb9beff47af5fb9c7109a2ee72f968f6a4a0834eaa4d3110a5d71a",
+    "manager/deploy/recovery_retention.py": "42821528821d757a7d0e1f44fac8610630dc9a2da295b48a4cfb5bbe76abeccb",
+    "manager/deploy/restore_drill.py": "eaf47189d61c0d7e6e2811dd5ad46dfd4c47e9411b5150180ede03c90c0db3b8",
+    "manager/deploy/sign-release-ed25519.py": "9b47e5c7ba6af719b5bae1ee322eb3af0594995ba4888e94a4c44be8f706d5d4",
+    "ops/integrity/verify-runtime.py": "34fd6ef428296ec4da503efe5a71b4294c76b11608588f26b249fa800c4c1393",
+    "tools/release_sign.py": "88c239d2e49837ccbc42a859e3995e9864c8fa345e83a5e9369fc2bc9b14f80c"
+  },
+  "cases": [
+    {
+      "case": "experimental_verify_self_signed_publisher",
+      "file": "tools/release_sign.py",
+      "baseline": {
+        "accepted": true,
+        "exit": 0,
+        "receipt": {
+          "status": "VERIFIED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/0-True/release",
+          "key_id": "62c2160c4a61df3f",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "problems": [],
+          "unlisted_files": []
+        }
+      },
+      "patched": {
+        "accepted": false,
+        "exit": "signature metadata does not match the independently trusted publisher"
+      }
+    },
+    {
+      "case": "experimental_verify_unsafe_mode",
+      "file": "tools/release_sign.py",
+      "baseline": {
+        "accepted": true,
+        "exit": 0,
+        "receipt": {
+          "status": "VERIFIED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/1-True/release",
+          "key_id": "d2f78a6c25d6ac5d",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "problems": [],
+          "unlisted_files": []
+        }
+      },
+      "patched": {
+        "accepted": false,
+        "exit": 1,
+        "receipt": {
+          "status": "FAILED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/1-False/release",
+          "key_id": "e185d525641cef1a",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "publisher_verified": false,
+          "production_approval": false,
+          "problems": [
+            "mode mismatch: app.py (0777 != 0755)"
+          ],
+          "unlisted_files": []
+        }
+      }
+    },
+    {
+      "case": "experimental_verify_unlisted_bytecode",
+      "file": "tools/release_sign.py",
+      "baseline": {
+        "accepted": true,
+        "exit": 0,
+        "receipt": {
+          "status": "VERIFIED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/2-True/release",
+          "key_id": "76877cea7311fd20",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "problems": [],
+          "unlisted_files": []
+        }
+      },
+      "patched": {
+        "accepted": false,
+        "exit": 1,
+        "receipt": {
+          "status": "FAILED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/2-False/release",
+          "key_id": "4535e174ea488c4d",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "publisher_verified": false,
+          "production_approval": false,
+          "problems": [],
+          "unlisted_files": [
+            "__pycache__/extra.pyc"
+          ]
+        }
+      }
+    },
+    {
+      "case": "experimental_verify_parent_path",
+      "file": "tools/release_sign.py",
+      "baseline": {
+        "accepted": true,
+        "exit": 0,
+        "receipt": {
+          "status": "VERIFIED",
+          "release_dir": "/tmp/ops-audit-synthetic-oesc2qyn/3-True/release",
+          "key_id": "1c97a76581de50d5",
+          "files_checked": 1,
+          "file_count_in_bom": 1,
+          "problems": [],
+          "unlisted_files": []
+        }
+      },
+      "patched": {
+        "accepted": false,
+        "exit": "unsafe or noncanonical BOM file path"
+      }
+    },
+    {
+      "case": "signer_dry_run_add",
+      "file": "manager/deploy/sign-release-ed25519.py",
+      "baseline": {
+        "exit": 0,
+        "manifest_changed": true,
+        "signature_changed": false
+      },
+      "patched": {
+        "exit": 0,
+        "manifest_changed": false,
+        "signature_changed": false
+      }
+    },
+    {
+      "case": "signer_dry_run_sign_only",
+      "file": "manager/deploy/sign-release-ed25519.py",
+      "baseline": {
+        "exit": 0,
+        "manifest_changed": false,
+        "signature_changed": true
+      },
+      "patched": {
+        "exit": 0,
+        "manifest_changed": false,
+        "signature_changed": false
+      }
+    },
+    {
+      "case": "retention_directory_link",
+      "file": "manager/deploy/recovery_retention.py",
+      "baseline": {
+        "outside_plaintext_survived": false,
+        "exit": 0,
+        "deletion_candidates": 1
+      },
+      "patched": {
+        "outside_plaintext_survived": true,
+        "exit": 4,
+        "deletion_candidates": 0
+      }
+    },
+    {
+      "case": "private_credential_backup",
+      "file": "manager/deploy/purge_credentials.py",
+      "baseline": {
+        "exit": 0,
+        "backup_matches_original_bytes": false,
+        "backup_mode": "0o644",
+        "rotated_file_mode": "0o644"
+      },
+      "patched": {
+        "exit": 0,
+        "backup_matches_original_bytes": true,
+        "backup_mode": "0o600",
+        "rotated_file_mode": "0o600"
+      }
+    },
+    {
+      "case": "managed_candidate_hash_drift",
+      "file": "ops/integrity/verify-runtime.py",
+      "baseline": {
+        "exit": 0,
+        "reported_changed": []
+      },
+      "patched": {
+        "exit": 0,
+        "reported_changed": [
+          "app.py"
+        ]
+      }
+    },
+    {
+      "case": "restore_archive_mismatch",
+      "file": "manager/deploy/restore_drill.py",
+      "baseline": {
+        "exit": 0,
+        "result": "verified",
+        "complete_restore_verified": "not stated",
+        "archive_check": false
+      },
+      "patched": {
+        "exit": 3,
+        "result": "archive_mismatch",
+        "complete_restore_verified": false,
+        "archive_check": false
+      }
+    }
+  ]
+}

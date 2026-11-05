@@ -1,0 +1,1803 @@
+{
+  "iso_root": "/tmp/zhihui-iso-20261105-204248-7zbsutb4",
+  "run_id": "20261105-204248-bb68f3",
+  "net_policy": "block",
+  "installed": true,
+  "syspath_added": [],
+  "env_problems": [],
+  "pytest_exitstatus": 1,
+  "duration_s": 378.01,
+  "network": {
+    "attempts": [
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.087
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.141
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.166
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.212
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.24
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.27
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.297
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.374
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.454
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.482
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.508
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.531
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.562
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.586
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.613
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.646
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.684
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.714
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 20.912
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 29.839
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 29.9
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 29.919
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 29.933
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 89.827
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 89.827
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 89.827
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 96.382
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 96.382
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 96.382
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 96.903
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 96.904
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 96.904
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 97.429
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 97.429
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 97.429
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 97.431
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 97.431
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 97.431
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 97.433
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 97.433
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 97.433
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 97.434
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 97.434
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 97.434
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 98.45
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 98.45
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 98.45
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 98.969
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 98.969
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 98.969
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 101.487
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 101.494
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 115.262
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 115.419
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 115.444
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.567
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.567
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.567
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.591
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.602
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.602
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.602
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.69
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.69
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.691
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.722
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.753
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.787
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.805
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.805
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.805
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.823
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.823
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.823
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.843
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.869
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.895
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.919
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.919
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.919
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 126.929
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 126.929
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.929
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.958
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 126.985
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 127.012
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 127.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 127.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 127.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 127.048
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 127.048
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 127.048
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 127.055
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 127.055
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 127.056
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 130.082
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 137.905
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 137.905
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 137.905
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 138.378
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.553
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.553
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.553
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.553
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.554
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.554
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.554
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.554
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.674
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.676
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.759
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.761
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.852
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.854
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.939
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 155.941
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.035
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.136
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.138
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.23
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.231
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.32
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.322
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.406
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.408
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.486
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.488
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.568
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.57
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.672
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.674
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.764
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.766
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.855
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.857
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.944
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 156.946
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.041
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.043
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.134
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.136
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.218
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.22
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.316
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.318
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.413
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.415
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.511
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.514
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.617
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.619
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.697
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.699
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.782
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.784
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.871
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.873
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.952
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 157.954
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.033
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.036
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.114
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.116
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.2
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.202
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.288
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.29
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.368
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.37
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.459
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.462
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.556
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.559
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.64
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.643
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.722
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.724
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.803
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.805
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.882
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.884
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.96
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 158.962
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.039
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.115
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.117
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.196
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.198
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.281
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.283
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.362
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.364
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.442
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.444
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.532
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.534
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.617
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.619
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.701
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.703
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.784
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.786
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.867
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.869
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.953
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 159.955
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.037
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.038
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.123
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.126
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.207
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.209
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.295
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.297
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.388
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.39
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.472
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.475
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.56
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.562
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.644
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.646
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.731
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.732
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.813
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.815
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.893
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.894
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.973
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 160.974
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.054
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.056
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.133
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.135
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.219
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.221
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.309
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.311
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.395
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.397
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.476
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.478
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.561
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.563
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.641
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.643
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.72
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.722
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.805
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.807
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.889
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.891
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.974
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 161.976
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.056
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.058
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.143
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.146
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.233
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.235
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.32
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.322
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.402
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.405
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.496
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.499
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.582
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.584
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.667
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.669
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.75
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.752
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.839
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.841
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.92
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.922
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 162.998
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.0
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.08
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.082
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.167
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.17
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.254
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.257
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.347
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.349
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.437
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.439
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.521
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.523
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.605
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.607
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.691
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.693
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.771
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.773
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.854
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 163.857
+      }
+    ],
+    "attempt_count": 300,
+    "blocked": 10
+  },
+  "writes": {
+    "protected_violations": [
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      },
+      {
+        "path": "/opt/workbuddy-manager/engine/var/audit.jsonl",
+        "reason": "命中生产资产标记 workbuddy-manager",
+        "where": "os.open"
+      }
+    ],
+    "outside_iso_samples": [
+      {
+        "path": "/dev/null",
+        "where": "builtins.open",
+        "t": 0.021
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 280.513
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 309.543
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 312.061
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 313.17
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 321.418
+      }
+    ],
+    "outside_iso_count": 6
+  },
+  "fake_provider": {
+    "total": 32,
+    "completed": 32,
+    "cancelled": 0,
+    "by_path": {
+      "/v1/chat/completions": 29,
+      "/v1/models": 3
+    },
+    "by_mode": {
+      "accepted_disconnect": 1,
+      "normal": 23,
+      "echo": 6,
+      "refusal": 1,
+      "error_500": 1
+    },
+    "bytes_in": 301579,
+    "bytes_out": 330436,
+    "max_body": 295325,
+    "errors": [],
+    "uptime_s": 378.411,
+    "recent": [
+      {
+        "t": 126.99,
+        "path": "/v1/chat/completions",
+        "mode": "accepted_disconnect",
+        "body": 145
+      },
+      {
+        "t": 127.12,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 127.151,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 127.185,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 127.241,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 127.266,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 127.293,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 127.355,
+        "path": "/v1/models",
+        "mode": "normal",
+        "body": 0
+      },
+      {
+        "t": 127.383,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 140
+      },
+      {
+        "t": 127.41,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 179
+      },
+      {
+        "t": 213.892,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 269
+      },
+      {
+        "t": 214.141,
+        "path": "/v1/chat/completions",
+        "mode": "refusal",
+        "body": 239
+      },
+      {
+        "t": 214.307,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 295325
+      },
+      {
+        "t": 214.462,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 560
+      },
+      {
+        "t": 214.499,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 214.537,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 548
+      },
+      {
+        "t": 214.707,
+        "path": "/v1/chat/completions",
+        "mode": "echo",
+        "body": 884
+      },
+      {
+        "t": 240.62,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 240.887,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 240.897,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 240.916,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 240.92,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.132,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.164,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.338,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.551,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.584,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.619,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.791,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 241.818,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 136
+      },
+      {
+        "t": 242.008,
+        "path": "/v1/chat/completions",
+        "mode": "normal",
+        "body": 190
+      },
+      {
+        "t": 242.041,
+        "path": "/v1/chat/completions",
+        "mode": "error_500",
+        "body": 146
+      }
+    ]
+  }
+}

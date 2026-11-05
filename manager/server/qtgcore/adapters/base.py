@@ -60,6 +60,7 @@ class BaseAdapter:
         self._client: Optional[httpx.AsyncClient] = None
         self._auth_lock = asyncio.Lock()
         self._authenticated = False
+        self._auth_generation = 0
         self.breaker = Breaker(settings.breaker_fail_threshold, settings.breaker_cooldown_sec)
         self.breaker.name = self.name  # type: ignore[attr-defined]
         self.last_error = ""
@@ -93,15 +94,22 @@ class BaseAdapter:
     def _credentials(self) -> str:  # pragma: no cover - 抽象
         return ""
 
-    async def ensure_auth(self, force: bool = False) -> None:
+    async def ensure_auth(self, force: bool = False, *, rejected_generation: int | None = None) -> None:
         if self._authenticated and not force:
             return
         async with self._auth_lock:
             if self._authenticated and not force:
                 return
+            if (self._authenticated and rejected_generation is not None
+                    and self._auth_generation != rejected_generation):
+                # Another caller already replaced the exact expired session
+                # rejected by this response. Reuse it instead of serializing
+                # one new upstream login per concurrent 401.
+                return
             try:
                 await self.authenticate()
                 self._authenticated = True
+                self._auth_generation += 1
             except UpstreamError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 统一翻译为上游错误
@@ -138,6 +146,7 @@ class BaseAdapter:
         for attempt in range(attempts):
             started = time.monotonic()
             try:
+                auth_generation = self._auth_generation
                 resp = await self.client.request(method, path, json=json_body, params=params)
                 elapsed = time.monotonic() - started
                 metrics.observe(
@@ -146,9 +155,10 @@ class BaseAdapter:
                     {"upstream": self.name, "method": method},
                 )
                 metrics.inc("qtg_upstream_requests_total", {"upstream": self.name, "method": method})
-                if resp.status_code == 401 and auth and retry and attempt == 0:
+                if (resp.status_code == 401 and auth and retry and attempt == 0
+                        and attempt + 1 < attempts):
                     # 会话过期：重登后重试一次
-                    await self.ensure_auth(force=True)
+                    await self.ensure_auth(force=True, rejected_generation=auth_generation)
                     continue
                 if resp.status_code >= 500:
                     if retry and attempt + 1 < attempts:

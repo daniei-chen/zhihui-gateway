@@ -934,7 +934,7 @@ def _reject_csrf(reason: str) -> None:
                         headers={'X-Manager-Csrf-Reason': reason})
 
 
-def check_same_origin(request: Request) -> None:
+def check_same_origin(request: Request, *, require_cookie: bool = True) -> None:
     """写请求的同源校验。规则与 `qtgcore.security.Auth.check_origin` 一致：
 
       1. 只看**非安全方法**（POST/PUT/PATCH/DELETE）；GET/HEAD 不参与
@@ -949,6 +949,9 @@ def check_same_origin(request: Request) -> None:
          浏览器对非安全方法一定会带 Origin/Referer，带了 Fetch 元数据却没有来源
          只能是"被剥离或伪造"。
 
+    登录与退出显式传 require_cookie=False：创建或清除浏览器会话同样需要来源
+    校验，不能因为首次登录尚无 Cookie 而放行跨站表单。
+
     与 qtgcore 严格版的唯一差别在第 5 条的兜底方向：管理器还要服务**非浏览器
     客户端**（运维脚本 / CI / QTG 的内部调用），它们一个 Fetch 头都不带，而浏览器
     根本构造不出这种请求 —— 对它们按"无 CSRF 语义"放行。若改成一律拒绝，会打断
@@ -956,9 +959,10 @@ def check_same_origin(request: Request) -> None:
     """
     if request.method.upper() not in UNSAFE_METHODS:
         return
-    cookie_name = getattr(config, 'COOKIE_NAME', '') or ''
-    if not cookie_name or not request.cookies.get(cookie_name):
-        return
+    if require_cookie:
+        cookie_name = getattr(config, 'COOKIE_NAME', '') or ''
+        if not cookie_name or not request.cookies.get(cookie_name):
+            return
     origins = [value for value in request.headers.getlist('origin') if value.strip()]
     if len(origins) > 1:
         _reject_csrf('csrf_multiple_origin')

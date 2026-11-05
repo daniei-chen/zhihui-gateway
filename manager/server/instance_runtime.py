@@ -8,6 +8,7 @@ import math
 import time
 
 from . import drain, instancelease
+from .services.asyncwork import joined_thread
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ class InstanceRuntime:
         # 本地保守的租约到期预算（单调时钟）；DB 里 lease_until 用 int(time.time())
         # 生成，可能比本地预算早最多 1 秒，所以要留安全边际。
         self._lease_deadline = None
+        self._expiry_timer = None
+        self._renewal_failed = False
 
     async def start(self):
         if self.held or self.closed:
@@ -61,17 +64,23 @@ class InstanceRuntime:
         return self
 
     async def _heartbeat(self):
-        while True:
+        while not self.closed and not self.lost:
             await asyncio.sleep(self.interval)
+            if self.closed or self.lost:
+                return
             started = time.monotonic()
             try:
-                renewed = instancelease.heartbeat(
+                # The shared SQLite writer lock can wait for seconds. Never
+                # hold up ASGI while renewing; cancellation joins this owned
+                # operation before close() can release the same lease.
+                renewed = await joined_thread(instancelease.heartbeat,
                     self.identity['instance_id'], self.fence,
                     owner=self.identity['owner'], ttl_seconds=self.ttl)
             except Exception as exc:
                 # 存储瞬时故障 != 真正失权：本地租约预算还有余量时重试下一个周期，
                 # 耗尽才停止新准入。否则一次 SQLite busy/IO 抖动会让实例永久停机。
                 self.transient_errors += 1
+                self._renewal_failed = True
                 self.last_error = f'{type(exc).__name__}: {exc}'
                 if self.transient_errors == 1 or self.transient_errors % 30 == 0:
                     logger.exception('Application instance heartbeat failed (attempt %s)',
@@ -82,10 +91,13 @@ class InstanceRuntime:
                     self._mark_lost('heartbeat_error')
                     return
                 continue
+            if self.lost or self.closed:
+                return
             if not renewed:
                 self._mark_lost('ownership_rejected')
                 return
             self.heartbeats += 1
+            self._renewal_failed = False
             self._renew_deadline(started)
             if self._lease_remaining() <= 0:
                 self._mark_lost('heartbeat_budget_exhausted')
@@ -95,6 +107,24 @@ class InstanceRuntime:
         """记下本地保守的租约到期预算；成功 claim/心跳后调用；等待与提交耗时不能凭空续命。"""
         margin = min(2.0, max(1.0, self.ttl * 0.1))
         self._lease_deadline = started + self.ttl - margin
+        self._arm_expiry_timer()
+
+    def _arm_expiry_timer(self):
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+        self._expiry_timer = asyncio.get_running_loop().call_later(
+            max(0.0, self._lease_remaining()), self._expire_if_needed)
+
+    def _expire_if_needed(self):
+        self._expiry_timer = None
+        if not self.held or self.closed or self.lost:
+            return
+        if self._lease_remaining() > 0:
+            self._arm_expiry_timer()
+            return
+        # This must also run while the renewal thread is waiting for SQLite.
+        # Moving the write off-loop must not extend admission past ownership.
+        self._mark_lost('heartbeat_error' if self._renewal_failed else 'heartbeat_budget_exhausted')
 
     def _lease_remaining(self):
         if self._lease_deadline is None:
@@ -102,14 +132,19 @@ class InstanceRuntime:
         return self._lease_deadline - time.monotonic()
 
     def _mark_lost(self, reason):
+        if self.lost:
+            return
         self.lost = True
         self.failure_reason = reason
         logger.critical('Instance lease lost; stopping admission until process restart reason=%s', reason)
         # Existing bodies finish; no automatic re-claim or administrative resume
         # can let an old fence continue serving after ownership loss.
-        drain.begin(shutdown=True)
+        drain.begin(shutdown=True, persist=False)
 
     def _release(self):
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+            self._expiry_timer = None
         if not self.held:
             return
         try:

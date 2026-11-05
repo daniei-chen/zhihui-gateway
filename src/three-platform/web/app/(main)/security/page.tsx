@@ -1,6 +1,6 @@
 'use client';
 
-import {useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {ShieldCheck, Plus, Trash2, Ban, CircleCheck, Network} from 'lucide-react';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
@@ -131,7 +131,7 @@ const EMPTY_LOGS: IpAccessLog[] = [];
 const EMPTY_AUDIT: AuditLog[] = [];
 
 export default function SecurityPage() {
-  const {isAdmin, role} = useAuth();
+  const {isAdmin, role, me} = useAuth();
   const t = useT();
 
   /**
@@ -156,7 +156,7 @@ export default function SecurityPage() {
     rules: () => securityApi.rules(),
     logs: () => securityApi.logs(200),
     ...(isAdmin || role === 'account_admin' ? {audit: () => settingsApi.auditLogs(200)} : {}),
-  }, [isAdmin, role]);
+  }, [isAdmin, role, me?.username]);
 
   /** null = 这份数据还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const config: SecurityConfig | null = values.config ?? null;
@@ -171,8 +171,24 @@ export default function SecurityPage() {
   const [busy, setBusy] = useState(false);
   /** 保存配置时的乐观值，见 saveConfig 的说明。null = 没有在途改动 */
   const [optimistic, setOptimistic] = useState<SecurityConfig | null>(null);
+  const [configSaving, setConfigSaving] = useState(false);
+  const configFlight = useRef<symbol | null>(null);
+  const configGeneration = useRef(0);
+  const configRef = useRef(config);
+  const [optimisticBase, setOptimisticBase] = useState(config);
+  const invalidateConfig = useCallback(() => {
+    configGeneration.current++;
+    configFlight.current = null;
+  }, []);
+  useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => {
+    setOptimistic(null);
+    setConfigSaving(false);
+    return invalidateConfig;
+  }, [isAdmin, role, me?.username, invalidateConfig]);
   /** 实际显示的那份配置：在途改动优先，否则用取回来的 */
-  const shownConfig = optimistic ?? config;
+  const shownConfig = optimistic && (configSaving || optimisticBase === config) ? optimistic : config;
+  const configWritable = isAdmin && config !== null && !('config' in errors) && !configSaving;
 
   // IP 规则与访问日志会随流量变化，心跳刷新保持同步。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
@@ -205,17 +221,34 @@ export default function SecurityPage() {
    * 失败时撤掉乐观值即可：显示回落到**服务端最后确认过**的那份值。
    */
   async function saveConfig(next: SecurityConfig) {
+    if (!configWritable || configFlight.current) return;
+    const request = Symbol('security-config');
+    const generation = configGeneration.current;
+    const current = () => generation === configGeneration.current && configFlight.current === request;
+    const previous = shownConfig;
+    configFlight.current = request;
+    setOptimisticBase(config);
+    setConfigSaving(true);
     setOptimistic(next);
     try {
-      await securityApi.saveConfig(next);
+      const saved = await securityApi.saveConfig(next);
+      if (!current()) return;
+      setOptimisticBase(configRef.current);
+      setOptimistic(saved);
       notify.ok(t('security.configSaved'));
       // 刷新**成功**才撤乐观值：写入已被服务端接受，若这一次刷新失败还把显示退回
       // 旧值，开关会跳回原态——用户以为没保存上，其实只是列表没刷上（顶部那条
       // 常驻提示已经在说明这件事）。
-      if (await reload()) setOptimistic(null);
+      if (await reload() && current()) setOptimistic(null);
     } catch (e) {
-      setOptimistic(null);
+      if (!current()) return;
+      setOptimistic(previous);
       notify.err(errText(e));
+    } finally {
+      if (current()) {
+        configFlight.current = null;
+        setConfigSaving(false);
+      }
     }
   }
 
@@ -299,7 +332,7 @@ export default function SecurityPage() {
                   <Switch
                     aria-label={t('security.enableControl')}
                     checked={shownConfig.enabled}
-                    disabled={!isAdmin}
+                    disabled={!configWritable}
                     onCheckedChange={(v) => saveConfig({...shownConfig, enabled: v})}
                   />
                 </div>
@@ -307,7 +340,7 @@ export default function SecurityPage() {
                   <Label className="text-[11px] text-muted-foreground">{t('security.mode')}</Label>
                   <Select
                     value={shownConfig.mode}
-                    disabled={!isAdmin}
+                    disabled={!configWritable}
                     onValueChange={(v) => saveConfig({...shownConfig, mode: v as SecurityConfig['mode']})}
                   >
                     <SelectTrigger className="bg-background" aria-label={t('security.mode')}><SelectValue /></SelectTrigger>
