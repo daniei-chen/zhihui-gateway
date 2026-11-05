@@ -210,8 +210,16 @@ def _install_net_guard(policy: str) -> None:
     def guarded_getaddrinfo(host, port, *args, **kwargs):  # type: ignore[no-untyped-def]
         if host not in (None, "", b""):
             text = host.decode("utf-8", "replace") if isinstance(host, bytes) else str(host)
+            target=host
+            if text.lower().rstrip('.')=='metadata.tencentyun.com':
+                # Deterministic SSRF fixture, never real DNS: return a reserved
+                # link-local address so the application itself must reject it.
+                # The fake HTTP client in that test still asserts zero sends.
+                target='169.254.169.254'
+                history=_STATE.setdefault('dns_fixture_lookups',[])
+                if len(history)<_MAX_SAMPLES:history.append(text)
             try:
-                ipaddress.ip_address(text)
+                ipaddress.ip_address(target)
                 numeric = True
             except ValueError:
                 numeric = False
@@ -223,7 +231,7 @@ def _install_net_guard(policy: str) -> None:
                 flags=socket.AI_NUMERICHOST|socket.AI_NUMERICSERV
                 if len(args)>3:args[3]|=flags
                 else:kwargs['flags']=kwargs.get('flags',0)|flags
-                return orig_gai(host,port,*args,**kwargs)
+                return orig_gai(target,port,*args,**kwargs)
             _decide(text, "socket.getaddrinfo")
         return orig_gai(host, port, *args, **kwargs)
 

@@ -108,6 +108,9 @@ class NetworkEvidenceTest(unittest.TestCase):
                     with self.assertRaises(plugin.NetworkBlocked):client.connect(('169.254.169.254',443))
                 with self.assertRaises(plugin.NetworkBlocked):socket.create_connection(('203.0.113.4',443))
                 with self.assertRaises(plugin.NetworkBlocked):socket.getaddrinfo('metadata.invalid',443)
+                socket.getaddrinfo('metadata.tencentyun.com',443)
+                self.assertEqual(parse.call_args.args[:2],('169.254.169.254',443))
+                self.assertEqual(plugin._STATE['dns_fixture_lookups'],['metadata.tencentyun.com'])
                 connect.assert_not_called()
             finally:plugin.pytest_unconfigure(None)
 
