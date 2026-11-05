@@ -389,33 +389,98 @@ class PgSyncPanelPollingTest(unittest.TestCase):
          脏标记清掉。
 
     行为验收在 `dev/verify_pgsync_form_ui.py`（真浏览器里打字等两个轮询周期），
-    这里钉结构：改回「空闲也全量重载」会立刻被拦下。
+    这里钉结构：改回「空闲也全量重载」会立刻被拦下。轮询已改成请求完成后
+    setTimeout，另外检查 single-flight、取消、身份代次和可见性；实际组件竞态
+    在 web/tests/audit-business-state.test.cjs 执行，不依赖此处的源码形状断言。
     """
 
     PANEL = (_ROOT / 'web' / 'components' / 'common' / 'settings'
              / 'PgSyncPanel.tsx')
 
     def setUp(self) -> None:
-        self.src = self.PANEL.read_text(encoding='utf-8')
+        raw = self.PANEL.read_text(encoding='utf-8')
+        # 断言要检查实际代码，不能让解释旧缺陷的注释提供虚假的匹配。
+        self.src = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', raw, flags=re.S))
+        self.api = (_ROOT / 'web' / 'lib' / 'api.ts').read_text(encoding='utf-8')
+
+    def _polling_contract(self, src: str) -> None:
+        effect = re.search(
+            r'^  useEffect\(\(\) => \{\s*(let alive = true;[\s\S]*?)'
+            r'^  \}, \[([^\]]*)\]\);', src, flags=re.M)
+        self.assertIsNotNone(effect, '找不到独立进度轮询的生命周期')
+        body, deps = effect.groups()
+        for dep in ('acceptStatus', 'isAdmin', 'me?.username', 'invalidateStatus'):
+            self.assertIn(dep, deps, f'轮询缺少当前身份/状态依赖 {dep}')
+        tick = re.search(
+            r'^    const tick = async \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(tick, '找不到异步进度读取')
+        request = tick.group(1)
+        self.assertIn('await pgSyncApi.status(request.signal)', request,
+                      '轮询必须把取消 signal 传入进度 API')
+        self.assertNotRegex(request, r'\bload\s*\(|\bsetForm\s*\(',
+                            '轮询又出现完整重载或表单更新 —— issue #122 会覆盖未保存输入')
+        self.assertRegex(request, r'if \(!alive \|\| document\.hidden \|\| inFlight\) return;',
+                         '轮询没有同步在途/可见性门控')
+        self.assertIn('inFlight = true;', request)
+        self.assertLess(request.find('inFlight = true;'), request.find('await pgSyncApi.status('),
+                        '在途锁必须在发请求之前生效')
+        self.assertIn('const request = new AbortController();', request)
+        self.assertIn('controller = request;', request)
+        self.assertRegex(request,
+                         r'if \(alive && !request\.signal\.aborted && generation === statusGeneration\.current\) acceptStatus\(next\)',
+                         '已取消或旧代次的进度不能写入当前状态')
+        finalizer = request.split('} finally {', 1)
+        self.assertEqual(len(finalizer), 2, '请求完成/失败都必须释放锁并安排下一次轮询')
+        self.assertIn('inFlight = false;', finalizer[1])
+        self.assertIn('else schedule();', finalizer[1])
+        self.assertRegex(body,
+                         r'if \(alive && !document\.hidden\) timer = window\.setTimeout\(\(\) => void tick\(\), runningRef\.current \? 1500 : 15000\)',
+                         '完成后轮询必须保留运行 1.5 秒/空闲 15 秒的有界间隔')
+        self.assertNotIn('setInterval(', body, '固定 interval 会堆叠慢请求')
+        self.assertIn('window.clearTimeout(timer)', body, 'clearTimer 必须实际撤掉计时器')
+        visibility = re.search(
+            r'^    const visibility = \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(visibility, '缺少标签页隐藏/恢复处理')
+        self.assertIn('if (document.hidden)', visibility.group(1))
+        self.assertIn('controller?.abort();', visibility.group(1))
+        self.assertIn('statusGeneration.current++;', visibility.group(1))
+        self.assertIn('else if (inFlight) resumeImmediately = true;', visibility.group(1))
+        self.assertIn('else void tick();', visibility.group(1))
+        cleanup = re.search(
+            r'^    return \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(cleanup, '离开轮询作用域必须取消与清理')
+        for action in ('alive = false;', 'invalidateStatus();', 'clearTimer();',
+                       'controller?.abort();', "document.removeEventListener('visibilitychange', visibility)"):
+            self.assertIn(action, cleanup.group(1), f'轮询清理缺少 {action}')
+        self.assertRegex(src, r'if \(wasRunning\.current && !running\) void load\(\);',
+                         '任务完成时仍需刷新上次导入/导出时间')
 
     def test_轮询回调只拉进度(self) -> None:
-        block = re.search(r'window\.setInterval\(\(\) => \{([\s\S]*?)\}, interval\)', self.src)
-        self.assertIsNotNone(block, '找不到轮询回调')
-        body = block.group(1)
-        self.assertIn('pollStatus', body, '轮询居然不拉进度了')
-        self.assertNotIn('load(', body,
-                         '轮询回调里又出现了完整重载 —— 那就是 issue #122 复发：'
-                         '空闲时用服务端配置整体覆盖表单')
+        self._polling_contract(self.src)
+        self.assertRegex(self.api,
+                         r"status: \(signal\?: AbortSignal\) => get<PgSyncStatus>\('/api/settings/pg-sync/status', undefined, signal\)",
+                         '进度 API 必须把 signal 继续传给 HTTP 层')
 
     def test_回填表单要过脏检查(self) -> None:
         loader = re.search(
-            r'const load = useCallback\(async \(\) => \{([\s\S]*?)\}, \[\]\)', self.src)
+            r'^  const load = useCallback\(async \(\) => \{\n([\s\S]*?)'
+            r'^  \}, \[([^\]]*)\]\);', self.src, flags=re.M)
         self.assertIsNotNone(loader, '找不到配置加载函数')
         body = loader.group(1)
         self.assertIn('dirtyRef.current', body,
                       '回填表单没有脏检查：用户没保存的输入会被旧值打回去')
         self.assertIn('setForm((f) =>', body,
                       '回填要走函数式更新（基于当前表单判断，而不是闭包里的旧值）')
+        self.assertIn('acceptStatus', loader.group(2), '配置读取必须跟随状态提交回调的依赖')
+        self.assertIn('await pgSyncApi.config(controller.signal)', body)
+        self.assertIn('mounted.current && !controller.signal.aborted && generation === configGeneration.current', body,
+                      '旧身份/已取消的配置读取不能回填表单')
+        self.assertIn('if (!current()) return;', body)
+        self.assertLess(body.find('if (!current()) return;'), body.find('setForm((f) =>'),
+                        '配置读取应在回填前拒绝旧代次')
+        self.assertIn('if (statusRead === statusGeneration.current) acceptStatus(r.status)', body)
+        self.assertRegex(self.api,
+                         r"config: \(signal\?: AbortSignal\) => get<PgSyncConfigResponse>\('/api/settings/pg-sync', undefined, signal\)")
 
     def test_脏标记的置位与清零(self) -> None:
         self.assertRegex(self.src, r'const patch = \(next[\s\S]{0,160}?dirtyRef\.current = true',
@@ -424,14 +489,21 @@ class PgSyncPanelPollingTest(unittest.TestCase):
                          '保存成功后没清脏标记 —— 之后服务端值再也回填不进表单')
 
     def test_守卫不是空转(self) -> None:
-        """把轮询回调换回修前的写法，第一条必须能看出来。"""
-        broken = self.src.replace(
-            '      void pollStatus();\n',
-            '      if (running) { void pollStatus(); } else { void load(); }\n', 1)
-        self.assertNotEqual(broken, self.src, '替换没生效，这条反证没有意义')
-        block = re.search(r'window\.setInterval\(\(\) => \{([\s\S]*?)\}, interval\)', broken)
-        self.assertIn('load(', block.group(1),
-                      '换回修前的写法后守卫仍看不出来 —— 这条守卫是空转的')
+        """实际变异轮询实现：恢复整表读取、移除互斥/取消/身份边界都必须失败。"""
+        mutations = (
+            ('const next = await pgSyncApi.status(request.signal);',
+             'await load();\n        const next = await pgSyncApi.status(request.signal);'),
+            ('!alive || document.hidden || inFlight', '!alive || document.hidden'),
+            ('alive && !request.signal.aborted && generation', 'alive && generation'),
+            ('[acceptStatus, isAdmin, me?.username, invalidateStatus]',
+             '[acceptStatus, isAdmin, invalidateStatus]'),
+        )
+        for old, new in mutations:
+            with self.subTest(removed_contract=old):
+                broken = self.src.replace(old, new, 1)
+                self.assertTrue(broken != self.src, '替换没生效，这条反证没有意义')
+                with self.assertRaises(AssertionError):
+                    self._polling_contract(broken)
 
 
 if __name__ == '__main__':

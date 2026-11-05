@@ -31,6 +31,11 @@ function hookHarness() {
       if (!same(slots[index]?.deps, deps)) slots[index] = {value: callback, deps};
       return slots[index].value;
     },
+    useMemo(factory, deps) {
+      const index = cursor++;
+      if (!same(slots[index]?.deps, deps)) slots[index] = {value: factory(), deps};
+      return slots[index].value;
+    },
     useEffect(effect, deps) {
       const index = cursor++;
       if (!same(slots[index]?.deps, deps)) {
@@ -583,7 +588,7 @@ test('logout failure keeps identity/cache/location; confirmed success clears the
   const {AuthProvider} = load('lib/auth-context.tsx', {
     react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
     '@/lib/use-hydrated': {useHydrated: () => true},
-    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window},
+    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
   });
   const render = () => harness.render(() => AuthProvider({children: null})).props.value;
   render(); harness.effects(); await flush();
@@ -1288,4 +1293,297 @@ test('approved key page states wallet cap and does not show the unpaid-activatio
   assert.match(view, /余额为零拒绝新请求/);
   assert.match(view, /超出部分由平台承担/);
   assert.match(view, /不扣未来签到/);
+});
+
+function authRaceFixture() {
+  const harness = hookHarness();
+  const cache = new Map();
+  const reads = [];
+  const window = {sessionStorage: {
+    getItem: key => cache.get(key) ?? null,
+    setItem: (key, value) => cache.set(key, value),
+    removeItem: key => cache.delete(key),
+  }, location: {href: '/login'}};
+  const authApi = {
+    me: signal => {const read = {...deferred(), signal}; reads.push(read); return read.promise;},
+    login: async username => ({ok: true, username, role: 'viewer'}),
+    logout: async () => ({ok: true}),
+  };
+  const {AuthProvider} = load('lib/auth-context.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
+    '@/lib/use-hydrated': {useHydrated: () => true},
+    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
+  });
+  return {harness, cache, reads, window, authApi, render: () => harness.render(() => AuthProvider({children: null})).props.value};
+}
+
+for (const response of ['old identity', 'old unauthorized']) {
+  test(`a delayed identity read cannot replace a successful login with ${response}`, async () => {
+    const fixture = authRaceFixture();
+    fixture.render(); fixture.harness.effects(); await flush();
+    await fixture.render().login('new-user', 'fixture-password');
+    assert.equal(fixture.render().me.username, 'new-user');
+    if (response === 'old identity') fixture.reads[0].resolve({username: 'old-admin', role: 'admin'});
+    else fixture.reads[0].reject({response: {status: 401}});
+    await flush();
+    assert.equal(fixture.render().me.username, 'new-user');
+    assert.equal(fixture.render().isAdmin, false);
+    assert.equal(JSON.parse(fixture.cache.get('wb-me')).username, 'new-user');
+  });
+}
+
+test('confirmed logout fences an older identity read and cancels the request', async () => {
+  const fixture = authRaceFixture();
+  fixture.render(); fixture.harness.effects(); await flush();
+  await fixture.render().logout();
+  fixture.reads[0].resolve({username: 'old-admin', role: 'admin'}); await flush();
+  assert.equal(fixture.render().me, null);
+  assert.equal(fixture.cache.has('wb-me'), false);
+  assert.equal(fixture.reads[0].signal.aborted, true);
+});
+
+test('identity refresh coalesces reads and Strict Mode replay replaces an abandoned read', async () => {
+  const fixture = authRaceFixture();
+  fixture.render(); fixture.harness.effects(); await flush();
+  const joined = fixture.render().refresh(); await flush();
+  assert.equal(fixture.reads.length, 1);
+  fixture.harness.replayEffects(); await flush();
+  assert.equal(fixture.reads[0].signal.aborted, true);
+  assert.equal(fixture.reads.length, 2);
+  fixture.reads[1].resolve({username: 'current', role: 'viewer'}); await flush();
+  fixture.reads[0].resolve({username: 'obsolete', role: 'admin'}); await joined;
+  assert.equal(fixture.render().me.username, 'current');
+  fixture.harness.unmount();
+});
+
+function taskRunFixture() {
+  const harness = hookHarness(), reads = [], starts = [], scheduled = [];
+  let finished = 0;
+  const start = deferred();
+  const {useTaskRun} = load('lib/use-task-run.ts', {
+    react: harness.react,
+    '@/lib/api': {errText: String, accountApi: {
+      taskRunStatus() { const read = deferred(); reads.push(read); return read.promise; },
+      taskRunStart(...args) { starts.push(args); return start.promise; },
+      taskRunStop: async () => ({ok: true, message: 'stopped'}),
+    }},
+    '@/lib/i18n/provider': {useI18n: () => ({t: key => key, tp: key => key})},
+    '@/lib/toast': {notify: {ok() {}, err() {}, info() {}}},
+    globals: {
+      setTimeout(callback, delay) { const entry = {callback, delay}; scheduled.push(entry); return entry; },
+      clearTimeout(entry) { entry.cancelled = true; },
+    },
+  });
+  return {harness, reads, starts, start, scheduled, finished: () => finished,
+    render: () => harness.render(() => useTaskRun({target: 'ALL', onFinished: () => {finished++;}}))};
+}
+
+test('task status read failures preserve running cadence and never announce false completion', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.reads[0].resolve({running: true}); await flush();
+  assert.equal(fixture.scheduled[0].delay, 2000);
+  fixture.scheduled[0].callback();
+  fixture.reads[1].reject(new Error('temporary network outage')); await flush();
+  assert.equal(fixture.finished(), 0);
+  assert.equal(fixture.scheduled[1].delay, 2000);
+  fixture.scheduled[1].callback();
+  fixture.reads[2].resolve({running: false}); await flush();
+  assert.equal(fixture.finished(), 1);
+  assert.equal(fixture.scheduled[2].delay, 15000);
+  fixture.harness.unmount();
+});
+
+test('task status responses arriving after unmount cannot write state', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects(); fixture.harness.unmount();
+  fixture.reads[0].resolve({running: true}); await flush();
+  assert.equal(fixture.render().status, null);
+  assert.equal(fixture.scheduled.length, 0);
+});
+
+test('task actions coalesce same-tick clicks before React rerenders', async () => {
+  const fixture = taskRunFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.reads[0].resolve({running: false}); await flush();
+  const actions = fixture.render();
+  const first = actions.run('preview');
+  const second = actions.run('preview');
+  assert.equal(fixture.starts.length, 1);
+  fixture.start.resolve({ok: true}); await flush();
+  fixture.reads[1].resolve({running: true});
+  await Promise.all([first, second]);
+  fixture.harness.unmount();
+});
+
+function playgroundRaceFixture() {
+  const harness = hookHarness(), streams = [];
+  const jsx = (type, props) => ({type, props});
+  const models = [{id: 'synthetic-model', efforts: []}];
+  let realm = 'international';
+  const {default: PlaygroundPage} = load('app/(main)/playground/page.tsx', {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+    'lucide-react': new Proxy({}, {get: (_target, key) => key}),
+    '@/components/common/layout/PageHeader': {PageHeader: 'header'},
+    '@/components/common/layout/PageSectionTabs': {PageSectionTabs: 'tabs'},
+    '@/components/common/states/LoadError': {LoadError: 'load-error'},
+    '@/components/ui/button': {Button: 'button'}, '@/components/ui/badge': {Badge: 'badge'},
+    '@/components/ui/skeleton': {Skeleton: 'skeleton'},
+    '@/components/ui/ai-chat-input': {AiChatInput: 'chat-input'},
+    '@/components/ui/copy-button': {CopyButton: 'copy-button'},
+    '@/lib/api': {playgroundApi: {}, errText: String, channelRejectionText: String},
+    '@/lib/chat-stream': {streamChat(options) { const stream = {...deferred(), options}; streams.push(stream); return stream.promise; }},
+    '@/lib/use-async-data': {useAsyncAll: () => ({values: {models}, errors: {}, reload() {}})},
+    '@/lib/base-path': {withBasePath: value => value}, '@/lib/toast': {notify: {info() {}}},
+    '@/lib/i18n/provider': {useT: () => (key, params) => params ? `${key}:${JSON.stringify(params)}` : key},
+    '@/lib/format': {fmtCredit: String}, '@/lib/utils': {cn: (...values) => values.join(' ')},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: true})},
+    '@/lib/realm-context': {useRealm: () => ({realm, label: realm})},
+    '@/lib/platform-context': {usePlatform: () => ({platform: 'workbuddy'})},
+    globals: {AbortController},
+  });
+  const render = () => harness.render(PlaygroundPage);
+  const input = () => reviewNodes(render()).find(node => node.type === 'chat-input').props;
+  return {harness, streams, render, input, setRealm(value) {realm = value;}};
+}
+
+test('switching playground realm invalidates old stream callbacks, usage, and finalizers', async () => {
+  const fixture = playgroundRaceFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.input().onChange('old question');
+  const oldSend = fixture.input().onSend();
+  assert.equal(fixture.streams.length, 1);
+  fixture.setRealm('china'); fixture.render(); fixture.harness.effects();
+  assert.equal(fixture.streams[0].options.signal.aborted, true);
+  assert.equal(fixture.input().streaming, false);
+  fixture.input().onChange('new question');
+  const newSend = fixture.input().onSend();
+  assert.equal(fixture.streams.length, 2);
+  fixture.streams[0].options.onDelta('obsolete answer', 'obsolete answer');
+  fixture.streams[0].resolve({answer: 'obsolete answer', usage: {credit: 99}, aborted: true});
+  await oldSend;
+  assert.equal(fixture.input().streaming, true);
+  assert.doesNotMatch(JSON.stringify(fixture.render()), /obsolete answer|\\"v\\":\\"99\\"/);
+  fixture.streams[1].resolve({answer: 'current answer', usage: {credit: 2}, sawDone: true});
+  await newSend;
+  assert.equal(fixture.input().streaming, false);
+  assert.match(JSON.stringify(fixture.render()), /current answer/);
+  assert.match(JSON.stringify(fixture.render()), /\\"v\\":\\"2\\"/);
+  fixture.harness.unmount();
+});
+
+function accountCreditFixture() {
+  const harness = hookHarness(), snapshots = [], refreshes = [], actions = [], notices = [];
+  const jsx = (type, props) => ({type, props});
+  const t = key => key;
+  const refresh = async () => true;
+  const groups = [{id: null, name: 'Default', is_default: true, enabled: true, base_url: 'http://a.invalid'},
+    {id: 1, name: 'Pool B', is_default: false, enabled: true, base_url: 'http://b.invalid'}];
+  const mocks = {
+    react: harness.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'next/link': {default: 'Link'},
+    'lucide-react': new Proxy({}, {get: (_target, key) => key}),
+    '@/lib/api': {errText: String, upstreamApi: {}, upstreamsApi: {}, accountApi: {
+      proxies: async () => ({routes: []}),
+      cachedCredits(groupId) { const read = {...deferred(), groupId}; snapshots.push(read); return read.promise; },
+      refreshCredits(force, groupId, staleOnly) { const read = {...deferred(), force, groupId, staleOnly}; refreshes.push(read); return read.promise; },
+      checkin(file, groupId) { const action = {...deferred(), file, groupId}; actions.push(action); return action.promise; },
+    }},
+    '@/lib/use-heartbeat': {useHeartbeat() {}},
+    '@/lib/use-async-data': {useAsyncAll: (fetchers, deps) => ({errors: {}, reload: refresh, refresh,
+      values: 'pool' in fetchers ? {pool: {accounts: [{uid: 'shared-uid', file: 'workbuddy-shared.json',
+        nickname: deps[0] === null ? 'Default account' : 'Pool B account', realm: 'cn',
+        expires_at: 0, credits: 10}], manageable: true, upstream: {name: 'synthetic'}}}
+        : 'groups' in fetchers ? {groups: {items: groups}} : {upstream: null}})},
+    '@/lib/account-status': {AVAILABILITY_GROUPS: [], availabilityOf: () => 'healthy',
+      availabilityGroup: () => 'healthy', availabilityGroupLabelKey: String,
+      availabilityLabelKey: String, isDegraded: () => false, mergePoolStatus: value => value,
+      rateLimitedModels: () => []},
+    '@/lib/account-list': {groupCounts: rows => ({all: rows.length}), matchesQuery: () => true,
+      selectAccounts: rows => rows,
+      paginate: (rows, page) => ({rows, page, pages: 1, total: rows.length})},
+    '@/lib/format': {fmtNumber: value => `credit:${value}`, fmtDateTime: String, fmtAgo: String,
+      fmtRemain: String, expiryBarPercent: () => 0, expiryVisual: () => ({})},
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: true, canAddAccounts: true, loading: false, me: {role: 'admin'}})},
+    '@/lib/realm-context': {useRealm: () => ({realm: 'cn', label: 'cn'}), realmLabel: String},
+    '@/lib/platform-context': {usePlatform: () => ({platform: 'workbuddy', label: 'WorkBuddy'})},
+    '@/lib/i18n/provider': {useT: () => t},
+    '@/lib/toast': {notify: Object.fromEntries(['ok', 'warn', 'err', 'info'].map(name =>
+      [name, (...args) => notices.push([name, ...args])]))},
+    globals: {window: {dispatchEvent() {}}, Event},
+  };
+  const source = fs.readFileSync(path.join(root, 'app/(main)/accounts/page.tsx'), 'utf8');
+  for (const [, name] of source.matchAll(/from '(@\/components\/[^']+)'/g)) {
+    mocks[name] = new Proxy({}, {get: (_target, key) => key});
+  }
+  const {default: AccountsPage} = load('app/(main)/accounts/page.tsx', mocks);
+  const render = () => harness.render(() => AccountsPage().type());
+  const nodes = () => reviewNodes(render()).flatMap(node => node.type === 'PageHeader'
+    ? [node, ...reviewNodes(node.props.actions)] : [node]);
+  const button = title => nodes().find(node => node.type === 'Button' && node.props.title === title).props;
+  const credits = () => nodes().filter(node => node.props?.title === 'accounts.creditsTitle').map(node => node.props.children);
+  const selectB = () => {
+    nodes().find(node => node.type === 'Button' && JSON.stringify(node.props.children)?.includes('Pool B')).props.onClick();
+    render(); harness.effects();
+  };
+  const response = value => ({credits: {'shared-uid': value},
+    meta: {'shared-uid': {cached: false, source: 'cache', expiries: []}}, failed: [], total: 1, succeeded: 1});
+  const settleAutomatic = async value => {
+    snapshots.at(-1).resolve(response(value)); await flush();
+    const read = refreshes.at(-1); assert.equal(read.force, false);
+    read.resolve(response(value)); await flush();
+  };
+  return {harness, snapshots, refreshes, actions, notices, render, button, credits, selectB, response, settleAutomatic};
+}
+
+test('old group manual credit responses cannot replace the selected group balances', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  const oldRead = fixture.refreshes.at(-1);
+  fixture.selectB(); await fixture.settleAutomatic(31);
+  oldRead.resolve(fixture.response(999)); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:31', 'credit:31']);
+  fixture.harness.unmount();
+});
+
+test('an older automatic credit read cannot overwrite a newer manual refresh', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects();
+  fixture.snapshots[0].resolve(fixture.response(10)); await flush();
+  const automatic = fixture.refreshes[0];
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  fixture.refreshes[1].resolve(fixture.response(200)); await pending;
+  automatic.resolve(fixture.response(11)); await flush();
+  assert.deepEqual(fixture.credits(), ['credit:200', 'credit:200']);
+  fixture.harness.unmount();
+});
+
+test('old group single-account action responses cannot change the new group credits', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.checkin').onClick();
+  fixture.selectB(); await fixture.settleAutomatic(31);
+  fixture.actions[0].resolve({ok: true, credits: 999, expiries: []}); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:31', 'credit:31']);
+  fixture.harness.unmount();
+});
+
+test('manual credit refresh cannot write or notify after the account page unmounts', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const pending = fixture.button('accounts.refreshCreditsTitle').onClick();
+  fixture.harness.unmount();
+  fixture.refreshes.at(-1).resolve(fixture.response(999)); await pending;
+  assert.deepEqual(fixture.credits(), ['credit:20', 'credit:20']);
+  assert.equal(fixture.notices.length, 0);
+});
+
+test('manual credit refresh prevents same-tick duplicate provider fanout', async () => {
+  const fixture = accountCreditFixture();
+  fixture.render(); fixture.harness.effects(); await fixture.settleAutomatic(20);
+  const click = fixture.button('accounts.refreshCreditsTitle').onClick;
+  const first = click(), second = click();
+  assert.equal(fixture.refreshes.filter(read => read.force).length, 1);
+  fixture.refreshes.at(-1).resolve(fixture.response(25)); await Promise.all([first, second]);
+  fixture.harness.unmount();
 });

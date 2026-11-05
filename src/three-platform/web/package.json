@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test lib/*.test.mjs tests/reliability.test.cjs tests/static-export.test.cjs tests/language.test.cjs tests/managed-update-boundary.test.cjs"
+    "test": "node --test lib/*.test.mjs tests/*.test.cjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.19",

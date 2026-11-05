@@ -128,8 +128,10 @@ def _as_int(value: object) -> int:
     if isinstance(value, bool):
         return 0
     try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        result = int(value)  # type: ignore[arg-type]
+        return result if 0 <= result <= 2**53 - 1 and not (
+            isinstance(value, float) and value != result) else 0
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -740,7 +742,8 @@ class _StreamTranslator:
         self.text_index: int | None = None       # 当前打开的文本块
         self.tool_index: int | None = None       # 当前打开的工具块
         self.think_index: int | None = None      # 当前打开的思考块
-        self.think_buf = ''                      # 思考全文（用于算签名）
+        self.think_buf: list[str] = []            # 本思考块全文（用于算签名）
+        self.tools: dict[int, dict] = {}
         self.next_index = 0
         self.tool_seen = False
         # 是否见过正文增量：首字延迟据此判定（用「第一个含正文的 delta」，而不是
@@ -788,15 +791,32 @@ class _StreamTranslator:
             'index': index,
             'delta': {
                 'type': 'signature_delta',
-                'signature': responses._encode_credential(self.think_buf),
+                'signature': responses._encode_credential(''.join(self.think_buf)),
             },
         })]
+        self.think_buf.clear()
         out += self._close(index)
         return out
 
-    def _open_think(self) -> list[bytes]:
-        self.think_index = self.next_index
+    def _allocate_index(self) -> int:
+        if self.next_index >= responses.MAX_OUTPUT_ITEMS:
+            raise ValueError('Upstream response exceeds the content block limit.')
+        index = self.next_index
         self.next_index += 1
+        return index
+
+    def _close_tools(self) -> list[bytes]:
+        out = []
+        for tool in self.tools.values():
+            if not tool['closed']:
+                out += self._close(tool['index'])
+                tool['closed'] = True
+        self.tool_index = None
+        return out
+
+    def _open_think(self) -> list[bytes]:
+        self.think_buf = []
+        self.think_index = self._allocate_index()
         return [_event('content_block_start', {
             'type': 'content_block_start',
             'index': self.think_index,
@@ -841,8 +861,11 @@ class _StreamTranslator:
         reasoning = delta.get('reasoning_content')
         if self.thinking and isinstance(reasoning, str) and reasoning:
             if self.think_index is None:
+                out += self._close(self.text_index)
+                self.text_index = None
+                out += self._close_tools()
                 out += self._open_think()
-            self.think_buf += reasoning
+            self.think_buf.append(reasoning)
             out.append(_event('content_block_delta', {
                 'type': 'content_block_delta',
                 'index': self.think_index,
@@ -856,12 +879,9 @@ class _StreamTranslator:
             # 顺序保证签名在对应的正文之前送达。
             out += self._close_think()
             # 从工具块切回文本时，先把工具块关掉
-            if self.tool_index is not None:
-                out += self._close(self.tool_index)
-                self.tool_index = None
+            out += self._close_tools()
             if self.text_index is None:
-                self.text_index = self.next_index
-                self.next_index += 1
+                self.text_index = self._allocate_index()
                 out.append(_event('content_block_start', {
                     'type': 'content_block_start',
                     'index': self.text_index,
@@ -885,12 +905,14 @@ class _StreamTranslator:
                 self.text_index = None
 
             name = fn.get('name')
-            if name:
-                # 新工具：关掉上一个，开一个新的
-                if self.tool_index is not None:
-                    out += self._close(self.tool_index)
-                self.tool_index = self.next_index
-                self.next_index += 1
+            seq = _as_int(call.get('index'))
+            tool = self.tools.get(seq)
+            if tool is None:
+                if not name:
+                    raise ValueError('Upstream tool arguments arrived before its name.')
+                self.tool_index = self._allocate_index()
+                tool = {'index': self.tool_index, 'closed': False}
+                self.tools[seq] = tool
                 self.tool_seen = True
                 out.append(_event('content_block_start', {
                     'type': 'content_block_start',
@@ -902,13 +924,15 @@ class _StreamTranslator:
                         'input': {},
                     },
                 }))
+            elif tool['closed']:
+                raise ValueError('Upstream tool arguments arrived after its block closed.')
 
             args = fn.get('arguments')
-            if isinstance(args, str) and args and self.tool_index is not None:
+            if isinstance(args, str) and args:
                 # 分片原样透传，拼接交给客户端（我们无从判断 JSON 何时完整）
                 out.append(_event('content_block_delta', {
                     'type': 'content_block_delta',
-                    'index': self.tool_index,
+                    'index': tool['index'],
                     'delta': {'type': 'input_json_delta', 'partial_json': args},
                 }))
 
@@ -918,6 +942,18 @@ class _StreamTranslator:
                 self._deferred_finish=str(finish)
             else:
                 out += self.finish(str(finish))
+        return out
+
+    def abort(self) -> list[bytes]:
+        """Close a failed stream without inventing end_turn or executable tools."""
+        if self.finished or not self.started:
+            return []
+        self.finished = True
+        out = self._close(self.think_index) + self._close(self.text_index)
+        out += self._close_tools()
+        self.think_index = self.text_index = None
+        self.think_buf.clear()
+        out.append(_event('message_stop', {'type': 'message_stop'}))
         return out
 
     def finish(self, finish_reason: str | None = None, *, force: bool = False) -> list[bytes]:
@@ -931,7 +967,7 @@ class _StreamTranslator:
         # 思考块先关（含发签名）：顺序与开块顺序一致，也让签名一定落在 stop 之前
         out += self._close_think()
         out += self._close(self.text_index)
-        out += self._close(self.tool_index)
+        out += self._close_tools()
         self.text_index = self.tool_index = None
 
         reason = finish_reason
@@ -1059,10 +1095,10 @@ async def messages(request: Request):
 
     if not stream:
         try:
-            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))) as client:
+            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)) as client:
                 resp = await deadline_mod.await_total(
                     client.post(url, content=wire,
-                                headers=gateway._upstream_headers(upstream)),
+                                headers=await gateway._upstream_headers_async(upstream)),
                     request_deadline)
             state=observability.current.get()
             if state:
@@ -1115,11 +1151,11 @@ async def messages(request: Request):
             return _err(f'上游不可用：{exc}', 502, 'api_error')
 
     # ── 流式 ────────────────────────────────────────────────
-    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
     resp = None
     try:
         req = client.build_request('POST', url, content=wire,
-                                   headers=gateway._upstream_headers(upstream))
+                                   headers=await gateway._upstream_headers_async(upstream))
         # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
         resp = await deadline_mod.await_headers(client.send(req, stream=True),
                                                 request_deadline)
@@ -1273,7 +1309,7 @@ async def messages(request: Request):
                         if upstream_request_id:
                             _payload['upstream_request_id'] = upstream_request_id
                         yield _event('error', _payload)
-                        for event in translator.finish(None,force=True):
+                        for event in translator.abort():
                             yield event
                     else:
                         for event in translator.finish(getattr(translator,'_deferred_finish',None),force=True):

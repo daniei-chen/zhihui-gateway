@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import errno
 import pathlib
+import stat
 import sys
 import tempfile
 import time
@@ -284,6 +286,65 @@ class ChannelFailureAdmissionTest(_ChannelFixture):
                       'ledger_channel_state', 'ledger_channel_writable',
                       'ledger_channel_reason'):
             self.assertIn(field, status, f'就绪输出缺 {field}')
+
+    def test_unreadable_dead_directory_is_unknown_and_blocks_new_inference(self):
+        self.spool.mkdir(parents=True)
+        dead = self.spool / 'dead'
+        dead.mkdir()
+        real_scandir = os.scandir
+
+        def denied(path):
+            if pathlib.Path(path) == dead:
+                raise PermissionError(errno.EACCES, 'synthetic unreadable dead directory')
+            return real_scandir(path)
+
+        with mock.patch.object(ledgerreplay.os, 'scandir', side_effect=denied):
+            self.assertEqual(ledgerreplay.dead_letters(), -1)
+            state = ledgerreplay.channel_state(force_probe=True)
+            self.assertTrue(state['writable'], 'root spool writes still succeed in this case')
+            self.assertEqual(state['state'], 'degraded')
+            block = ledgerreplay.admission_block()
+            self.assertTrue(block['blocked'])
+            self.assertEqual(block['code'], ledgerreplay.CODE_SPOOL_UNWRITABLE)
+            with self.assertRaises(budget.BudgetRejected):
+                self._prepare()
+
+    def test_unreadable_pending_directory_is_not_a_zero_backlog(self):
+        self.spool.mkdir(parents=True)
+        with mock.patch.object(ledgerreplay.os, 'scandir', side_effect=OSError(errno.EIO, 'synthetic IO failure')):
+            self.assertEqual(ledgerreplay.backlog(), -1)
+            self.assertTrue(ledgerreplay.should_backpressure())
+            self.assertTrue(ledgerreplay.admission_block()['blocked'])
+
+    def test_negative_evidence_counts_never_pass_admission(self):
+        for field in ('pending', 'dead'):
+            state = {'state': 'degraded', 'writable': True, 'pending': 0, 'dead': 0,
+                     'reason': 'synthetic evidence unavailable'}
+            state[field] = -1
+            with self.subTest(field=field), mock.patch.object(ledgerreplay, 'channel_state', return_value=state):
+                self.assertTrue(ledgerreplay.admission_block()['blocked'])
+
+    def test_admission_does_not_scan_historical_disposition_log(self):
+        with mock.patch.object(ledgerreplay, 'dead_dispositions', side_effect=AssertionError('unbounded history read')):
+            self.assertFalse(ledgerreplay.admission_block()['blocked'])
+        with mock.patch.object(ledgerreplay, 'dead_dispositions', return_value=123) as history:
+            self.assertEqual(ledgerreplay.channel_state()['dead_dispositions'], 123)
+            history.assert_called_once()
+
+    @unittest.skipIf(os.name == 'nt', 'directory fsync is a POSIX durability contract')
+    def test_spill_does_not_claim_durability_after_directory_fsync_failure(self):
+        real_fsync = os.fsync
+
+        def fail_directory(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(errno.EIO, 'synthetic directory sync failure')
+            return real_fsync(descriptor)
+
+        with mock.patch.object(ledgerreplay.os, 'fsync', side_effect=fail_directory):
+            result = ledgerreplay.spill(ledgerreplay.build_entry(self._facts('dir-fsync-failed')))
+        self.assertIsNone(result)
+        self.assertTrue((self.spool / 'dir-fsync-failed.json').is_file(),
+                        'uncertain receipt bytes remain for reconciliation, never discarded')
 
 
 if __name__ == '__main__':

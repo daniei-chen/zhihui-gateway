@@ -24,6 +24,7 @@ from .routers import (
     security as security_router, proxies, settings, stats, system, tokens, upstreams, steward,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
+from .services.asyncwork import joined_thread
 from .routers import budgets
 from .routers import qtg_panel
 from .routers import portal
@@ -92,7 +93,7 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(10)
             try:
-                budget.heartbeat()
+                await joined_thread(budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
@@ -248,7 +249,9 @@ async def lifespan(app: FastAPI):
         taskrun.stop_scheduler()
         renew.stop_scheduler()
         cooling.stop_scheduler()
-        dailyplan.stop_scheduler()
+        # Plans retain their task leases until owned work has been cancelled
+        # and joined; finish that cleanup before closing shared HTTP clients.
+        await dailyplan.close_scheduler()
         accountlog.stop_collector()
         await asyncio.to_thread(archiveworker.stop)
         pgsync.stop_scheduler()
@@ -459,7 +462,9 @@ async def _qtg_platform_route(request, call_next):
             platform = ""
     if platform in ("qoder", "trae") and _qtg_should_route(path):
         try:
-            _user = security.current_user(request)
+            # Identity resolution may wait on a file/SQLite lock. Keep that
+            # blocking work off the loop that also delivers inference streams.
+            _user = await joined_thread(security.current_user, request)
         except Exception as _exc:
             # H-011：区分「鉴权失败」与「内部错误」。此前一律 401，导致
             # DB 抖动 / 用户文件读失败 / 磁盘满都表现为"未登录"——用户被莫名
@@ -528,6 +533,9 @@ async def cache_headers(request: Request, call_next):
     - CSP: 只允许同源资源与内联样式（前端使用内联样式属性）；
       限制外联目标，降低 XSS 得手后的影响面
     """
+    # QTG routing rewrites the shared ASGI scope below us. Cache policy belongs
+    # to the public request path, not the later internal /__qtg implementation.
+    path = request.url.path
     response = await call_next(request)
 
     # 会话滑动续期：current_user 判定「该续了」时在这里重签 cookie。
@@ -543,16 +551,22 @@ async def cache_headers(request: Request, call_next):
             and response.status_code < 400 and not cookie_already_set):
         try:
             token = request.cookies.get(config.COOKIE_NAME) or ''
-            cfg = security.load_users()
-            obj = security._unsign(token, cfg['secret']) or {}
-            username = str(obj.get('username') or '')
-            if username:
+            def renew_cookie():
+                cfg = security.load_users()
+                obj = security._unsign(token, cfg['secret']) or {}
+                username = str(obj.get('username') or '')
+                if not username:
+                    return None
                 # orig 原样延续 —— 续期只推后**空闲截止**，不延长**总寿命**。
                 # role 传空：鉴权一律以用户表为准（载荷里的 role 仅作展示参考）。
-                fresh = security.issue_token(
+                return security.issue_token(
                     username, '', orig=int(obj.get('orig') or 0) or None,
                     expected_sv=int(obj.get('sv') or 0),
                 )
+            # File/authorization locks can wait behind an administrator update.
+            # Other streams must keep progressing while this cookie is renewed.
+            fresh = await joined_thread(renew_cookie)
+            if fresh:
                 response.set_cookie(
                     config.COOKIE_NAME, fresh,
                     max_age=config.SESSION_DAYS * 86400, httponly=True,
@@ -565,11 +579,10 @@ async def cache_headers(request: Request, call_next):
             # 续期失败不能让请求失败 —— 用户这次照常，只是下次要重登
             logger.warning('会话续期失败（不影响本次请求）: %s', exc)
 
-    path = request.url.path
     if path.startswith('/_next/static/'):
         # 文件名含内容哈希，内容变了文件名就变，可长期强缓存
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
-    elif path == '/metrics' or path.startswith(('/api/', '/v1/', '/v2/', '/healthz')):
+    elif path in {'/metrics', '/readyz', '/responses', '/responses/'} or path.startswith(('/api/', '/v1/', '/v2/', '/healthz')):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
     elif path.startswith('/favicon/') or path.endswith(('.png', '.ico', '.svg', '.woff2', '.webmanifest')):

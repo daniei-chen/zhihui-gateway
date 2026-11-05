@@ -26,7 +26,12 @@ docs/*.md 之间的相互引用一直走到底，得到的集合就是「用户�
 from __future__ import annotations
 
 import re
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -138,6 +143,25 @@ class DocsPackagingTest(unittest.TestCase):
         block = _pack_block()
         self.assertIn('计划外文件', block, '打包步骤丢了「包内 docs 只许是名单里的」核对')
         self.assertIn('$STAGE/docs', block)
+
+    @unittest.skipUnless(shutil.which('bash'), 'the GitHub release job requires bash')
+    def test_actual_pack_block_preserves_nested_document_paths(self):
+        # Execute only the local copy/closure block with a synthetic destination,
+        # never the download, signing, publication or installation workflow.
+        block = _pack_block().split('\n', 1)[1]
+        block = textwrap.dedent(block.rsplit('#', 1)[0])
+        with tempfile.TemporaryDirectory(prefix='docs-pack-contract-') as temporary:
+            stage = Path(temporary) / 'release'
+            stage.mkdir()
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', block],
+                                    cwd=_ROOT, env={**os.environ, 'STAGE': str(stage)},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            packed = {path.relative_to(stage / 'docs').as_posix()
+                      for path in (stage / 'docs').rglob('*.md')}
+            self.assertEqual(packed, set(self.whitelist))
+            for name in self.whitelist:
+                self.assertEqual((stage / 'docs' / name).read_bytes(), (_DOCS / name).read_bytes())
 
 
 if __name__ == '__main__':

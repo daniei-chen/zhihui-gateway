@@ -112,7 +112,7 @@ const EMPTY_USERS: UserItem[] = [];
 
 export default function KeysPage() {
   const t = useT();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
   const {realm} = useRealm();
   const {platform} = usePlatform();
   /**
@@ -128,11 +128,12 @@ export default function KeysPage() {
     keys: () => keyApi.list(),
     upstreams: () => upstreamsApi.list(),
     users: () => isAdmin ? settingsApi.users() : Promise.resolve(EMPTY_USERS),
-  }, [isAdmin]);
+  }, [isAdmin, me?.username]);
 
   const keys: ApiKey[] = values.keys ?? EMPTY_KEYS;
   const upstreams: UpstreamEndpoint[] = values.upstreams?.items ?? EMPTY_UPSTREAMS;
   const users: UserItem[] = values.users ?? EMPTY_USERS;
+  const upstreamsReady = values.upstreams !== undefined && !('upstreams' in errors);
   /**
    * 密钥列表**这一份**没取到。
    *
@@ -180,6 +181,43 @@ export default function KeysPage() {
   /** 是否把导入的供应商设为当前。默认关：这等于替用户切换正在用的供应商，
    *  该由他自己点头，不能靠"顺手"发生。 */
   const [importSetCurrent, setImportSetCurrent] = useState(false);
+  const clientGeneration = useRef(0);
+  const pageGeneration = useRef(0);
+  const statusGeneration = useRef(0);
+  const clientMounted = useRef(false);
+  const exportFlight = useRef<symbol | null>(null);
+  // Import and detection can mutate local client state. Keep one operation in
+  // flight even when its display target changes; changing tabs cannot undo it.
+  const clientMutation = useRef<symbol | null>(null);
+  const invalidateClient = useCallback(() => {
+    clientGeneration.current++;
+    statusGeneration.current++;
+    exportFlight.current = null;
+  }, []);
+  const resetClientResults = useCallback(() => {
+    invalidateClient();
+    setExporting(false);
+    setExported(null);
+    setImported(null);
+    setImportStatus(null);
+  }, [invalidateClient]);
+  const closeIssued = useCallback(() => {
+    resetClientResults();
+    setIssued(null);
+    setImportSetCurrent(false);
+  }, [resetClientResults]);
+  const invalidatePage = useCallback(() => {
+    pageGeneration.current++;
+    invalidateClient();
+  }, [invalidateClient]);
+  useEffect(() => {
+    clientMounted.current = true;
+    closeIssued();
+    return () => {
+      clientMounted.current = false;
+      invalidatePage();
+    };
+  }, [isAdmin, me?.username, closeIssued, invalidatePage]);
   /**
    * 模型白名单里**匹配不到已知模型**的名字（issue #46）。
    *
@@ -233,6 +271,7 @@ export default function KeysPage() {
   }
 
   function openCreate() {
+    if (!isAdmin || !upstreamsReady || submitting.current) return;
     setRepairConfirmed(false);
     setEditing(null);
     // 新建时默认跟随当前所在版本：在哪个版本的界面里建，就是哪个版本的密钥
@@ -242,6 +281,7 @@ export default function KeysPage() {
   }
 
   function openEdit(k: ApiKey) {
+    if (submitting.current) return;
     setRepairConfirmed(false);
     setEditing(k);
     setForm({
@@ -268,7 +308,11 @@ export default function KeysPage() {
   async function submit() {
     // 同步锁：必须在任何 await / setState 之前判断并置位。
     // 只看 `busy` 不够——那个状态要等重渲染才生效，连点会漏过去。
-    if (submitting.current) return;
+    if (submitting.current || !isAdmin) return;
+    if (!upstreamsReady) {
+      notify.err(t('keys.upstreamsFailed'));
+      return;
+    }
     if (!form.name.trim()) {
       notify.err(t('keys.nameRequired'));
       return;
@@ -287,6 +331,8 @@ export default function KeysPage() {
       return;
     }
     submitting.current = true;
+    const generation = pageGeneration.current;
+    const current = () => clientMounted.current && generation === pageGeneration.current;
     setBusy(true);
     try {
       const days = Number(form.expiresDays) || 0;
@@ -329,11 +375,14 @@ export default function KeysPage() {
 
       if (editing) {
         await keyApi.update(editing.id, payload as Partial<ApiKey>);
+        if (!current()) return;
         notify.ok(t('keys.keyUpdated'));
       } else {
         const created = await keyApi.create(payload as Partial<ApiKey>);
+        if (!current()) return;
         notify.ok(t('keys.keyCreated'));
         if (created.key) {
+          resetClientResults();
           setIssued(created.key);
           // 上一把密钥的「一键导入」结果不能留到这一把：否则用户会以为新密钥
           // 已经写入目标、或对着旧备份路径去核对。
@@ -345,13 +394,13 @@ export default function KeysPage() {
       // 所以这里用 reload() 的返回值判断，而不是 `.catch()` —— reload 内部已经
       // 把异常收进 errors 并返回布尔值，返回的 Promise 永远不 reject，
       // 用 .catch 的话这段提示永远不会出现，用户只会看到「失败了」。
-      if (!(await reload())) {
+      if (!(await reload()) && current()) {
         notify.warn(t('keys.createdButRefreshFailed'), t('keys.createdButRefreshFailedHint'));
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setBusy(false);
+      if (clientMounted.current) setBusy(false);
       submitting.current = false;
     }
   }
@@ -403,20 +452,28 @@ export default function KeysPage() {
 
   const doExport = useCallback(async () => {
     const body = clientBody();
-    if (!body) return;
+    if (!body || !isAdmin || exportFlight.current) return;
+    const request = Symbol('key-export');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && exportFlight.current === request;
+    exportFlight.current = request;
     setExporting(true);
     try {
       const res = await keyApi.exportConfig(body);
+      if (!current()) return;
       // 展示可直接粘贴的片段：cc-switch 用 settings_config，ZCode 用整个片段
       const payload = res.client === 'ccswitch' ? res.settings_config : res.provider;
       setExported(JSON.stringify(payload, null, 2));
       notify.ok(t('keys.exported'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setExporting(false);
+      if (current()) {
+        exportFlight.current = null;
+        setExporting(false);
+      }
     }
-  }, [clientBody, t]);
+  }, [clientBody, isAdmin, t]);
 
   /**
    * 把刚创建的密钥**一键写进本机**客户端。
@@ -431,26 +488,37 @@ export default function KeysPage() {
    */
   const doImport = useCallback(async () => {
     const body = clientBody();
-    if (!body) return;
+    if (!body || !isAdmin || clientMutation.current) return;
+    const request = Symbol('key-import');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && clientMutation.current === request;
+    clientMutation.current = request;
+    statusGeneration.current++;
     setImporting(true);
     try {
       const res = await keyApi.importLocal({
         ...body, setCurrent: importSetCurrent, mode: 'auto', closeRunning: true,
       });
+      if (!current()) return;
       setImported(res);
       notify.ok(res.method === 'deeplink' ? t('keys.importHandedOff') : t('keys.importDone'));
       // 写完重新探测：客户端可能被我们关了又起来，状态得跟着变
       try {
-        setImportStatus(await keyApi.importLocalStatus());
+        const read = ++statusGeneration.current;
+        const status = await keyApi.importLocalStatus();
+        if (current() && read === statusGeneration.current) setImportStatus(status);
       } catch {
         /* 探测失败不影响"已经写成功"这个事实，保留旧状态即可 */
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setImporting(false);
+      if (clientMutation.current === request) {
+        clientMutation.current = null;
+        if (clientMounted.current) setImporting(false);
+      }
     }
-  }, [clientBody, importSetCurrent, t]);
+  }, [clientBody, importSetCurrent, isAdmin, t]);
 
   /**
    * 让面板自己去找客户端装在哪。
@@ -460,9 +528,16 @@ export default function KeysPage() {
    * 检测结果会缓存，之后导入 / 关闭 / 重新拉起都用它，所以是"点一次长期有效"。
    */
   const doDetect = useCallback(async () => {
+    if (!issued || !isAdmin || clientMutation.current) return;
+    const request = Symbol('key-detect');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && clientMutation.current === request;
+    clientMutation.current = request;
+    statusGeneration.current++;
     setDetecting(true);
     try {
       const res = await keyApi.importLocalDetect(importClient);
+      if (!current()) return;
       if (!res.found) {
         notify.warn(t('keys.detectMissing'), t('keys.detectMissingHint'));
         return;
@@ -470,26 +545,34 @@ export default function KeysPage() {
       notify.ok(t('keys.detectFound'));
       // 定位结果体现在 status 的 exe 上，重新取一次让界面跟着更新
       try {
-        setImportStatus(await keyApi.importLocalStatus());
+        const read = ++statusGeneration.current;
+        const status = await keyApi.importLocalStatus();
+        if (current() && read === statusGeneration.current) setImportStatus(status);
       } catch {
         /* 同上：探测失败不该把"已找到"这件事说成失败 */
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setDetecting(false);
+      if (clientMutation.current === request) {
+        clientMutation.current = null;
+        if (clientMounted.current) setDetecting(false);
+      }
     }
-  }, [importClient, t]);
+  }, [importClient, issued, isAdmin, t]);
 
   // 弹窗打开（拿到明文）时才去探测本机状态：没建密钥的人不需要这次请求。
   useEffect(() => {
     if (!issued) return;
     let alive = true;
+    const generation = clientGeneration.current;
+    const read = ++statusGeneration.current;
+    const current = () => alive && clientMounted.current && generation === clientGeneration.current && read === statusGeneration.current;
     keyApi.importLocalStatus()
-      .then((s) => { if (alive) setImportStatus(s); })
-      .catch(() => { if (alive) setImportStatus(null); });
+      .then((s) => { if (current()) setImportStatus(s); })
+      .catch(() => { if (current()) setImportStatus(null); });
     return () => { alive = false; };
-  }, [issued]);
+  }, [issued, exportTarget]);
 
   /** 当前目标客户端的状态；null = 未探测 / 探测失败 */
   const importClientState = importStatus?.clients.find(
@@ -542,7 +625,7 @@ export default function KeysPage() {
         actions={
           <>
             {isAdmin && (
-              <Button size="sm" className="rounded-full" onClick={openCreate}>
+              <Button size="sm" className="rounded-full" onClick={openCreate} disabled={!upstreamsReady || busy}>
                 <Plus />
                 {t('keys.newKey')}
               </Button>
@@ -1055,6 +1138,7 @@ export default function KeysPage() {
                     账号池。默认上游 = 不绑定，也就是升级前的行为。 */}
                 <Select
                   value={form.upstream_id == null ? '__default__' : String(form.upstream_id)}
+                  disabled={!isAdmin || !upstreamsReady}
                   onValueChange={(v) =>
                     setForm({...form, upstream_id: v === '__default__' ? null : Number(v)})
                   }
@@ -1131,7 +1215,7 @@ export default function KeysPage() {
             <Button variant="outline" className="rounded-full" onClick={() => setFormOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button className="rounded-full" onClick={submit} disabled={busy}>
+            <Button className="rounded-full" onClick={submit} disabled={busy || !isAdmin || !upstreamsReady}>
               {editing ? t('common.save') : t('keys.create')}
             </Button>
           </DialogFooter>
@@ -1140,7 +1224,7 @@ export default function KeysPage() {
 
       {/* 一次性展示新密钥 */}
       <Dialog open={!!issued}
-              onOpenChange={(v) => { if (!v) { setIssued(null); setExported(null); setImported(null); } }}>
+              onOpenChange={(v) => { if (!v) closeIssued(); }}>
         {/* 尺寸必须**跟着视口走**：这个弹窗里有密钥、有一整段 JSON、还有导入区，
             内容比一般弹窗高得多。之前只写了个 max-w，高度没上限，于是窗口一矮
             （或系统缩放一大）底部就被 `overflow-hidden` 直接裁掉，连「我已保存」
@@ -1181,11 +1265,10 @@ export default function KeysPage() {
                 <div className="flex items-center gap-2">
                   <Select value={exportTarget}
                           onValueChange={(v) => {
+                            resetClientResults();
                             setExportTarget(v as typeof exportTarget);
                             // 换了目标就清掉旧结果：两个客户端的内容不一样，
                             // 留着上一份会造成"看的是 claude、复制的是 codex"。
-                            setExported(null);
-                            setImported(null);
                           }}>
                     <SelectTrigger className="h-7 w-[168px] rounded-full text-xs" aria-label={t('keys.exportTitle')}>
                       <SelectValue />
@@ -1242,12 +1325,12 @@ export default function KeysPage() {
                       <Button variant="outline" size="sm"
                               className="h-7 rounded-full text-xs"
                               onClick={doDetect}
-                              disabled={detecting || !importReady}>
+                              disabled={detecting || importing || !importReady}>
                         {detecting ? t('common.loading') : t('keys.detectBtn')}
                       </Button>
                     ) : null}
                     <Button size="sm" className="h-7 rounded-full text-xs"
-                            onClick={doImport} disabled={!canImport || importing}>
+                            onClick={doImport} disabled={!canImport || importing || detecting}>
                       {importing ? t('common.loading') : t('keys.importBtn')}
                     </Button>
                   </div>
@@ -1302,7 +1385,7 @@ export default function KeysPage() {
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button className="rounded-full" onClick={() => { setIssued(null); setExported(null); }}>
+            <Button className="rounded-full" onClick={closeIssued}>
               {t('keys.savedIt')}
             </Button>
           </DialogFooter>

@@ -22,12 +22,14 @@
 
 `operational.transition()` 在状态变化时调用 `dispatch(...)`。投递是**同步、尽力而为**，
 因为 transition 本身在 monitor 循环里（异步上下文），用同步 http 会阻塞——所以 http 模式
-只接受短超时（默认 3s），超时即放弃并记 warning。
+只接受 0.1–3s 的有限 socket 超时（默认 3s），超时即放弃并记 warning。
+这不是 DNS、重定向等全部阶段合计的硬性 deadline；调用方仍应离开事件循环投递。
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -60,17 +62,32 @@ def _settings() -> dict[str, Any]:
     """读取投递配置。文件不存在/损坏 -> 全默认（disabled），绝不因此崩。"""
     path = Path(os.environ.get('WB_NOTIFY_CONFIG', '/opt/notify/config.json'))
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
+        value = json.loads(path.read_text(encoding='utf-8'))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, UnicodeError):
         return {}
 
 
-def configured_mode() -> str:
-    cfg = _settings()
-    if not cfg.get('enabled'):
+def _mode(cfg) -> str:
+    if not isinstance(cfg, dict) or cfg.get('enabled') is not True:
         return 'disabled'
     mode = str(cfg.get('mode') or '').strip().lower()
     return mode if mode in ('file', 'http') else 'disabled'
+
+
+def configured_mode() -> str:
+    return _mode(_settings())
+
+
+def _http_timeout(value) -> float:
+    """Finite socket timeout in [0.1, 3] seconds; invalid input uses 3 seconds."""
+    try:
+        timeout = float(value) if not isinstance(value, bool) else 3.0
+    except (TypeError, ValueError, OverflowError):
+        timeout = 3.0
+    if not math.isfinite(timeout) or timeout <= 0:
+        timeout = 3.0
+    return max(0.1, min(timeout, 3.0))
 
 
 def dispatch(name: str, active: bool, detail: str = '', *, host: str = '') -> dict:
@@ -78,7 +95,8 @@ def dispatch(name: str, active: bool, detail: str = '', *, host: str = '') -> di
 
     永远不抛：任何异常都降级为 `{'delivered': False, 'error': ...}`。
     """
-    mode = configured_mode()
+    cfg = _settings()
+    mode = _mode(cfg)
     payload = {
         'name': name,
         'active': bool(active),
@@ -90,7 +108,6 @@ def dispatch(name: str, active: bool, detail: str = '', *, host: str = '') -> di
     if mode == 'disabled':
         return {'mode': 'disabled', 'delivered': False, 'payload': payload}
 
-    cfg = _settings()
     try:
         if mode == 'file':
             out = Path(cfg.get('file') or '/opt/notify/alerts.jsonl')
@@ -107,7 +124,7 @@ def dispatch(name: str, active: bool, detail: str = '', *, host: str = '') -> di
             req = urllib.request.Request(
                 url, data=body, method='POST',
                 headers={'Content-Type': 'application/json'})
-            timeout = float(cfg.get('timeout_sec') or 3)
+            timeout = _http_timeout(cfg.get('timeout_sec'))
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return {'mode': 'http', 'delivered': 200 <= resp.status < 300,
                         'status': resp.status, 'url': url}

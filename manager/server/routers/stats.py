@@ -146,15 +146,15 @@ def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
     `credit = 0` = 确实扣了 0。把未知混成 0 会让"少扣"看起来像"免费"。
     """
     scale = 1_000_000.0
+    # Aggregate each log once instead of three correlated scans per key. A
+    # LEFT JOIN retains unused keys and COUNT(credit) preserves unknown vs zero.
     rows = [dict(r) for r in db.query(
-        'SELECT k.id, k.name, k.used_credit_units, '
-        '  COALESCE((SELECT SUM(r.credit) FROM request_logs r '
-        '            WHERE r.key_id=k.id AND r.credit IS NOT NULL),0) AS detail, '
-        '  (SELECT COUNT(*) FROM request_logs r '
-        '   WHERE r.key_id=k.id AND r.credit IS NOT NULL) AS known_rows, '
-        '  (SELECT COUNT(*) FROM request_logs r '
-        '   WHERE r.key_id=k.id AND r.credit IS NULL) AS unknown_rows '
-        'FROM api_keys k ORDER BY k.id')]
+        'SELECT k.id,k.name,k.used_credit_units,COALESCE(r.detail,0) AS detail,'
+        'COALESCE(r.known_rows,0) AS known_rows,COALESCE(r.unknown_rows,0) AS unknown_rows '
+        'FROM api_keys k LEFT JOIN ('
+        'SELECT key_id,SUM(credit) AS detail,COUNT(credit) AS known_rows,'
+        'COUNT(*)-COUNT(credit) AS unknown_rows FROM request_logs GROUP BY key_id'
+        ') r ON r.key_id=k.id ORDER BY k.id')]
     items = []
     drift = []
     for r in rows:
@@ -174,28 +174,25 @@ def credit_reconcile(user: dict = Depends(security.current_user)) -> dict:
                       'gap_explained_by_retention': gap < 0})
     totals = {}
     row = dict(db.query_one(
-        'SELECT '
-        ' (SELECT COALESCE(SUM(credit),0) FROM request_logs WHERE credit IS NOT NULL) AS detail, '
-        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NOT NULL) AS detail_known_rows, '
-        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NULL) AS detail_unknown_rows, '
-        ' (SELECT COUNT(*) FROM request_logs WHERE credit IS NOT NULL AND credit = 0) AS detail_zero_rows, '
+        'SELECT r.*, '
         ' (SELECT COALESCE(SUM(credit_units),0)/1000000.0 FROM usage_events) AS ledger, '
         ' (SELECT COALESCE(SUM(COALESCE(credit_units, CAST(credit*1000000 AS INTEGER))),0)/1000000.0 FROM usage_daily) AS daily, '
-        ' (SELECT COALESCE(SUM(used_credit_units),0)/1000000.0 FROM api_keys) AS enforced, '
-        ' (SELECT COALESCE(SUM(credit),0) FROM request_logs '
-        '    WHERE credit IS NOT NULL AND (key_id IS NULL OR key_id NOT IN (SELECT id FROM api_keys))) AS orphan'
+        ' (SELECT COALESCE(SUM(used_credit_units),0)/1000000.0 FROM api_keys) AS enforced '
+        'FROM (SELECT COALESCE(SUM(l.credit),0) AS detail,COUNT(l.credit) AS detail_known_rows,'
+        'COUNT(*)-COUNT(l.credit) AS detail_unknown_rows,'
+        'COALESCE(SUM(l.credit=0),0) AS detail_zero_rows,'
+        'COALESCE(SUM(CASE WHEN k.id IS NULL THEN l.credit ELSE 0 END),0) AS orphan,'
+        'COUNT(CASE WHEN k.id IS NULL THEN l.credit END) AS orphan_rows '
+        'FROM request_logs l LEFT JOIN api_keys k ON k.id=l.key_id) r'
     ) or {})
     for k in ('detail', 'ledger', 'daily', 'enforced', 'orphan'):
         totals[k] = round(float(row.get(k) or 0), 6)
     for k in ('detail_known_rows', 'detail_unknown_rows', 'detail_zero_rows'):
         totals[k] = int(row.get(k) or 0)
-    orow = dict(db.query_one(
-        'SELECT COUNT(*) AS n FROM request_logs '
-        'WHERE credit IS NOT NULL AND (key_id IS NULL OR key_id NOT IN (SELECT id FROM api_keys))') or {})
     return {
         'scale': 'credit',
         'totals': totals,
-        'orphan_rows': int(orow.get('n') or 0),
+        'orphan_rows': int(row.get('orphan_rows') or 0),
         'drift_keys': drift,
         'ok': not drift,
         'items': items,

@@ -38,10 +38,10 @@ function render(product, status = {}, isAdmin = true) {
     '@/components/common/states/LoadError': component('LoadError'),
     '@/lib/i18n/provider': {useT: () => key => key},
   };
-  const module = {exports: {}};
-  vm.runInNewContext(compiled.outputText, {module, exports: module.exports,
+  const compiledModule = {exports: {}};
+  vm.runInNewContext(compiled.outputText, {module: compiledModule, exports: compiledModule.exports,
     require(name) { assert.ok(name in mocks, name); return mocks[name]; }}, {filename: relative});
-  return module.exports.UpdatePanel();
+  return compiledModule.exports.UpdatePanel();
 }
 
 function collect(tree, match) {

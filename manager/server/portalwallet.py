@@ -16,7 +16,7 @@ import logging
 import os
 import re
 
-from . import budgetowner, db, observability, portalbilling, portalpolicy as policy, portalstore as store
+from . import budgetowner, db, metering, observability, portalbilling, portalpolicy as policy, portalstore as store
 
 RECEIPTS = '''CREATE TABLE IF NOT EXISTS portal_spend_receipts(
  request_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, payload TEXT NOT NULL
@@ -102,8 +102,11 @@ def receipt(state, usage, credit):
     if not owner:
         return
     amount = None
-    if (state.terminal_state == 'completed' and isinstance(usage, dict)
-            and all(type(usage.get(k)) is int and usage[k] >= 0 for k in ('prompt_tokens', 'completion_tokens'))):
+    evidence = metering.parse_usage(usage)
+    # Use the same bounded evidence as request_logs and replay_receipt. A
+    # malformed live receipt must not release a hold that replay keeps unknown.
+    if (state.terminal_state == 'completed' and evidence.complete
+            and not evidence.malformed):
         try:
             if credit is not None:
                 amount = store.units(credit)

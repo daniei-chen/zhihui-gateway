@@ -20,6 +20,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from server import config, security
+from server.services.asyncwork import joined_thread
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -65,7 +66,7 @@ class RenewalRegressionTest(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         namespace = {'security': security, 'config': config, 'Request': Request,
-                     'logger': logging.getLogger('audit-test')}
+                     'logger': logging.getLogger('audit-test'), 'joined_thread': joined_thread}
         self.middleware = load_functions(ROOT / 'server/main.py', {'cache_headers'}, namespace)['cache_headers']
         namespace = {'security': security, 'config': config, 'Request': Request, 'Depends': Depends,
                      'HTTPException': HTTPException, 'JSONResponse': JSONResponse,
@@ -160,7 +161,7 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         namespace = {'__package__': 'server', 'security': security, '_QTG_INTERNAL': '/__qtg',
                      '_QTGP_ROUTE_PREFIXES': ('/api/accounts', '/api/stats/', '/api/models'),
-                     'logger': logging.getLogger('audit-test')}
+                     'logger': logging.getLogger('audit-test'), 'joined_thread': joined_thread}
         self.middleware = load_functions(ROOT / 'server/main.py',
                                          {'_qtg_should_route', '_qtg_platform_route'}, namespace)['_qtg_platform_route']
 

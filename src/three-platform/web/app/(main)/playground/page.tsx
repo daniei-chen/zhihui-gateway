@@ -115,7 +115,12 @@ export default function PlaygroundPage() {
   // 同时**必须取消在途流**：不取消的话上游会继续生成、照样计费，而页面上已经看不到
   // 那条回答了；旧回调还会写进刚被清空的列表（原来会写到 index -1）。
   useEffect(() => {
+    // 先失效旧代次，再取消传输；取消的 Promise 仍可能携带 usage 完成。
+    seqRef.current += 1;
     abortRef.current?.abort();
+    abortRef.current = null;
+    inFlightRef.current = false;
+    setStreaming(false);
     setMsgs([]);
     setSessionCredit(0);
   }, [realm]);
@@ -127,6 +132,7 @@ export default function PlaygroundPage() {
    */
   useEffect(
     () => () => {
+      seqRef.current += 1;
       abortRef.current?.abort();
     },
     [],
@@ -197,13 +203,12 @@ export default function PlaygroundPage() {
         onDelta: (_delta, full) => patchLast({content: full, done: false}),
       });
 
-      // 实测消耗：取消时也可能已经收到 usage，按上游报的数计入；没报就是 null，
+      if (!isCurrent()) return;
+      // 实测消耗：当前会话取消时也可能已经收到 usage，按上游报的数计入；没报就是 null，
       // 不填 0 假冒。同一发只计一次（result 只有一个 usage）。
       if (typeof result.usage.credit === 'number') {
         setSessionCredit((v) => v + (result.usage.credit as number));
       }
-      if (!isCurrent()) return;
-
       if (result.aborted) {
         // 用户点停止 / 切平台离页：保留已收到的内容，不标成错误
         patchLast({done: true, content: result.answer || t('playground.stopped')});

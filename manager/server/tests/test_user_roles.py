@@ -109,7 +109,8 @@ class HumanRolesHttpTest(unittest.TestCase):
                 self.assertEqual(self.client.request(method, path, json=body).status_code, 403)
 
     def test_account_admin_can_add_to_existing_groups_but_not_override_routes(self):
-        with mock.patch.object(accounts, '_group', return_value={'id': 1}), \
+        with mock.patch.object(accounts, '_group', return_value={
+                 'id': 1, 'name': 'synthetic', 'auth_dir': str(config.DATA_DIR / 'auths')}), \
              mock.patch.object(accounts.tencent, 'start_login', new=mock.AsyncMock(return_value={
                  'state': '', 'realm': 'cn', 'authUrl': 'https://copilot.tencent.com/'})) as provider:
             response = self.client.post('/api/auth/start', json={'realm': 'cn', 'platform': 'workbuddy'})

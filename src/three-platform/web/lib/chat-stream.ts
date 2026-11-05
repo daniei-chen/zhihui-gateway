@@ -232,9 +232,11 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
       (typeof msgObj?.content === 'string' ? (msgObj.content as string) : '') ||
       (typeof first?.text === 'string' ? (first.text as string) : '');
     if (delta) {
-      result.answer += delta;
-      onDelta?.(delta, result.answer);
-      if (result.answer.length > maxAnswerChars) {
+      const room = Math.max(0, maxAnswerChars - result.answer.length);
+      const accepted = delta.slice(0, room);
+      result.answer += accepted;
+      if (accepted) onDelta?.(accepted, result.answer);
+      if (accepted.length < delta.length) {
         result.error = `response exceeds ${maxAnswerChars} chars`;
         stopReading = true;
       }
@@ -299,7 +301,9 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
         }
         if (!value || value.length === 0) continue;
         for (const ev of parser.push(value)) handleEvent(ev);
-        if (stopReading) break;
+        // A protocol terminal is enough. Waiting for HTTP EOF after [DONE] or
+        // an error keeps the UI busy if a proxy leaves the connection open.
+        if (result.sawDone || result.error || parser.overflowed || stopReading) break;
       }
     } catch (e) {
       if (isAbortError(e) || signal?.aborted) {
@@ -309,9 +313,12 @@ export async function streamChat(options: StreamChatOptions): Promise<ChatStream
       }
     }
 
-    // 冲刷解码器尾部与未闭合事件（半截关闭时把已收齐的 JSON 也派发出来）
-    for (const ev of parser.flush()) handleEvent(ev);
-    if (parser.truncated) result.truncated = true;
+    // Only a natural, non-terminal EOF may contribute a final partial event.
+    // Never consume more content or label an aborted/finished stream truncated.
+    if (!result.aborted && !result.sawDone && result.error === null && !stopReading) {
+      for (const ev of parser.flush()) handleEvent(ev);
+      if (parser.truncated) result.truncated = true;
+    }
 
     if (!result.aborted && result.error === null && !result.sawDone) {
       // 没有 [DONE] 就结束：协议未终止。可能是上游正常收尾（个别实现不发 DONE），

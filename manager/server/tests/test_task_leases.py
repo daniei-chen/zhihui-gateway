@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -367,6 +368,72 @@ class TaskLeaseUnitTest(_LeaseCase):
         self.assertIn('flock',
                       tasklease.publish_block_reason(conn, release_probe=lambda: True) or '')
 
+    def test_expired_owner_cannot_revive_after_publisher_takes_control(self):
+        claimed, fence = tasklease.claim('daily', 30, owner='old-owner', now=1000)
+        self.assertTrue(claimed)
+        with db.transaction() as conn:
+            tasklease.begin_publish(conn, 'publisher', 60, now=1030)
+        before = self.lease_row('daily')
+        self.assertFalse(tasklease.renew('daily', fence, 30, owner='old-owner', now=1030))
+        self.assertEqual(self.lease_row('daily'), before)
+
+    def test_expired_owner_cannot_revive_without_a_replacement_owner(self):
+        _, fence = tasklease.claim('daily', 30, owner='old-owner', now=1000)
+        self.assertFalse(tasklease.renew('daily', fence, 30, owner='old-owner', now=1030))
+        self.assertEqual(self.lease_row('daily')['lease_until'], 1030)
+
+    def test_lock_wait_is_counted_before_renewal_and_new_claim(self):
+        _, fence = tasklease.claim('daily', 30, owner='old-owner', now=1000)
+        original = db.transaction
+        clock = [1005]
+
+        @contextmanager
+        def delayed_transaction():
+            with original() as conn:
+                clock[0] = 1040
+                yield conn
+
+        with mock.patch.object(tasklease, '_now', side_effect=lambda now: clock[0] if now is None else int(now)):
+            with mock.patch.object(db, 'transaction', delayed_transaction):
+                self.assertFalse(tasklease.renew('daily', fence, 30, owner='old-owner'))
+                clock[0] = 1005
+                self.assertTrue(tasklease.claim('fresh', 30, owner='new-owner')[0])
+        self.assertEqual(self.lease_row('fresh')['lease_until'], 1070)
+
+    def test_holding_guard_checks_expiry_after_read_lock_wait(self):
+        _, fence = tasklease.claim('daily', 30, owner='old-owner', now=1000)
+        original = db.query_one
+        clock = [1005]
+
+        def delayed_query(*args, **kwargs):
+            row = original(*args, **kwargs)
+            clock[0] = 1040
+            return row
+
+        with mock.patch.object(tasklease, '_now', side_effect=lambda now: clock[0] if now is None else int(now)):
+            with mock.patch.object(db, 'query_one', side_effect=delayed_query):
+                self.assertFalse(tasklease.still_holding('daily', fence, owner='old-owner'))
+
+    def test_publish_state_corruption_never_authorizes_a_task(self):
+        for value in ('{broken', 'null', '{}', '{"state":"publishing","lease_until":true}'):
+            db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',
+                       (tasklease.PUBLISH_KEY, value))
+            with self.subTest(value=value), self.assertRaises(tasklease.PublishBlocked):
+                tasklease.claim('daily', 60)
+        self.assertIsNone(self.lease_row('daily'))
+
+    def test_read_errors_are_not_misreported_as_absent_leases(self):
+        conn = sqlite3.connect(':memory:')
+        self.addCleanup(conn.close)
+        self.assertEqual(tasklease.active_leases(conn), [])
+        self.assertIsNone(tasklease.publish_state(conn))
+        conn.execute('CREATE TABLE task_leases(broken TEXT)')
+        conn.execute('CREATE TABLE settings(broken TEXT)')
+        with self.assertRaises(sqlite3.Error):
+            tasklease.active_leases(conn)
+        with self.assertRaises(sqlite3.Error):
+            tasklease.publish_state(conn)
+
 
 class TaskLeaseMultiprocessTest(_LeaseCase):
     """真实双进程：claim 互斥、崩溃恢复。"""
@@ -536,7 +603,7 @@ class DailyPlanLeaseTest(_LeaseCase):
         self.assertTrue(claimed)
         calls: list[str] = []
 
-        async def fake_run(task):
+        async def fake_run(task, *, wait_for_completion=False):
             calls.append(task)
             return True, 'should not run'
 
@@ -551,7 +618,8 @@ class DailyPlanLeaseTest(_LeaseCase):
         plan = self._plan()
         calls: list[str] = []
 
-        async def fake_run(task):
+        async def fake_run(task, *, wait_for_completion=False):
+            self.assertTrue(wait_for_completion)
             calls.append(task)
             return True, 'ok'
 
@@ -570,7 +638,7 @@ class DailyPlanLeaseTest(_LeaseCase):
         plan = self._plan()
         thrown: list[bool] = []
 
-        async def fake_run(task):
+        async def fake_run(task, *, wait_for_completion=False):
             # 模拟执行期间租约过期并被另一个进程接管
             db.execute('UPDATE task_leases SET lease_until=? WHERE task=?',
                        (int(time.time()) - 5, task))
@@ -590,7 +658,7 @@ class DailyPlanLeaseTest(_LeaseCase):
     def test_exception_still_releases_lease_and_stamps(self) -> None:
         plan = self._plan()
 
-        async def boom(task):
+        async def boom(task, *, wait_for_completion=False):
             raise RuntimeError('synthetic failure')
 
         with mock.patch.object(dailyplan, 'run_task', boom):
@@ -607,7 +675,7 @@ class DailyPlanLeaseTest(_LeaseCase):
         plan = self._plan()
         calls: list[str] = []
 
-        async def fake_run(task):
+        async def fake_run(task, *, wait_for_completion=False):
             calls.append(task)
             return True, 'should not run'
 

@@ -47,41 +47,75 @@ export function AuthProvider({children}: {children: ReactNode}) {
   // Cached display identity is not proof of an authenticated server session.
   const [loading, setLoading] = useState(true);
   const hydrated = useRef(false);
+  const sequence = useRef(0);
+  const pendingRead = useRef<{controller: AbortController; promise: Promise<void>} | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const data = await authApi.me();
-      setMe(data);
-      writeCachedMe(data);
-    } catch (e) {
-      // 只有 401（会话真的失效）才清登录态。网络抖动 / 5xx 时保留缓存：
-      // 以前一律 setMe(null) 会在后端瞬时故障时把有效会话用户踢回登录页。
-      const status = (e as {response?: {status?: number}}).response?.status;
-      if (status === 401) {
-        setMe(null);
-        writeCachedMe(null);
+  const invalidateRead = useCallback(() => {
+    sequence.current++;
+    pendingRead.current?.controller.abort();
+    pendingRead.current = null;
+  }, []);
+
+  const refresh = useCallback((): Promise<void> => {
+    if (pendingRead.current) return pendingRead.current.promise;
+    const generation = ++sequence.current;
+    const controller = new AbortController();
+    const current = () => generation === sequence.current && !controller.signal.aborted;
+    const promise = Promise.resolve().then(async () => {
+      if (!current()) return;
+      try {
+        const data = await authApi.me(controller.signal);
+        if (!current()) return;
+        setMe(data);
+        writeCachedMe(data);
+      } catch (e) {
+        if (!current()) return;
+        // Only an authoritative 401 clears identity. Offline/5xx retains the
+        // last display state; an older session read never overrides a login.
+        const status = (e as {response?: {status?: number}}).response?.status;
+        if (status === 401) {
+          setMe(null);
+          writeCachedMe(null);
+        }
+      } finally {
+        if (current()) {
+          pendingRead.current = null;
+          setLoading(false);
+        }
       }
-    } finally {
-      setLoading(false);
-    }
+    });
+    pendingRead.current = {controller, promise};
+    return promise;
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await authApi.login(username, password);
-    const next = {username: res.username, role: res.role as Role};
-    setMe(next);
-    writeCachedMe(next);
-    setLoading(false);
-  }, []);
+    invalidateRead();
+    const generation = sequence.current;
+    // A cached identity must not redirect a failed new login into the console.
+    setMe(null);
+    writeCachedMe(null);
+    try {
+      const res = await authApi.login(username, password);
+      if (generation !== sequence.current) return;
+      const next = {username: res.username, role: res.role as Role};
+      setMe(next);
+      writeCachedMe(next);
+    } finally {
+      if (generation === sequence.current) setLoading(false);
+    }
+  }, [invalidateRead]);
 
   const logout = useCallback(async () => {
+    invalidateRead();
+    const generation = sequence.current;
     const result = await authApi.logout();
     if (!result.ok) throw new Error('Logout was not confirmed by the server.');
+    if (generation !== sequence.current) return;
     setMe(null);
     writeCachedMe(null);
     // 裸跳转不走 next/router，basePath 不会自动生效，必须显式拼上
     if (typeof window !== 'undefined') window.location.href = `${BASE_PATH}/login`;
-  }, []);
+  }, [invalidateRead]);
 
   useEffect(() => {
     if (hydrated.current) return;
@@ -91,8 +125,12 @@ export function AuthProvider({children}: {children: ReactNode}) {
     if (cached) {
       setMe(cached);
     }
-    refresh();
-  }, [refresh]);
+    void refresh();
+    return () => {
+      invalidateRead();
+      hydrated.current = false;
+    };
+  }, [refresh, invalidateRead]);
 
   return (
     <AuthContext.Provider

@@ -220,7 +220,9 @@ class ConfigMaskingAllowlistTest(unittest.TestCase):
 
         from server.services import wb2api
         src = inspect.getsource(wb2api.load_upstream_config)
-        save_src = inspect.getsource(wb2api.save_upstream_config)
+        # The public function now owns the path lock; the existing write policy
+        # lives in its locked helper. Inspect that policy, not just the wrapper.
+        save_src = inspect.getsource(wb2api._save_upstream_config_locked)
         self.assertIn('_EDITABLE_SECTIONS', src)
         self.assertIn('_EDITABLE_SECTIONS', save_src)
 

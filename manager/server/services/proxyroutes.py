@@ -24,12 +24,14 @@ import ipaddress
 import json
 import re
 import time
+from functools import wraps
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from .. import config
 from . import wb2api
 from .tencent import _atomic_write_json
+from .filelock import file_lock
 
 # 线路名会出现在账号文件与界面上：限字母、数字与 . _ -（1~32 位）。
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]{1,32}$')
@@ -46,6 +48,19 @@ class RouteError(ValueError):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
+
+
+def _config_edit(function):
+    """Serialize complete config reads/edits with the settings writer."""
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with file_lock(_config_path()):
+            return function(*args, **kwargs)
+    return locked
+
+
+def _url_host(host: str) -> str:
+    return f'[{host}]' if ':' in host and not host.startswith('[') else host
 
 
 def _config_path() -> Path:
@@ -93,6 +108,8 @@ def normalize_url(url: object) -> str:
     try:
         parts = urlsplit(value)
         port = parts.port
+        if port is None:
+            port = {'http': 80, 'https': 443}.get(parts.scheme)
     except ValueError as exc:
         raise RouteError('代理地址格式不对') from exc
     if parts.scheme not in SCHEMES:
@@ -101,10 +118,9 @@ def normalize_url(url: object) -> str:
         raise RouteError('代理地址缺少主机名')
     if not port:
         raise RouteError('代理地址缺少端口')
-    netloc = f'{_quote_userinfo(parts)}@{parts.hostname}' if parts.username is not None \
-        else parts.hostname
-    if port != {'http': 80, 'https': 443}.get(parts.scheme):
-        netloc = f'{netloc}:{port}'
+    host = _url_host(parts.hostname)
+    netloc = f'{_quote_userinfo(parts)}@{host}' if parts.username is not None else host
+    netloc = f'{netloc}:{port}'
     return urlunsplit((parts.scheme, netloc, '', '', ''))
 
 
@@ -130,14 +146,15 @@ def mask_url(url: str) -> str:
     """脱敏：保留协议、用户名、主机与端口，密码换成 `***`。"""
     try:
         parts = urlsplit(url)
+        port = parts.port
     except ValueError:
         return MASK
     if not parts.password:
         return url
     user = _restore_placeholder(quote(unquote(parts.username or ''), safe=''))
-    netloc = f'{user}:{MASK}@{parts.hostname}'
-    if parts.port:
-        netloc = f'{netloc}:{parts.port}'
+    netloc = f'{user}:{MASK}@{_url_host(parts.hostname or "")}'
+    if port:
+        netloc = f'{netloc}:{port}'
     return urlunsplit((parts.scheme, netloc, '', '', ''))
 
 
@@ -185,6 +202,7 @@ def keep_secret(url: str, stored: str) -> str:
     """
     try:
         incoming = urlsplit(url)
+        incoming_port = incoming.port
     except ValueError:
         return url
     if incoming.password and incoming.password != MASK:
@@ -194,14 +212,15 @@ def keep_secret(url: str, stored: str) -> str:
         return url.replace(f':{MASK}@', '@')
     try:
         known = urlsplit(stored)
+        known_port = known.port
     except ValueError:
         return url
     if not known.password:
         return url.replace(f':{MASK}@', '@')
     user = quote(unquote(incoming.username or known.username or ''), safe='')
     secret = quote(unquote(known.password), safe='')
-    host = incoming.hostname or known.hostname or ''
-    port = incoming.port or known.port
+    host = _url_host(incoming.hostname or known.hostname or '')
+    port = incoming_port or known_port
     netloc = f'{user}:{secret}@{host}' + (f':{port}' if port else '')
     return urlunsplit((incoming.scheme or known.scheme, netloc, '', '', ''))
 
@@ -222,6 +241,7 @@ def list_routes(auth_dir: Path | None = None) -> list[dict]:
     return out
 
 
+@_config_edit
 def upsert(name: object, url: object, *, weight: object = None,
            enabled: object = None, allow_overwrite: bool = True) -> dict:
     clean_name = validate_name(name)
@@ -267,6 +287,7 @@ def _validate_weight(weight: object) -> int:
     return value
 
 
+@_config_edit
 def delete(name: object, *, auth_dir: Path | None = None,
            clear_bindings: bool = False) -> dict:
     """删除线路。仍被账号绑着时必须显式 `clear_bindings`（路由层用 force）。
@@ -298,6 +319,7 @@ def delete(name: object, *, auth_dir: Path | None = None,
     return {'name': clean_name, 'bound_cleared': cleared}
 
 
+@_config_edit
 def rename(old: object, new: object, *, auth_dir: Path | None = None) -> dict:
     """改名：绑着它的账号一并改到新名字上（不改的话那些账号会直接失败）。"""
     clean_old = validate_name(old)
@@ -331,16 +353,6 @@ def _write_binding(filename: str, directory: Path, name: str) -> None:
     清掉就等于给那个账号换一个出口 IP。
     """
     wb2api.set_account_proxy(filename, name, directory)
-    path = directory / filename
-    try:
-        raw = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError) as exc:
-        raise RouteError(f'账号文件读取失败：{exc}') from exc
-    if not isinstance(raw, dict):
-        raise RouteError('账号文件格式异常')
-    if 'proxy_pool' in raw:
-        raw.pop('proxy_pool', None)
-        _atomic_write_json(path, raw)
 
 
 def set_binding(name: object, files: list[str], *, auth_dir: Path | None = None,
@@ -386,8 +398,7 @@ def auto_assign(name: object, count: int, *, auth_dir: Path | None = None,
 
     rows = [row for row in account_rows(auth_dir) if row['proxy'] != clean_name]
     if not include_bound:
-        rows = [row for row in rows if not row['proxy']] + \
-               [row for row in rows if row['proxy']]
+        rows = [row for row in rows if not row['proxy']]
     rows.sort(key=lambda row: (0 if not row['proxy'] else 1,
                                row['nickname'] or row['uid'], row['uid']))
     picked = [row['file'] for row in rows[:count]]

@@ -34,6 +34,8 @@ from urllib.parse import parse_qs, urlparse
 # ---------------------------------------------------------------------------
 MODES = (
     "normal",           # 正常成功：非流式 JSON / 流式多块 SSE，末帧带 usage
+    "echo",             # 返回实际收到的 JSON，用于逐字段线协议完整性断言
+    "refusal",          # 显式 403 业务拒绝，不得被转换为成功
     "delay_first",      # 流式：延迟 first_delay 秒再发首帧（验证首包超时/预算）
     "error_400",        # 400 + OpenAI 风格 error JSON
     "error_429",        # 429 + Retry-After
@@ -291,6 +293,10 @@ class FakeProvider:
                     self._send_json(200, {"ok": True, "mode": provider.mode,
                                           "port": provider.port})
                     return
+                if path == "/status":
+                    self._send_json(200, {"connected": True, "accounts": [],
+                                          "total": 0, "healthy": 0})
+                    return
                 if path in ("/v1/models", "/models"):
                     provider.stats.begin(path, "normal", 0)
                     provider.stats.end()
@@ -449,6 +455,18 @@ class FakeProvider:
                 provider.stats.end()
 
             def _chat(self, payload: dict[str, Any] | None, raw: bytes, mode: str) -> None:
+                if mode == "echo":
+                    result = self._completion(payload, with_usage=True)
+                    result['choices'][0]['message']['content'] = json.dumps(
+                        payload, ensure_ascii=False)
+                    self._send_json(200, result)
+                    provider.stats.end()
+                    return
+                if mode == "refusal":
+                    self._send_json(403, {"error": {"message": "Explicit provider refusal",
+                        "type": "permission_error", "code": "content_policy_rejected"}})
+                    provider.stats.end()
+                    return
                 if mode == "slow_headers":
                     time.sleep(provider.delay_first)
                     self._send_json(200, self._completion(payload, with_usage=True))
