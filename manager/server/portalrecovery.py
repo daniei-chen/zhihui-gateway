@@ -76,11 +76,24 @@ def _allowed(name):
     if name in FIXED or name in ('.spool-used', '.spool-channel.json', '.spool-adoption.json',
                                 'spool/.spool-channel', 'spool/.spool-used', 'spool/dead/dispositions.jsonl'):
         return True
+    if _credential_lock(name):
+        return True
     if re.fullmatch(r'auths/workbuddy[0-9A-Za-z_-]{0,80}\.json(?:\.disabled)?', name):
         return True
     if re.fullmatch(r'user-portal-auths/[a-f0-9]{32}\.json', name):
         return True
     return bool(re.fullmatch(r'spool/(?:[A-Za-z0-9_-]{1,128}\.json|dead/(?:processed/)?[A-Za-z0-9_.-]{1,180}\.json)', name)) and '..' not in name
+
+
+def _credential_lock(name):
+    return bool(re.fullmatch(r'(?:auths/workbuddy[0-9A-Za-z_-]{0,80}\.json(?:\.disabled)?|user-portal-auths/[a-f0-9]{32}\.json)\.refresh\.lock',name))
+
+
+def _check_lock_file(name,info):
+    # These are empty kernel-lock rendezvous files, not saved lock ownership.
+    # Preserve their bytes; never restore an assertion that an old owner lives.
+    if _credential_lock(name) and (info.st_size!=0 or info.st_nlink!=1 or os.name!='nt' and info.st_mode&0o077):
+        raise ValueError('凭据锁文件不是受支持的空私有普通文件')
 
 
 def _inventory(root):
@@ -94,6 +107,7 @@ def _inventory(root):
             path = Path(current) / name
             relative = path.relative_to(root).as_posix()
             info = _regular(path)
+            _check_lock_file(relative,info)
             total += info.st_size
             if total > MAX_TOTAL or len(found) >= MAX_FILES:
                 raise ValueError('快照文件数量或总体积超出上限')
@@ -238,7 +252,9 @@ def _source_files(users, auths, isolated, spool, *, data_root=None):
                 relative = prefix + '/' + path.relative_to(base).as_posix()
                 if not _allowed(relative):
                     raise ValueError('目录包含不支持或正在写入的文件，未创建一致性快照')
-                total += _regular(path).st_size
+                info=_regular(path)
+                _check_lock_file(relative,info)
+                total += info.st_size
                 if total > MAX_TOTAL or len(sources) >= MAX_FILES:
                     raise ValueError('源文件数量或总体积超出快照上限')
                 sources[relative] = path
