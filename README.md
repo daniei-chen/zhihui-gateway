@@ -14,7 +14,7 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 正式发布与验收" /></a>
+<a href="docs/UPGRADE-20261106.md"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 增补构建、验收与上线状态" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
@@ -29,7 +29,7 @@
 
 把已验证修复合为一个版本：客户端更兼容，页面少做重复工作，失败与恢复都有边界。
 
-**本次增补构建：`v0.0.7+stable.20261106.1`。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产。
+**本次增补候选构建：`v0.0.7+stable.20261106.1`，尚未上线。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产。
 
 <a href="docs/RELEASE-0.0.7.md">
   <picture>

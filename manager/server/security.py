@@ -105,7 +105,7 @@ def managed_user_password_problem(pwd: str, username: str = '') -> str | None:
     return None
 
 
-def weak_admin_passwords() -> list[str]:
+def weak_admin_passwords(*, stop: threading.Event | None = None) -> list[str]:
     """启动时检测**存量**管理员是否仍在用已知弱口令。
 
     新密码在设置入口就被拦了，但升级上来的 users.json 里可能已经有
@@ -113,6 +113,7 @@ def weak_admin_passwords() -> list[str]:
     哈希，命中就返回用户名，让启动日志能明确点出来；不直接拒绝启动——
     否则用户会被锁在面板外，连改密码的入口都没有。
     """
+    if stop is not None and stop.is_set():return []
     try:
         cfg = load_users()
     except Exception:  # noqa: BLE001
@@ -123,6 +124,9 @@ def weak_admin_passwords() -> list[str]:
             continue
         stored = str(item.get('pwd_hash') or '')
         for candidate in _WEAK_PASSWORDS:
+            # PBKDF2 itself is not cancellable. Finish its current invocation,
+            # then stop before another hash or before reading another owner.
+            if stop is not None and stop.is_set():return []
             if verify_pwd(candidate, stored):
                 found.append(str(item.get('username') or ''))
                 break

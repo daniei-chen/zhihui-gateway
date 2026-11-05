@@ -25,6 +25,7 @@ from .routers import (
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
 from .services.asyncwork import joined_thread
+from .services.startupchecks import WeakAdminCheck
 from .routers import budgets
 from .routers import qtg_panel
 from .routers import portal
@@ -117,18 +118,7 @@ async def lifespan(app: FastAPI):
     # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
     # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
     # 先进面板改密码，日志必须足够醒目。
-    def _weak_admin_check():
-        try:
-            weak_admins = security.weak_admin_passwords()
-            if weak_admins:
-                logger.error('管理员仍在使用常见弱口令：%s。请立即在「设置 → 管理用户」'
-                             '中修改；本次生产事故的入口就是 admin123。',
-                             '、'.join(weak_admins))
-        except Exception:  # noqa: BLE001  巡检失败不影响服务
-            logger.exception('weak admin password check failed')
-    if config.BACKGROUND_JOBS:
-        threading.Thread(target=_weak_admin_check, daemon=True,
-                         name='wb-weak-pwd-check').start()
+    weak_admin_check = WeakAdminCheck()
     _warn_if_exposed()
     if config.BACKGROUND_JOBS:
         # 后台作业只在「主实例」（systemd 管理的那个）运行。零停机发布的过渡
@@ -198,6 +188,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception('qoder/trae control plane failed; workbuddy proxy unaffected')
     try:
+        if config.BACKGROUND_JOBS:
+            weak_admin_check.start()
         from .instance_runtime import InstanceRuntime
         instance_runtime = InstanceRuntime()
         await instance_runtime.start()
@@ -215,6 +207,15 @@ async def lifespan(app: FastAPI):
         await operational.initialize_readiness()
         yield
     finally:
+        # A completed application lifetime must not leave expensive hash workers
+        # running against another lifetime's configuration or competing for CPU.
+        pending_shutdown_cancel = None
+        try:
+            await weak_admin_check.close()
+        except asyncio.CancelledError as error:
+            # joined_thread has already joined the hash worker. Defer its
+            # cancellation until the remaining leases/clients are also closed.
+            pending_shutdown_cancel = error
         if portal_checkins is not None:
             portal_checkins.cancel()
             try:
@@ -272,6 +273,8 @@ async def lifespan(app: FastAPI):
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
         await config.close_clients()
+        if pending_shutdown_cancel is not None:
+            raise pending_shutdown_cancel
 
 
 def _warn_if_exposed() -> None:
