@@ -1,0 +1,30 @@
+[ZH-ISO] 警告：当前解释器未开启 UTF-8 模式（建议 `python -X utf8` 启动）。
+[ZH-ISO]       Windows 下依赖子进程中文输出的用例可能因 GBK 解码失败而误报。
+[ZH-ISO] run_id=20261105-211630-2d5fa7
+[ZH-ISO] target=manager-assets  Manager + 前端/dev/docs 资产（诊断视图，非部署树）
+[ZH-ISO] 隔离根: /tmp/zhihui-iso-20261105-211630-fbkqosl5
+[ZH-ISO] 视图:   /tmp/zhihui-iso-20261105-211630-fbkqosl5/view/manager-assets-view
+[ZH-ISO] 假上游: http://127.0.0.1:40295  (OPENAI_BASE_URL=http://127.0.0.1:40295/v1)
+[ZH-ISO] 网络策略: block；附加 sys.path: 无
+[ZH-ISO] pytest: /workspace/scratch/913dc6e1a7c0/audit-venv/bin/python -m pytest server/tests/test_async_state.py -p no:cacheprovider --tb=short -q --continue-on-collection-errors --junitxml=/tmp/zhihui-iso-20261105-211630-fbkqosl5/artifacts/20261105-211630-df74d613/junit-manager-assets.xml
+..........F......                                             [100%]
+=================================== FAILURES ===================================
+_____ SecurityPageHonestyTest.test_reload_resolves_after_the_request_lands _____
+server/tests/test_async_state.py:450: in test_reload_resolves_after_the_request_lands
+    self.assertRegex(
+E   AssertionError: Regex didn't match: 'if\\s*\\(\\s*await\\s+reload\\(\\)\\s*\\)' not found in "async function saveConfig(next: SecurityConfig) {\n    if (!configWritable || configFlight.current) return;\n    const request = Symbol('security-config');\n    const generation = configGeneration.current;\n    const current = () => generation === configGeneration.current && configFlight.current === request;\n    const previous = shownConfig;\n    configFlight.current = request;\n    setOptimisticBase(config);\n    setConfigSaving(true);\n    setOptimistic(next);\n    try {\n      const saved = await securityApi.saveConfig(next);\n      if (!current()) return;\n      setOptimisticBase(configRef.current);\n      setOptimistic(saved);\n      notify.ok(t('security.configSaved'));\n      \n      \n      \n      if (await reload() && current()) setOptimistic(null);\n    } catch (e) {\n      if (!current()) return;\n      setOptimistic(previous);\n      notify.err(errText(e));\n    } finally {\n      if (current()) {\n" : saveConfig 无条件撤掉乐观值：刷新失败时开关会跳回旧值，而写入其实已经成功（顶部常驻提示已说明列表没刷上）
+------------------------------- 隔离环境摘要 (ZH-ISO) --------------------------------
+隔离根: /tmp/zhihui-iso-20261105-211630-fbkqosl5
+网络策略: block；观察到网络调用 3 次（样本 3 条），非回环调用 0 次
+受保护路径写入拦截: 0 次；越界写(仅记录): 1 次
+假 provider 调用: total=0 cancelled=0 by_mode={}
+=========================== short test summary info ============================
+FAILED server/tests/test_async_state.py::SecurityPageHonestyTest::test_reload_resolves_after_the_request_lands
+1 failed, 16 passed, 11 subtests passed in 0.21s
+
+[ZH-ISO] 结果: exit=1  用时 0.5s  tests=17 passed=16 failed=1 errors=0 skipped=0
+[ZH-ISO] junit: /workspace/scratch/913dc6e1a7c0/zhihui-gateway/evidence/runs/20261105-211630-df74d613/junit-manager-assets.xml
+[ZH-ISO] stats: /workspace/scratch/913dc6e1a7c0/zhihui-gateway/evidence/runs/20261105-211630-df74d613/stats-manager-assets.json
+
+[ZH-ISO] 退出码: {'manager-assets': 1}
+[ZH-ISO] 失败目标: {'manager-assets': 1}

@@ -1,0 +1,14 @@
+{
+  "run_id": "20261105-212828-f30a85",
+  "target": "manager-assets",
+  "iso_root": "/tmp/zhihui-iso-20261105-212828-al5qpx_j",
+  "repo": "/workspace/scratch/913dc6e1a7c0/zhihui-gateway",
+  "created_at": 1793881708.4690137,
+  "finished_at": 1793882088.406848,
+  "pytest_exit": 1,
+  "log_path": "",
+  "isolation_report": "/tmp/zhihui-iso-20261105-212828-al5qpx_j/artifacts/isolation-report.json",
+  "kept": true,
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "platform": "linux"
+}

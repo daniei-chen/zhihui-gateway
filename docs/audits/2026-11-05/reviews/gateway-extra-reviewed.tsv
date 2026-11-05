@@ -1,0 +1,32 @@
+path	coverage	lines	sha256	review_focus
+manager/server/routers/keys.py	FULL	618	dc2451745fad1fc47921c4f63b78f83617682493db9749c1286aa21aa31541b0	role dependencies, key constraints, plaintext export, local-import gates
+manager/server/routers/proxies.py	FULL	316	e4e6b683bd82de83dddc82d3551637e1f5e9644d6cbebaf1f42a4e3f47807f03	credential masking, write roles, group bindings, probe and config policy
+manager/server/routers/read_api.py	FULL	212	4f5a152b2f2639e48221a1f7394d288caa1bdd37b49e16dc0bcf44c912e7e881	read scope, SQL parameters, response cardinality, date/realm contracts
+manager/server/routers/security.py	FULL	176	c1b9bdc6b850134a9591cda2c9659e67972173419bb9ef7d7520193f0a4a9722	IP-rule validation, explicit lockout confirmation, read/write separation
+manager/server/routers/upstreams.py	FULL	158	3e55e265a9538e028fa3786817623780cd07b05843eac6d8d742f13d05af1a67	masked credentials, group deletion guards, probe authority
+manager/server/routers/tokens.py	FULL	81	26eaf45a346588bf1d11154ea87b2e71497878ace748ecc45a0a357aa14d0967	session-only mutation, service-token separation, audit secrecy
+manager/server/routers/budgets.py	FULL	57	be3afaefb33863c8854a86f9d4a38567c7c6588fcb33f86e30dc6e9563de7f00	recent-session guard, resolution evidence, bounded review endpoints
+manager/server/services/realm.py	FULL	460	47d668d764136421ad46ad0a7902f3e22aa8a066bb53d9e9fde97fbb8f33127d	realm/cache separation, configured endpoint trust, device headers/secrets
+manager/server/services/scope.py	FULL	278	4fdbab888d042d18540eed626731c992d83db0e67a54de1dd46de048fc5889cf	cache generations, lock ordering, explicit routing degradation
+manager/server/services/credits.py	FULL	285	1c09efd6538ce6512024b926d0705e368b30d6445e36f662805377aceabfe3e9	credential identities, in-flight coalescing, invalidation fencing, DB/state locks
+manager/server/services/modelcatalog.py	FULL	484	0550199c657ab456c50e3f9286e902abeb1f35d091ce26828f37719d59dde6e7	realm cache keys, background task ownership, account selection, fallback metadata
+manager/server/iputil.py	FULL	120	0be8c5306aeb289437006c1707e43b3bcab388fb90a737dc3a9f292ba7452718	trusted-peer gating, XFF hop handling, CIDR matching, malformed addresses
+manager/server/edgeidentity.py	FULL	73	1f4f8876369d439d1debe31f733bf7f4533f98c72095ac39d6016088677ef003	regular-file secret checks, role/scope mapping, HMAC assertions
+manager/server/metricsauth.py	FULL	46	05b18679d243d56b10dbae84635f6d6bbf001f0b18d4b2dfd93b0c1861e67204	collector secret isolation, fail-closed parsing, admin fallback
+manager/server/diagnostics.py	FULL	124	f80dcb73e2dfb20b50c2cf70d6fd383ebd0ea0985eb70365762136c5affe5381	read-only SQLite, query deadline, bounded metadata and output
+manager/server/cachemetrics.py	FULL	28	bb409867927c5fb4d9931b5a63b0b6b1880a0f900b28db4b6318d22e7732afa4	allowlisted dimensions, parameterized windows, unknown cache evidence
+manager/server/modelcontext.py	FULL	29	eba0a5ecf32887a96ac0eb3d69d716301efdb5fbac53e761c55b2daa88cb840e	native evidence bounds, options/default conflict handling
+manager/server/outputlimits.py	FULL	33	a7b6855c551f30231de11aee5c8f0ca85acc7448f38f92f2d5f0fc4960f22712	protocol-specific output fields, integer validation, conflict rejection
+manager/server/platformstats.py	FULL	106	af6a603b756884a1b2e028102670cc742111950e3b0aa2461a1cc4320b923b0c	selected-platform attribution, unknown totals, aggregation numeric bounds
+manager/server/portalbilling.py	FULL	29	432124de4fc4cbe633210ab17f3b91f68df1ea15eb52023f01649a496be6ed40	persisted billing-policy approval, dispatch fail-closed semantics
+manager/server/product.py	FULL	51	01edf61afaa5996caf9fffed4eda4a2834e39e251ce8b557699538be8698c4e9	release identity/provenance validation, metadata confidentiality
+manager/server/productupdates.py	FULL	164	9c9cd2cbf9711ca317a3727a596018e4dcd8919a040739e2693504f5e618d709	bounded regular-file snapshots, archive durability, activity gates
+manager/server/providerevents.py	FULL	199	fd4a318d51e556445dd5de2e296c4d007ae3bd96a766f85d23107961fc5b6b5c	strict event schema, immutable evidence conflicts, filesystem ownership
+manager/server/qtgadapter.py	FULL	191	07bec95cf6a6948f53af8cd3a627a8995271d92be6ae59ed9b7984cdee82f07e	internal auth, direct egress, per-endpoint degradation, contract versions
+manager/server/runtimemetrics.py	FULL	175	29bf5ee4c951e9bfcea16f8b0d60e11ed32539c307345951852a35573afa40b1	bounded metric cardinality, time windows, histogram/terminal semantics
+manager/server/tokensvc.py	FULL	168	bb6e8e231e64d5b4a6b92e139727f6bd3b3152888d6fb9b6f83fe8998c20d3d4	random token hashing, scope normalization, expiry and touch throttling
+manager/server/userstore.py	FULL	57	a999a481a1eab4167c412505f9bc0c7b80ca7c4f92791e7841d0ab657fc74805	thread/process locks, symlink defenses, nested ownership
+manager/server/wirebody.py	FULL	48	0b411b85e7f2d3245b6d6eeaef2ea5ed5777f653dfd8b13f6b20638f6d5e1eb7	incremental JSON byte budget, admission callback, invalid Unicode/numbers
+manager/server/upstreamschema.py	FULL	38	6852b8357d2192f55ab97a72e551a4656df0e9c2ac35b0b803b4af1254989363	write-field allowlist, primitive type and finite-number checks
+manager/server/budgetreview.py	FULL	100	15576cf48f7b72e36dcf2c81a3a03bffb98eac1454d3e59a7cd6d296f9f49991	bounded cursor paging, evidence display, immutable resolution prerequisites
+manager/server/budget_reconcile.py	FULL	33	983e8591bc2df5802880e3423d281a745cb038d7c5dbc555af57c52bc05cf629	finite scheduled reconciliation, failure/owner cleanup semantics

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="30" time="1.656" timestamp="2026-11-05T20:25:44.763271+09:00" hostname="897de8afea7d"><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_credit_limited_key_requires_credit_evidence" time="0.132" /><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_invalid_credit_is_unknown_even_for_an_unlimited_key" time="0.110" /><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_invalid_token_values_remain_unknown_and_do_not_prove_zero" time="0.145" /><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_partial_valid_counter_is_preserved_without_releasing_hold" time="0.121" /><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_portal_malformed_usage_retains_hold_and_matches_replay" time="0.270"><failure message="AssertionError: 0 is not None">server/tests/test_audit_usage_evidence.py:122: in test_portal_malformed_usage_retains_hold_and_matches_replay
+    self.assertIsNone(receipt['amount_units'])
+E   AssertionError: 0 is not None</failure></testcase><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_portal_valid_zero_and_integer_strings_match_main_ledger" time="0.204"><failure message="AssertionError: Tuples differ: ('unknown', None) != ('settled', 0)&#10;&#10;First differing element 0:&#10;'unknown'&#10;'settled'&#10;&#10;- ('unknown', None)&#10;+ ('settled', 0)">server/tests/test_audit_usage_evidence.py:147: in test_portal_valid_zero_and_integer_strings_match_main_ledger
+    self.assertEqual(tuple(spend), ('settled', 0))
+E   AssertionError: Tuples differ: ('unknown', None) != ('settled', 0)
+E   
+E   First differing element 0:
+E   'unknown'
+E   'settled'
+E   
+E   - ('unknown', None)
+E   + ('settled', 0)</failure></testcase><testcase classname="server.tests.test_audit_usage_evidence.UsageEvidenceTest" name="test_real_zero_and_compatible_integer_strings_can_settle" time="0.118" /></testsuite></testsuites>

@@ -1,0 +1,6 @@
+path	review	lines	reviewed_ranges	sha256	scope	evidence
+.github/workflows/audit-checks.yml	full	199	1-199	95ba793f5d21464274e5bec9ba8e8662b6957efa4aff1a9eb8b7d8277c64fe75	assigned	Entire workflow read; fixed official Action SHAs, permission/trigger/dependency/failure/receipt boundaries; actionlint and bash syntax checked; cloud CI not executed
+tests/requirements-audit.hashes.txt	full	6	1-6	6d6eef2846f78587487fa9a72d98f9108d772223bb59db5a1d800810b45cecd0	assigned	Entire QA-only lock read; all three official PyPI digests matched and wheel artifacts downloaded with hash verification
+tests/linux_lab/requirements-dev.hashes.txt	full	8	1-8	992e9108ad5741100cb694e6495caa0c4f62e6d1ea464c590ccab2bb2b50b59e	supporting	Entire existing QA lock read; all seven official PyPI digests matched; original pytest9.1.1 unchanged
+manager/server/requirements.hashes.txt	full	28	1-28	39880b5cacc0ecf53988ccc925196540f6a71126faf7d7465eb6c8a03f941fdb	supporting	Entire existing production hash lock read; all27 compatible official wheels matched/downloaded; no production dependency changes
+manager/server/requirements.lock.txt	full	27	1-27	201fbf5eef0f81b092be04b645cdac9d31df6ea50c44792f8e1bb54c123f9614	supporting	Entire existing Linux CPython3.12 version lock read; cross-check with hash lock; no changes

@@ -1,0 +1,51 @@
+{
+  "run_id": "20261105-212330-161220fa",
+  "summary": "tests=67 passed=67 failed=0 errors=0 skipped=0",
+  "elapsed_s": 16.34,
+  "view_changed": false,
+  "view_sha256": "45f98248edfe9a43815bdb0330dab0a1e4f98bf8e11aa36df3f242963ba37cf9",
+  "fake_provider": 0,
+  "writes": {
+    "protected_violations": [],
+    "outside_iso_samples": [
+      {
+        "path": "/dev/null",
+        "where": "builtins.open",
+        "t": 0.021
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 0.814
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 3.334
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 4.444
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 13.397
+      }
+    ],
+    "outside_iso_count": 5
+  },
+  "scope": "focused lifecycle diagnostic; not a replacement for interrupted full run",
+  "plugins": {
+    "pytest": "9.1.1",
+    "pytest-asyncio": "1.4.0",
+    "asyncio_mode": "strict",
+    "platformdirs": "4.14.5",
+    "anyio": "4.15.1"
+  },
+  "watchdog": "GNU timeout180s + owned command-group TERM/KILL10s; completed without timeout",
+  "faulthandler_timeout_seconds": 30,
+  "faulthandler_triggered": false,
+  "conclusion": "Three requested files completed standalone; the interrupted full-run stall is not yet attributed to a plugin or production defect."
+}

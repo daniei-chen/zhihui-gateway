@@ -1,0 +1,44 @@
+{
+  "full_manager_run": "20261105-212828-13b0299c",
+  "post_full_docs_run": "20261105-214039-74534a8a",
+  "only_manager_view_changes": [
+    {
+      "path": "docs/enterprise-support/README.en.md",
+      "full_run_value": "762a19c7de084c0b52dbc8c8a26bdfef8afd127d827b96e4d50608fa301e9f5a",
+      "post_full_value": "35367ff8f0e2865e138ba9ae97f9282abdff5b4190fe86c30c2a743eff922490"
+    },
+    {
+      "path": "docs/enterprise-support/README.md",
+      "full_run_value": "75503faad9568d4a01e70ea0cb661e154c3195bf5b92971ab7f256a49dcc6ed1",
+      "post_full_value": "f56b696c42affee6c5d6bcb998d186cd36ecfe21251222f508ac418f14ac591b"
+    },
+    {
+      "path": "docs/enterprise-support/apply.sh",
+      "full_run_value": "1dd2a10a94b629980864a090ac41577b0f4c177bf4063f88565cb98fdd55415e",
+      "post_full_value": "9d905f58fba29e3eb2d02b7050c4b40dcbd0f5300ebae1d3cca38cb0e3ec89d9"
+    }
+  ],
+  "all_application_runtime_frontend_and_manager_test_bytes_unchanged": true,
+  "new_root_regression": "tests/test_retired_enterprise_apply.py",
+  "new_root_regression_sha256": "15c5c0b9e5432321a2c8bbc16d0f8ad033df9bb70df02b309c5509b6bfc49204",
+  "root_tools": {
+    "tests": 75,
+    "passed": 75,
+    "failed": 0,
+    "skipped": 0,
+    "log": "root-tools.log"
+  },
+  "legacy_refusal_cases": {
+    "test_methods": 2,
+    "subtests": 11,
+    "real_deployment_commands_executed": false
+  },
+  "manager_docs_packaging": {
+    "tests": 9,
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0,
+    "required_built_web": true,
+    "log": "manager-docs.log"
+  }
+}

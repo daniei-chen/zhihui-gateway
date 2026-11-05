@@ -1,0 +1,106 @@
+[ZH-ISO] run_id=20261105-212330-543e4e
+[ZH-ISO] target=manager-assets  Manager + 前端/dev/docs 资产（诊断视图，非部署树）
+[ZH-ISO] 隔离根: /tmp/zhihui-iso-20261105-212330-wj_bpf4s
+[ZH-ISO] 视图:   /tmp/zhihui-iso-20261105-212330-wj_bpf4s/view/manager-assets-view
+[ZH-ISO] 假上游: http://127.0.0.1:46047  (OPENAI_BASE_URL=http://127.0.0.1:46047/v1)
+[ZH-ISO] 网络策略: block；附加 sys.path: 无
+[ZH-ISO] pytest: /workspace/scratch/913dc6e1a7c0/audit-venv/bin/python -m pytest server/tests/test_taskrun.py server/tests/test_audit_taskrun_lifecycle.py server/tests/test_audit_dailyplan_lifecycle.py -p no:cacheprovider --tb=short -q --continue-on-collection-errors --junitxml=/tmp/zhihui-iso-20261105-212330-wj_bpf4s/artifacts/20261105-212330-161220fa/junit-manager-assets.xml -vv -o faulthandler_timeout=30
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- /workspace/scratch/913dc6e1a7c0/audit-venv/bin/python
+rootdir: /tmp/zhihui-iso-20261105-212330-wj_bpf4s/view/manager-assets-view
+plugins: asyncio-1.4.0, platformdirs-4.14.5, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 67 items
+
+server/tests/test_taskrun.py::SummarizeTest::test_falls_back_to_error PASSED [  1%]
+server/tests/test_taskrun.py::SummarizeTest::test_falls_back_to_exit_code PASSED [  2%]
+server/tests/test_taskrun.py::SummarizeTest::test_picks_done_line_not_mode_line PASSED [  4%]
+server/tests/test_taskrun.py::CommandBuildTest::test_account_injection_rejected PASSED [  5%]
+server/tests/test_taskrun.py::CommandBuildTest::test_legit_account_accepted PASSED [  7%]
+server/tests/test_taskrun.py::CommandBuildTest::test_modes_map_to_expected_flags PASSED [  8%]
+server/tests/test_taskrun.py::CommandBuildTest::test_unbuffered_flags_present PASSED [ 10%]
+server/tests/test_taskrun.py::CommandBuildTest::test_unknown_mode_rejected PASSED [ 11%]
+server/tests/test_taskrun.py::AvailabilityTest::test_refuses_to_start_when_unavailable PASSED [ 13%]
+server/tests/test_taskrun.py::AvailabilityTest::test_reports_reason_when_script_missing PASSED [ 14%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_cache_invalidated_when_image_changes PASSED [ 16%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_cp_uses_container_and_app_scripts PASSED [ 17%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_error_message_mentions_both_deployment_shapes PASSED [ 19%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_extracts_whole_script_group PASSED [ 20%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_failure_is_cooled_down PASSED [ 22%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_host_mount_wins_over_extraction PASSED [ 23%]
+server/tests/test_taskrun.py::ScriptExtractionTest::test_successful_extract_resets_cooldown PASSED [ 25%]
+server/tests/test_taskrun.py::TimeoutPolicyTest::test_idle_timeout_is_generous_but_bounded PASSED [ 26%]
+server/tests/test_taskrun.py::TimeoutPolicyTest::test_progress_prevents_stall_detection PASSED [ 28%]
+server/tests/test_taskrun.py::TimeoutPolicyTest::test_silent_process_is_killed PASSED [ 29%]
+server/tests/test_taskrun.py::StreamingOutputTest::test_first_line_arrives_long_before_process_exit PASSED [ 31%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_available_async_does_not_block_loop PASSED [ 32%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_image_id_is_cached PASSED [ 34%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_start_async_actually_starts PASSED [ 35%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_start_async_does_not_block_loop PASSED [ 37%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_sync_call_still_blocks_by_design PASSED [ 38%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_sync_start_without_loop_reports_clearly PASSED [ 40%]
+server/tests/test_taskrun.py::EventLoopResponsivenessTest::test_sync_start_works_inside_loop PASSED [ 41%]
+server/tests/test_taskrun.py::ScheduleTest::test_default_is_disabled PASSED [ 43%]
+server/tests/test_taskrun.py::ScheduleTest::test_hours_validated_and_deduped PASSED [ 44%]
+server/tests/test_taskrun.py::ScheduleTest::test_roundtrip PASSED        [ 46%]
+server/tests/test_taskrun.py::EndpointTest::test_anonymous_requires_auth PASSED [ 47%]
+server/tests/test_taskrun.py::EndpointTest::test_claim_and_preview_need_no_confirm PASSED [ 49%]
+server/tests/test_taskrun.py::EndpointTest::test_conflict_returns_409 PASSED [ 50%]
+server/tests/test_taskrun.py::EndpointTest::test_full_requires_explicit_confirm PASSED [ 52%]
+server/tests/test_taskrun.py::EndpointTest::test_invalid_mode_rejected PASSED [ 53%]
+server/tests/test_taskrun.py::EndpointTest::test_requires_admin PASSED   [ 55%]
+server/tests/test_taskrun.py::EndpointTest::test_schedule_validation PASSED [ 56%]
+server/tests/test_taskrun.py::SchedulerOnlyClaimsTest::test_disabled_schedule_does_not_run PASSED [ 58%]
+server/tests/test_taskrun.py::SchedulerOnlyClaimsTest::test_scheduler_invokes_claim_only PASSED [ 59%]
+server/tests/test_taskrun.py::ChildStdioEncodingTest::test_child_env_pins_utf8_stdio PASSED [ 61%]
+server/tests/test_taskrun.py::ChildStdioEncodingTest::test_emoji_nickname_survives_a_cp936_inherited_env PASSED [ 62%]
+server/tests/test_taskrun.py::ForceUtf8StdioTest::test_main_calls_it_at_import PASSED [ 64%]
+server/tests/test_taskrun.py::ForceUtf8StdioTest::test_reconfigures_with_utf8_and_replace PASSED [ 65%]
+server/tests/test_taskrun.py::ForceUtf8StdioTest::test_tolerates_streams_without_reconfigure PASSED [ 67%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_cancellation_during_spawn_still_reaps_late_child PASSED [ 68%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_cancelled_start_joins_preparation_without_launching PASSED [ 70%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_continuous_output_cannot_extend_total_deadline PASSED [ 71%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_eof_does_not_remove_the_process_lifetime_deadline PASSED [ 73%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_exited_child_with_inherited_pipe_also_closes_reader PASSED [ 74%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_inherited_stdout_without_eof_is_bounded_and_closed_before_reap PASSED [ 76%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_preparation_failure_releases_running_state PASSED [ 77%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_read_failure_still_kills_and_reaps PASSED [ 79%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_repeated_cancellation_joins_child_before_another_run PASSED [ 80%]
+server/tests/test_audit_taskrun_lifecycle.py::TaskRunLifetimeTest::test_schedule_read_does_not_block_loop_and_is_joined_on_cancel PASSED [ 82%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_async_scheduler_close_joins_lease_cleanup PASSED [ 83%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_cancel_during_claim_releases_late_acquired_fence PASSED [ 85%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_cancelled_waiter_never_cancels_a_later_run PASSED [ 86%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_exhausted_claim_budget_never_dispatches_work PASSED [ 88%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_expiry_stops_work_while_renewal_thread_is_still_blocked PASSED [ 89%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_manual_run_still_returns_as_soon_as_script_is_started PASSED [ 91%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_refused_start_does_not_own_the_existing_job PASSED [ 92%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_renewal_exception_stops_work_instead_of_silently_retrying PASSED [ 94%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_renewal_rejection_cancels_and_joins_owned_script PASSED [ 95%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_repeated_cancel_of_close_still_joins_the_captured_scheduler PASSED [ 97%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_repeated_cancellation_cannot_release_before_script_cleanup PASSED [ 98%]
+server/tests/test_audit_dailyplan_lifecycle.py::DailyPlanLifetimeTest::test_scheduled_lease_covers_actual_background_completion PASSED [100%]
+
+=============================== warnings summary ===============================
+../../../../workspace/scratch/913dc6e1a7c0/audit-venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/scratch/913dc6e1a7c0/audit-venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+../../../../workspace/scratch/913dc6e1a7c0/audit-venv/lib/python3.12/site-packages/starlette/testclient.py:53
+  /workspace/scratch/913dc6e1a7c0/audit-venv/lib/python3.12/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /tmp/zhihui-iso-20261105-212330-wj_bpf4s/artifacts/20261105-212330-161220fa/junit-manager-assets.xml -
+------------------------------- 隔离环境摘要 (ZH-ISO) --------------------------------
+隔离根: /tmp/zhihui-iso-20261105-212330-wj_bpf4s
+网络策略: block；观察到网络调用 3 次（样本 3 条），非回环调用 0 次
+受保护路径写入拦截: 0 次；越界写(仅记录): 5 次
+假 provider 调用: total=0 cancelled=0 by_mode={}
+======================= 67 passed, 2 warnings in 16.08s ========================
+
+[ZH-ISO] 结果: exit=0  用时 16.3s  tests=67 passed=67 failed=0 errors=0 skipped=0
+[ZH-ISO] junit: /workspace/scratch/913dc6e1a7c0/zhihui-gateway/evidence/runs/20261105-212330-161220fa/junit-manager-assets.xml
+[ZH-ISO] stats: /workspace/scratch/913dc6e1a7c0/zhihui-gateway/evidence/runs/20261105-212330-161220fa/stats-manager-assets.json
+[ZH-ISO] 临时根已保留: /tmp/zhihui-iso-20261105-212330-wj_bpf4s
+
+[ZH-ISO] 退出码: {'manager-assets': 0}

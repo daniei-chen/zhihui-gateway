@@ -1,0 +1,180 @@
+Looking in links: /workspace/scratch/913dc6e1a7c0/ci-wheel-verification
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/annotated_doc-0.0.5-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 2))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/annotated_types-0.8.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 3))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/anyio-4.15.1-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 4))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/certifi-2026.10.19-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 5))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/click-8.5.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 6))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/fastapi-0.141.1-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 7))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/h11-0.16.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 8))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httpcore-1.0.9-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 9))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 10))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/httpx-0.28.1-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 11))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/idna-3.19-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 12))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/psycopg-3.3.6-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 13))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/psycopg_binary-3.3.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 14))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic-2.13.5-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 15))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 16))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/python_dotenv-1.2.3-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 17))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 18))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/starlette-1.6.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 19))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/typing_extensions-4.16.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 20))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/typing_inspection-0.4.4-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 21))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/tzdata-2026.5-py2.py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 22))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/uvicorn-0.53.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 23))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 24))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 25))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/websockets-17.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (from -r manager/server/requirements.hashes.txt (line 26))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/python_multipart-0.0.32-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 27))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/socksio-1.0.0-py3-none-any.whl (from -r manager/server/requirements.hashes.txt (line 28))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pytest-9.1.1-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 2))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pytest_asyncio-1.4.0-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 3))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/iniconfig-2.3.0-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 4))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/packaging-26.3-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 5))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pluggy-1.6.0-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 6))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pygments-2.21.0-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 7))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pydantic_settings-2.15.0-py3-none-any.whl (from -r tests/linux_lab/requirements-dev.hashes.txt (line 8))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl (from -r tests/requirements-audit.hashes.txt (line 4))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (from -r tests/requirements-audit.hashes.txt (line 5))
+Processing /workspace/scratch/913dc6e1a7c0/ci-wheel-verification/pycparser-3.12-py3-none-any.whl (from -r tests/requirements-audit.hashes.txt (line 6))
+Installing collected packages: websockets, uvloop, tzdata, typing-extensions, socksio, pyyaml, python-multipart, python-dotenv, Pygments, pycparser, psycopg-binary, pluggy, packaging, iniconfig, idna, httptools, h11, click, certifi, annotated-types, annotated-doc, uvicorn, typing-inspection, pytest, pydantic-core, psycopg, httpcore, cffi, anyio, watchfiles, starlette, pytest-asyncio, pydantic, httpx, cryptography, pydantic-settings, fastapi
+  Attempting uninstall: websockets
+    Found existing installation: websockets 17.1
+    Uninstalling websockets-17.1:
+      Successfully uninstalled websockets-17.1
+  Attempting uninstall: uvloop
+    Found existing installation: uvloop 0.22.1
+    Uninstalling uvloop-0.22.1:
+      Successfully uninstalled uvloop-0.22.1
+  Attempting uninstall: tzdata
+    Found existing installation: tzdata 2026.5
+    Uninstalling tzdata-2026.5:
+      Successfully uninstalled tzdata-2026.5
+  Attempting uninstall: typing-extensions
+    Found existing installation: typing_extensions 4.16.0
+    Uninstalling typing_extensions-4.16.0:
+      Successfully uninstalled typing_extensions-4.16.0
+  Attempting uninstall: socksio
+    Found existing installation: socksio 1.0.0
+    Uninstalling socksio-1.0.0:
+      Successfully uninstalled socksio-1.0.0
+  Attempting uninstall: pyyaml
+    Found existing installation: PyYAML 6.0.3
+    Uninstalling PyYAML-6.0.3:
+      Successfully uninstalled PyYAML-6.0.3
+  Attempting uninstall: python-multipart
+    Found existing installation: python-multipart 0.0.32
+    Uninstalling python-multipart-0.0.32:
+      Successfully uninstalled python-multipart-0.0.32
+  Attempting uninstall: python-dotenv
+    Found existing installation: python-dotenv 1.2.3
+    Uninstalling python-dotenv-1.2.3:
+      Successfully uninstalled python-dotenv-1.2.3
+  Attempting uninstall: Pygments
+    Found existing installation: Pygments 2.21.0
+    Uninstalling Pygments-2.21.0:
+      Successfully uninstalled Pygments-2.21.0
+  Attempting uninstall: pycparser
+    Found existing installation: pycparser 3.12
+    Uninstalling pycparser-3.12:
+      Successfully uninstalled pycparser-3.12
+  Attempting uninstall: psycopg-binary
+    Found existing installation: psycopg-binary 3.3.6
+    Uninstalling psycopg-binary-3.3.6:
+      Successfully uninstalled psycopg-binary-3.3.6
+  Attempting uninstall: pluggy
+    Found existing installation: pluggy 1.7.0
+    Uninstalling pluggy-1.7.0:
+      Successfully uninstalled pluggy-1.7.0
+  Attempting uninstall: packaging
+    Found existing installation: packaging 26.3
+    Uninstalling packaging-26.3:
+      Successfully uninstalled packaging-26.3
+  Attempting uninstall: iniconfig
+    Found existing installation: iniconfig 2.3.1
+    Uninstalling iniconfig-2.3.1:
+      Successfully uninstalled iniconfig-2.3.1
+  Attempting uninstall: idna
+    Found existing installation: idna 3.19
+    Uninstalling idna-3.19:
+      Successfully uninstalled idna-3.19
+  Attempting uninstall: httptools
+    Found existing installation: httptools 0.8.0
+    Uninstalling httptools-0.8.0:
+      Successfully uninstalled httptools-0.8.0
+  Attempting uninstall: h11
+    Found existing installation: h11 0.16.0
+    Uninstalling h11-0.16.0:
+      Successfully uninstalled h11-0.16.0
+  Attempting uninstall: click
+    Found existing installation: click 8.5.0
+    Uninstalling click-8.5.0:
+      Successfully uninstalled click-8.5.0
+  Attempting uninstall: certifi
+    Found existing installation: certifi 2026.10.19
+    Uninstalling certifi-2026.10.19:
+      Successfully uninstalled certifi-2026.10.19
+  Attempting uninstall: annotated-types
+    Found existing installation: annotated-types 0.8.0
+    Uninstalling annotated-types-0.8.0:
+      Successfully uninstalled annotated-types-0.8.0
+  Attempting uninstall: annotated-doc
+    Found existing installation: annotated-doc 0.0.5
+    Uninstalling annotated-doc-0.0.5:
+      Successfully uninstalled annotated-doc-0.0.5
+  Attempting uninstall: uvicorn
+    Found existing installation: uvicorn 0.53.0
+    Uninstalling uvicorn-0.53.0:
+      Successfully uninstalled uvicorn-0.53.0
+  Attempting uninstall: typing-inspection
+    Found existing installation: typing-inspection 0.4.4
+    Uninstalling typing-inspection-0.4.4:
+      Successfully uninstalled typing-inspection-0.4.4
+  Attempting uninstall: pytest
+    Found existing installation: pytest 9.2.0
+    Uninstalling pytest-9.2.0:
+      Successfully uninstalled pytest-9.2.0
+  Attempting uninstall: pydantic-core
+    Found existing installation: pydantic_core 2.46.5
+    Uninstalling pydantic_core-2.46.5:
+      Successfully uninstalled pydantic_core-2.46.5
+  Attempting uninstall: psycopg
+    Found existing installation: psycopg 3.3.6
+    Uninstalling psycopg-3.3.6:
+      Successfully uninstalled psycopg-3.3.6
+  Attempting uninstall: httpcore
+    Found existing installation: httpcore 1.0.9
+    Uninstalling httpcore-1.0.9:
+      Successfully uninstalled httpcore-1.0.9
+  Attempting uninstall: cffi
+    Found existing installation: cffi 2.1.1
+    Uninstalling cffi-2.1.1:
+      Successfully uninstalled cffi-2.1.1
+  Attempting uninstall: anyio
+    Found existing installation: anyio 4.15.1
+    Uninstalling anyio-4.15.1:
+      Successfully uninstalled anyio-4.15.1
+  Attempting uninstall: watchfiles
+    Found existing installation: watchfiles 1.2.0
+    Uninstalling watchfiles-1.2.0:
+      Successfully uninstalled watchfiles-1.2.0
+  Attempting uninstall: starlette
+    Found existing installation: starlette 1.6.0
+    Uninstalling starlette-1.6.0:
+      Successfully uninstalled starlette-1.6.0
+  Attempting uninstall: pydantic
+    Found existing installation: pydantic 2.13.5
+    Uninstalling pydantic-2.13.5:
+      Successfully uninstalled pydantic-2.13.5
+  Attempting uninstall: httpx
+    Found existing installation: httpx 0.28.1
+    Uninstalling httpx-0.28.1:
+      Successfully uninstalled httpx-0.28.1
+  Attempting uninstall: cryptography
+    Found existing installation: cryptography 50.0.2
+    Uninstalling cryptography-50.0.2:
+      Successfully uninstalled cryptography-50.0.2
+  Attempting uninstall: fastapi
+    Found existing installation: fastapi 0.141.1
+    Uninstalling fastapi-0.141.1:
+      Successfully uninstalled fastapi-0.141.1
+Successfully installed Pygments-2.21.0 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.15.1 certifi-2026.10.19 cffi-2.1.1 click-8.5.0 cryptography-50.0.2 fastapi-0.141.1 h11-0.16.0 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 idna-3.19 iniconfig-2.3.0 packaging-26.3 pluggy-1.6.0 psycopg-3.3.6 psycopg-binary-3.3.6 pycparser-3.12 pydantic-2.13.5 pydantic-core-2.46.5 pydantic-settings-2.15.0 pytest-9.1.1 pytest-asyncio-1.4.0 python-dotenv-1.2.3 python-multipart-0.0.32 pyyaml-6.0.3 socksio-1.0.0 starlette-1.6.0 typing-extensions-4.16.0 typing-inspection-0.4.4 tzdata-2026.5 uvicorn-0.53.0 uvloop-0.22.1 watchfiles-1.2.0 websockets-17.1

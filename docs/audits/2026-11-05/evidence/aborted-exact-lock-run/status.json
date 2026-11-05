@@ -1,0 +1,7 @@
+{
+  "status": "aborted-incomplete",
+  "view_run_id": "20261105-211331-5084861e",
+  "reason": "No completion near 82%; user-owned test process session interrupted; no full summary or complete JUnit.",
+  "must_not_count_as_final_validation": true,
+  "subsequent_focused_diagnosis": "../locked-taskrun-diagnostic/diagnosis.json"
+}

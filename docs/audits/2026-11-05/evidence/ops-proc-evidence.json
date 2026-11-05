@@ -1,0 +1,40 @@
+[
+  {
+    "label": "self-symlink",
+    "readable": true,
+    "state": "R",
+    "start_ticks": "2324663"
+  },
+  {
+    "label": "self-by-pid",
+    "readable": false,
+    "error": "FileNotFoundError",
+    "errno": 2
+  },
+  {
+    "label": "child-alive",
+    "readable": true,
+    "state": "S",
+    "start_ticks": "278"
+  },
+  {
+    "label": "child-alive-kill0",
+    "exists": true
+  },
+  {
+    "label": "child-before-wait",
+    "readable": true,
+    "state": "S",
+    "start_ticks": "278"
+  },
+  {
+    "label": "child-before-wait-kill0",
+    "exists": true
+  },
+  {
+    "label": "child-after-wait",
+    "readable": true,
+    "state": "S",
+    "start_ticks": "278"
+  }
+]

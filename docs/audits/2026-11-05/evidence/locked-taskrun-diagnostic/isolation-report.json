@@ -1,0 +1,82 @@
+{
+  "iso_root": "/tmp/zhihui-iso-20261105-212330-wj_bpf4s",
+  "run_id": "20261105-212330-543e4e",
+  "net_policy": "block",
+  "installed": true,
+  "syspath_added": [],
+  "env_problems": [],
+  "pytest_exitstatus": 0,
+  "duration_s": 16.11,
+  "network": {
+    "attempts": [
+      {
+        "host": "127.0.0.1",
+        "where": "socket.create_connection",
+        "t": 16.105,
+        "test": ""
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.getaddrinfo",
+        "t": 16.105,
+        "test": ""
+      },
+      {
+        "host": "127.0.0.1",
+        "where": "socket.connect",
+        "t": 16.105,
+        "test": ""
+      }
+    ],
+    "attempt_count": 3,
+    "sample_count": 3,
+    "samples_truncated": false,
+    "blocked": 0,
+    "blocked_samples": [],
+    "blocked_samples_truncated": false
+  },
+  "writes": {
+    "protected_violations": [],
+    "outside_iso_samples": [
+      {
+        "path": "/dev/null",
+        "where": "builtins.open",
+        "t": 0.021
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 0.814
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 3.334
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 4.444
+      },
+      {
+        "path": "/dev/null",
+        "where": "os.open",
+        "t": 13.397
+      }
+    ],
+    "outside_iso_count": 5
+  },
+  "fake_provider": {
+    "total": 0,
+    "completed": 0,
+    "cancelled": 0,
+    "by_path": {},
+    "by_mode": {},
+    "bytes_in": 0,
+    "bytes_out": 0,
+    "max_body": 0,
+    "errors": [],
+    "uptime_s": 16.657,
+    "recent": []
+  }
+}

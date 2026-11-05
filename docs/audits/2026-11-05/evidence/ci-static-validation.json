@@ -1,0 +1,81 @@
+{
+  "workflow_sha256": "95ba793f5d21464274e5bec9ba8e8662b6957efa4aff1a9eb8b7d8277c64fe75",
+  "yaml_parse": "passed",
+  "actionlint_version": "1.7.12",
+  "actionlint_exit": 0,
+  "bash_run_blocks": [
+    {
+      "step": "Prepare evidence directories",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Install hash-locked Python production and QA dependencies",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Install locked frontend dependencies",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Frontend tests",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Frontend typecheck",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Frontend lint",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Build frontend static export",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Full isolated Manager tests with built frontend",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Root offline tool unit tests",
+      "bash_n_exit": 0,
+      "stderr": ""
+    },
+    {
+      "step": "Collect current-run receipts even on failure",
+      "bash_n_exit": 0,
+      "stderr": ""
+    }
+  ],
+  "static_contracts": "read-only contents; three allowed triggers; exact Action SHAs; no continue-on-error; paths/scripts exist",
+  "synthetic_receipt_collection": [
+    {
+      "scenario": "failure before tests create receipts",
+      "exit": 0,
+      "copied": 0,
+      "historical_not_copied": true
+    },
+    {
+      "scenario": "current receipt + historical receipt",
+      "exit": 0,
+      "copied": 5,
+      "historical_not_copied": true
+    }
+  ],
+  "cloud_workflow_executed": false,
+  "full_tests_reexecuted_for_this_check": false,
+  "dependency_download": {
+    "exit": 0,
+    "wheels": 37,
+    "hash_required": true,
+    "index": "https://pypi.org/simple"
+  }
+}

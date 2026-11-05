@@ -1,0 +1,44 @@
+{
+  "files": 258,
+  "bytes": 5586393,
+  "js_files": 94,
+  "js_bytes": 3370617,
+  "js_gzip_bytes_sum": 1072757,
+  "css_files": 4,
+  "css_bytes": 143290,
+  "largest_js": [
+    [
+      "_next/static/chunks/601.c6a5090055501b7e.js",
+      395180
+    ],
+    [
+      "_next/static/chunks/3794-e6b880ea1810fa3e.js",
+      243714
+    ],
+    [
+      "_next/static/chunks/framework-dea131d1c6cbc1c0.js",
+      218938
+    ],
+    [
+      "_next/static/chunks/4bd1b696-8cd12253b448cc13.js",
+      203727
+    ],
+    [
+      "_next/static/chunks/7491.ae1daa51a78e9a85.js",
+      171024
+    ],
+    [
+      "_next/static/chunks/3048.4225ee87053ee11d.js",
+      158807
+    ],
+    [
+      "_next/static/chunks/9429.3834f75d1d1e1655.js",
+      138518
+    ],
+    [
+      "_next/static/chunks/main-6a7869ea003ca134.js",
+      137795
+    ]
+  ],
+  "demo_marker_in_production_js": false
+}

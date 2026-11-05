@@ -1,0 +1,38 @@
+{
+  "scope": "synthetic isolated local proof; no provider/network/production DB",
+  "dailyplan_source": "pinned pre-fix 4c6b4cb8 snapshot: ops-extra-dailyplan-before.py; current fixed behavior covered by test_audit_dailyplan_lifecycle.py",
+  "source_sha256": {
+    "manager/server/services/dailyplan.py": "30ada917ca159e82941a627eac524e76eaf1960bc56f44f4dec5981b2085fedb",
+    "manager/server/services/pgsync.py": "33c37cfa03e65b559db08a1bf3872d0ec3a24f239f8df72e9f88d699ca682be7",
+    "manager/server/ledger.py": "0b880243f4cf8f1df32d2eb031cb7015ce49627512a4966572ecb1ac6fb6f22e",
+    "manager/server/services/keyimport.py": "4cecc8411cec2509d62d273aba4627fb1638dbbfa7aef65de6ba05442882d98a",
+    "manager/server/notify.py": "34374bf90a39708a00056c2ed790ea6db1449174c9edfac4d3fea866e364bb00"
+  },
+  "dailyplan_lost_lease": {
+    "events": [
+      "lease_renew_returned_false",
+      "upstream_side_effect_after_lease_loss",
+      "lease_released"
+    ],
+    "work_continues_after_loss": true
+  },
+  "dailyplan_background_lease": {
+    "events": [
+      "background_work_started",
+      "lease_released",
+      "background_work_completed"
+    ],
+    "lease_released_while_work_running": true
+  },
+  "pgsync_immutable_restore": {
+    "error": "IntegrityError: admin events are immutable",
+    "replace_called": false,
+    "original_unchanged": true,
+    "actual_immutable_trigger_and_import_code": true
+  },
+  "keyimport_and_notify": {
+    "keyimport_original_mode": "0600",
+    "keyimport_result_mode": "0o644",
+    "notify_list_config_error": "AttributeError: 'list' object has no attribute 'get'"
+  }
+}

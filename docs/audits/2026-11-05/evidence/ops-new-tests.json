@@ -1,0 +1,186 @@
+[
+  {
+    "path": "manager/server/tests/test_docs_packaging.py",
+    "new_methods": 1,
+    "methods": [
+      "test_actual_pack_block_preserves_nested_document_paths"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_instance_runtime.py",
+    "new_methods": 3,
+    "methods": [
+      "test_deadline_stops_admission_while_renewal_thread_is_still_blocked",
+      "test_repeated_cancellation_joins_renewal_before_releasing_lease",
+      "test_slow_heartbeat_does_not_stall_other_coroutines"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_task_leases.py",
+    "new_methods": 6,
+    "methods": [
+      "test_expired_owner_cannot_revive_after_publisher_takes_control",
+      "test_expired_owner_cannot_revive_without_a_replacement_owner",
+      "test_holding_guard_checks_expiry_after_read_lock_wait",
+      "test_lock_wait_is_counted_before_renewal_and_new_claim",
+      "test_publish_state_corruption_never_authorizes_a_task",
+      "test_read_errors_are_not_misreported_as_absent_leases"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_ledger_channel_health.py",
+    "new_methods": 5,
+    "methods": [
+      "test_admission_does_not_scan_historical_disposition_log",
+      "test_negative_evidence_counts_never_pass_admission",
+      "test_spill_does_not_claim_durability_after_directory_fsync_failure",
+      "test_unreadable_dead_directory_is_unknown_and_blocks_new_inference",
+      "test_unreadable_pending_directory_is_not_a_zero_backlog"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_recovery_retention.py",
+    "new_methods": 9,
+    "methods": [
+      "test_apply_without_confirm_token_does_not_self_approve",
+      "test_cipher_part_must_be_unique_and_local_ciphertext",
+      "test_directory_replacement_after_cipher_check_cannot_redirect_unlink",
+      "test_invalid_existing_latest_marker_blocks_deletion",
+      "test_linked_cipher_parts_do_not_authorize_plaintext_deletion",
+      "test_non_object_metadata_is_conservatively_kept",
+      "test_plaintext_apply_without_token_is_read_only",
+      "test_snapshot_directory_symlink_is_never_followed",
+      "test_wrong_recorded_part_size_or_digest_is_rejected"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_release_signer.py",
+    "new_methods": 10,
+    "methods": [
+      "test_add_dry_run_does_not_mutate_manifest_or_signature",
+      "test_directory_symlink_cannot_supply_a_source",
+      "test_dry_run_rejects_bad_modes_using_the_real_validation",
+      "test_invalid_add_never_persists_partial_additions",
+      "test_manifest_cannot_hash_its_detached_signature",
+      "test_missing_key_leaves_manifest_untouched",
+      "test_rebuild_add_sign_and_verify_round_trip",
+      "test_sign_only_dry_run_never_requires_key_or_signs",
+      "test_signing_failure_preserves_previous_signature",
+      "test_wrong_signing_key_preserves_previous_trusted_signature"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_credential_purge.py",
+    "new_methods": 4,
+    "methods": [
+      "test_atomic_replace_failure_preserves_original_and_backup",
+      "test_malformed_user_list_never_rotates_or_creates_backup",
+      "test_original_backup_and_rotated_credentials_are_private",
+      "test_symlink_input_and_predictable_backup_cannot_overwrite_other_files"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_restore_evidence.py",
+    "new_methods": 4,
+    "methods": [
+      "test_archive_mismatch_stops_before_sidecar_restoration",
+      "test_missing_archive_digest_is_reported_as_unchecked",
+      "test_sidecar_replacement_does_not_follow_existing_symlink",
+      "test_skipped_sqlite_never_claims_complete_recovery"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_taskrun_lifecycle.py",
+    "new_methods": 10,
+    "methods": [
+      "test_cancellation_during_spawn_still_reaps_late_child",
+      "test_cancelled_start_joins_preparation_without_launching",
+      "test_continuous_output_cannot_extend_total_deadline",
+      "test_eof_does_not_remove_the_process_lifetime_deadline",
+      "test_exited_child_with_inherited_pipe_also_closes_reader",
+      "test_inherited_stdout_without_eof_is_bounded_and_closed_before_reap",
+      "test_preparation_failure_releases_running_state",
+      "test_read_failure_still_kills_and_reaps",
+      "test_repeated_cancellation_joins_child_before_another_run",
+      "test_schedule_read_does_not_block_loop_and_is_joined_on_cancel"
+    ]
+  },
+  {
+    "path": "tests/test_release_sign_strict.py",
+    "new_methods": 15,
+    "methods": [
+      "test_bundled_trust_anchor_is_rejected_even_with_parent_components",
+      "test_bundler_normalizes_actual_staged_permissions_and_roundtrips",
+      "test_bundler_refuses_overlapping_trees_and_a_packaged_private_key",
+      "test_duplicate_file_entries_and_inconsistent_count_are_refused",
+      "test_duplicate_json_keys_are_refused_even_if_signature_is_valid",
+      "test_external_hardlink_is_refused",
+      "test_keygen_creates_private_key_with_private_permissions",
+      "test_legitimate_release_requires_external_trust_and_has_no_production_approval",
+      "test_missing_trust_anchor_fails_closed",
+      "test_runtime_file_and_directory_symlinks_are_refused",
+      "test_self_signed_replacement_cannot_choose_its_own_publisher",
+      "test_signed_path_traversal_is_refused_before_hashing",
+      "test_tampered_runtime_and_signature_fail",
+      "test_unlisted_bytecode_in_formerly_ignored_directory_fails",
+      "test_world_writable_or_special_modes_are_not_normalized_during_verification"
+    ]
+  },
+  {
+    "path": "tests/test_runtime_integrity.py",
+    "new_methods": 4,
+    "methods": [
+      "test_duplicate_normalized_list_entries_are_rejected",
+      "test_existing_sha256_dictionary_and_list_formats",
+      "test_invalid_or_ambiguous_digests_fail_closed",
+      "test_managed_candidate_digest_detects_modified_runtime"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_dailyplan_lifecycle.py",
+    "new_methods": 12,
+    "methods": [
+      "test_async_scheduler_close_joins_lease_cleanup",
+      "test_cancel_during_claim_releases_late_acquired_fence",
+      "test_cancelled_waiter_never_cancels_a_later_run",
+      "test_exhausted_claim_budget_never_dispatches_work",
+      "test_expiry_stops_work_while_renewal_thread_is_still_blocked",
+      "test_manual_run_still_returns_as_soon_as_script_is_started",
+      "test_refused_start_does_not_own_the_existing_job",
+      "test_renewal_exception_stops_work_instead_of_silently_retrying",
+      "test_renewal_rejection_cancels_and_joins_owned_script",
+      "test_repeated_cancel_of_close_still_joins_the_captured_scheduler",
+      "test_repeated_cancellation_cannot_release_before_script_cleanup",
+      "test_scheduled_lease_covers_actual_background_completion"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_local_import_files.py",
+    "new_methods": 11,
+    "methods": [
+      "test_backup_is_private_exact_and_does_not_follow_old_backup_name",
+      "test_concurrent_file_change_is_not_overwritten",
+      "test_existing_public_permissions_are_restricted",
+      "test_failed_import_never_copy_backs_through_a_changed_link",
+      "test_linked_parent_hardlink_and_directory_are_rejected",
+      "test_old_predictable_temporary_link_is_never_used",
+      "test_portable_branch_avoids_posix_only_operations",
+      "test_precommit_fsync_failure_preserves_original_and_cleans_temporary",
+      "test_private_file_remains_private_and_preserves_owner",
+      "test_replace_failure_preserves_original_and_cleans_temporary",
+      "test_symlink_target_is_rejected_before_writing"
+    ]
+  },
+  {
+    "path": "manager/server/tests/test_audit_notify_config.py",
+    "new_methods": 6,
+    "methods": [
+      "test_dispatch_uses_one_consistent_configuration_snapshot",
+      "test_invalid_and_extreme_timeouts_are_finite_and_bounded",
+      "test_invalid_encoding_is_disabled_without_raising",
+      "test_non_boolean_enabled_never_sends",
+      "test_non_object_json_uses_disabled_default_without_raising",
+      "test_valid_short_timeouts_and_minimum_are_preserved"
+    ]
+  }
+]
