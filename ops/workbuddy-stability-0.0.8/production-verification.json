@@ -4,11 +4,149 @@
   "product_version": "0.0.8",
   "release_id": "v0.0.8+stable.20261106.1",
   "previous_release": "v0.0.7+stable.20261106.1",
-  "production_accepted": false,
-  "traffic_switched": false,
-  "state": "awaiting-exact-build-tests-signature-and-controlled-cutover",
+  "production_accepted": true,
+  "traffic_switched": true,
+  "state": "accepted-with-known-output-limit",
+  "cutover_complete_at": 1793937368,
+  "accepted_at": 1793938471,
   "engine_binary_changed": false,
+  "engine_process_restarted": false,
+  "engine_config_changed": false,
   "business_logic_changed": false,
   "business_database_restored": false,
-  "interpretation": "This candidate record is not production acceptance. The final public receipt is populated from actual cutover and smoke evidence."
+  "source_input_sha256": "32fb708b7b270e611aaf401c1a8bf7f6fb0e065eaa9963d37805da455f9697ef",
+  "backend_manifest_sha256": "fc0e3329a9c09946b523d593afee3ca832b34b1732e51ec9abeedd54be9c574f",
+  "signed_manager_archive_sha256": "e3531c2f598ce581006ff60761e940ba49c7f4ab4ffcfbf0120e02ff023e28a8",
+  "manager_gate": {
+    "passed": 4966,
+    "failed": 0,
+    "frozen_skipped": 9,
+    "host_runtime_equivalence_verified": true
+  },
+  "frontend_gate": {
+    "passed": 243,
+    "typecheck": true,
+    "static_build": true,
+    "lint_errors": 0,
+    "existing_lint_warnings": 81
+  },
+  "publisher_contracts": {
+    "passed": 73,
+    "failed": 0,
+    "platform": "isolated Linux"
+  },
+  "build_ci": {
+    "run_id": 42154199257,
+    "code_commit": "ba958e0e4620d0ef046f9b8396fff03c6edf3272",
+    "conclusion": "success"
+  },
+  "engine_tests_rerun_for_version_only_build": false,
+  "public_versions_verified": true,
+  "account_read_checks": 12,
+  "statistics_read_checks": 9,
+  "protocol_smoke": {
+    "passed": true,
+    "actual_inference_requests": 4,
+    "temporary_key_disabled": true,
+    "checks": [
+      {
+        "name": "authenticated_models",
+        "status": 200,
+        "passed": true
+      },
+      {
+        "name": "chat_codex",
+        "status": 200,
+        "passed": true,
+        "seconds": 1.271
+      },
+      {
+        "name": "responses_codex",
+        "status": 200,
+        "passed": true,
+        "seconds": 1.834
+      },
+      {
+        "name": "messages_claude",
+        "status": 200,
+        "passed": true,
+        "seconds": 1.817
+      },
+      {
+        "name": "tool_history_preserved",
+        "status": 200,
+        "passed": true,
+        "seconds": 1.346
+      },
+      {
+        "name": "positive_requests_have_logs",
+        "passed": true
+      },
+      {
+        "name": "runtime_and_usage_facts",
+        "passed": true
+      }
+    ]
+  },
+  "observation": {
+    "observed_at": 1793938027,
+    "post_open_since": 1793937368,
+    "post_open_seconds": 659,
+    "new_release_outcomes": 47,
+    "new_release_statuses": {
+      "200": 44,
+      "204": 2,
+      "401": 1
+    },
+    "http502": 0,
+    "http5xx": 0,
+    "channel_rejections": 0,
+    "model_requests": 12,
+    "http200_noncompleted_models": 0,
+    "completed_usage_incomplete_models": 0
+  },
+  "wallet": {
+    "pending": 0,
+    "settled": 713,
+    "settlement_invariant_failures": 0,
+    "positive_debt_users": 0,
+    "pending_receipts": 0,
+    "wallet_requests_since_cutover": 0
+  },
+  "provider_evidence": {
+    "http_status": 200,
+    "ok": true,
+    "fresh": true,
+    "pending": 0,
+    "oldest_seconds": 0,
+    "conflicts": 0,
+    "collection_age_seconds": 6
+  },
+  "paired_backup": {
+    "complete": true,
+    "consistency": "portal-paired-online-v2",
+    "activation_quarantined": true,
+    "locked_seconds": 2.228,
+    "manifest_sha256": "05c9bd242ac606184b06e8248cafda92d0e8a494ab21659b17ad8fe497f77ccb",
+    "restore_check": "ok",
+    "decryption_verified": true,
+    "offsite": false,
+    "business_data_restored": false
+  },
+  "complete_local_backup": {
+    "verified": true,
+    "created_at": 1793938447,
+    "real_key_decryption_verified": true,
+    "new_release_signature_verified": true,
+    "sqlite_databases_verified": 4,
+    "offsite": false
+  },
+  "known_limitations": [
+    "The unchanged Engine and Manager default 4 MiB output guards can still reject long streams with 502/incomplete output.",
+    "Only four bounded synthetic-content real-provider calls were made, not every Codex/Claude client version.",
+    "No new wallet transactions occurred in this observation window; a zero-pending snapshot does not guarantee no future hold.",
+    "A finite observation window is not a long-term SLO or a power-loss/fresh-host recovery drill.",
+    "Main-ledger unknown supplier usage is preserved and must not be inferred from portal wallet pending count."
+  ],
+  "private_credentials_or_business_backups_included": false
 }
