@@ -20,9 +20,9 @@
       "sha256": "4e98ad2911b0981f6cb84cbd5d1dce28aa4ff0ebc63c4b2f38cde6223e073141"
     },
     {
-      "path": "docs/images/readme/button-release-v0.0.7.svg",
+      "path": "docs/images/readme/button-release-v0.0.8.svg",
       "bytes": 1074,
-      "sha256": "b75ca84900da0e96267ebacce154d17f7795e07f66cb296ec2a9ad8def6aeb06"
+      "sha256": "9632a9b961415726c9e458faef9341def15f10732e62588bbf0e8264e659c3c1"
     },
     {
       "path": "docs/images/readme/capabilities-mobile.svg",
@@ -35,24 +35,24 @@
       "sha256": "6d156bba419df8c709c0e9726395fdc85d9bebbeb5381fbf60c251a7ebd5aa83"
     },
     {
-      "path": "docs/images/readme/cover-mobile-v0.0.7.svg",
+      "path": "docs/images/readme/cover-mobile-v0.0.8.svg",
       "bytes": 6039,
-      "sha256": "2409a7a76dba01a991abf6a9673f1c9522d64fe68237f0904cdf91334704ee41"
+      "sha256": "5b590404d1bfe1a9753c414f27dddd7095add314871e684b9597d6ce91d940de"
     },
     {
-      "path": "docs/images/readme/cover-v0.0.7.svg",
+      "path": "docs/images/readme/cover-v0.0.8.svg",
       "bytes": 6325,
-      "sha256": "8bd000ba0d98172ea89f4ae326dbc8dd9109c7226b0761a752676b9750b5f408"
+      "sha256": "c9524cccbf5ada27554edc4ee249e406c32cfa330ac1d4ee2efec6a189523a80"
     },
     {
-      "path": "docs/images/readme/release-mobile-v0.0.7.svg",
+      "path": "docs/images/readme/release-mobile-v0.0.8.svg",
       "bytes": 5197,
-      "sha256": "fe0a8a2086d3a977ff06d16ad1bfecfb90ea8c535055cc9cdf4e67be52e18772"
+      "sha256": "cb74795318faed958c786e389e9ce1343493b9b772c4ef640187108e89403992"
     },
     {
-      "path": "docs/images/readme/release-v0.0.7.svg",
+      "path": "docs/images/readme/release-v0.0.8.svg",
       "bytes": 5535,
-      "sha256": "bf270fcdffa3a832dbbf5c2038c721e1526578abacac0e9eb4bc3c662b28e6f1"
+      "sha256": "a33f7ecc2da191a538574de3c34f281dad622d9790f394ee60234d8f34f37047"
     },
     {
       "path": "docs/images/readme/routing-mobile.svg",
