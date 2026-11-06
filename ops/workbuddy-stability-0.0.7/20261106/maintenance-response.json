@@ -1,0 +1,9 @@
+{
+  "error": {
+    "message": "网关正在升级中，预计 5–10 分钟恢复，请稍后重试。",
+    "type": "service_unavailable_error",
+    "code": "gateway_upgrading"
+  },
+  "estimated_downtime_seconds": 600,
+  "retry_after_seconds": 60
+}

@@ -31,6 +31,8 @@
 
 **本次增补构建：`v0.0.7+stable.20261106.1`。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产；发布状态以该构建的签名回执与 GitHub Release 为准。
 
+**现网验收 · 2026-11-06：** 已受控切换此构建，用户确认账号页恢复。三平台账号、状态、分组及积分缓存 12 项读取通过，统计 9 项读取通过；Codex Chat / Responses、Claude Messages 与工具结果保真 4 项模型测试通过。维护时返回带中文说明、预计时长和 `Retry-After` 的 JSON 503。测试样本不代表未来零故障或所有长上下文的延迟保证。
+
 <a href="docs/RELEASE-0.0.7.md">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.7.svg" />
