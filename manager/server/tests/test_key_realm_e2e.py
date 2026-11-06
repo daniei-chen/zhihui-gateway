@@ -139,6 +139,16 @@ class GatewayRealmIsolationE2ETest(unittest.TestCase):
         self.assertEqual([m['id'] for m in gl.json()['data']], ['global:gpt-5.6-sol'])
         self.assertEqual([m['id'] for m in cn.json()['data']], ['glm-5.2', 'glm-5.1'])
 
+    def test_qoder_models_are_not_filtered_by_workbuddy_realm(self) -> None:
+        """qoder/trae 的模型 id 不属于 workbuddy cn/global；不能被 realm 裁空。"""
+        from server.routers.gateway import _scope_models
+        payload = {'object': 'list', 'data': [{'id': 'qwen3-coder'}, {'id': 'global:gpt-5.6-sol'}]}
+        key = {'realm': 'cn', 'models': []}
+        scoped = _scope_models(payload, key, platform='qoder')
+        self.assertEqual([m['id'] for m in scoped['data']], ['qwen3-coder', 'global:gpt-5.6-sol'])
+        workbuddy = _scope_models(payload, key, platform='workbuddy')
+        self.assertEqual([m['id'] for m in workbuddy['data']], ['qwen3-coder'])
+
 
 if __name__ == '__main__':
     unittest.main()

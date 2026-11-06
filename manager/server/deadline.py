@@ -407,7 +407,7 @@ async def decoded_bytes(response, maximum=None):
                 yield response.content[offset:offset+16384]
         iterator=buffered();encoding='identity'
     elif callable(getattr(response,'aiter_raw',None)):
-        iterator=response.aiter_raw(chunk_size=16384)
+        iterator=response.aiter_raw(chunk_size=None)
     else:
         iterator=response.aiter_bytes()  # decoded embedded transport
         encoding='identity'

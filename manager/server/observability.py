@@ -561,7 +561,7 @@ def _bounded(value: object, limit: int, *, ascii_only: bool = False) -> str | No
 
 
 def sse_error(message, *, code: object = None, hint: object = None,
-              upstream_request_id: object = None):
+              upstream_request_id: object = None, leading_separator: bool = False):
     """OpenAI 形状的流中错误帧（`error` 事件 + 终止 `[DONE]`）。
 
     U13 契约：流前 JSON 错误与流中 SSE 错误必须表达同一件事——
@@ -589,8 +589,9 @@ def sse_error(message, *, code: object = None, hint: object = None,
                    or _bounded(detail.get('upstream_request_id'), 128, ascii_only=True))
     if upstream_id:
         payload['upstream_request_id'] = upstream_id
-    return ('data: ' + json.dumps(payload, ensure_ascii=False)
-            + '\n\ndata: [DONE]\n\n').encode()
+    prefix = b'\n\n' if leading_separator else b''
+    return prefix + ('data: ' + json.dumps(payload, ensure_ascii=False)
+                     + '\n\ndata: [DONE]\n\n').encode()
 
 class StreamAudit:
     """Incremental UTF-8/SSE parser. Bounds an unfinished event, preserves raw transport."""

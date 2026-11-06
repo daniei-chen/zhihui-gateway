@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .. import db, keysvc, portalkeys, portalpolicy, portalservice as service, portalstore as store, security
+from ..iputil import client_ip
 from ..services import tencent
 from ..services.asyncwork import joined_thread
 
@@ -18,6 +19,38 @@ router = APIRouter(prefix='/api/portal', tags=['user-portal'])
 admin_router = APIRouter(prefix='/api/portal-admin', tags=['user-portal-admin'])
 COOKIE = 'zh-user-portal'
 _login_active = 0
+_PORTAL_IP_FAILS: dict[str, list] = {}
+_PORTAL_IP_LOCK = __import__('threading').Lock()
+_PORTAL_IP_MAX = 10
+_PORTAL_IP_WINDOW = 600
+
+
+def _portal_ip_blocked(ip: str) -> bool:
+    import time
+    with _PORTAL_IP_LOCK:
+        count, first = _PORTAL_IP_FAILS.get(ip, [0, 0.0])
+        return count >= _PORTAL_IP_MAX and time.time() - first < _PORTAL_IP_WINDOW
+
+
+def _portal_ip_record(ip: str) -> None:
+    import time
+    with _PORTAL_IP_LOCK:
+        now = time.time()
+        count, first = _PORTAL_IP_FAILS.get(ip, [0, now])
+        if now - first >= _PORTAL_IP_WINDOW:
+            count, first = 0, now
+        _PORTAL_IP_FAILS[ip] = [count + 1, first]
+        if len(_PORTAL_IP_FAILS) > 4096:
+            for key, value in list(_PORTAL_IP_FAILS.items()):
+                if now - value[1] >= _PORTAL_IP_WINDOW:
+                    _PORTAL_IP_FAILS.pop(key, None)
+            while len(_PORTAL_IP_FAILS) > 4096:
+                _PORTAL_IP_FAILS.pop(next(iter(_PORTAL_IP_FAILS)))
+
+
+def _portal_ip_clear(ip: str) -> None:
+    with _PORTAL_IP_LOCK:
+        _PORTAL_IP_FAILS.pop(ip, None)
 
 
 def same_origin(request):
@@ -63,6 +96,9 @@ async def login(request: Request, body: dict = Body(...)):
     username, password = body.get('username'), body.get('password')
     if not isinstance(username, str) or not isinstance(password, str) or len(username) > 64 or len(password) > 256:
         raise HTTPException(status_code=400, detail='登录格式无效')
+    ip = client_ip(request)
+    if _portal_ip_blocked(ip):
+        raise HTTPException(status_code=429, detail='登录尝试过多，请稍后重试')
     global _login_active
     if _login_active >= 4:
         raise HTTPException(status_code=429, detail='登录繁忙，请稍后重试')
@@ -85,6 +121,7 @@ async def login(request: Request, body: dict = Body(...)):
                         failures = fresh['failed_logins'] + 1
                         conn.execute('UPDATE portal_users SET failed_logins=?,blocked_until=? WHERE id=?',
                                      (failures, store.now() + 600 if failures >= 5 else 0, user['id']))
+                    _portal_ip_record(ip)
                     rejected = True
                 else:
                     conn.execute('UPDATE portal_users SET failed_logins=0,blocked_until=0 WHERE id=?', (user['id'],))
@@ -94,6 +131,7 @@ async def login(request: Request, body: dict = Body(...)):
         user = await joined_thread(verify)
     finally:
         _login_active -= 1
+    _portal_ip_clear(ip)
     # Adopt labels/default selection without issuing or rotating a credential.
     try:await joined_thread(portalkeys.adopt_or_create,user)
     except HTTPException as exc:

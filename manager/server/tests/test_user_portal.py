@@ -348,6 +348,25 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual((await self.call('GET', '/api/portal/me', headers=headers)).status_code, 401)
 
+    async def test_portal_login_limits_unknown_usernames_by_ip(self):
+        """没有 IP 维度时限速只护真实账号；未知用户名可无限探测。"""
+        import server.routers.portal as portal
+        with portal._PORTAL_IP_LOCK:
+            portal._PORTAL_IP_FAILS.clear()
+        try:
+            for index in range(portal._PORTAL_IP_MAX):
+                response = await self.call('POST', '/api/portal/login',
+                    headers={'origin': 'http://testserver'},
+                    json={'username': f'nobody-{index}', 'password': 'x'})
+                self.assertEqual(response.status_code, 401, response.text)
+            response = await self.call('POST', '/api/portal/login',
+                headers={'origin': 'http://testserver'},
+                json={'username': 'nobody-final', 'password': 'x'})
+            self.assertEqual(response.status_code, 429, response.text)
+        finally:
+            with portal._PORTAL_IP_LOCK:
+                portal._PORTAL_IP_FAILS.clear()
+
     async def test_admin_creates_normal_user_not_manager(self):
         response = await self.call('POST', '/api/portal-admin/users', headers=self.admin, json={'username': 'new-user', 'password': 'new-password-123'})
         self.assertEqual(response.status_code, 200, response.text)

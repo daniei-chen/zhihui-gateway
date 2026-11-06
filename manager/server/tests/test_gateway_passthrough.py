@@ -107,7 +107,7 @@ class GatewayPassthroughTest(unittest.TestCase):
         # are unrelated to response bytes and must not count as SSE rewrites.
         forwarding_src = inspect.getsource(gateway._chat)
         yields = [ln.strip() for ln in forwarding_src.splitlines() if ln.strip().startswith('yield ')]
-        self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text)','yield observability.sse_error(error_text)'],
+        self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text, leading_separator=True)','yield observability.sse_error(error_text, leading_separator=True)'],
                          f'转发热路径出现了非透传的 yield：{yields}')
 
     def test_no_tool_calls_handling_anywhere(self) -> None:
