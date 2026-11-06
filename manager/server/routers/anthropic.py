@@ -875,11 +875,13 @@ class _StreamTranslator:
                     raise ToolStreamError('tool identity changed after arguments started')
                 continue  # repeated complete metadata does not create another tool
             current = tool[name]
-            if value == current:
+            # 单字符重复仍按分片拼接（既有契约：a + a = aa）；
+            # 多字符完整重复才按上游重复元数据去重（call_1/Bash）。
+            if value == current and len(value) >= 2:
                 continue  # 上游重复完整 id/name，不拼成 call_1call_1 / BashBash
             if current and value.startswith(current) and len(value) > len(current):
                 merged = value  # 先分片、后补全：用补全值替换
-            elif current.endswith(value):
+            elif current.endswith(value) and len(value) >= 2:
                 merged = current  # 重复尾部片段
             else:
                 merged = current + value
