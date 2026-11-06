@@ -139,6 +139,14 @@
       "description": "Grace period before auto-closing a proved client-cancelled portal hold",
       "consumers": ["manager/server/portalwallet.py"]
     },
+    "WB_PORTAL_AUTO_CLOSE_REJECTED": {
+      "type": "string",
+      "sensitive": false,
+      "default": "1",
+      "choices": ["0", "1"],
+      "description": "Automatically release portal wallet holds for requests the gateway rejected before any supplier usage",
+      "consumers": ["manager/server/portalwallet.py"]
+    },
     "WB_BACKGROUND_JOBS": {
       "type": "boolean",
       "sensitive": false,
