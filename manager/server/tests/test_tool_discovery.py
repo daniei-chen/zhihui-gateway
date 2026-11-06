@@ -135,7 +135,7 @@ class DiscoveryContractTest(unittest.TestCase):
 
     def test_bad_search_is_a_terminal_failure(self):
         tr = R._StreamTranslator('m', 'r', bridge=R._ToolBridge([SEARCH]))
-        es = events(tr.feed(chunk('tool_search', '{"query":', finish='tool_calls')))
+        es = events(tr.feed(chunk('tool_search', '{"query":', finish='tool_calls',ident='call_search_fixture')))
         self.assertEqual(es[-1]['type'], 'response.failed')
         self.assertEqual(es[-1]['response']['error']['code'], 'invalid_tool_search_arguments')
         self.assertFalse(tr.items)
@@ -207,7 +207,7 @@ class DiscoveryContractTest(unittest.TestCase):
 
     def test_terminal_response_includes_late_usage_and_ignores_late_content(self):
         tr = R._StreamTranslator('m', 'r', bridge=R._ToolBridge([SEARCH]), defer_finish=True)
-        raw = tr.feed(chunk('tool_search', '{"query":"fixture"}', finish='tool_calls'))
+        raw = tr.feed(chunk('tool_search', '{"query":"fixture"}', finish='tool_calls',ident='call_search_fixture'))
         self.assertFalse(any(e['type'] == 'response.completed' for e in events(raw)))
         raw += tr.feed({'choices': [{'delta': {'content': 'ignore-after-finish'}}],
             'usage': {'prompt_tokens': 1234, 'completion_tokens': 20,

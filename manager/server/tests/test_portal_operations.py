@@ -156,7 +156,7 @@ class PortalOperationsTests(fixtures.PortalTests):
         self.assertEqual(store.overview('alice')['held_units'], 100 * store.SCALE)
         (config.DATA_DIR / '.spool-used').write_text('synthetic used marker')
         with mock.patch.object(ledgerreplay, 'spool_dir', return_value=self.root / 'missing-spool'):
-            self.assertIn('缺失', wallet.replay_problem())
+            self.assertIn('通道身份不可核实', wallet.replay_problem())
 
     async def test_known_receipt_cannot_be_manually_replaced_with_zero(self):
         await self.grant(); request = self.unknown()

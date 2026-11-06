@@ -39,20 +39,53 @@ def _guard_names(route) -> list[str]:
     return names
 
 
-def _iter_routes(routes):
+def _iter_routes(routes, prefix='', inherited_guards=()):
     """Expand FastAPI >=0.130 deferred `_IncludedRouter` wrappers.
 
-    Those wrappers keep the mounted APIRouter under ``original_router`` and do
-    not expose ``path`` themselves, so a flat walk of ``app.routes`` silently
-    under-counts the control plane.
+    Include prefixes and inherited dependencies are part of the effective
+    route. Dropping them reports /__qtg/api paths as public /api handlers.
     """
     for route in routes:
         if type(route).__name__ == '_IncludedRouter':
             original = getattr(route, 'original_router', None)
             if original is not None:
-                yield from _iter_routes(original.routes)
+                context = route.include_context
+                names = tuple(getattr(item.dependency, '__name__', repr(item.dependency))
+                              for item in context.dependencies)
+                yield from _iter_routes(original.routes, prefix + context.prefix,
+                                        inherited_guards + names)
             continue
-        yield route
+        path = getattr(route, 'path', None)
+        yield route, prefix + path if path is not None else None, inherited_guards
+
+
+def _auth_mechanism(module, name, path, guards):
+    """Describe source-visible gates; absence of Depends is not public access.
+
+    This is an inventory, not an authentication proof. Handler and middleware
+    classifications still require integration tests and manual control-flow
+    review; unknown routes deliberately stay unclassified.
+    """
+    if module.startswith('server.qtgcore.') and (path or '').startswith('/__qtg/'):
+        return 'manager_rewrite_middleware', True, False
+    if module == 'server.routers.portal' and 'current' in guards:
+        return 'portal_session_dependency', True, False
+    if any('admin' in guard or 'writer' in guard or 'read_scope' in guard
+           or guard == 'current_user' for guard in guards):
+        return 'manager_auth_dependency', True, False
+    if module in ('server.routers.gateway', 'server.routers.responses', 'server.routers.anthropic'):
+        if name == 'gateway_health':
+            return 'public_health', False, True
+        return 'handler_api_key_validation', True, False
+    if module == 'server.main' and name == 'prometheus_metrics':
+        return 'handler_metrics_token', True, False
+    if module == 'server.routers.redpackets' and name in ('claim_info', 'claim_draw'):
+        return 'public_claim_capability', False, True
+    if ((module == 'server.routers.auth' and name in ('login', 'logout', 'healthz', 'readyz'))
+            or (module == 'server.routers.portal' and name in ('login', 'logout'))
+            or (module == 'server.main' and name == 'public_ready')):
+        return 'public_session_or_health_entry', False, True
+    return 'review_required', None, None
 
 
 def main() -> int:
@@ -71,17 +104,16 @@ def main() -> int:
     from server.main import app  # noqa: E402
 
     rows = []
-    for route in _iter_routes(app.routes):
-        path = getattr(route, 'path', None)
+    for route, path, inherited_guards in _iter_routes(app.routes):
         methods = sorted(getattr(route, 'methods', set()) or [])
         endpoint = getattr(route, 'endpoint', None)
         module = getattr(endpoint, '__module__', '') if endpoint else ''
         name = getattr(endpoint, '__name__', '') if endpoint else getattr(route, 'name', '')
-        guards = _guard_names(route) if hasattr(route, 'dependant') else []
+        guards = list(inherited_guards) + (_guard_names(route) if hasattr(route, 'dependant') else [])
         admin = any('admin' in guard for guard in guards)
         writer = any('writer' in guard for guard in guards)
         read_scope = any('read_scope' in guard for guard in guards)
-        user = any(guard in ('current_user',) for guard in guards)
+        mechanism, authenticated, public = _auth_mechanism(module, name, path, guards)
         rows.append({
             'path': path,
             'methods': methods,
@@ -91,8 +123,9 @@ def main() -> int:
             'admin_required': admin,
             'write_scope_required': writer,
             'read_scope_accepted': read_scope,
-            'authenticated': bool(admin or writer or read_scope or user),
-            'public': not (admin or writer or read_scope or user),
+            'auth_mechanism': mechanism,
+            'authenticated': authenticated,
+            'public': public,
         })
 
     rows.sort(key=lambda item: (item['path'] or '', ','.join(item['methods'])))
@@ -101,15 +134,19 @@ def main() -> int:
         prefix = '/' + (row['path'] or '').strip('/').split('/')[0]
         by_prefix[prefix] = by_prefix.get(prefix, 0) + 1
     document = {
-        'schema': 'zhihui-control-plane-inventory/1',
+        'schema': 'zhihui-control-plane-inventory/2',
         'generated_at': __import__('datetime').datetime.now().astimezone().isoformat(),
         'source': 'manager/server/main.py::app',
         'reference_only_paths': list(REFERENCE_ONLY),
+        'interpretation': ('Mechanisms describe source-visible gates, not proof of enforcement. '
+                           'public=null means review required; missing Depends never proves anonymous access. '
+                           '/__qtg routes require the Manager rewrite middleware; public API aliases are separate.'),
         'totals': {
             'routes': len(rows),
-            'public': sum(1 for r in rows if r['public']),
+            'public': sum(1 for r in rows if r['public'] is True),
             'admin_required': sum(1 for r in rows if r['admin_required']),
-            'authenticated': sum(1 for r in rows if r['authenticated']),
+            'authenticated': sum(1 for r in rows if r['authenticated'] is True),
+            'review_required': sum(1 for r in rows if r['public'] is None),
         },
         'by_prefix': dict(sorted(by_prefix.items(), key=lambda kv: -kv[1])),
         'routes': rows,

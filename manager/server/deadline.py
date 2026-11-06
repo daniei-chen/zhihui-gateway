@@ -394,23 +394,102 @@ async def await_total(awaitable, deadline: Deadline):
         raise BudgetExceeded('total', 'request exceeded its total deadline') from exc
 
 
+async def decoded_bytes(response, maximum=None):
+    """Decode with a hard expansion limit, including gzip/deflate responses."""
+    import zlib
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    limit=maximum_bytes() if maximum is None else maximum
+    encoding=(getattr(response,'headers',{}) or {}).get('content-encoding','identity').strip().lower()
+    consumed=getattr(response,'is_stream_consumed',False)
+    if consumed:
+        async def buffered():
+            for offset in range(0,len(response.content),16384):
+                yield response.content[offset:offset+16384]
+        iterator=buffered();encoding='identity'
+    elif callable(getattr(response,'aiter_raw',None)):
+        iterator=response.aiter_raw(chunk_size=16384)
+    else:
+        iterator=response.aiter_bytes()  # decoded embedded transport
+        encoding='identity'
+    if encoding not in ('','identity','gzip','deflate'):
+        raise ValueError('Unsupported upstream content encoding')
+    decoder=zlib.decompressobj(16+zlib.MAX_WBITS if encoding=='gzip' else zlib.MAX_WBITS) if encoding in ('gzip','deflate') else None
+    encoded=decoded=0
+    async for raw in iterator:
+        encoded+=len(raw)
+        if encoded>limit+65536:
+            raise OutputLimitExceeded('Upstream encoded response exceeds the configured byte limit')
+        chunk=decoder.decompress(raw,limit-decoded+1) if decoder else raw
+        decoded+=len(chunk)
+        if decoded>limit:
+            raise OutputLimitExceeded('Upstream response exceeds the configured byte limit')
+        if decoder and (decoder.unconsumed_tail or decoder.unused_data):
+            raise OutputLimitExceeded('Upstream compressed response exceeds the supported limit')
+        if chunk:yield chunk
+    if decoder and not decoder.eof:
+        raise ValueError('Truncated compressed upstream response')
+
+
+async def buffered_post(client, url, *, content, headers, deadline):
+    """Bound decoded bytes and first-byte time before buffering a response."""
+    import httpx
+    from . import observability
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    request_headers=dict(headers)
+    request_headers['Accept-Encoding']='gzip, deflate, identity'
+    request=client.build_request('POST',url,content=content,headers=request_headers)
+    response=await await_headers(client.send(request,stream=True),deadline)
+    # A buffered request's first-byte SLO ends at response headers. Reading a
+    # complete generated body then uses idle/total time, not first-byte again.
+    deadline.mark_first_byte()
+    maximum=65536 if response.status_code>=400 else maximum_bytes()
+    data=bytearray()
+    try:
+        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
+            data.extend(chunk)
+        clean_headers={k:v for k,v in response.headers.items() if k.lower() not in
+                       ('content-encoding','content-length','transfer-encoding')}
+        return httpx.Response(response.status_code,headers=clean_headers,content=bytes(data),request=request)
+    except OutputLimitExceeded:
+        if response.status_code < 400:
+            raise
+        # The HTTP status is known even when the error payload is too large to
+        # trust/parse. Do not turn a provider's explicit 4xx into a retryable 502.
+        return httpx.Response(response.status_code,request=request,json={'error':{
+            'type':'upstream_invalid_body','code':'upstream_error_body_too_large',
+            'message':'Upstream error body exceeded the supported size limit',
+            'upstream_http_status':response.status_code,'retry_policy':{'retry':False}}})
+    finally:
+        await observability.close_stream(response,None,timeout=deadline.budgets.client_cancel_s)
+
+
 class ErrorBodyTooLarge(ValueError):
     pass
 
 
-async def read_error_body(response, deadline: Deadline, maximum: int = 65536) -> bytes:
+async def read_error_body(response, deadline: Deadline, maximum: int = 65536, *, preserve_status=False) -> bytes:
     """An error response is not exempt from the request's time/space budget."""
+    from .outputlimits import OutputLimitExceeded
     result = bytearray()
-    async for chunk in iterate_with_budgets(response.aiter_bytes(), deadline):
-        if len(result) + len(chunk) > maximum:
-            raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB')
-        result.extend(chunk)
+    try:
+        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
+            result.extend(chunk)
+    except OutputLimitExceeded as exc:
+        status=getattr(response,'status_code',0)
+        if preserve_status and 400<=status<=599:
+            import json
+            return json.dumps({'error':{'type':'upstream_invalid_body',
+                'code':'upstream_error_body_too_large','retry_policy':{'retry':False},
+                'message':'Upstream error body exceeded the supported size limit',
+                'upstream_http_status':status}}).encode()
+        raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB') from exc
     return bytes(result)
 
 
 async def iterate_with_budgets(iterator: AsyncIterator[bytes], deadline: Deadline, *,
                                on_first_chunk: Callable[[], None] | None = None,
-                               timeout_override: float | None = None) -> AsyncIterator[bytes]:
+                               timeout_override: float | None = None,
+                               maximum: int | None = None) -> AsyncIterator[bytes]:
     """在五类预算下迭代上游字节流。
 
     * 每块之前用 `asyncio.wait_for` 施加「首包 / 流中空闲 / 总时长」三者中最紧的
@@ -419,6 +498,9 @@ async def iterate_with_budgets(iterator: AsyncIterator[bytes], deadline: Deadlin
     * 不吞取消：`asyncio.CancelledError` 原样向上抛，保证客户端取消能一路传回
       上游（外层 `observability.close_stream` 负责有界关闭）。
     """
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    limit=maximum_bytes() if maximum is None else maximum
+    used=0
     while True:
         deadline.check_total()
         if timeout_override is not None:
@@ -431,6 +513,9 @@ async def iterate_with_budgets(iterator: AsyncIterator[bytes], deadline: Deadlin
             return
         except asyncio.TimeoutError as exc:
             raise BudgetExceeded(kind, f'等待 {timeout:.1f}s 超时') from exc
+        used+=len(chunk)
+        if used>limit:
+            raise OutputLimitExceeded('Upstream output exceeds the configured byte limit')
         if not deadline.first_byte_seen:
             deadline.mark_first_byte()
             deadline.phase = PHASE_STREAMING

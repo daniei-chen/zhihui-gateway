@@ -800,7 +800,7 @@ function pickValues(fields: Field[], source: Record<string, unknown> | undefined
         out[f.key] = Array.isArray(raw) ? hoursToText(raw) : hoursToText(f.def);
         break;
       case 'duration':
-        out[f.key] = durationOk(f, raw) ? String(raw).trim() : f.def;
+        out[f.key] = durationOk(f, raw) ? String(raw ?? '').trim() : f.def;
         break;
       case 'select':
         // 只接受枚举内的取值；配置里是别的值（上游改过枚举）时回退默认
@@ -914,7 +914,7 @@ const TOP_LEVEL_KEYS = new Set(['reasoning_as_content']);
  */
 export default function SettingsLayout({children}: {children: React.ReactNode}) {
   const {t, tp} = useI18n();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
   const {platform} = usePlatform();
   const isWorkbuddy = platform === 'workbuddy';
   /**
@@ -972,7 +972,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     cfg: () => settingsApi.upstream(),
     modelMap: () => settingsApi.modelMap(),
     users: () => settingsApi.users(),
-  }, [], [], {enabled: !independentTab});
+  }, [isAdmin, me?.username], [], {enabled: !independentTab});
 
   /** 配置：null = 还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const cfg: UpstreamConfig | null = values.cfg ?? null;
@@ -987,7 +987,25 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
   const usersFailed = 'users' in errors;
   /** 模型映射的乐观值：保存成功后、刷新落地前先显示新值（见 saveModelMap） */
   const [optimisticMap, setOptimisticMap] = useState<Record<string, string> | null>(null);
-  const modelMap: Record<string, string> = optimisticMap ?? values.modelMap ?? {};
+  const [mapBase, setMapBase] = useState<Record<string, string> | undefined>();
+  const [mapSaving, setMapSaving] = useState(false);
+  const mapFlight = useRef<symbol | null>(null);
+  const mapGeneration = useRef(0);
+  const mapRef = useRef(values.modelMap);
+  const invalidateMap = useCallback(() => {
+    mapGeneration.current++;
+    mapFlight.current = null;
+  }, []);
+  useEffect(() => { mapRef.current = values.modelMap; }, [values.modelMap]);
+  useEffect(() => {
+    setOptimisticMap(null);
+    setMapSaving(false);
+    return invalidateMap;
+  }, [isAdmin, me?.username, independentTab, invalidateMap]);
+  const modelMap = (optimisticMap && (mapSaving || mapBase === values.modelMap)
+    ? optimisticMap : values.modelMap) ?? {};
+  const modelMapReady = values.modelMap !== undefined && !('modelMap' in errors);
+  const modelMapWritable = isAdmin && modelMapReady && !mapSaving;
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   /** 模型列表来源：dynamic = 上游实时拉取，static = 上游内置回退表 */
@@ -1267,14 +1285,35 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 用户会以为没保存上（其实写操作是成功的）。与 `security` 页的 saveConfig 同一套。
    */
   async function saveModelMap(next: Record<string, string>) {
+    // The API replaces the entire map. An unknown/failed read must never become
+    // an empty object used as the base of a destructive replacement.
+    if (!modelMapWritable || mapFlight.current) return false;
+    const request = Symbol('model-map');
+    const generation = mapGeneration.current;
+    const current = () => generation === mapGeneration.current && mapFlight.current === request;
+    const previous = modelMap;
+    mapFlight.current = request;
+    setMapBase(values.modelMap);
+    setMapSaving(true);
     setOptimisticMap(next);
     try {
-      await settingsApi.saveModelMap(next);
+      const saved = await settingsApi.saveModelMap(next);
+      if (!current()) return false;
+      setMapBase(mapRef.current);
+      setOptimisticMap(saved);
       notify.ok(t('settings.modelMapSaved'));
-      if (await reload()) setOptimisticMap(null);
+      if (await reload() && current()) setOptimisticMap(null);
+      return current();
     } catch (e) {
-      setOptimisticMap(null);
+      if (!current()) return false;
+      setOptimisticMap(previous);
       notify.err(errText(e));
+      return false;
+    } finally {
+      if (current()) {
+        mapFlight.current = null;
+        setMapSaving(false);
+      }
     }
   }
 
@@ -1969,6 +2008,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
         {/* ═══ 模型映射 ═══ */}
         <TabsContent value="models" className="mt-4 space-y-4">
+          {!modelMapReady && <LoadError message={t('settings.cfgNotLoaded')} onRetry={reload} />}
           <div className="rounded-[20px] bg-muted p-4">
             <div className="mb-1 text-sm font-medium">{t('settings.mapNewAlias')}</div>
             <div className="mb-3 text-[11px] text-muted-foreground">
@@ -1977,11 +2017,11 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
             <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
               <div className="space-y-1.5">
                 <Label className="text-[11px] text-muted-foreground">{t('settings.mapAlias')}</Label>
-                <Input value={mapAlias} onChange={(e) => setMapAlias(e.target.value)} placeholder="gpt-4o-mini" className="bg-background" disabled={!isAdmin} />
+                <Input value={mapAlias} onChange={(e) => setMapAlias(e.target.value)} placeholder="gpt-4o-mini" className="bg-background" disabled={!modelMapWritable} />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[11px] text-muted-foreground">{t('settings.mapTarget')}</Label>
-                <Select value={mapTarget} onValueChange={setMapTarget} disabled={!isAdmin}>
+                <Select value={mapTarget} onValueChange={setMapTarget} disabled={!modelMapWritable}>
                   <SelectTrigger className="bg-background" aria-label={t('settings.mapTarget')}><SelectValue placeholder={t('chat.selectModel')} /></SelectTrigger>
                   <SelectContent>
                     {models.map((m) => (
@@ -1993,11 +2033,12 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               <div className="sm:col-span-2">
                 <Button
                   className="rounded-full"
-                  disabled={!isAdmin || !mapAlias.trim() || !mapTarget}
-                  onClick={() => {
-                    saveModelMap({...modelMap, [mapAlias.trim()]: mapTarget});
-                    setMapAlias('');
-                    setMapTarget('');
+                  disabled={!modelMapWritable || !mapAlias.trim() || !mapTarget}
+                  onClick={async () => {
+                    if (await saveModelMap({...modelMap, [mapAlias.trim()]: mapTarget})) {
+                      setMapAlias('');
+                      setMapTarget('');
+                    }
                   }}
                 >
                   <Plus />
@@ -2039,6 +2080,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7 rounded-md text-red-500 hover:text-red-600"
+                          disabled={!modelMapWritable}
                           onClick={() => {
                             const next = {...modelMap};
                             delete next[alias];
@@ -2053,7 +2095,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                 ))}
               </TableBody>
             </Table>
-            {!Object.keys(modelMap).length && (
+            {modelMapReady && !Object.keys(modelMap).length && (
               <div className="py-10 text-center text-xs text-muted-foreground">
                 {t('settings.mapEmpty')}
               </div>

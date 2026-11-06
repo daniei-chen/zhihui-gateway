@@ -22,6 +22,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import stat
 import time
 import uuid
 from decimal import Decimal
@@ -77,25 +79,48 @@ def _dead_dir() -> Path:
 
 
 def _fsync_dir(path: Path) -> None:
-    try:
-        fd = os.open(str(path), os.O_RDONLY)
-    except OSError:
+    # POSIX rename durability requires the directory entry to be synced too.
+    # A failed fsync is unknown persistence, not a successful spill receipt.
+    if os.name == 'nt':
         return
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
         os.fsync(fd)
-    except OSError:
-        pass
     finally:
         os.close(fd)
 
 
-def backlog() -> int:
-    """待重放回执条数；目录不可读时返回 0（就绪判定另有 database_writable）。"""
-    directory = spool_dir()
+def _receipt_count(directory: Path) -> int:
+    """Distinguish an absent directory from unreadable/unsafe evidence.
+
+    pathlib.glob may suppress directory access errors. Those errors cannot be
+    interpreted as an empty ledger or a zero-dead-letter admission proof.
+    """
     try:
-        return sum(1 for _ in directory.glob('*.json'))
-    except OSError:
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            return -1
+        count = 0
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name.startswith('.receipt-') and entry.name.endswith('.tmp'):
+                    # A publication may be active or may have failed after its
+                    # file sync. Neither is proof of an empty/recovered channel.
+                    return -1
+                if entry.name.endswith('.json'):
+                    if not entry.is_file(follow_symlinks=False):
+                        return -1
+                    count += 1
+        return count
+    except FileNotFoundError:
         return 0
+    except OSError:
+        return -1
+
+
+def backlog() -> int:
+    """待重放回执条数；不存在为 0，不可读为 -1（未知，禁止放行）。"""
+    return _receipt_count(spool_dir())
 
 
 def backpressure_limit() -> int:
@@ -103,7 +128,8 @@ def backpressure_limit() -> int:
 
 
 def should_backpressure() -> bool:
-    return backlog() >= backpressure_limit()
+    pending = backlog()
+    return pending < 0 or pending >= backpressure_limit()
 
 
 def build_entry(facts: dict, *, config_hash: str | None = None,
@@ -125,38 +151,137 @@ def build_entry(facts: dict, *, config_hash: str | None = None,
     }
 
 
+def _receipt_identity(entry: dict) -> str:
+    """Compare accounting evidence, not replay bookkeeping or measured timings."""
+    if (not isinstance(entry, dict) or entry.get('schema') != SCHEMA_VERSION
+            or not isinstance(entry.get('facts'), dict)
+            or not isinstance(entry.get('budget', {}), dict)):
+        raise ValueError('invalid receipt envelope')
+    volatile = {'latency_ms', 'first_token_ms', 'first_byte_ms'}
+    identity = {key: entry.get(key) for key in ('schema', 'config_hash', 'release_id')}
+    identity['facts'] = {key: value for key, value in entry['facts'].items() if key not in volatile}
+    if entry['facts'].get('ts') is None:
+        # Legacy receipts without ts use spilled_at to select the accounting
+        # instant. In that case it is evidence, rather than bookkeeping.
+        identity['effective_ts'] = entry.get('spilled_at')
+    identity['diagnostics'] = entry.get('diagnostics', {})
+    identity['budget'] = entry.get('budget', {})
+    return json.dumps(identity, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+
+def _read_receipt(path: Path) -> dict:
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024
+            or getattr(info, 'st_file_attributes', 0) & 0x400):
+        raise ValueError('unsafe or oversized receipt')
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(fd, 'rb') as handle:
+        current = os.fstat(handle.fileno())
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError('receipt changed during verification')
+        raw = handle.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError('receipt exceeds size limit')
+    value = json.loads(raw)
+    _receipt_identity(value)
+    return value
+
+
+def _publish_receipt(target: Path, payload: bytes) -> None:
+    """Publish complete bytes without overwriting another writer's evidence."""
+    tmp = target.parent / ('.receipt-' + uuid.uuid4().hex + '.tmp')
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    cleanup = False
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            cleanup = True  # caller compares and retains a conflict separately
+            raise
+        cleanup = True
+    finally:
+        # On another publication failure retain the complete/partial evidence.
+        # Its presence persistently blocks admission and paired backup until a
+        # reviewed recovery reconciles it; a write probe cannot clear it.
+        if cleanup:tmp.unlink(missing_ok=True)
+
+
+def _retain_spill_conflict(payload: bytes, directory: Path, name: str) -> None:
+    dead = directory / 'dead'
+    dead.mkdir(mode=0o700, exist_ok=True)
+    info = dead.lstat()
+    if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+        raise OSError('unsafe dead-letter directory')
+    # Dead letters are counted by admission and never automatically replayed.
+    # A distinct schema also prevents accidental application if moved to root.
+    target = dead / (name[:90] + '-conflict-' + uuid.uuid4().hex + '.json')
+    evidence = {'schema': 'spill-conflict-v1', 'request_id': name,
+                'reason': 'existing receipt is unsafe or differs from incoming evidence',
+                'incoming': json.loads(payload)}
+    _publish_receipt(target, json.dumps(evidence, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode())
+    _fsync_dir(dead)
+    _fsync_dir(directory)
+
+
+def _move_dead(path: Path) -> None:
+    """Retain every contradictory receipt, including repeated late conflicts."""
+    directory = _dead_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+        raise OSError('unsafe dead-letter directory')
+    target = directory / (path.stem[:100] + '-' + uuid.uuid4().hex + '.json')
+    os.link(path, target, follow_symlinks=False)
+    _fsync_dir(directory)
+    path.unlink()
+    _fsync_dir(path.parent)
+
+
 def spill(entry: dict) -> str | None:
     """原子写入一条回执；成功返回路径，失败返回 None（调用方据此降级）。
 
     文件名用 request_id（无则随机），因此同一请求反复失败只会留下一份回执。
     """
     facts = entry.get('facts') or {}
-    name = facts.get('request_id') or ('spool-' + uuid.uuid4().hex)
+    name = str(facts.get('request_id') or ('spool-' + uuid.uuid4().hex))
     directory = spool_dir()
-    target = directory / (str(name) + '.json')
     try:
+        if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', name) or name in ('.', '..'):
+            raise ValueError('unsafe receipt execution id')
+        target = directory / (name + '.json')
+        expected = _receipt_identity(entry)
+        payload = json.dumps(entry, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        if len(payload) > 1024 * 1024:
+            raise ValueError('receipt exceeds size limit')
+        from . import spoolidentity
+        identity = spoolidentity.check(directory, create=True)
+        if not identity['ok']:
+            raise OSError(identity['reason'])
         directory.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            return str(target)
-        payload = json.dumps(entry, ensure_ascii=False, separators=(',', ':'))
-        tmp = directory / (str(name) + '.json.tmp')
-        with open(tmp, 'w', encoding='utf-8') as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, target)
+        try:
+            _publish_receipt(target, payload)
+        except FileExistsError:
+            try:
+                matches = _receipt_identity(_read_receipt(target)) == expected
+            except (OSError, ValueError, TypeError):
+                matches = False
+            if not matches:
+                _retain_spill_conflict(payload, directory, name)
+                log.error('ledger spool conflict retained request_id=%s', facts.get('request_id'))
+                return None
+        # Also sync on a matching retry: a previous publication may have
+        # completed but failed the directory sync. Existence is not durability.
         _fsync_dir(directory)
         # N02：记下「这个通道确实被用过」。目录**从未使用**与**用过之后不见了**
         # 是两件事：前者是常态（功能没触发），后者是降级（写不进/被删/权限变了）。
         _mark_used(directory)
         return str(target)
-    except OSError:
+    except (OSError, ValueError, TypeError):
         log.exception('ledger spool write failed request_id=%s', facts.get('request_id'))
-        try:
-            if tmp.exists():  # noqa: F821 - 仅在 mkdir 成功后定义
-                tmp.unlink()
-        except (OSError, NameError):
-            pass
         return None
 
 
@@ -216,7 +341,8 @@ def _settle(entry: dict) -> dict:
     known = facts.get('terminal_state') == 'completed' and complete
     if quota and (quota['quota_credit'] or quota['daily_credit_quota']) and facts.get('credit') is None:
         known = False
-    next_state = 'settled' if known else 'released' if row['state'] == 'reserved' else 'unknown'
+    next_state = ('settled' if known else 'released'
+                  if row['state'] == 'reserved' and facts.get('usage_source') != 'upstream' else 'unknown')
     db.execute(
         'UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? '
         'WHERE request_id=?',
@@ -285,9 +411,18 @@ def apply(entry: dict, receipt_id: str) -> str:
     facts = entry.get('facts') or {}
     request_id = facts.get('request_id')
     with db.transaction():
-        if db.query_one('SELECT 1 FROM ledger_receipts WHERE receipt_id=?', (receipt_id,)):
-            return 'duplicate'
+        receipt = db.query_one('SELECT request_id FROM ledger_receipts WHERE receipt_id=?', (receipt_id,))
         existing = db.query_one('SELECT * FROM request_logs WHERE request_id=?', (request_id,)) if request_id else None
+        if receipt:
+            if receipt['request_id'] != request_id or existing is None:
+                raise ReplayConflict('duplicate receipt cannot be matched to committed request facts')
+            _validate_existing(facts, existing)
+            has_portal = db.query_one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='portal_spend_receipts'")
+            portal = db.query_one('SELECT owner_id FROM portal_spend_receipts WHERE request_id=?', (request_id,)) if has_portal else None
+            supplied_owner = (entry.get('budget') or {}).get('portal_owner') or None
+            if supplied_owner != (portal['owner_id'] if portal else None):
+                raise ReplayConflict('duplicate receipt differs from committed wallet owner')
+            return 'duplicate'
         if existing is None:
             if request_id and db.query_one('SELECT 1 FROM usage_events WHERE request_id=?', (request_id,)):
                 raise ReplayConflict('immutable usage exists without its request log; review required')
@@ -327,8 +462,28 @@ def _validate_existing(facts: dict, existing) -> None:
 
 
 def replay_batch(limit: int | None = None) -> dict:
+    """Only one replay reader may own read→apply→remove at a time."""
+    from .services import credentiallease
+    root = Path(config.DATA_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        # Keep this private lock outside the snapshotted receipt namespace.
+        with credentiallease.mutation(root / '.ledger-replay'):
+            return _replay_batch(limit)
+    except OSError as exc:
+        return {'scanned': 0, 'applied': 0, 'duplicate': 0, 'failed': 1,
+                'dead': 0, 'backlog': backlog(), 'dead_pending': dead_letters(),
+                'channel_error': type(exc).__name__, 'replay_busy_or_unavailable': True}
+
+
+def _replay_batch(limit: int | None = None) -> dict:
     """重放一批回执：成功即删除文件；失败保留并累计 attempts，超限移入 dead/。"""
     directory = spool_dir()
+    from . import spoolidentity
+    identity = spoolidentity.check(directory)
+    if not identity['ok']:
+        return {'applied': 0, 'duplicate': 0, 'failed': 1, 'dead': 0,
+                'pending': backlog(), 'channel_error': identity['reason']}
     batch = limit if limit is not None else _env_int('WB_LEDGER_REPLAY_BATCH', 50)
     try:
         files = sorted(directory.glob('*.json'))[:batch]
@@ -346,8 +501,7 @@ def replay_batch(limit: int | None = None) -> dict:
             failed += 1
             log.exception('ledger receipt unreadable file=%s -> dead letter', path.name)
             try:
-                _dead_dir().mkdir(parents=True, exist_ok=True)
-                os.replace(path, _dead_dir() / path.name)
+                _move_dead(path)
                 dead += 1
             except OSError:
                 log.exception('failed to move unreadable receipt file=%s', path.name)
@@ -356,8 +510,7 @@ def replay_batch(limit: int | None = None) -> dict:
             failed += 1
             log.error('ledger receipt schema unsupported file=%s -> dead letter', path.name)
             try:
-                _dead_dir().mkdir(parents=True, exist_ok=True)
-                os.replace(path, _dead_dir() / path.name)
+                _move_dead(path)
                 dead += 1
             except OSError:
                 log.exception('failed to move unsupported receipt file=%s', path.name)
@@ -369,15 +522,14 @@ def replay_batch(limit: int | None = None) -> dict:
             else:
                 duplicate += 1
             path.unlink()
-        except Exception:  # noqa: BLE001 - 单条失败不中断整批
+        except Exception as exc:  # noqa: BLE001 - 单条失败不中断整批
             failed += 1
             log.exception('ledger replay failed file=%s', path.name)
             try:
-                attempts = int(entry.get('attempts') or 0) + 1
+                attempts = MAX_ATTEMPTS if isinstance(exc, ReplayConflict) else int(entry.get('attempts') or 0) + 1
                 entry['attempts'] = attempts
                 if attempts >= MAX_ATTEMPTS:
-                    _dead_dir().mkdir(parents=True, exist_ok=True)
-                    os.replace(path, _dead_dir() / path.name)
+                    _move_dead(path)
                     dead += 1
                     log.error('ledger replay moved to dead letter file=%s attempts=%d',
                               path.name, attempts)
@@ -466,11 +618,7 @@ def dead_letters() -> int:
     读不到就返回 -1（= 不确定），由调用方按"不健康"处理 —— **不能**返回 0：
     0 的意思是"确认没有死信"，而读不到并不等于没有。
     """
-    directory = _dead_dir()
-    try:
-        return sum(1 for _ in directory.glob('*.json'))
-    except OSError:
-        return -1
+    return _receipt_count(_dead_dir())
 
 
 def dead_dispositions() -> int:
@@ -494,6 +642,10 @@ def channel_probe(*, force: bool = False) -> dict:
     """
     now = time.monotonic()
     directory = spool_dir()
+    from . import spoolidentity
+    identity = spoolidentity.check(directory, create=True)
+    if not identity['ok']:
+        return {'ok': False, 'reason': identity['reason']}
     cache_key = str(directory)
     if (not force and _PROBE_CACHE['ok'] is not None
             and _PROBE_CACHE['key'] == cache_key
@@ -508,6 +660,7 @@ def channel_probe(*, force: bool = False) -> dict:
             handle.write('probe')
             handle.flush()
             os.fsync(handle.fileno())
+        _fsync_dir(directory)
         ok = True
     except OSError as exc:
         reason = f'{type(exc).__name__}: {exc}'[:200]
@@ -520,7 +673,7 @@ def channel_probe(*, force: bool = False) -> dict:
     return {'ok': ok, 'reason': reason}
 
 
-def channel_state(*, force_probe: bool = False) -> dict:
+def channel_state(*, force_probe: bool = False, include_dispositions: bool = True) -> dict:
     """回执通道的**持久**状态（给就绪判定与准入用）。
 
     `state`：
@@ -534,8 +687,7 @@ def channel_state(*, force_probe: bool = False) -> dict:
     except OSError:
         exists = False
     used = _spool_used(directory)
-    # **先探测再定性**：目录"不存在"有两种含义 —— 从没用过（正常）与**建不出来**
-    # （只读挂载/父路径不是目录/配额满）。只有写探测成功才能认定是前者。
+    # Verify the registered identity BEFORE any write probe can create a directory.
     probe = channel_probe(force=force_probe)
     pending = backlog()
     dead = dead_letters()
@@ -561,7 +713,9 @@ def channel_state(*, force_probe: bool = False) -> dict:
         'writable': bool(probe['ok']),
         'pending': pending,
         'dead': dead,
-        'dead_dispositions': dead_dispositions(),
+        # Historical disposition counts are a diagnostics field, not an
+        # admission predicate. Do not reread this unbounded history per request.
+        'dead_dispositions': dead_dispositions() if include_dispositions else None,
         'reason': reason or None,
         'checked_at': int(time.time()),
     }
@@ -573,10 +727,10 @@ def admission_block() -> dict:
     返回 `{'blocked', 'code', 'reason'}`；`code` 是稳定可分支的字符串，且三类
     都是**可恢复**的（积压会重放掉、死信可处置、目录可修复后探测通过即恢复）。
     """
-    state = channel_state()
-    if not state['writable']:
+    state = channel_state(include_dispositions=False)
+    if not state['writable'] or state['pending'] < 0 or state['dead'] < 0:
         return {'blocked': True, 'code': CODE_SPOOL_UNWRITABLE,
-                'reason': ('账本回执通道不可写（%s），暂停新生成以免事实丢失；'
+                'reason': ('账本回执通道无法核实读写状态（%s），暂停新生成以免事实丢失；'
                            '修复目录/磁盘后可自动恢复' % (state['reason'] or '写探测失败'))}
     if state['dead'] > 0:
         return {'blocked': True, 'code': CODE_DEAD_PENDING,
@@ -631,6 +785,7 @@ def dispose_dead_letters(actor: str, reason: str) -> dict:
                 disposed += 1
             except OSError:
                 log.exception('dispose dead letter failed file=%s', path.name)
+    _fsync_dir(processed)
     _fsync_dir(directory)
     return {'disposed': disposed, 'remaining': dead_letters(),
             'dispositions': dead_dispositions(), 'ledger': str(ledger_path)}

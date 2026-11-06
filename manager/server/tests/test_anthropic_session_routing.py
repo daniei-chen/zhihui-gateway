@@ -131,6 +131,9 @@ class SessionForwardingTests(unittest.IsolatedAsyncioTestCase):
                 return object()
 
             async def send(self, req, **kwargs):
+                if not stream:
+                    import httpx
+                    return httpx.Response(200,json=data)
                 return Response()
 
             async def aclose(self):

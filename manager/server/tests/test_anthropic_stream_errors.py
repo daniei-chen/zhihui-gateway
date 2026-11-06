@@ -143,7 +143,7 @@ class StreamErrorPassthroughTest(unittest.TestCase):
         """Pre-stream rejection is non-2xx JSON, per the Messages API contract.
 
         https://platform.claude.com/docs/en/api/errors
-        Mid-stream errors still require error before message_stop (next test).
+        Mid-stream errors end the stream without a successful message_stop.
         """
         r = self._post_stream(400, self._SHORT_ERROR)
         self.assertEqual(r.status_code, 400)
@@ -151,7 +151,7 @@ class StreamErrorPassthroughTest(unittest.TestCase):
         self.assertNotIn('event: message_stop', r.text)
         self.assertIn('does not exist', r.json()['error']['message'])
 
-    def test_midstream_error_precedes_message_stop(self) -> None:
+    def test_midstream_error_has_no_success_message_stop(self) -> None:
         """状态码 **200** 但中途回 error 帧：同样要 error 在前。
 
         与上面「上游直接报错」是同一原则的另一个入口——收尾逻辑只有一份，
@@ -165,8 +165,7 @@ class StreamErrorPassthroughTest(unittest.TestCase):
         i_err = r.text.find('event: error')
         i_stop = r.text.find('event: message_stop')
         self.assertNotEqual(i_err, -1, '中途出错必须告诉客户端，否则只剩「空回复」')
-        self.assertNotEqual(i_stop, -1, '仍要给出收尾事件，否则客户端会一直等')
-        self.assertLess(i_err, i_stop, 'error 发在 message_stop 之后——客户端读到 stop 就不再读了')
+        self.assertEqual(i_stop, -1, '错误流不能额外发送成功 message_stop；传输结束即终止')
         self.assertIn('upstream blew up', r.text, '错误内容要透传')
 
     def test_large_error_body_also_works(self) -> None:

@@ -56,7 +56,7 @@
 <div class="nav-actions"><a class="nav-source" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank" aria-label="在 GitHub 查看智汇网关源码">GitHub <span aria-hidden="true">↗</span></a></div>
 <button aria-controls="mobileMenu" aria-expanded="false" aria-label="打开菜单" class="mobile-trigger" id="mobileTrigger" type="button"><svg fill="none" height="23" stroke="currentColor" stroke-linecap="round" stroke-width="1.7" viewbox="0 0 24 24" width="23"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
 </nav>
-<div class="mobile-menu" id="mobileMenu"><a href="#task-scene">开发任务演示</a><a href="#ride-preview">专注向前</a><a href="#product">产品</a><a href="#platforms">平台接入</a><a href="#routing">路由机制</a><a href="#ledger">计量账本</a><a href="#preview">首屏工作台</a><a href="#setup">快速接入</a><a href="#boundary">安全边界</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码</a><a href="/dashboard/">进入控制台 ↗</a></div>
+<div class="mobile-menu" id="mobileMenu"><a href="#task-scene">开发任务演示</a><a href="#ride-preview">专注向前</a><a href="#product">产品</a><a href="#platforms">平台接入</a><a href="#routing">路由机制</a><a href="#ledger">计量账本</a><a href="#preview">首屏工作台</a><a href="#setup">快速接入</a><a href="#boundary">安全边界</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码</a><a href="/portal/">用户登录 ↗</a><a href="/login/">管理员登录 ↗</a></div>
 </div>
 <header aria-labelledby="hero-title" class="hero container">
 <div class="hero-copy">
@@ -64,7 +64,7 @@
 <div class="hero-signature"><svg aria-hidden="true" class="hero-signature-mark" fill="none" viewbox="0 0 220 175"><defs><lineargradient gradientunits="userSpaceOnUse" id="heroZShade" x1="28" x2="182" y1="15" y2="162"><stop stop-color="#B3CDFF"></stop><stop offset=".5" stop-color="#7D98F5"></stop><stop offset="1" stop-color="#9DABF8"></stop></lineargradient><lineargradient gradientunits="userSpaceOnUse" id="heroZLight" x1="58" x2="167" y1="20" y2="139"><stop stop-color="#F8FCFF"></stop><stop offset="1" stop-color="#E6EDFF"></stop></lineargradient></defs><path d="M49 32H174L47 143H174" opacity=".88" stroke="url(#heroZLight)" stroke-linecap="round" stroke-linejoin="round" stroke-width="30"></path><path d="M49 32H174L47 143H174" stroke="url(#heroZShade)" stroke-linecap="round" stroke-linejoin="round" stroke-width="21"></path><path d="M49 23H174" opacity=".75" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2"></path></svg><p class="hero-kicker">三种入口，同一个智汇。</p></div>
 <h1 id="hero-title"><span class="muted"><span class="zh23-phrase">让灵感出发，</span><span class="zh23-phrase">让工作向前。</span></span></h1>
 <p class="intro">WorkBuddy、Qoder、Trae，汇入一个清晰入口。</p>
-<div class="hero-actions"><a class="btn btn-dark" href="/dashboard/" aria-label="进入智汇网关控制台">进入控制台 <span aria-hidden="true">↗</span></a><a class="hero-explore" href="#task-scene">向下探索 <span aria-hidden="true">↓</span></a></div>
+<div class="hero-actions"><a class="btn btn-dark" href="/login/" aria-label="管理员登录智汇控制台">管理员登录 <span aria-hidden="true">↗</span></a><a class="hero-explore" href="/portal/" aria-label="用户登录智汇工作台">用户登录 <span aria-hidden="true">↗</span></a></div>
 <div class="hero-tagline"><span><i aria-hidden="true"></i>三种入口</span><span><i aria-hidden="true"></i>独立授权</span><span><i aria-hidden="true"></i>用量可查</span><button class="motion-control" id="zh-motion-control" type="button" aria-pressed="false">暂停动效</button></div>
 </div>
 <div class="visual-wrap" id="preview" data-motion-scope>
@@ -91,12 +91,12 @@
       <a class="story-link" href="#platforms">找到适合你的入口 <span aria-hidden="true">↗</span></a>
       <div class="scene-controls"><span>开发任务动画 · 示例内容</span><button id="taskMotionControl" type="button" aria-pressed="false">暂停演示</button></div>
     </div>
-    <div class="task-frame-wrap reveal"><iframe id="taskWorkspace" src="/home-assets/r-37e06d65f8431be8231d/animations/task-workspace.html" title="智汇工作空间：上下文汇聚、实现、验证与回执的动态示例" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="-1"></iframe></div>
+    <div class="task-frame-wrap reveal"><iframe id="taskWorkspace" src="/home-assets/r-bb0b5ad4c7a0582efcf4/animations/task-workspace.html" title="智汇工作空间：上下文汇聚、实现、验证与回执的动态示例" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="-1"></iframe></div>
   </div>
 </section>
 <section class="story-screen ride-screen" id="ride-preview" data-motion-scope aria-labelledby="ride-title">
   <div class="container ride-layout">
-    <div class="ride-art reveal"><iframe loading="lazy" id="pelicanRide" src="/home-assets/r-37e06d65f8431be8231d/animations/velo-coast.html" title="海岸夕照：鹧鸪骑着带花篮的复古单车，可拖动旋转" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="0"></iframe></div>
+    <div class="ride-art reveal"><iframe loading="lazy" id="pelicanRide" src="/home-assets/r-bb0b5ad4c7a0582efcf4/animations/velo-coast.html" title="海岸夕照：鹧鸪骑着带花篮的复古单车，可拖动旋转" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="0"></iframe></div>
     <div class="story-copy reveal">
       <div class="overline">03 / A LITTLE JOY IN MOTION</div>
       <h2 id="ride-title">向着海风，<br>轻快创造。</h2>
@@ -222,14 +222,14 @@
 
 <section class="section" id="boundary" data-motion-scope><div class="container"><div class="boundary"><div class="reveal"><div class="section-eyebrow">PRIVATE BY DESIGN</div><h2 class="section-title">连接更多，边界依然清楚。</h2><p class="section-description">在你的授权范围内，使用你的工具与资源。</p><div style="margin-top:27px"><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway/blob/main/README.md" rel="noopener noreferrer" target="_blank">阅读项目 README <span>↗</span></a></div></div><div class="boundary-points reveal"><div class="boundary-item"><div class="boundary-number">01</div><div><h3>授权访问</h3><p>仅向获授权用户开放，按权限使用。</p></div></div><div class="boundary-item"><div class="boundary-number">02</div><div><h3>凭据受控</h3><p>凭据在控制台中管理，公开页面使用示例。</p></div></div><div class="boundary-item"><div class="boundary-number">03</div><div><h3>真实有据</h3><p>界面预览与运行状态分开呈现。</p></div></div></div></div></div></section>
 <section class="faq-section" id="faq" data-motion-scope><div class="container"><div class="faq-layout"><div class="reveal"><div class="overline">QUESTIONS, ANSWERED</div><h2 class="big-title">开始之前，了解这些。</h2><p class="section-lead">工具、授权与数据，一次说清。</p></div><div class="faq-list reveal">
-<div class="faq-item open"><button aria-expanded="true" class="faq-question" type="button">智汇是公开注册的 API 平台吗？<span>+</span></button><div class="faq-answer"><p>不是。仅面向本人及获授权用户，不提供公开注册。</p></div></div>
+<div class="faq-item open"><button aria-expanded="true" class="faq-question" type="button">智汇是公开注册的 API 平台吗？<span>+</span></button><div class="faq-answer"><p>仅面向本人及获授权用户。已有账号可直接登录，新用户需要管理员提供的一次性邀请码；注册同时受浏览器设备登记与限流保护。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">三种入口可以混用账号和权限吗？<span>+</span></button><div class="faq-answer"><p>请按各入口的授权与接入配置使用。WorkBuddy、Qoder、Trae 的配置和权限不应直接互换。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">怎样确认当前能用的模型？<span>+</span></button><div class="faq-answer"><p>在控制台查看当前模型范围。可用性会随工具、授权、额度和运行状态变化。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">用量暂时缺失，会算成零吗？<span>+</span></button><div class="faq-answer"><p>不会。未知用量保留为 unknown，待核对后再处理。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">网站会展示我的 API Key 吗？<span>+</span></button><div class="faq-answer"><p>不会。公开首页不读取真实 Key；密钥在授权后的控制台中管理。</p></div></div>
 <div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">动画和工作台预览是实时运行画面吗？<span>+</span></button><div class="faq-answer"><p>开发任务动画展示工作过程，图表数字为演示值；工作台预览使用合成示例数据。真实账号与用量请登录查看。</p></div></div>
 </div></div></div></section>
-<section class="footcta" data-motion-scope><div class="container reveal"><div class="section-eyebrow">ZHIHUI / UNIFIED AI GATEWAY</div><h2>下一个想法，从智汇出发。</h2><p>三种入口，连接你的下一步。</p><div class="hero-actions"><a class="btn btn-dark" href="/dashboard/" rel="noopener noreferrer" target="_blank">进入控制台 ↗</a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码 ↗</a></div></div></section>
+<section class="footcta" data-motion-scope><div class="container reveal"><div class="section-eyebrow">ZHIHUI / UNIFIED AI GATEWAY</div><h2>下一个想法，从智汇出发。</h2><p>用户与管理员，各有清晰入口。</p><div class="hero-actions"><a class="btn btn-dark" href="/login/">管理员登录 ↗</a><a class="btn btn-soft" href="/portal/">用户登录 ↗</a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码 ↗</a></div></div></section>
 </main>
 <footer class="footer"><div class="container footer-content"><div><a class="logo" href="#top"><svg aria-hidden="true" class="logo-sign" fill="none" viewbox="0 0 40 40"><defs><lineargradient gradientunits="userSpaceOnUse" id="footerBrandZGradient" x1="6" x2="34" y1="5" y2="35"><stop stop-color="#7391FA"></stop><stop offset="1" stop-color="#4D6CEB"></stop></lineargradient></defs><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="url(#footerBrandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"></path></svg> 智汇</a><div class="footer-meta">ZHIHUI · 智汇网关<br/>WorkBuddy · Qoder · Trae</div></div><div class="footer-links"><a href="#platforms">平台</a><a href="#ledger">账本</a><a href="#preview">控制台</a><a href="#faq">常见问题</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">源码 ↗</a></div></div></footer>
 <div aria-live="polite" class="toast" id="toast" role="status">已复制到剪贴板</div>

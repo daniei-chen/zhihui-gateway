@@ -19,6 +19,17 @@
 
 ## Components And Boundaries
 
+### Local Candidate: One Default Key And Invitation Registration
+
+These changes remain in the local candidate. They are not enabled in production until the full gates, signatures and an explicit deployment instruction are complete.
+
+- The homepage separates user login and administrator login. The user login page offers invitation registration.
+- Each workbench reuses one existing default key and does not offer multiple-key creation. A user without a key may initialize it once; existing plaintext cannot be read again and is not automatically rotated. Current key labels and statistics use the owning username, without rewriting usage history or ledgers.
+- Extra keys retained from older versions stay valid to avoid interrupting existing clients. The workbench displays one default and prevents further issuance.
+- Registration requires a one-time administrator invitation, a server-signed browser registration credential and persistent IP, network, device and global rate limits. Only the invitation hash is stored; plaintext is returned once. Registration grants no calling credits.
+- Device registration binds a browser, not an unforgeable physical device. Clearing cookies or changing browsers still requires another valid invitation and remains subject to rate limits.
+- The public reverse proxy must overwrite client-supplied IP identity headers and use the correct trusted proxy ranges. The example configuration requires trusted-publisher review; it does not automatically alter production.
+
 Manager provides accounts, models, keys, logs and the administration UI. The WorkBuddy engine handles the account pool and provider requests. Qoder / Trae retain their separate adapters and authorization boundaries.
 
 This is a maintained branch with local adaptations, not an unmodified-upstream panel. Candidate source, licenses, tests and build identities are retained. Historical installation guides are component references, not substitutes for the controlled release contract.

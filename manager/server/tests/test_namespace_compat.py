@@ -184,7 +184,7 @@ class NamespacedCustomStreamTest(unittest.TestCase):
         self.assertEqual(payload['item']['type'], 'custom_tool_call')
         self.assertEqual(payload['item']['name'], 'apply_patch')
         self.assertEqual(payload['item']['input'], 'PATCH')
-        self.assertNotIn('namespace', payload['item'])
+        self.assertEqual(payload['item']['namespace'],'shell')
 
     def test_custom_decision_uses_one_criterion(self) -> None:
         """「是不是 custom」与「取哪份入参」必须是**同一个判据**。

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS request_performance(
 );
 CREATE INDEX IF NOT EXISTS idx_request_performance_ts ON request_performance(ts);
 '''
-SPANS = frozenset(('preauthorization', 'body_receive', 'json_parse', 'forward_prepare',
+SPANS = frozenset(('preauthorization', 'admission_wait', 'body_receive', 'json_parse', 'forward_prepare',
                    'json_encode', 'budget_prepare', 'transport_slot_wait',
                    'transport_headers', 'connect', 'tls', 'request_send',
                    'headers_wait', 'settlement', 'finalize'))

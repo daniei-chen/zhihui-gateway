@@ -12,7 +12,7 @@ test('console carries the homepage mint and apricot side atmosphere without tint
   const css=read('app/brand.css');
   assert.match(css,/ellipse 34% 700px at 0 58%, #eaf7f3/);
   assert.match(css,/ellipse 34% 700px at 100% 53%, #fff2e5/);
-  assert.match(css,/html:not\(\.dark\):has\(#main-content\) body/);
+  assert.match(css,/html:not\(\.dark\):is\(:has\(#main-content\), :has\(\.user-portal\)\) body/);
   assert.doesNotMatch(css,/filter:\s*(hue-rotate|sepia)/);
 });
 
@@ -23,9 +23,9 @@ test('console logo retains the homepage exact gradient and unique SVG ids', () =
   const code = ts.transpileModule(read('components/common/layout/BrandHome.tsx'), {compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
   }}).outputText;
-  const module = {exports: {}};
-  vm.runInNewContext(code, {module, exports: module.exports, require: name => mocks[name]});
-  const first = JSON.stringify(module.exports.BrandHome()), second = JSON.stringify(module.exports.BrandHome());
+  const compiledModule = {exports: {}};
+  vm.runInNewContext(code, {module: compiledModule, exports: compiledModule.exports, require: name => mocks[name]});
+  const first = JSON.stringify(compiledModule.exports.BrandHome()), second = JSON.stringify(compiledModule.exports.BrandHome());
   assert.match(first, /#7391FA/); assert.match(first, /#4D6CEB/);
   assert.match(first, /url\(#brand-1\)/); assert.match(second, /url\(#brand-2\)/);
 });

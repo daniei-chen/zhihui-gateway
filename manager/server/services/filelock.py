@@ -25,12 +25,12 @@ _GUARD = threading.Lock()
 
 
 @contextmanager
-def file_lock(path: Path, *, writing: bool = False):
+def file_lock(path: Path, *, writing: bool = False, timeout: float = 0):
     """进入某个路径的互斥区。同一路径可重入（RLock）。"""
     key = str(Path(path).absolute())
     with _GUARD:
         lock = _LOCKS.setdefault(key, threading.RLock())
     with lock:
         from . import credentiallease
-        with credentiallease.mutation(Path(path)) if writing else nullcontext():
+        with credentiallease.mutation(Path(path),timeout=timeout) if writing else nullcontext():
             yield

@@ -233,7 +233,11 @@ def reset_usage(key_id: int, user: dict = Depends(security.require_keys_writer))
         raise HTTPException(status_code=409,detail='该密钥有未结算请求，请先核对用量')
     # 不存在的 id 应报 404，而不是静默成功：否则前端会提示「已重置」，
     # 而实际什么都没发生（密钥可能已被别人删掉，页面上却看着还在）。
-    if not keysvc.reset_usage(key_id):
+    try:
+        changed=keysvc.reset_usage(key_id, actor=user['username'])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not changed:
         raise HTTPException(status_code=404, detail='密钥不存在')
     security.audit(user,'reset_key_usage',str(key_id),'reset token and credit counters')
     return {'ok': True}

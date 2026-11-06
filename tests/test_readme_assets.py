@@ -107,8 +107,13 @@ class ReadmeAssetsTests(unittest.TestCase):
         self.assertEqual(proof['publisher_contracts']['passed'], 15)
         for mobile in (False, True):
             source = artwork.release(mobile)
-            for value in ('4,403', '1,764', '15'):
-                self.assertIn(value, source)
+            for label in ('完整门禁','来源绑定','业务账本不回退'):
+                self.assertIn(label,source)
+            # Published historical proof remains checked above, but the shared
+            # graphic must not attribute its old counts to a later build.
+            for value in ('4,403','1,764'):
+                self.assertNotIn(value,source)
+        self.assertIn('验收以具体构建的签名回执为准',(ROOT/'README.md').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

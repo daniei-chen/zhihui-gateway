@@ -16,7 +16,7 @@ import logging
 import os
 import re
 
-from . import budgetowner, db, observability, portalbilling, portalpolicy as policy, portalstore as store
+from . import budgetowner, db, metering, observability, portalbilling, portalpolicy as policy, portalstore as store
 
 RECEIPTS = '''CREATE TABLE IF NOT EXISTS portal_spend_receipts(
  request_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, payload TEXT NOT NULL
@@ -96,21 +96,35 @@ def forwarded(state):
         reject('用户积分发送许可不可用，未发送请求')
 
 
+def supplier_units(credit):
+    """Supplier amounts share the main ledger's bounded half-even quantization.
+
+    User grants and operator-entered amounts retain their strict six-digit input
+    validation; only measured supplier credit uses this conversion.
+    """
+    from . import ledger, metering
+    parsed, malformed = metering.parse_credit(credit)
+    if malformed or parsed is None:
+        return None
+    # Validate the supplier domain, then use the same decimal input as the
+    # ledger. Legacy replay strings must not get an extra float rounding step.
+    return ledger.units(credit)
+
+
 def receipt(state, usage, credit):
     """Called ONLY inside the same main DB transaction as request_logs."""
     owner = getattr(state, 'portal_owner', None)
     if not owner:
         return
     amount = None
-    if (state.terminal_state == 'completed' and isinstance(usage, dict)
-            and all(type(usage.get(k)) is int and usage[k] >= 0 for k in ('prompt_tokens', 'completion_tokens'))):
-        try:
-            if credit is not None:
-                amount = store.units(credit)
-        except ValueError:
-            pass
+    supplier = None
+    from . import metering
+    try:
+        if credit is not None:supplier = supplier_units(credit)
+    except ValueError:pass
+    if state.terminal_state == 'completed' and metering.parse_usage(usage).complete:amount = supplier
     db.execute('INSERT OR IGNORE INTO portal_spend_receipts VALUES(?,?,?)',
-        (state.request_id, owner, json.dumps({'amount_units': amount})))
+        (state.request_id, owner, json.dumps({'amount_units': amount, 'supplier_units': supplier})))
 
 
 def replay_receipt(entry, facts):
@@ -118,12 +132,11 @@ def replay_receipt(entry, facts):
     if not isinstance(owner, str) or not owner:
         return
     amount = None
-    if facts.get('terminal_state') == 'completed' and facts.get('usage_complete') == 1:
-        try:
-            if facts.get('credit') is not None:
-                amount = store.units(facts['credit'])
-        except ValueError:
-            pass
+    supplier = None
+    try:
+        if facts.get('credit') is not None:supplier = supplier_units(facts['credit'])
+    except ValueError:pass
+    if facts.get('terminal_state') == 'completed' and facts.get('usage_complete') == 1:amount = supplier
     # A delayed/spooled fact must not silently disagree with an operator's
     # immutable resolution. Caller rolls back replay and retains the evidence.
     with store.transaction() as conn:
@@ -131,18 +144,29 @@ def replay_receipt(entry, facts):
             'JOIN portal_spends s ON s.request_id=r.request_id WHERE r.request_id=?', (facts['request_id'],)).fetchone()
         if resolution and (resolution['owner_id'] != owner or (amount is not None and resolution['amount_units'] != amount)):
             raise ValueError('迟到费用回执与人工核对结果冲突，保留回执等待复核')
+        settled = conn.execute('SELECT supplier_units FROM portal_settlements WHERE request_id=?',(facts['request_id'],)).fetchone()
+        unknown = conn.execute('SELECT 1 FROM portal_unknown_supplier_costs WHERE request_id=?',(facts['request_id'],)).fetchone()
+        if supplier is not None and ((settled and settled[0] != supplier) or unknown):
+            raise ValueError('迟到供应商费用与已记录的成本状态不同，保留证据等待复核')
     db.execute('INSERT OR IGNORE INTO portal_spend_receipts VALUES(?,?,?)',
-        (facts['request_id'], owner, json.dumps({'amount_units': amount})))
+        (facts['request_id'], owner, json.dumps({'amount_units': amount, 'supplier_units': supplier})))
 
 
-def _release(conn, row, charge):
-    if type(charge) is not int or not 0 <= charge <= 10**15:
+_SUPPLIER_FROM_CHARGE = object()
+
+
+def _release(conn, row, charge, *, supplier=_SUPPLIER_FROM_CHARGE):
+    if type(charge) is not int or not 0 <= charge <= 9_000_000_000_000_000_000:
         raise ValueError('settlement amount invalid')
     policy = conn.execute('SELECT policy FROM portal_spend_policies WHERE request_id=?', (row['request_id'],)).fetchone()
     capped = bool(policy and policy[0] == portalbilling.POLICY)
     if policy and not capped:
         raise ValueError('unrecognized persisted billing policy')
-    supplier = charge
+    if supplier is _SUPPLIER_FROM_CHARGE: supplier = charge
+    if supplier is None:
+        if charge != 0: raise ValueError('unknown supplier cost cannot establish a nonzero user settlement')
+    elif type(supplier) is not int or not charge <= supplier <= 9_000_000_000_000_000_000:
+        raise ValueError('supplier settlement amount invalid')
     if capped:
         charge = min(charge, row['held_units'])
     left = charge
@@ -174,9 +198,13 @@ def _release(conn, row, charge):
         conn.execute('INSERT OR IGNORE INTO portal_events(owner_id,kind,amount_units,ts,source_ref) VALUES(?,?,?,?,?)',
             (row['owner_id'], 'usage', -charge, store.now(), 'spend:' + row['request_id']))
     if capped:
-        conn.execute('INSERT INTO portal_settlements VALUES(?,?,?,?,?,?,?,?,?)',
-            (row['request_id'], row['owner_id'], row['key_id'], portalbilling.POLICY, row['held_units'],
-             supplier, charge, supplier - charge, store.now()))
+        if supplier is None:
+            conn.execute('INSERT INTO portal_unknown_supplier_costs VALUES(?,?,?,?,?,?)',
+                (row['request_id'],row['owner_id'],row['key_id'],charge,row['held_units'],store.now()))
+        else:
+            conn.execute('INSERT INTO portal_settlements VALUES(?,?,?,?,?,?,?,?,?)',
+                (row['request_id'], row['owner_id'], row['key_id'], portalbilling.POLICY, row['held_units'],
+                 supplier, charge, supplier - charge, store.now()))
     return charge
 
 
@@ -277,18 +305,67 @@ def auto_close_client_cancelled(limit=100):
     """
     if not _client_cancel_auto_close_enabled() or not (store.config.DATA_DIR / 'user-portal.sqlite3').exists():
         return 0
+    limit = max(0, min(500, int(limit)))
+    if not limit:
+        return 0
     cutoff = store.now() - _client_cancel_auto_close_grace()
     with store.transaction() as conn:
         quarantine = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
         if quarantine and quarantine[0] == 'true':
             return 0
-        rows = [dict(row) for row in conn.execute(
-            "SELECT s.request_id FROM portal_spends s "
+        # Persist a keyset cursor, not OFFSET: unresolved non-cancellations and
+        # deferred/conflicting rows must not starve the remainder of the queue.
+        saved = conn.execute("SELECT value FROM portal_settings WHERE key='client_cancel_scan_cursor_v1'").fetchone()
+        cursor = None
+        if saved:
+            try:
+                value = json.loads(saved[0])
+                if (isinstance(value, list) and len(value) == 3
+                        and type(value[0]) is int and type(value[1]) is int
+                        and isinstance(value[2], str) and 0 < len(value[2]) <= 128):
+                    cursor = value
+            except (ValueError, TypeError):
+                pass
+        select = (
+            "SELECT s.request_id,e.ended_at,s.created_at FROM portal_spends s "
             "JOIN portal_request_ends e ON e.request_id=s.request_id "
             "WHERE s.state='unknown' AND e.owner_id=s.owner_id "
-            "AND e.key_id=s.key_id AND e.worker=s.worker AND e.ended_at<=? "
-            "ORDER BY e.ended_at,s.created_at,s.request_id LIMIT ?",
-            (cutoff, max(0, int(limit))))]
+            "AND e.key_id=s.key_id AND e.worker=s.worker AND e.ended_at<=? ")
+        # Freeze an upper key for each sweep. Otherwise a continuously growing
+        # tail can prevent wraparound forever and starve late/backdated ends.
+        # Do not restart on every old unresolved row: that would starve the tail.
+        saved_upper=conn.execute("SELECT value FROM portal_settings WHERE key='client_cancel_scan_upper_v1'").fetchone()
+        upper=None
+        if saved_upper:
+            try:
+                value=json.loads(saved_upper[0])
+                if (isinstance(value,list) and len(value)==3 and type(value[0]) is int
+                        and type(value[1]) is int and isinstance(value[2],str)
+                        and 0<len(value[2])<=128):upper=value
+            except (TypeError,ValueError):pass
+        if upper is None:
+            row=conn.execute(select+'ORDER BY e.ended_at DESC,s.created_at DESC,s.request_id DESC LIMIT 1',
+                             (cutoff,)).fetchone()
+            upper=[row['ended_at'],row['created_at'],row['request_id']] if row else None
+        bounded='AND (e.ended_at,s.created_at,s.request_id) <= (?,?,?) ' if upper else ''
+        bounds=tuple(upper or ())
+        order = "ORDER BY e.ended_at,s.created_at,s.request_id LIMIT ?"
+        after = "AND (e.ended_at,s.created_at,s.request_id) > (?,?,?) "
+        rows = [dict(row) for row in conn.execute(
+            select + bounded + (after if cursor else '') + order,
+            (cutoff, *bounds, *cursor, limit) if cursor else (cutoff, *bounds, limit))]
+        if not rows and cursor:
+            # Finish this bounded sweep; the next call starts a fresh one and
+            # includes ends inserted behind the old cursor.
+            upper=None
+        next_cursor = ([rows[-1]['ended_at'], rows[-1]['created_at'], rows[-1]['request_id']]
+                       if len(rows) == limit else None)
+        if next_cursor==upper:next_cursor=None
+        if next_cursor is None:upper=None
+        conn.execute("INSERT INTO portal_settings(key,value) VALUES('client_cancel_scan_cursor_v1',?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(next_cursor),))
+        conn.execute("INSERT INTO portal_settings(key,value) VALUES('client_cancel_scan_upper_v1',?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(upper),))
     if not rows or replay_problem():
         return 0
     closed = 0
@@ -309,7 +386,12 @@ def auto_close_client_cancelled(limit=100):
 
 
 def resolve_unknown(request_id, amount, actor, reason, evidence):
-    """Explicit operator evidence, never an automatic timeout/zero write-off."""
+    """Record operator-confirmed supplier cost with its evidence.
+
+    ``amount`` is the verified supplier amount, not an arbitrary user debit or
+    waiver. The user's actual debit is separately capped by ``_release``.
+    Automatic cancellation closeout confirms no supplier amount at all.
+    """
     charge = store.units(amount)
     _require_evidence(reason, evidence)
     # Serialize with receipt replay in main -> portal lock order. Main is only
@@ -333,7 +415,16 @@ def resolve_unknown(request_id, amount, actor, reason, evidence):
             if not request_ended(conn, row) and budgetowner.alive(row['worker']) is not False:
                 # Lease age or an unreadable owner lock never proves termination.
                 raise ValueError('请求尚无可信结束凭证且所属进程未确认退出，不能凭超时解冻')
-            charged = _release(conn, row, charge)
+            supplier = charge if charge > 0 else None
+            if receipt:
+                payload=json.loads(receipt['payload'])
+                supplier=payload.get('supplier_units',payload.get('amount_units'))
+                # A human can confirm a positive cost with the recorded evidence;
+                # waiving the user's charge does not confirm zero supplier cost.
+                if supplier is None and actor != AUTO_CLOSE_ACTOR and charge>0:supplier=charge
+            elif actor == AUTO_CLOSE_ACTOR:
+                supplier=None
+            charged = _release(conn, row, charge, supplier=supplier)
             conn.execute('INSERT INTO portal_spend_resolutions VALUES(?,?,?,?,?,?)', (request_id, charge, actor, reason.strip(), evidence.strip(), store.now()))
             conn.execute("UPDATE portal_spends SET state='settled',charged_units=?,settled_at=? WHERE request_id=?", (charged, store.now(), request_id))
 
@@ -353,6 +444,9 @@ def replay_problem():
     from . import ledgerreplay
     try:
         directory = ledgerreplay.spool_dir()
+        from . import spoolidentity
+        if not spoolidentity.check(directory)['ok']:
+            return '费用回执通道身份不可核实，先恢复原目录和回执再处理'
         if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
             return '费用回执通道不可核实，先恢复回执通道再人工处理'
         if not directory.exists() and (store.config.DATA_DIR / '.spool-used').exists():
@@ -496,7 +590,12 @@ def platform_costs_page(page=1):
             'JOIN portal_users u ON u.id=s.owner_id WHERE s.platform_units>0 '
             'ORDER BY s.created_at DESC,s.request_id DESC LIMIT 30 OFFSET ?', ((page - 1) * 30,))]
         units = conn.execute('SELECT COALESCE(SUM(platform_units),0) FROM portal_settlements').fetchone()[0]
-    return {'items': rows, 'total': total, 'page': page, 'page_size': 30, 'platform_units': units}
+        unknown = conn.execute('SELECT COUNT(*) FROM portal_unknown_supplier_costs').fetchone()[0]
+        unknown_items=[dict(row) for row in conn.execute('SELECT s.*,u.username FROM portal_unknown_supplier_costs s '
+            'JOIN portal_users u ON u.id=s.owner_id ORDER BY s.created_at DESC,s.request_id DESC LIMIT 30 OFFSET ?',((page-1)*30,))]
+    return {'items': rows, 'total': total, 'page': page, 'page_size': 30, 'platform_units': units,
+            'unknown_supplier_costs':unknown,'unknown_items':unknown_items,'cost_complete':unknown==0,
+            'cost_scope':'recorded supplier evidence; historical cancellations need separate reconciliation'}
 
 
 def grant_bonus(owner_id, action_id, amount, valid_days, actor, reason):

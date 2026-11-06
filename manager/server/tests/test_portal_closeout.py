@@ -546,6 +546,53 @@ class PortalCloseoutTests(fixtures.PortalTests):
             self.assertEqual((root / 'spool' / name).read_bytes(), content)
         self.assertEqual((root / '.spool-used').read_bytes(), b'1')
 
+    async def test_known_empty_credential_locks_are_preserved_in_paired_restore(self):
+        args=await self.prepare_snapshot()
+        path=config.AUTH_DIR/'workbuddy-snapshot-account.json.refresh.lock'
+        path.write_bytes(b'');path.chmod(0o600)
+        args.pop('offline_confirmed')
+        receipt=recovery.create_paired_snapshot(**args)
+        result=self.root/'restore-known-lock'
+        recovery.restore_quarantine(args['destination'],result,receipt['manifest_sha256'])
+        self.assertFalse(list((result/'auths').iterdir()))
+        self.assertEqual((result/'quarantined-credentials/auths'/path.name).read_bytes(),b'')
+        self.assertEqual(path.read_bytes(),b'')
+
+    async def test_empty_credential_locks_are_preserved_in_offline_snapshot(self):
+        args=await self.prepare_snapshot()
+        path=config.AUTH_DIR/'workbuddy-snapshot-account.json.refresh.lock';path.write_bytes(b'');path.chmod(0o600)
+        receipt=recovery.create_snapshot(**args)
+        recovery.verify_snapshot(args['destination'],receipt['manifest_sha256'])
+        self.assertEqual((args['destination']/'auths'/path.name).read_bytes(),b'')
+
+    async def test_nonempty_known_credential_lock_refuses_snapshot(self):
+        args=await self.prepare_snapshot()
+        path=config.AUTH_DIR/'workbuddy-snapshot-account.json.refresh.lock';path.write_bytes(b'unknown-state');path.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,'空私有普通文件'):recovery.create_snapshot(**args)
+        self.assertFalse((args['destination']/'manifest.json').exists())
+        self.assertEqual(path.read_bytes(),b'unknown-state')
+
+    async def test_unknown_lock_names_still_refuse_snapshot(self):
+        args=await self.prepare_snapshot();path=config.AUTH_DIR/'unrecognized.lock';path.write_bytes(b'')
+        with self.assertRaisesRegex(ValueError,'不支持'):recovery.create_snapshot(**args)
+        self.assertTrue(path.exists());self.assertFalse((args['destination']/'manifest.json').exists())
+
+    async def test_publicly_readable_credential_lock_refuses_on_posix(self):
+        import os
+        if os.name=='nt':return
+        args=await self.prepare_snapshot()
+        path=config.AUTH_DIR/'workbuddy-snapshot-account.json.refresh.lock';path.write_bytes(b'');path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError,'空私有普通文件'):recovery.create_snapshot(**args)
+        self.assertFalse((args['destination']/'manifest.json').exists())
+
+    async def test_hardlinked_credential_lock_refuses_snapshot(self):
+        import os
+        args=await self.prepare_snapshot()
+        path=config.AUTH_DIR/'workbuddy-snapshot-account.json.refresh.lock';path.write_bytes(b'');path.chmod(0o600)
+        os.link(path,self.root/'unrelated-lock-link')
+        with self.assertRaisesRegex(ValueError,'空私有普通文件'):recovery.create_snapshot(**args)
+        self.assertFalse((args['destination']/'manifest.json').exists())
+
     async def test_failed_restore_copy_never_overwrites_source_or_marks_completion(self):
         args = await self.prepare_snapshot()
         receipt = recovery.create_snapshot(**args)

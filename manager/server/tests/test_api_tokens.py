@@ -69,11 +69,13 @@ class ApiTokenTest(unittest.TestCase):
         # 必须每次清干净，否则后面的登录会被自己锁掉（429）。
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self.c.cookies.clear()
 
     def tearDown(self) -> None:
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self.c.cookies.clear()
 
     # ── 工具 ─────────────────────────────────────────────
@@ -352,6 +354,8 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/steward/test-mail',
         'POST /api/steward/chat',
         # Customer account and wallet effects require a human super-admin.
+        'POST /api/portal-admin/invitations',
+        'DELETE /api/portal-admin/invitations/{identifier}',
         'POST /api/portal-admin/users',
         'PATCH /api/portal-admin/users/{user_id}',
         'POST /api/portal-admin/users/{owner_id}/bonus',

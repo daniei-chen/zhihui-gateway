@@ -18,7 +18,7 @@ import hashlib
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 SKIP_DIRS = {".git", "__pycache__", "data", "node_modules", ".venv", "venv"}
 
@@ -69,18 +69,42 @@ def build_manifest(root: Path) -> dict:
 
 def load_baseline(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
-    # managed-release.json 的格式：{ "files": {"rel": {"sha256": ...}} } 或 {"rel": "hash"}
+    # Managed releases use candidate_sha256; runtime/BOM manifests use sha256.
+    # An absent digest is invalid evidence, never an instruction to skip a diff.
     files = data.get("files") if isinstance(data, dict) else None
+    out = {}
+
+    def add(relative, value):
+        if not isinstance(relative, str):
+            raise SystemExit("基线清单路径无效")
+        relative = relative.replace("\\", "/")
+        parts = PurePosixPath(relative)
+        if (not relative or parts.is_absolute() or '..' in parts.parts
+                or parts.as_posix() != relative or relative in out):
+            raise SystemExit("基线清单路径无效或重复: %r" % relative)
+        if isinstance(value, dict):
+            sha = value.get("sha256")
+            candidate = value.get("candidate_sha256")
+            if sha is not None and candidate is not None and sha != candidate:
+                raise SystemExit("基线清单摘要冲突: " + relative)
+            digest = sha if sha is not None else candidate
+        else:
+            digest = value
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(c not in '0123456789abcdefABCDEF' for c in digest)):
+            raise SystemExit("基线清单缺少有效 SHA-256: " + relative)
+        out[relative] = digest.lower()
+
     if isinstance(files, dict):
-        out = {}
         for k, v in files.items():
-            out[k.replace("\\", "/")] = v.get("sha256") if isinstance(v, dict) else str(v)
+            add(k, v)
         return out
     if isinstance(files, list):
-        out = {}
         for item in files:
             if isinstance(item, dict) and "path" in item:
-                out[str(item["path"]).replace("\\", "/")] = item.get("sha256")
+                add(item["path"], item)
+            else:
+                raise SystemExit("基线清单条目无效")
         return out
     raise SystemExit("基线清单格式无法识别")
 

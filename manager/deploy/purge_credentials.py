@@ -5,7 +5,7 @@
   - users.json.secret 可用来离线伪造任意角色的会话
   - users.json.api_keys 曾是管理端提权后门（已在 v1.0.23 移除，但残留值仍是隐患）
 
-本脚本做两件事，都是幂等的：
+本脚本每次执行都会重新轮换密钥：
   1. 生成新的 secret  → 立即吊销所有既有 cookie（含攻击者伪造的）
   2. 清空 api_keys 数组 → 遗留后门钥匙作废
 
@@ -21,13 +21,15 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 
 def main() -> int:
     path = Path(os.environ.get('WB_USERS_FILE', '') or 'users.json')
-    if not path.is_file():
+    if path.is_symlink() or not path.is_file():
         print(f'未找到 users.json：{path}', file=sys.stderr)
         print('请用 WB_USERS_FILE 指定路径，例如：', file=sys.stderr)
         print('  WB_USERS_FILE=/opt/workbuddy-manager/users.json python3 purge_credentials.py',
@@ -35,12 +37,23 @@ def main() -> int:
         return 1
 
     try:
-        cfg = json.loads(path.read_text(encoding='utf-8'))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                             | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(descriptor, 'rb') as handle:
+            original_info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(original_info.st_mode):
+                raise ValueError('凭据必须是常规文件')
+            original = handle.read()
+        cfg = json.loads(original)
     except Exception as exc:
         print(f'解析失败（未做任何修改）：{exc}', file=sys.stderr)
         return 1
     if not isinstance(cfg, dict):
         print('文件不是合法 JSON 对象（未做任何修改）', file=sys.stderr)
+        return 1
+    if not isinstance(cfg.get('users', []), list) or any(
+            not isinstance(user, dict) for user in cfg.get('users', [])):
+        print('users 必须是对象数组（未做任何修改）', file=sys.stderr)
         return 1
 
     changed = []
@@ -70,10 +83,31 @@ def main() -> int:
     if n:
         changed.append(f'已递增 {n} 个用户的会话版本')
 
-    # 先备份再写：出问题可回滚
-    backup = path.with_suffix(path.suffix + '.bak')
-    backup.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
-    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    # Preserve the ORIGINAL bytes, including the old secret. Both outputs are
+    # private from creation; never follow/overwrite a predictable .bak path.
+    temporary = None
+    try:
+        backup_fd, backup_name = tempfile.mkstemp(prefix=path.name + '.bak.', dir=path.parent)
+        backup = Path(backup_name)
+        with os.fdopen(backup_fd, 'wb') as handle:
+            handle.write(original)
+            handle.flush()
+            os.fsync(handle.fileno())
+        output_fd, output_name = tempfile.mkstemp(prefix=path.name + '.rotate.', dir=path.parent)
+        temporary = Path(output_name)
+        with os.fdopen(output_fd, 'wb') as handle:
+            if hasattr(os, 'fchown'):
+                os.fchown(handle.fileno(), original_info.st_uid, original_info.st_gid)
+            handle.write((json.dumps(cfg, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except OSError as exc:
+        print(f'写入失败：{exc}（保留已生成的私有备份）', file=sys.stderr)
+        return 1
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
     print('完成：')
     for c in changed:

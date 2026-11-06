@@ -6,6 +6,9 @@
     "WB2API_"
   ],
   "settings": {
+    "WB_MAX_OUTPUT_BYTES": {"type":"integer","sensitive":false,"default":4194304,"minimum":65536,"maximum":16777216,"unit":"decoded bytes per request","consumers":["server/outputlimits.py","server/deadline.py"],"description":"Bound successful response bodies, stream output and retained translator state; errors are additionally capped at 64 KiB."},
+    "WB_AUTH_SHARED_GID": {"type":"string","sensitive":false,"default":"","consumers":["server/services/tencent.py"],"description":"Optional shared credential-reader group ID; both Manager and engine must belong to this group and credential directories must permit group traversal."},
+    "WB_SHARED_ADMISSION": {"type": "boolean", "sensitive": false, "default": false, "consumers": ["server/config.py"], "description": "Opt-in same-host cross-generation resource coordination; does not authorize parallel writers or background jobs."},
     "WB_ARCHIVE_ENABLED": {"type": "boolean", "sensitive": false, "default": true, "consumers": ["server/archiveworker.py"], "description": "Archive and verify eligible derived logs before exact-row pruning; disabled never permits direct deletion."},
     "WB_ARCHIVE_INTERVAL_SEC": {"type": "integer", "sensitive": false, "default": 300, "minimum": 60, "maximum": 86400, "consumers": ["server/archiveworker.py"], "unit": "seconds"},
     "WB_ARCHIVE_BATCH_ROWS": {"type": "integer", "sensitive": false, "default": 200, "minimum": 1, "maximum": 1000, "consumers": ["server/archiveworker.py"], "unit": "rows per dataset per cycle"},
@@ -18,6 +21,18 @@
       "default": 67108864,
       "minimum": 1,
       "unit": "bytes"
+    },
+    "WB_GATEWAY_MAX_RESPONSE_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:75",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 64,
+      "minimum": 1,
+      "maximum": 512,
+      "unit": "MiB"
     },
     "WB_GATEWAY_MIN_BODY_RESERVATION_BYTES": {
       "type": "integer",

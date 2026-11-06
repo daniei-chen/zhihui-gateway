@@ -15,7 +15,8 @@ if (_bundle.get('schema') != 1 or _bundle.get('platform') != 'workbuddy'
 VERSION = _bundle['version']
 BUILTINS = tuple((rule['id'], rule['match'], rule['replacement']) for rule in _bundle['rules'])
 if (len(BUILTINS) > 64 or len({r[0] for r in BUILTINS}) != len(BUILTINS)
-        or any(not 0 < len(pat) <= 4096 or len(rep) > 8192 for _, pat, rep in BUILTINS)):
+        or any(not 0 < len(pat) <= 4096 or len(rep) > 8192 or pat == rep
+               for _, pat, rep in BUILTINS)):
     raise ValueError('invalid compatibility rules')
 
 _matchers = {}
@@ -46,10 +47,12 @@ def apply(body, *, platform, get_setting):
     custom = get_setting('prompt_defuse_rules') or []
     rules, patterns = [], set()
     if isinstance(custom, list):
+        # Invalid/no-op entries must not claim a signed rule's source pattern.
         for pair in custom[:64]:
             if (not isinstance(pair, (list, tuple)) or len(pair) != 2
                     or not all(isinstance(x, str) for x in pair)
-                    or not 0 < len(pair[0]) <= 4096 or len(pair[1]) > 8192 or pair[0] in patterns):
+                    or not 0 < len(pair[0]) <= 4096 or len(pair[1]) > 8192
+                    or pair[0] == pair[1] or pair[0] in patterns):
                 continue
             pat, rep = pair
             known = next((name for name, p, r in BUILTINS if p == pat and r == rep), None)

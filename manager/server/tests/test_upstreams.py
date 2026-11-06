@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -234,6 +235,13 @@ class UpstreamRoutingTest(_TempDbMixin, unittest.TestCase):
 
     class _Resp:
         status_code = 200
+        headers = {'content-type':'application/json'}
+        is_stream_consumed = True
+
+        @property
+        def content(self):return json.dumps(self.json()).encode()
+
+        async def aclose(self):return None
 
         def json(self):
             return {'id': 'x', 'choices': [
@@ -254,6 +262,15 @@ class UpstreamRoutingTest(_TempDbMixin, unittest.TestCase):
             async def post(self_, url, **kw):
                 sent.append(('POST', url, kw.get('headers') or {}))
                 return resp
+
+            def build_request(self_,method,url,**kw):
+                import httpx
+                sent.append((method,url,kw.get('headers') or {}))
+                return httpx.Request(method,url,**kw)
+
+            async def send(self_,request,**kw):return resp
+
+            async def aclose(self_):return None
 
             async def get(self_, url, **kw):
                 sent.append(('GET', url, kw.get('headers') or {}))

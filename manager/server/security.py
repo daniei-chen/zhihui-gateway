@@ -105,7 +105,7 @@ def managed_user_password_problem(pwd: str, username: str = '') -> str | None:
     return None
 
 
-def weak_admin_passwords() -> list[str]:
+def weak_admin_passwords(*, stop: threading.Event | None = None) -> list[str]:
     """启动时检测**存量**管理员是否仍在用已知弱口令。
 
     新密码在设置入口就被拦了，但升级上来的 users.json 里可能已经有
@@ -113,6 +113,7 @@ def weak_admin_passwords() -> list[str]:
     哈希，命中就返回用户名，让启动日志能明确点出来；不直接拒绝启动——
     否则用户会被锁在面板外，连改密码的入口都没有。
     """
+    if stop is not None and stop.is_set():return []
     try:
         cfg = load_users()
     except Exception:  # noqa: BLE001
@@ -123,6 +124,9 @@ def weak_admin_passwords() -> list[str]:
             continue
         stored = str(item.get('pwd_hash') or '')
         for candidate in _WEAK_PASSWORDS:
+            # PBKDF2 itself is not cancellable. Finish its current invocation,
+            # then stop before another hash or before reading another owner.
+            if stop is not None and stop.is_set():return []
             if verify_pwd(candidate, stored):
                 found.append(str(item.get('username') or ''))
                 break
@@ -488,6 +492,8 @@ def insecure_cookie_warning(request: Request) -> str:
 # 等一次重启就能重置爆破进度（fail2ban 虽持久但阈值更宽）。
 _fail: dict[str, list] = {}
 _user_fail: dict[str, list] = {}
+_token_fail: dict[str, list] = {}
+_TOKEN_FAIL_PREFIX='management-token:'
 MAX_FAILS = 5
 LOCK_SECONDS = 600
 MAX_TRACKED = 5000
@@ -517,7 +523,12 @@ def _load_fails_once() -> None:
         now = time.time()
         for row in db.query('SELECT ip, fails, first FROM login_fails_ip WHERE first > ?',
                             (now - LOCK_SECONDS,)):
-            _fail[str(row['ip'])] = [int(row['fails'] or 0), float(row['first'] or now)]
+            address=str(row['ip'])
+            counts=[int(row['fails'] or 0),float(row['first'] or now)]
+            if address.startswith(_TOKEN_FAIL_PREFIX):
+                _token_fail[address[len(_TOKEN_FAIL_PREFIX):]]=counts
+            else:
+                _fail[address]=counts
         for row in db.query('SELECT username, fails, first FROM login_fails_user WHERE first > ?',
                             (now - LOCK_SECONDS,)):
             _user_fail[str(row['username'])] = [int(row['fails'] or 0), float(row['first'] or now)]
@@ -617,6 +628,26 @@ def record_fail(ip: str, username: str | None = None) -> None:
 
     _prune(_fail)
     _prune(_user_fail)
+
+
+@_serialized_login_counters
+def token_login_blocked(ip: str) -> bool:
+    _load_fails_once()
+    count,first=_token_fail.get(ip,[0,0.0])
+    return count>=MAX_FAILS and time.time()-first<LOCK_SECONDS
+
+
+@_serialized_login_counters
+def record_token_fail(ip: str) -> None:
+    _load_fails_once()
+    now=time.time()
+    count,first=_token_fail.get(ip,[0,now])
+    if now-first>=LOCK_SECONDS:count,first=0,now
+    _token_fail[ip]=[count+1,first]
+    # Separate namespace in the existing persistent operational table: neither
+    # password clear nor successful token auth can erase the other channel.
+    _mirror_fail('ip',_TOKEN_FAIL_PREFIX+ip,count+1,first)
+    _prune(_token_fail)
 
 
 @_serialized_login_counters
@@ -756,15 +787,16 @@ def _token_identity(request: Request, token: str) -> dict:
 
     角色由 token 的 **scope** 决定（不查用户表，避免与用户表产生暧昧耦合）；
     失败时**不区分**「不存在 / 已停用 / 已过期」，只回一个笼统的 401，不给探测者
-    信号。失败同样计入既有的按 IP 失败计数（与登录共用），成功则清除。
+    信号。失败使用独立的 Token/IP 计数；Token 成功不能清除密码登录失败。
     """
     ip = client_ip(request)
+    if token_login_blocked(ip):
+        raise HTTPException(status_code=429,detail='请求过于频繁，请稍后重试')
     row = tokensvc.resolve(token)
     if not row or not tokensvc.usable(row):
-        record_fail(ip)
+        record_token_fail(ip)
         audit(None, 'token_rejected', '', f'来源 {ip}')
         raise HTTPException(status_code=401, detail='未登录')
-    clear_fail(ip)
     tokensvc.touch(int(row['id']), ip)
     # 标记来源，供 require_session_admin 识别并拒绝高危接口。
     request.state.token_id = int(row['id'])
@@ -934,7 +966,7 @@ def _reject_csrf(reason: str) -> None:
                         headers={'X-Manager-Csrf-Reason': reason})
 
 
-def check_same_origin(request: Request) -> None:
+def check_same_origin(request: Request, *, require_cookie: bool = True) -> None:
     """写请求的同源校验。规则与 `qtgcore.security.Auth.check_origin` 一致：
 
       1. 只看**非安全方法**（POST/PUT/PATCH/DELETE）；GET/HEAD 不参与
@@ -949,6 +981,9 @@ def check_same_origin(request: Request) -> None:
          浏览器对非安全方法一定会带 Origin/Referer，带了 Fetch 元数据却没有来源
          只能是"被剥离或伪造"。
 
+    登录与退出显式传 require_cookie=False：创建或清除浏览器会话同样需要来源
+    校验，不能因为首次登录尚无 Cookie 而放行跨站表单。
+
     与 qtgcore 严格版的唯一差别在第 5 条的兜底方向：管理器还要服务**非浏览器
     客户端**（运维脚本 / CI / QTG 的内部调用），它们一个 Fetch 头都不带，而浏览器
     根本构造不出这种请求 —— 对它们按"无 CSRF 语义"放行。若改成一律拒绝，会打断
@@ -956,9 +991,10 @@ def check_same_origin(request: Request) -> None:
     """
     if request.method.upper() not in UNSAFE_METHODS:
         return
-    cookie_name = getattr(config, 'COOKIE_NAME', '') or ''
-    if not cookie_name or not request.cookies.get(cookie_name):
-        return
+    if require_cookie:
+        cookie_name = getattr(config, 'COOKIE_NAME', '') or ''
+        if not cookie_name or not request.cookies.get(cookie_name):
+            return
     origins = [value for value in request.headers.getlist('origin') if value.strip()]
     if len(origins) > 1:
         _reject_csrf('csrf_multiple_origin')

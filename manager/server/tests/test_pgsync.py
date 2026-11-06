@@ -488,12 +488,14 @@ class RouterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.security._fail.clear()
         self.security._user_fail.clear()
+        self.security._token_fail.clear()
         self.c.cookies.clear()
         db.set_setting(pgsync.CONFIG_KEY, dict(pgsync.DEFAULT_CONFIG))
 
     def tearDown(self) -> None:
         self.security._fail.clear()
         self.security._user_fail.clear()
+        self.security._token_fail.clear()
         self.c.cookies.clear()
 
     def _login(self) -> None:

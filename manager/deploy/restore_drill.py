@@ -1,10 +1,10 @@
 #!/opt/workbuddy-manager/venv/bin/python
-"""从密文 + 恢复私钥完整重建快照，并按 snapshot.json 记录的哈希逐项校验。
+"""从密文 + 恢复私钥解出归档，核对摘要并抽查最多三个 SQLite 库。
 
 用途有两个：
 
-1. **还原演练**：在没有第二台主机的条件下，证明「只拿密文 + 私钥」就能把快照
-   完整解出来，并逐项核对（密文哈希 → 解包 → archive_sha256 → SQLite 完整性）。
+1. **还原抽查**：核对密文哈希、可用的 archive_sha256 与 SQLite 完整性样本；
+   不验证全部资产、全部数据库或服务启动，因此不能证明完整灾备恢复成功。
 2. **修复 sidecar**：2026-10-28 的 `--purge-plaintext` 白名单写错，误删了
    `recovery-manifest.json`；这里从解密后的包里把它取回来。
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -71,7 +72,9 @@ def main(argv: list) -> int:
     WORK.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix='drill-', dir=WORK))
     started = time.time()
-    report = {'snapshot': str(snapshot), 'read_only_source': True, 'steps': []}
+    report = {'snapshot': str(snapshot), 'read_only_source': not args.restore_sidecar,
+              'complete_restore_verified': False, 'sqlite_sample_limit': 3,
+              'result': 'failed', 'sqlite_skipped': bool(args.skip_sqlite), 'sqlite_checks': [], 'steps': []}
 
     try:
         # 1) 密文拼接哈希
@@ -91,12 +94,13 @@ def main(argv: list) -> int:
         # 2) 解密（age 从 stdin 流式读取拼接后的密文）
         archive = scratch / 'snapshot.tar.gz'
         cat = subprocess.Popen(['cat'] + [str(p) for p in parts], stdout=subprocess.PIPE)
-        age = subprocess.Popen(['age', '--decrypt', '-i', str(KEY)], stdin=cat.stdout,
-                               stdout=archive.open('wb'), stderr=subprocess.PIPE)
-        cat.stdout.close()
-        _err = age.communicate()[1]
-        cat.wait()
-        if age.returncode != 0:
+        with archive.open('wb') as output:
+            age = subprocess.Popen(['age', '--decrypt', '-i', str(KEY)], stdin=cat.stdout,
+                                   stdout=output, stderr=subprocess.PIPE)
+            cat.stdout.close()
+            _err = age.communicate()[1]
+            cat.wait()
+        if age.returncode != 0 or cat.returncode != 0:
             print('解密失败：%s' % (_err or b'').decode('utf-8', 'replace'), file=sys.stderr)
             return 4
         print('[2] 解密 OK  %s' % human(archive.stat().st_size))
@@ -104,10 +108,14 @@ def main(argv: list) -> int:
         # 3) 明文归档哈希
         expected_archive = meta.get('archive_sha256')
         actual_archive = sha256_file(archive)
-        ok = (expected_archive is None) or (actual_archive == expected_archive)
+        ok = None if expected_archive is None else actual_archive == expected_archive
         report['steps'].append({'step': 'archive_sha256', 'ok': ok,
                                 'expected': expected_archive, 'actual': actual_archive})
         print('[3] 明文归档 SHA-256 %s %s' % ('OK' if ok else 'MISMATCH', actual_archive[:16] + '…'))
+        if not ok:
+            report['result'] = 'failed'
+            report['error'] = 'archive_sha256_mismatch_or_missing'
+            return 5
 
         # 4) 取 sidecar
         with tarfile.open(archive, 'r:gz') as bundle:
@@ -119,8 +127,16 @@ def main(argv: list) -> int:
               % (report['manifest_files'], report['manifest_databases']))
         if args.restore_sidecar:
             sidecar = snapshot / 'recovery-manifest.json'
-            sidecar.write_bytes(raw)
-            sidecar.chmod(0o600)
+            fd, name = tempfile.mkstemp(prefix='.recovery-manifest.', dir=snapshot)
+            temporary = Path(name)
+            try:
+                with os.fdopen(fd, 'wb') as output:
+                    output.write(raw)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, sidecar)
+            finally:
+                temporary.unlink(missing_ok=True)
             report['sidecar_restored'] = str(sidecar)
             print('[4] sidecar 已写回 %s' % sidecar)
 
@@ -144,13 +160,17 @@ def main(argv: list) -> int:
                     print('[5] %s → integrity_check=%s' % (member.name, result))
             report['sqlite_checks'] = checked
             if any(item['integrity'] != 'ok' for item in checked):
+                report['error'] = 'sqlite_integrity_failed'
                 print('[5] 有库未通过 integrity_check', file=sys.stderr)
                 return 5
 
         elapsed = time.time() - started
         report['elapsed_seconds'] = round(elapsed, 1)
-        report['result'] = 'verified'
-        print('\n结果：可从「密文 + 私钥」完整重建并逐项校验通过（用时 %.1fs）' % elapsed)
+        report['verification_scope'] = ('archive-and-sampled-sqlite'
+                                        if report['sqlite_checks'] else 'archive-only')
+        report['result'] = 'sampled'
+        print('\n结果：解密和所列抽查通过；范围 %s（用时 %.1fs），不代表完整业务恢复'
+              % (report['verification_scope'], elapsed))
         return 0
     finally:
         if args.keep:

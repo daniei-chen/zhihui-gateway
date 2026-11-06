@@ -24,7 +24,9 @@ python3 ops/integrity/verify-runtime.py \
   --fail-on-overlay
 ```
 
-退出码：`0` 通过；`2` 目录/参数错误；`3` 存在未签名的运行覆盖层。
+退出码：`0` 报告生成完成；`2` 目录/参数错误；`3` 在 `--fail-on-overlay` 下发现运行覆盖层。
+`0` 不代表来源可信或基线一致：本工具不验签，missing/extra/changed 仍须由调用方检查，
+不能仅以退出码批准发布。
 
 输出包含：逐文件 sha256/size、`untrusted_overlay` 列表、与基线清单的 missing/extra/changed 差集。
 
@@ -37,5 +39,5 @@ python3 ops/integrity/verify-runtime.py \
 ## 未验证 / 边界
 
 - 未在真实 release 目录跑过（本地无 `/opt` 路径），脚本已用合成目录自测；
-- `managed-release.json` 实际格式需在只读授权下确认（脚本兼容 dict/list 两种常见形态）；
+- 兼容仓库 managed-release 的 `candidate_sha256`、运行清单的 `sha256`，以及 dict/list 两种结构；缺失、冲突或无效摘要拒绝作为基线；
 - 信任锚的权限模型（公钥文件属主、是否 root-only）需在服务器上核对。

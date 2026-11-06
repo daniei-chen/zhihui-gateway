@@ -27,15 +27,16 @@ IP 是这里能拿到的最省事、也最粗的标识。要更严就得引入�
 
 两条设计约束值得先知道
 ----------------------
-1. **key 明文只在此刻返回一次**（库里只存 hash + 前缀，与 create_key 一致）。
-   所以结果必须一次性给全，且界面要提示「离开后无法再看到」——这是「直接发
-   key」方案的固有代价，不是缺陷，但 UI 必须处理好。
+1. 普通 `api_keys` 表只存 hash + 前缀；红包的 `red_packet_shares.token`
+   **另存明文**以支持后续领取和按 IP 找回。创建响应和符合 `claim_info` 条件的
+   查询都可能返回明文，因此红包码、数据库及其备份均需按凭据保护。
 2. **默认 7 天失效**。发出去的东西收不回，且熟人场景里常见「拿到就忘了」；
    给个默认期限让它们自动清理，比留一堆永不失效的 key 干净。
 """
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import time
 
@@ -149,6 +150,12 @@ def validate(total: float, shares: int, kind: str, mode: str,
 
     if not isinstance(total, (int, float)) or isinstance(total, bool) or total <= 0:
         raise RedPacketError('总额必须大于 0')
+    try:
+        finite = math.isfinite(total)
+    except OverflowError:
+        finite = False
+    if not finite:
+        raise RedPacketError('总额必须是有限数值')
     # 关键约束：分到每份不能低于最小单位。
     # 不拦的话 split_amount 会产出 0 或负数的份额，那些 key 等于一建出来
     # 就超限（配额 0 = 不限！见 keysvc 的语义），反而变成无限额度的钥匙。
@@ -171,7 +178,7 @@ def create_packet(name: str, kind: str, total: float, shares: int,
     整批写在**同一个事务**里：中途失败就整体回滚，不会留下「几个 key 建好了、
     红包记录却没有」的半成品——那些 key 没人知道是红包发的，也就收不回来。
 
-    `models`：token 红包必填、积分红包必须为空（见 `validate`）。
+    `models`：token 红包必填、积分红包可选（见 `validate`）。
     """
     validate(total, shares, kind, mode, ttl_days, models)
 
@@ -230,11 +237,11 @@ def create_packet(name: str, kind: str, total: float, shares: int,
         'total_amount': float(total),
         'shares': shares,
         'mode': mode,
-        'models': model_list,   # token 红包非空、积分红包恒为空
+        'models': model_list,   # token 红包非空、积分红包可选
         'code': code,           # 抽奖码 —— 拼出分享链接用（它是凭据，别外传）
         'expires_at': expires_at,
         'created_at': int(time.time()),
-        'keys': created,        # 含明文 key —— **仅此一次**
+        'keys': created,        # 含明文；后续领取/同IP找回见 claim_info
     }
 
 
@@ -266,7 +273,7 @@ def _models_of(raw: object) -> list[str]:
 
 
 def list_packets() -> list[dict]:
-    """红包列表（不含明文 key —— 库里本来也没有）。"""
+    """红包列表不返回明文 key；份额表为领取功能另存明文。"""
     rows = db.query(
         'SELECT p.*, '
         '  (SELECT COUNT(*) FROM red_packet_shares s WHERE s.packet_id = p.id) AS shares_actual '
@@ -377,22 +384,21 @@ def revoke_packet(packet_id: int) -> int:
     删除后 `red_packet_shares.key_id` 会悬空（指向不存在的密钥），所以
     `packet_detail` 用的是 LEFT JOIN，界面上把这类显示成已收回。
     """
-    rows = db.query(
-        'SELECT key_id FROM red_packet_shares WHERE packet_id = ?', (packet_id,))
-    key_ids = [int(r['key_id']) for r in rows if r['key_id']]
-    for kid in key_ids:
-        try:
-            keysvc.delete_key(kid)
-        except Exception:  # noqa: BLE001
-            # 单把删不掉（例如已被手工删过）不该让整批收回失败
-            continue
-    # 未领的份额用空 IP 占位（抽奖只认 claimed_by_ip IS NULL）。
-    # 不删行：删了就看不出「这个红包原本几份、收回时还剩几份」。
-    db.execute(
-        "UPDATE red_packet_shares SET claimed_by_ip = '', claimed_at = ?, token = '' "
-        "WHERE packet_id = ? AND claimed_by_ip IS NULL",
-        (int(time.time()), packet_id))
-    return len(key_ids)
+    # Deleting every key and invalidating undrawn shares is one revocation.
+    # A storage failure must roll back the whole batch, never report that still
+    # usable keys were revoked. Missing keys are already handled as False.
+    with db.transaction() as conn:
+        rows = conn.execute(
+            'SELECT key_id FROM red_packet_shares WHERE packet_id = ?', (packet_id,)).fetchall()
+        key_ids = [int(r['key_id']) for r in rows if r['key_id']]
+        deleted = sum(keysvc.delete_key(kid) for kid in key_ids)
+        # 未领的份额用空 IP 占位（抽奖只认 claimed_by_ip IS NULL）。
+        # 不删行：删了就看不出「这个红包原本几份、收回时还剩几份」。
+        conn.execute(
+            "UPDATE red_packet_shares SET claimed_by_ip = '', claimed_at = ?, token = '' "
+            "WHERE packet_id = ? AND claimed_by_ip IS NULL",
+            (int(time.time()), packet_id))
+    return deleted
 
 
 class ClaimError(ValueError):
@@ -487,6 +493,6 @@ def draw(code: str, ip: str) -> dict:
         'amount': float(row['amount']),
         'quota_kind': p['quota_kind'],
         'models': _models_of(p['models']),
-        'key': str(row['token']),     # 明文；库里那份只给这一次
+        'key': str(row['token']),     # 明文；同IP持码找回见 claim_info
         'expires_at': int(p['expires_at']),
     }

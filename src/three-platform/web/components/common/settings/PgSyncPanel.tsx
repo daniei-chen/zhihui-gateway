@@ -43,7 +43,7 @@ const BLANK: PgSyncConfig = {
 
 export function PgSyncPanel() {
   const t = useT();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
   const [form, setForm] = useState<PgSyncConfig>(BLANK);
   const [status, setStatus] = useState<PgSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,10 +60,38 @@ export function PgSyncPanel() {
    * 由 `patch()` 置位、保存成功时清零，`load()` 据此决定要不要回填。
    */
   const dirtyRef = useRef(false);
+  const mounted = useRef(false);
+  const lifecycle = useRef(0);
+  const configGeneration = useRef(0);
+  const statusGeneration = useRef(0);
+  const configController = useRef<AbortController | null>(null);
+  const runningRef = useRef(false);
+  const statusKnown = useRef(false);
+  const runPending = useRef(false);
+  const restartPolling = useRef<() => void>(() => {});
+  const acceptStatus = useCallback((next: PgSyncStatus) => {
+    statusKnown.current = true;
+    runningRef.current = !!next.running;
+    setStatus(next);
+  }, []);
+  const invalidateStatus = useCallback(() => { statusGeneration.current++; }, []);
+  const invalidateReads = useCallback(() => {
+    lifecycle.current++;
+    configGeneration.current++;
+    invalidateStatus();
+    configController.current?.abort();
+  }, [invalidateStatus]);
 
   const load = useCallback(async () => {
+    configController.current?.abort();
+    const controller = new AbortController();
+    configController.current = controller;
+    const generation = ++configGeneration.current;
+    const statusRead = ++statusGeneration.current;
+    const current = () => mounted.current && !controller.signal.aborted && generation === configGeneration.current;
     try {
-      const r = await pgSyncApi.config();
+      const r = await pgSyncApi.config(controller.signal);
+      if (!current()) return;
       // 有未保存输入时只刷新「上次导出 / 上次导入」这类**只读**展示，
       // 其余字段保持用户正在填的内容。
       setForm((f) => (dirtyRef.current
@@ -71,44 +99,107 @@ export function PgSyncPanel() {
            last_export_at: r.config.last_export_at,
            last_import_at: r.config.last_import_at}
         : r.config));
-      setStatus(r.status);
+      if (statusRead === statusGeneration.current) acceptStatus(r.status);
       setLoadError(false);
     } catch {
+      if (!current()) return;
       // 取不到配置时**不能**渲染那张默认值表单：那看起来像「我的配置就是空的」，
       // 用户会以为备份从没配过，然后重新填一遍。
       setLoadError(true);
     } finally {
-      setLoading(false);
+      if (current()) {
+        configController.current = null;
+        setLoading(false);
+      }
     }
-  }, []);
-
-  /** 只刷进度，不覆盖表单 —— 轮询期间用户可能正在改输入框 */
-  const pollStatus = useCallback(async () => {
-    try {
-      setStatus(await pgSyncApi.status());
-    } catch {
-      /* 任务进行中接口短暂不可用属正常，忽略 */
-    }
-  }, []);
+  }, [acceptStatus]);
 
   useEffect(() => {
+    mounted.current = true;
+    setLoading(true);
+    dirtyRef.current = false;
+    runningRef.current = false;
+    statusKnown.current = false;
+    setStatus(null);
+    setForm(BLANK);
     void load();
-  }, [load]);
+    return () => {
+      mounted.current = false;
+      invalidateReads();
+    };
+  }, [load, isAdmin, me?.username, invalidateReads]);
 
   const running = !!status?.running;
   useEffect(() => {
-    // 空闲 15 秒、任务进行中 1.5 秒；两条路径都**只拉 /status**，一次都不碰表单
-    // ——空闲时那份完整重载正是把输入打回去的元凶（issue #122）。
-    const interval = running ? 1500 : 15000;
-    const timer = window.setInterval(() => {
-      void pollStatus();
-    }, interval);
-    return () => window.clearInterval(timer);
-  }, [running, pollStatus]);
+    // Schedule after completion, so a slow response cannot accumulate requests.
+    // Only /status is polled; unsaved connection fields remain untouched.
+    let alive = true;
+    let timer: number | undefined;
+    let controller: AbortController | null = null;
+    let inFlight = false;
+    let resumeImmediately = false;
+    const clearTimer = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = () => {
+      clearTimer();
+      if (alive && !document.hidden) timer = window.setTimeout(() => void tick(), runningRef.current ? 1500 : 15000);
+    };
+    const tick = async () => {
+      clearTimer();
+      if (!alive || document.hidden || inFlight) return;
+      if (runPending.current) { schedule(); return; }
+      inFlight = true;
+      const request = new AbortController();
+      controller = request;
+      const generation = ++statusGeneration.current;
+      try {
+        const next = await pgSyncApi.status(request.signal);
+        if (alive && !request.signal.aborted && generation === statusGeneration.current) acceptStatus(next);
+      } catch {
+        // An unavailable read says nothing about task completion. Retain the
+        // last confirmed status and retry after the normal bounded interval.
+      } finally {
+        inFlight = false;
+        controller = null;
+        if (alive && resumeImmediately && !document.hidden) {
+          resumeImmediately = false;
+          void tick();
+        } else schedule();
+      }
+    };
+    const restart = () => {
+      statusGeneration.current++;
+      clearTimer();
+      controller?.abort();
+      if (!inFlight) schedule();
+    };
+    const visibility = () => {
+      clearTimer();
+      if (document.hidden) {
+        statusGeneration.current++;
+        controller?.abort();
+      } else if (inFlight) resumeImmediately = true;
+      else void tick();
+    };
+    restartPolling.current = restart;
+    document.addEventListener('visibilitychange', visibility);
+    schedule();
+    return () => {
+      alive = false;
+      invalidateStatus();
+      clearTimer();
+      controller?.abort();
+      document.removeEventListener('visibilitychange', visibility);
+      if (restartPolling.current === restart) restartPolling.current = () => {};
+    };
+  }, [acceptStatus, isAdmin, me?.username, invalidateStatus]);
 
   // 任务跑完的那一刻把配置也刷一遍（last_export_at 变了）
   const wasRunning = useRef(false);
   useEffect(() => {
+    if (wasRunning.current !== running) restartPolling.current();
     if (wasRunning.current && !running) void load();
     wasRunning.current = running;
   }, [running, load]);
@@ -170,19 +261,30 @@ export function PgSyncPanel() {
   }
 
   async function run(kind: 'export' | 'import') {
+    if (!isAdmin || loading || loadError || !statusKnown.current || runPending.current || runningRef.current) return;
+    const generation = lifecycle.current;
+    const current = () => mounted.current && generation === lifecycle.current;
+    runPending.current = true;
+    restartPolling.current();
     setBusy(true);
     try {
       const r = kind === 'export' ? await pgSyncApi.exportData() : await pgSyncApi.importData();
+      if (!current()) return;
       if (r.ok) {
         notify.ok(kind === 'export' ? t('pgSync.exportStarted') : t('pgSync.importStarted'));
-        setStatus(r.status);
+        statusGeneration.current++;
+        acceptStatus(r.status);
       } else {
         notify.warn(r.message);
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setBusy(false);
+      runPending.current = false;
+      if (mounted.current) {
+        setBusy(false);
+        restartPolling.current();
+      }
     }
   }
 
@@ -205,7 +307,7 @@ export function PgSyncPanel() {
   }
 
   const configured = !!form.host.trim() && !!form.dbname.trim();
-  const disabled = !isAdmin || busy || running;
+  const disabled = !isAdmin || busy || running || status === null;
   const logs = status?.logs ?? [];
 
   return (
@@ -315,18 +417,6 @@ export function PgSyncPanel() {
               onChange={(e) => patch({interval_minutes: Number(e.target.value) || 0})}
             />
           </div>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm">{t('pgSync.keepBackup')}</div>
-              <p className="text-xs text-muted-foreground">{t('pgSync.keepBackupDesc')}</p>
-            </div>
-            <Switch
-              aria-label={t('pgSync.keepBackup')}
-              checked={form.keep_local_backup}
-              disabled={!isAdmin}
-              onCheckedChange={(v) => patch({keep_local_backup: v})}
-            />
-          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
@@ -368,7 +458,8 @@ export function PgSyncPanel() {
                   {t('pgSync.exportBtn')}
                 </Button>
               }
-              onConfirm={() => void run('export')}
+              confirmDisabled={disabled || !configured}
+              onConfirm={() => run('export')}
             />
           </div>
 
@@ -398,7 +489,8 @@ export function PgSyncPanel() {
                   {t('pgSync.importBtn')}
                 </Button>
               }
-              onConfirm={() => void run('import')}
+              confirmDisabled={disabled || !configured}
+              onConfirm={() => run('import')}
             />
           </div>
         </div>

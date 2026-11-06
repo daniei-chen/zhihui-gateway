@@ -436,7 +436,11 @@ class SecurityPageHonestyTest(unittest.TestCase):
         code = _code(_SECURITY)
         save = code.find('async function saveConfig')
         self.assertGreaterEqual(save, 0, '安全页找不到 saveConfig')
-        body = code[save:save + 900]
+        # 保存现在包含同步互斥与代次检查，不能再用任意 900 字符窗口截断函数。
+        # 取到下一个同层 async handler，避免把它的刷新/清状态误算到本次保存。
+        end = code.find('\n  async function ', save + 1)
+        self.assertGreater(end, save, '找不到 saveConfig 的下一处同层 handler 边界')
+        body = code[save:end]
         self.assertIn('await reload()', body,
                       'saveConfig 没有等这一轮刷新落地')
         self.assertLess(
@@ -448,9 +452,10 @@ class SecurityPageHonestyTest(unittest.TestCase):
         # 刷新失败就把显示退回旧值，开关照样跳回去、用户照样以为没保存上——只不
         # 过触发条件从「撤早了」换成了「刷新失败」。两种形态都要防。
         self.assertRegex(
-            body, r'if\s*\(\s*await\s+reload\(\)\s*\)',
-            'saveConfig 无条件撤掉乐观值：刷新失败时开关会跳回旧值，'
-            '而写入其实已经成功（顶部常驻提示已说明列表没刷上）',
+            body,
+            r'if\s*\(\s*await\s+reload\(\)\s*&&\s*current\(\)\s*\)\s*setOptimistic\(null\)',
+            'saveConfig 只能在刷新成功且保存代次仍有效时撤掉乐观值：刷新失败会'
+            '让已成功写入的开关跳回旧值，旧代次完成也不能清除新上下文的状态',
         )
 
 

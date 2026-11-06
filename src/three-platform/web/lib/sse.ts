@@ -40,6 +40,8 @@ export interface SseParserOptions {
    * 并把 `overflowed` 置 true —— 上层据此给出「响应异常」而不是继续拼。
    */
   maxDataBytes?: number;
+  /** Raw line limit, including comments/unknown fields; defaults to maxDataBytes + 6. */
+  maxLineBytes?: number;
 }
 
 export interface SseParser {
@@ -67,12 +69,23 @@ const DEFAULT_MAX_DATA_BYTES = 1024 * 1024;
  */
 export function createSseParser(options: SseParserOptions = {}): SseParser {
   const maxDataBytes = options.maxDataBytes ?? DEFAULT_MAX_DATA_BYTES;
-  const decoder = new TextDecoder('utf-8', {fatal: false, ignoreBOM: false});
+  const maxLineBytes = options.maxLineBytes ?? maxDataBytes + 6;
+  if (!Number.isSafeInteger(maxDataBytes) || maxDataBytes < 0
+      || !Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) {
+    throw new RangeError('SSE limits must be finite, non-negative safe integers (line limit > 0)');
+  }
+  // Strip the BOM once for both byte and string input, never at a later boundary.
+  const decoder = new TextDecoder('utf-8', {fatal: false, ignoreBOM: true});
   /** 只有超限防护用得到；按真实 UTF-8 字节数算，不能用字符数（CJK 是 3 字节） */
   const encoder = new TextEncoder();
 
-  /** 尚未处理完的文本（可能是半行，或半行 + 可能被拆开的 CRLF） */
-  let buf = '';
+  // Keep fragments until a line ends. Re-scanning/concatenating a growing partial
+  // line on every push is quadratic, even when the final event is within its cap.
+  let lineParts: string[] = [];
+  let lineBytes = 0;
+  let previousHighSurrogate = false;
+  let pendingCR = false;
+  let atStart = true;
   /** 当前事件累积的 data 行 */
   let dataLines: string[] = [];
   let dataBytes = 0;
@@ -90,6 +103,18 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
     dataLines = [];
     dataBytes = 0;
     eventName = '';
+  };
+
+  const overflow = (out: SseEvent[], message: string): void => {
+    if (overflowed) return;
+    overflowed = true;
+    resetEvent();
+    lineParts = [];
+    lineBytes = 0;
+    previousHighSurrogate = false;
+    pendingCR = false;
+    lastId = undefined;
+    out.push({event: 'error', data: message});
   };
 
   /** 派发当前缓冲的事件；没有 data 行（或 data 为空串）时不派发（规范） */
@@ -127,9 +152,7 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
         dataLines.push(value);
         dataBytes += encoder.encode(value).length + 1; // +1 = 行间换行
         if (dataBytes > maxDataBytes) {
-          overflowed = true;
-          resetEvent();
-          out.push({event: 'error', data: `sse event exceeds ${maxDataBytes} bytes`});
+          overflow(out, `sse event exceeds ${maxDataBytes} bytes`);
         }
         break;
       case 'event':
@@ -140,74 +163,82 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
         if (!value.includes('\u0000')) lastId = value;
         break;
       case 'retry':
-        if (/^\d+$/.test(value)) retry = Number(value);
+        if (/^\d+$/.test(value) && Number.isSafeInteger(Number(value))) retry = Number(value);
         break;
       default:
         break; // 未知字段忽略
     }
   };
 
-  /** 从 buf 里切出完整行；`final` 为真时把残留当作最后一行 */
-  const consume = (out: SseEvent[], final: boolean): void => {
-    let start = 0;
-    for (;;) {
-      let cr = -1;
-      let lf = -1;
-      for (let i = start; i < buf.length; i += 1) {
-        const c = buf.charCodeAt(i);
-        if (c === 0x0a) {
-          lf = i;
-          break;
-        }
-        if (c === 0x0d) {
-          cr = i;
-          break;
-        }
-      }
-      if (lf !== -1) {
-        processLine(buf.slice(start, lf), out);
-        start = lf + 1;
-        continue;
-      }
-      if (cr !== -1) {
-        // CRLF 可能被拆在两个分片里：缓冲末尾的 CR 先等下一个分片确认
-        if (cr + 1 === buf.length && !final) break;
-        const skip = buf.charCodeAt(cr + 1) === 0x0a ? 2 : 1;
-        processLine(buf.slice(start, cr), out);
-        start = cr + skip;
-        continue;
-      }
-      break; // 没有行结束符
-    }
-    buf = buf.slice(start);
+  const finishLine = (out: SseEvent[]): void => {
+    const line = lineParts.join('');
+    lineParts = [];
+    lineBytes = 0;
+    previousHighSurrogate = false;
+    processLine(line, out);
+  };
 
-    if (final && buf.length > 0) {
-      processLine(buf, out);
-      buf = '';
+  /** Scan each new code unit once and bound storage before a newline arrives. */
+  const consume = (text: string, out: SseEvent[]): void => {
+    if (!text || overflowed) return;
+    let start = 0;
+    if (atStart) {
+      atStart = false;
+      if (text.charCodeAt(0) === 0xfeff) start = 1;
     }
+    if (pendingCR) {
+      pendingCR = false;
+      finishLine(out);
+      if (overflowed) return;
+      if (text.charCodeAt(start) === 0x0a) start += 1;
+    }
+    for (let i = start; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code === 0x0a || code === 0x0d) {
+        if (i > start) lineParts.push(text.slice(start, i));
+        // A trailing CR may be the first half of CRLF. Preserve the existing
+        // dispatch timing until the next fragment (or flush) resolves it.
+        if (code === 0x0d && i + 1 === text.length) {
+          pendingCR = true;
+          return;
+        }
+        finishLine(out);
+        if (overflowed) return;
+        if (code === 0x0d && text.charCodeAt(i + 1) === 0x0a) i += 1;
+        start = i + 1;
+      } else {
+        // UTF-8 size, including surrogate pairs split across string fragments.
+        lineBytes += code < 0x80 ? 1 : code < 0x800 ? 2
+          : code >= 0xdc00 && code <= 0xdfff && previousHighSurrogate ? 1 : 3;
+        previousHighSurrogate = code >= 0xd800 && code <= 0xdbff;
+        if (lineBytes > maxLineBytes) {
+          overflow(out, `sse line exceeds ${maxLineBytes} bytes`);
+          return;
+        }
+      }
+    }
+    if (start < text.length) lineParts.push(text.slice(start));
   };
 
   return {
     push(chunk) {
       const out: SseEvent[] = [];
-      if (typeof chunk === 'string') {
-        // 字符串分片时 TextDecoder 不参与，BOM 要自己剥（字节分片由 decoder 处理）
-        const text = buf === '' && chunk.charCodeAt(0) === 0xfeff ? chunk.slice(1) : chunk;
-        buf += text;
-      } else {
-        // stream: true —— 保留不完整的多字节序列到下一次
-        buf += decoder.decode(chunk, {stream: true});
-      }
-      consume(out, false);
+      if (overflowed) return out;
+      consume(typeof chunk === 'string' ? chunk : decoder.decode(chunk, {stream: true}), out);
       return out;
     },
 
     flush() {
       const out: SseEvent[] = [];
+      if (overflowed) return out;
       // 解码器尾部：把最后一个分片里残缺的多字节序列吐出来（可能是 U+FFFD，
       // 但至少不会把整条流卡住）
-      buf += decoder.decode();
-      consume(out, true);
+      consume(decoder.decode(), out);
+      if (pendingCR || lineParts.length > 0) {
+        pendingCR = false;
+        finishLine(out);
+      }
+      if (overflowed) return out;
       if (dataLines.length > 0) {
         truncated = true;
         dispatch(out);

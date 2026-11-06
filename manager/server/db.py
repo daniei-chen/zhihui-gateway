@@ -574,6 +574,10 @@ def _connect_locked() -> sqlite3.Connection:
         try:
             _conn = sqlite3.connect(str(config.DB_PATH), check_same_thread=False)
             _conn.row_factory = sqlite3.Row
+            if _conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_wb_restore_quarantine'").fetchone():
+                _conn.close()
+                _conn = None
+                raise RuntimeError('该数据库是隔离 PG 恢复产物；缺少钱包配对与离线激活证明，禁止作为现网主库启动')
             _conn.execute('PRAGMA journal_mode=WAL')
             _conn.execute('PRAGMA synchronous=FULL')
             # U27（2026-10-28）：把等待预算**显式化**。这个值原先来自
@@ -2024,7 +2028,8 @@ def reconcile_credit_from_events(actor: str, reason: str, *, apply: bool = False
     rows = [dict(r) for r in query(
         'SELECT k.id, k.used_credit_units, '
         '  COALESCE((SELECT SUM(e.credit_units) FROM usage_events e '
-        "            WHERE e.key_id = k.id), 0) AS expected "
+        "            WHERE e.key_id = k.id), 0) - COALESCE((SELECT event_units_before "
+        "FROM usage_reset_events r WHERE r.key_id=k.id ORDER BY r.id DESC LIMIT 1),0) AS expected "
         'FROM api_keys k ORDER BY k.id')]
     adjustable, protected = [], []
     for r in rows:
@@ -2047,6 +2052,11 @@ def reconcile_credit_from_events(actor: str, reason: str, *, apply: bool = False
                 if fresh is None:
                     continue
                 cur = int(fresh['used_credit_units'] or 0)
+                latest=query_one('SELECT COALESCE(SUM(credit_units),0) - COALESCE('
+                    '(SELECT event_units_before FROM usage_reset_events WHERE key_id=? ORDER BY id DESC LIMIT 1),0) '
+                    'AS expected, COALESCE((SELECT id FROM usage_reset_events WHERE key_id=? ORDER BY id DESC LIMIT 1),0) '
+                    'AS reset_epoch FROM usage_events WHERE key_id=?',(kid,kid,kid))
+                item['expected_units']=int(latest['expected'])
                 delta = item['expected_units'] - cur
                 if delta <= 0:
                     continue
@@ -2055,6 +2065,8 @@ def reconcile_credit_from_events(actor: str, reason: str, *, apply: bool = False
                 execute('UPDATE api_keys SET used_credit = used_credit_units * 1.0 / ? '
                         'WHERE id = ?', (1000000, kid))
                 event_id = 'reconcile:%d:%d' % (kid, item['expected_units'])
+                if latest['reset_epoch']:
+                    event_id='reconcile:%d:epoch:%d:%d' % (kid,latest['reset_epoch'],item['expected_units'])
                 execute('INSERT OR IGNORE INTO adjustment_events VALUES(?,?,?,?,?,?,?,?)',
                         (event_id, event_id, int(time.time()), kid, 0, delta,
                          actor[:128], reason[:500]))

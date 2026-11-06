@@ -96,10 +96,10 @@ class AttemptBillingFactsTest(unittest.TestCase):
                   prompt_tokens=0, completion_tokens=0)
         self._attempt('r2', 1, 'selected', status=0)
         report = ledger.attempt_billing_report('r2')
-        self.assertEqual(report['attempts'][0]['billing_fact'], 'not_applicable')
+        self.assertEqual(report['attempts'][0]['billing_fact'], 'unknown')
         self.assertEqual(report['attempts'][0]['billing_source'], 'absent')
-        self.assertFalse(report['attempts'][0]['reached_upstream'])
-        self.assertEqual(report['billing_fact_counts']['not_applicable'], 1)
+        self.assertIsNone(report['attempts'][0]['reached_upstream'])
+        self.assertEqual(report['billing_fact_counts']['unknown'], 1)
 
     def test_attempt_reached_upstream_without_terminal_is_unknown(self) -> None:
         self._log('r3', status=502, terminal_state='upstream_error',
@@ -188,7 +188,7 @@ class AttemptBillingFactsTest(unittest.TestCase):
                    ('r8',))
         report = ledger.attempt_billing_report('r8')
         self.assertEqual(report['recorded_drift']['1'],
-                         {'recorded': 'not_applicable', 'derived': 'reported'})
+                         {'recorded': 'unknown', 'derived': 'reported'})
         self.assertEqual(report['attempts'][0]['billing_fact'], 'reported',
                          '报告以当前事实为准，同时明示已落库值发生了漂移')
 

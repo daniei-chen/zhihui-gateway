@@ -1,0 +1,6 @@
+# QA only: root offline signing tests. Not an application dependency lock.
+# Official PyPI wheels, verified 2026-11-05 for Ubuntu x86_64 / CPython 3.12.
+# Provenance: docs/audits/2026-11-05/evidence/ci-pypi-lock-verification.json
+cryptography==50.0.2 --hash=sha256:9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079
+cffi==2.1.1 --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+pycparser==3.12 --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e

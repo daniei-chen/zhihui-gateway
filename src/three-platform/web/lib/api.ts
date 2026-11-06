@@ -1,6 +1,7 @@
 import axios, {AxiosError} from 'axios';
-import type {AxiosRequestConfig} from 'axios';
+import type {AxiosRequestConfig, InternalAxiosRequestConfig} from 'axios';
 import {BASE_PATH} from './base-path';
+import {validateAccountExport} from './account-export.mjs';
 import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
 import {t, tp} from './i18n';
 import {platformStore, type Platform} from './platform-store';
@@ -69,7 +70,8 @@ import type {
 } from './types';
 
 export const http = axios.create({
-  ...(process.env.NEXT_PUBLIC_ZHIHUI_DEMO === '1' ? {adapter: require('./public-demo').publicDemoAdapter} : {}),
+  ...(process.env.NEXT_PUBLIC_ZHIHUI_DEMO === '1' ? {adapter: async (config: InternalAxiosRequestConfig) =>
+    (await import('./public-demo')).publicDemoAdapter(config)} : {}),
   // 子路径部署时接口也挂在前缀下（反向代理剥掉前缀再转发给本服务）。
   // 这里必须用 basePath，否则所有请求都会打到域名根路径的 /api 上。
   baseURL: BASE_PATH,
@@ -154,7 +156,7 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (r) => r,
   (error: AxiosError) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    if (error.response?.status === 401 && !error.config?.signal?.aborted && typeof window !== 'undefined') {
       // 会话失效：清掉缓存的登录态，避免仍显示管理员入口。
       // `hadSession` 决定要不要说「会话已过期」：首次访问本来就没有会话，
       // 那是「请登录」而不是「过期了」（用户会以为面板坏了）。
@@ -190,8 +192,8 @@ http.interceptors.response.use(
   },
 );
 
-const get = async <T>(url: string, params?: Record<string, unknown>): Promise<T> =>
-  (await http.get<T>(url, {params})).data;
+const get = async <T>(url: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> =>
+  (await http.get<T>(url, {params, ...(signal ? {signal} : {})})).data;
 const post = async <T>(url: string, body?: unknown, scope?: AxiosRequestConfig): Promise<T> =>
   (await (scope ? http.post<T>(url, body, scope) : http.post<T>(url, body))).data;
 const patch = async <T>(url: string, body?: unknown): Promise<T> =>
@@ -202,7 +204,7 @@ const del = async <T>(url: string): Promise<T> => (await http.delete<T>(url)).da
 
 /* ── 鉴权 ───────────────────────────────────────────── */
 export const authApi = {
-  me: () => get<Me>('/api/me'),
+  me: (signal?: AbortSignal) => http.get<Me>('/api/me', {signal}).then(response => response.data),
   login: (username: string, password: string) =>
     post<{ok: boolean; username: string; role: string}>('/api/login', {username, password}),
   logout: () => post<{ok: boolean}>('/api/logout'),
@@ -289,7 +291,7 @@ export const accountApi = {
     const response = await http.get<Blob>('/api/accounts/export' + groupQs(upstreamId), {
       responseType: 'blob',
     });
-    return response.data;
+    return validateAccountExport(response.data);
   },
   upload: (files: File[], upstreamId?: number | null, overwrite = false) => {
     const body = new FormData();
@@ -826,7 +828,7 @@ export const systemApi = {
 
 /* ── PostgreSQL 异地备份（设置 → 数据备份）────────────── */
 export const pgSyncApi = {
-  config: () => get<PgSyncConfigResponse>('/api/settings/pg-sync'),
+  config: (signal?: AbortSignal) => get<PgSyncConfigResponse>('/api/settings/pg-sync', undefined, signal),
   /** 保存连接配置；password 传掩码或空串表示沿用已保存的值 */
   save: (body: Partial<PgSyncConfig>) =>
     post<{config: PgSyncConfig}>('/api/settings/pg-sync', body),
@@ -839,5 +841,5 @@ export const pgSyncApi = {
   /** 从 PostgreSQL 拉回数据。**会覆盖本地数据**，前端必须先二次确认 */
   importData: () =>
     post<{ok: boolean; message: string; status: PgSyncStatus}>('/api/settings/pg-sync/import'),
-  status: () => get<PgSyncStatus>('/api/settings/pg-sync/status'),
+  status: (signal?: AbortSignal) => get<PgSyncStatus>('/api/settings/pg-sync/status', undefined, signal),
 };

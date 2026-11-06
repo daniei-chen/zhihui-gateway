@@ -6,11 +6,10 @@ import {PortalError, portalFetch, portalTime} from '@/lib/portal-api';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/animate-ui/radix/dialog';
 
 type Key = {id: number; label: string; prefix: string; enabled: boolean; created_at: number};
-type Keys = {items: Key[]; allowed_models: string[]; dispatch_enabled?: boolean; pool_enabled?: boolean; model_discovery_enabled?: boolean; dispatch_note?: string};
+type Keys = {items: Key[]; allowed_models: string[]; can_initialize?: boolean; single_key?: boolean; dispatch_enabled?: boolean; pool_enabled?: boolean; model_discovery_enabled?: boolean; dispatch_note?: string};
 
 export default function PortalKeys({onUnauthorized}: {onUnauthorized: () => void}) {
   const [data, setData] = useState<Keys | null>(null);
-  const [label, setLabel] = useState('我的调用密钥');
   const [secret, setSecret] = useState<{id: number; value: string} | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -72,11 +71,11 @@ export default function PortalKeys({onUnauthorized}: {onUnauthorized: () => void
       else setError(err instanceof Error ? err.message : '列表读取失败，请重试。');
     } finally {inFlight.current = false; if (generation === sequence.current) {setBusy(false); setLoading(false);}}
   }
-  return <section className="portal-panel portal-keys"><div className="portal-panel-heading"><div><h2>我的调用密钥</h2><p className="portal-small">密钥只展示一次，请通过安全渠道保存。</p></div>
+  return <section className="portal-panel portal-keys"><div className="portal-panel-heading"><div><h2>默认调用密钥</h2><p className="portal-small">继续使用同一把默认密钥，调用统计记在你的用户名下。</p></div>
     <button className="portal-button" disabled={busy || loading} onClick={() => void refresh()}>刷新列表</button></div>
-    {data?.dispatch_enabled === false && <div className="portal-notice" role="status"><strong>密钥已创建，不代表模型调用已开放。</strong><p className="portal-small">{data.model_discovery_enabled ? '已启用的密钥可读取模型目录。' : '模型目录暂不可读取。'}{data.dispatch_note}</p></div>}
+    {data?.dispatch_enabled === false && <div className="portal-notice" role="status"><strong>模型调用暂未开放</strong><p className="portal-small">{data.model_discovery_enabled ? '已启用的密钥可读取模型目录。' : '模型目录暂不可读取。'}{data.dispatch_note}</p></div>}
     <details className="portal-key-help"><summary>接入说明与调用规则</summary>
-    <p className="portal-small">由公共池统一调度，不固定使用你添加的账号。多个密钥共用你的积分与请求锁，不绑定来源 IP；生成密钥不会解除调用保护。</p>
+    <p className="portal-small">已有密钥直接沿用，不重复生成。由公共池统一调度，使用你的积分钱包与请求锁；密钥不会解除调用保护。</p>
     <p className="portal-small">仅限 DeepSeek 国内模型：{data?.allowed_models.join(' / ') || '正在读取白名单'}。模型实际可用性以网关目录为准。</p>
     <label className="portal-field">OpenAI 兼容 Base URL<input className="portal-input" value={base} readOnly onFocus={event => event.target.select()} /></label>
     <p className="portal-small">单用户一次一个计费请求；费用缺失或流中断会保留冻结，需核对后恢复，不当成免费调用。</p>
@@ -88,15 +87,15 @@ export default function PortalKeys({onUnauthorized}: {onUnauthorized: () => void
     {secret && <div className="portal-notice" role="status"><strong>明文仅显示这一次，请立即保存。</strong>
       <label className="portal-field">新密钥<input className="portal-input" value={secret.value} readOnly autoComplete="off" spellCheck={false} onFocus={event => event.target.select()} /></label>
       <button className="portal-button" onClick={() => setSecret(null)}>我已保存，隐藏明文</button></div>}
-    <form className="portal-key-create" onSubmit={event => {event.preventDefault(); if (secret || needsRefresh || !data || data.items.filter(key => key.enabled).length >= 5) return;
-      void run(() => portalFetch<{id: number; key: string}>('portal/keys', {method: 'POST', body: JSON.stringify({label})}),
-        result => setSecret({id: result.id, value: result.key}), '密钥已生成');
-    }}><label className="portal-field">密钥名称<input className="portal-input" required maxLength={60} value={label} disabled={busy} onChange={event => setLabel(event.target.value)} /></label>
-      <button className="portal-button primary" disabled={busy || loading || !!secret || needsRefresh || !data || data.items.filter(key => key.enabled).length >= 5}>{busy ? '处理中…' : secret ? '请先保存新密钥' : needsRefresh ? '请先刷新核对' : '生成密钥'}</button></form>
-    {data?.items.map(key => <article className="portal-account" key={key.id}><div><div className="portal-account-name">{key.label}</div>
+    {data?.can_initialize && <form className="portal-key-create" onSubmit={event => {event.preventDefault(); if (secret || needsRefresh || !data.can_initialize) return;
+      void run(() => portalFetch<{id: number; key: string | null; existing?: boolean}>('portal/keys', {method: 'POST', body: '{}'}),
+        result => {if (result.key) setSecret({id: result.id, value: result.key});}, '默认密钥已就绪');
+    }}><button className="portal-button primary" disabled={busy || loading || !!secret || needsRefresh}>{busy ? '处理中…' : secret ? '请先保存默认密钥' : needsRefresh ? '请先刷新核对' : '启用默认密钥'}</button></form>}
+    {data?.items.slice(0,1).map(key => <article className="portal-account" key={key.id}><div><div className="portal-account-name">{key.label} · 默认密钥</div>
       <p className="portal-small">{key.prefix}… · {portalTime(key.created_at)} · {key.enabled ? '已启用' : '已失效'}</p></div>
       <button className="portal-button" disabled={busy || needsRefresh || !key.enabled} onClick={() => setRevoke(key)}>撤销</button></article>)}
-    {data && !data.items.length && <p className="portal-empty">还没有调用密钥。密钥明文不会保存在浏览器本地存储。</p>}
+    {data && !data.items.length && <p className="portal-empty">尚未启用默认密钥。启用后请保存仅显示一次的明文。</p>}
+    {!!data?.items.length && !secret && <p className="portal-small">继续使用你已保存的密钥。历史明文不能重新读取，遗失请联系管理员；不会自动更换你的密钥。</p>}
     {revoke && <Dialog open onOpenChange={open => { if (!open && !inFlight.current) setRevoke(null); }}><DialogContent className="portal-ops-dialog" showCloseButton={!busy}
       onEscapeKeyDown={event => {if (inFlight.current) event.preventDefault();}} onInteractOutside={event => {if (inFlight.current) event.preventDefault();}}>
       <DialogHeader><DialogTitle>撤销密钥 · {revoke.label}</DialogTitle><DialogDescription>撤销后不能恢复。正在执行的请求仍按实际用量结算，不会因此解除费用未知冻结。</DialogDescription></DialogHeader>

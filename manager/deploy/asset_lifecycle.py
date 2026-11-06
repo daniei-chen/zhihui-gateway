@@ -131,6 +131,8 @@ def dir_size(path: Path) -> int:
 def open_paths() -> set[str]:
     """当前被任何进程打开的真实路径（用于排除「正在使用」的资产）。"""
     opened: set[str] = set()
+    if not Path('/proc').is_dir():
+        return opened  # Read-only audit; --apply is unconditionally retired.
     for pid in os.listdir('/proc'):
         if not pid.isdigit():
             continue
@@ -168,7 +170,7 @@ def denied(path: Path, active: Path | None, opened: set[str]) -> str | None:
         return '预算 owner 锁文件只能由 budget 层按状态处理'
     if active is not None and (path == active or path in active.parents):
         return '当前 release'
-    if text in opened:
+    if any(text == entry or path in Path(entry).parents for entry in opened):
         return '正被进程打开'
     return None
 
@@ -178,7 +180,8 @@ def audit() -> dict:
     opened = open_paths()
     now = time.time()
     report: dict = {'active_release': str(active) if active else None,
-                    'now': int(now), 'groups': []}
+                    'now': int(now), 'groups': [], 'destructive_apply_supported': False,
+                    'process_observation_supported': Path('/proc').is_dir()}
 
     # ── releases ──────────────────────────────────────────────────────
     items = []
@@ -189,7 +192,12 @@ def audit() -> dict:
                 if p.is_dir() and not p.is_symlink() and not p.name.startswith('.')]
         # 按**版本语义**排序，不按 mtime（见 release_order_key 的说明）
         dirs.sort(key=lambda p: release_order_key(p.name), reverse=True)
-        keep = set(dirs[:KEEP_RELEASES])
+        families = {}
+        for directory in dirs:
+            version = _VERSION_RE.match(directory.name)
+            family = version.group(1) if version else 'unversioned'
+            families.setdefault(family, []).append(directory)
+        keep = {directory for members in families.values() for directory in members[:KEEP_RELEASES]}
         if active is not None:
             keep.add(active)
         for path in dirs:
@@ -305,50 +313,10 @@ def parse_group_list(text: str) -> set:
     return {part.strip() for part in text.replace('，', ',').split(',') if part.strip()}
 
 
+
 def apply_prune(report: dict, token: str, only: str = '', exclude: str = '') -> int:
-    if token != report['confirm_token']:
-        print('令牌不匹配：拒绝执行。当前令牌 %s' % report['confirm_token'], file=sys.stderr)
-        return 2
-    only_groups = parse_group_list(only)
-    exclude_groups = parse_group_list(exclude)
-    known = {group['name'] for group in report['groups']}
-    unknown = (only_groups | exclude_groups) - known
-    if unknown:
-        print('未知分组：%s（可选：%s）' % (', '.join(sorted(unknown)), ', '.join(sorted(known))),
-              file=sys.stderr)
-        return 2
-    active = Path(report['active_release']) if report['active_release'] else None
-    opened = open_paths()
-    removed = 0
-    freed = 0
-    for group in report['groups']:
-        if only_groups and group['name'] not in only_groups:
-            print('SKIP 分组 %s（--only 未包含）' % group['name'], file=sys.stderr)
-            continue
-        if group['name'] in exclude_groups:
-            print('SKIP 分组 %s（--exclude）' % group['name'], file=sys.stderr)
-            continue
-        for item in group['items']:
-            if item['action'] != 'prune':
-                continue
-            path = Path(item['path'])
-            reason = denied(path, active, opened)
-            if reason:
-                print('SKIP %s（%s）' % (path, reason), file=sys.stderr)
-                continue
-            try:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-            except OSError as exc:
-                print('FAIL %s（%s）' % (path, exc), file=sys.stderr)
-                continue
-            removed += 1
-            freed += item['size']
-            print('removed %-10s %s' % (human(item['size']), path))
-    print('\n完成：%d 项 / %s' % (removed, human(freed)))
-    return 0 if removed else 4
+    print('旧资产工具已退役写入能力；只提供审计。删除必须使用当前可信发布器的受锁保留流程。', file=sys.stderr)
+    return 3
 
 
 def main(argv: list[str]) -> int:

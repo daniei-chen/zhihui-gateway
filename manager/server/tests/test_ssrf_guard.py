@@ -60,7 +60,8 @@ class InternalHostRejectionTest(unittest.TestCase):
                 f'{h} 应被拒绝 —— 它能被用来探测内网或云元数据',
             )
 
-    def test_allowed_hosts(self) -> None:
+    @mock.patch('socket.getaddrinfo', return_value=[(2,1,6,'',('8.8.8.8',443))])
+    def test_allowed_hosts(self, dns) -> None:
         for h in self.ALLOWED:
             self.assertIsNone(
                 wb2api._reject_internal_host(h),
@@ -96,7 +97,7 @@ class TestUpstashEndpointTest(unittest.TestCase):
                 sent.append(u)
                 raise AssertionError('不应发出请求')
 
-        with mock.patch.object(config, 'http_client', _Client):
+        with mock.patch.object(wb2api.httpx, 'AsyncClient', _Client):
             ok, msg = asyncio.run(wb2api.test_upstash(url, 'tok'))
         return ok, msg, sent
 
@@ -108,7 +109,7 @@ class TestUpstashEndpointTest(unittest.TestCase):
             ok, msg, sent = self._call(url)
             self.assertFalse(ok, f'{url} 应被拒绝')
             self.assertEqual(sent, [], f'{url} 竟然发出了请求：{sent}')
-            self.assertIn('不允许探测', msg)
+            self.assertRegex(msg, r'未发送请求|只支持.*HTTPS|不允许探测')
 
     def test_public_target_is_actually_probed(self) -> None:
         """公网地址要照常探测 —— 修复不能把正常功能一起关掉。"""
@@ -132,7 +133,9 @@ class TestUpstashEndpointTest(unittest.TestCase):
                 sent.append(u)
                 return _Resp()
 
-        with mock.patch.object(config, 'http_client', _Client):
+        from server.services import pinnedprobe
+        with mock.patch.object(wb2api.httpx, 'AsyncClient', _Client), \
+             mock.patch.object(pinnedprobe, 'resolve_public', mock.AsyncMock(return_value=('8.8.8.8',))):
             ok, msg = asyncio.run(wb2api.test_upstash('https://us1-abc.upstash.io', 'tok'))
         self.assertTrue(ok, msg)
         self.assertEqual(len(sent), 1, '公网地址应正常探测')
@@ -275,7 +278,7 @@ class SelfHostedRedisProbeTest(unittest.TestCase):
         for host in ('metadata.tencentyun.com', 'metadata.google.internal'):
             ok, msg = self._probe(f'redis://{host}:6379')
             self.assertFalse(ok, host)
-            self.assertIn('不允许探测', msg)
+            self.assertRegex(msg, r'未发送请求|只支持.*HTTPS|不允许探测')
 
     def test_不是_redis_的回应要如实报错(self) -> None:
         """对端不说 RESP（比如连到了 HTTP 服务）：不能报「连接正常」。"""

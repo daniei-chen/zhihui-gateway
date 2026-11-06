@@ -28,6 +28,17 @@ class PublicPoolTests(fixtures.PortalTests):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    async def make_legacy_key(self, who='alice'):
+        """Preserve multi-key wallet tests as pre-upgrade data, not new issuance."""
+        with db.transaction() as conn:
+            made=keysvc.create_key('synthetic legacy',models=list(policy.MODELS),realm='cn',platforms=['workbuddy'],_conn=conn,_portal=True)
+            conn.execute('UPDATE api_keys SET source=? WHERE id=?',(policy.SOURCE,made['id']))
+        with store.transaction() as conn:
+            owner=conn.execute('SELECT sv FROM portal_users WHERE id=?',(who,)).fetchone()
+            conn.execute('INSERT INTO portal_key_links VALUES(?,?,?)',(made['id'],who,keysvc._hash(made['key'])))
+            conn.execute('INSERT INTO portal_keys VALUES(?,?,?,?,0)',(made['id'],owner['sv'],'synthetic legacy',NOW))
+        return made
+
     def enabled(self):
         return mock.patch.dict(os.environ, {'WB_PORTAL_PUBLIC_POOL_ENABLED': '1'})
 
@@ -108,12 +119,14 @@ class PublicPoolTests(fixtures.PortalTests):
             validate_environment({'WB_PORTAL_PUBLIC_POOL_ENABLED': 'yes'})
 
     async def test_key_limit_rejects_before_leaving_disabled_orphan(self):
-        for _ in range(5):
-            await self.make_key()
+        first=await self.make_key()
         before = db.query_one('SELECT COUNT(*) FROM api_keys')[0]
         for _ in range(2):
             response = await self.call('POST', '/api/portal/keys', json={'label': 'limit'})
-            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()['existing'])
+            self.assertEqual(response.json()['id'],first['id'])
+            self.assertIsNone(response.json()['key'])
         self.assertEqual(db.query_one('SELECT COUNT(*) FROM api_keys')[0], before)
 
     async def test_publication_after_sql_failure_recovers_own_file_without_overwrite(self):
@@ -228,7 +241,7 @@ class PublicPoolTests(fixtures.PortalTests):
         with store.transaction() as conn:
             account = store.require_account(conn, out['id'])
             store._grant(conn, account, 'checkin', 'later', 20 * store.SCALE, NOW, NOW + 200)
-        first, second = await self.make_key(), await self.make_key()
+        first, second = await self.make_key(), await self.make_legacy_key()
         db.execute(wallet.RECEIPTS)
         with self.enabled():
             key = keysvc.resolve(first['key'])
@@ -363,7 +376,7 @@ class PublicPoolTests(fixtures.PortalTests):
                 observability.current.reset(token)
 
     async def test_concurrent_keys_cannot_reserve_twice(self):
-        await self.pooled(); first, second = await self.make_key(), await self.make_key()
+        await self.pooled(); first, second = await self.make_key(), await self.make_legacy_key()
         with self.enabled():
             keys = [keysvc.resolve(value['key']) for value in (first, second)]
             def attempt(index):

@@ -156,6 +156,7 @@ export function ModelWhitelistInput({
             setDraft(e.target.value);
           }}
           onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
             if (e.key === 'Enter') {
               e.preventDefault();
               add(draft);

@@ -5,7 +5,7 @@
  *
  * 用**可断言的假 fetch / 假 reader**，所以能验证的真不只是「正文拼出来了」：
  *   · 一次调用只发一次请求（`calls.requests` 恒为 1，出错也不重试）；
- *   · 正常 EOF → 只 releaseLock；取消/读失败 → 先 cancel 再 releaseLock；
+ *   · 正常 EOF → 只 releaseLock；协议终态/取消/读失败 → 先 cancel 再 releaseLock；
  *   · `aborted`（用户点停止）与 `truncated`（上游没发 [DONE] 就断）分开；
  *   · 错误帧、HTTP 错误、非法 JSON、超长正文各走各的分支，不互相污染。
  *
@@ -101,8 +101,8 @@ console.log('正常终态：');
   check('onDelta received each delta', deltas, ['你', '好']);
   check('onUsage called', usages.length, 1);
   check('exactly one request (no duplicate POST / no double billing)', calls.requests, 1);
-  check('natural EOF releases lock', calls.releases, 1);
-  check('natural EOF does not cancel reader', calls.cancels, 0);
+  check('protocol terminal releases lock', calls.releases, 1);
+  check('protocol terminal cancels unread HTTP tail without waiting for EOF', calls.cancels, 1);
 }
 
 console.log('协议终态与截断：');

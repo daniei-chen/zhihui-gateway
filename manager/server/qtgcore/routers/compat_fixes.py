@@ -427,7 +427,7 @@ async def cached_pool_credits(request: Request) -> Dict[str, Any]:
 async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
     rt = _rt(request)
     plat = _platform(request)
-    if realm in ("cn", "intl"):
+    if realm in ("cn", "global", "intl"):
         # 该版本下没有账号时不给模型列表：「有这些模型可用」是假象——
         # 上游 /v1/models 是按账号池整体返回的，不分版本。
         try:
@@ -440,7 +440,7 @@ async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict
             _ok = False
             for _a in _rows:
                 _got = str(getattr(_a, "realm", "") or "").strip().lower()
-                if _got == realm or (not _got and realm == "cn"):
+                if ("global" if _got == "intl" else _got) == ("global" if realm == "intl" else realm) or (not _got and realm == "cn"):
                     _ok = True
                     break
             if not _ok:
@@ -477,7 +477,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
     """
     rt = _rt(request)
     plat = _platform(request)
-    if realm in ("cn", "intl"):
+    if realm in ("cn", "global", "intl"):
         # 该版本下没有账号时不该给出「这些模型可用」的假象：
         # Qoder / Trae 的 /v1/models 是按账号池整体返回的，不分版本。
         try:
@@ -490,7 +490,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
             _ok = False
             for _a in _rows:
                 _got = str(getattr(_a, "realm", "") or "").strip().lower()
-                if _got == realm or (not _got and realm == "cn"):
+                if ("global" if _got == "intl" else _got) == ("global" if realm == "intl" else realm) or (not _got and realm == "cn"):
                     _ok = True
                     break
             if not _ok:
@@ -556,7 +556,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
 async def fixed_playground_models(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
     rt = _rt(request)
     plat = _platform(request)
-    data = await _load_models(rt)
+    data = await _load_models(rt, plat)
     models = [{"id": r["id"], "name": r["name"], "efforts": r.get("efforts") or [],
                "series": r["series"]}
               for r in data[plat]]

@@ -55,6 +55,11 @@ class DecoderTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(sizes[-1],200000)
 
     async def test_tiny_identity_frames_are_coalesced_not_retained_per_byte(self):
+        # Production loops do not collect a Python stack for every timer. Keep
+        # this resource test independent of debug traceback overhead; timeout
+        # behaviour has dedicated tests in test_requestbody_timeout.py.
+        loop=asyncio.get_running_loop();debug=loop.get_debug()
+        loop.set_debug(False);self.addCleanup(loop.set_debug,debug)
         count=200000
         async def receive():
             nonlocal count

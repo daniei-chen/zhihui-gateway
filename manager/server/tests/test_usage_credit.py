@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import sqlite3
 import sys
 import tempfile
@@ -45,17 +46,26 @@ class KeyCreditQuotaTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_db = config.DB_PATH
         self._orig_users = config.USERS_FILE
+        self._orig_data = config.DATA_DIR
+        self._orig_spool = os.environ.get('WB_LEDGER_SPOOL_DIR')
         config.DB_PATH = pathlib.Path(self._tmp.name) / 'm.db'
         config.USERS_FILE = pathlib.Path(self._tmp.name) / 'users.json'
+        config.DATA_DIR = pathlib.Path(self._tmp.name)
+        os.environ['WB_LEDGER_SPOOL_DIR']=str(config.DATA_DIR/'ledger-spool')
         db._conn = None
         db.connect()
 
     def tearDown(self) -> None:
+        from server import budgetowner
+        budgetowner.close()
         if db._conn is not None:
             db._conn.close()
         db._conn = None
         config.DB_PATH = self._orig_db
         config.USERS_FILE = self._orig_users
+        config.DATA_DIR = self._orig_data
+        if self._orig_spool is None:os.environ.pop('WB_LEDGER_SPOOL_DIR',None)
+        else:os.environ['WB_LEDGER_SPOOL_DIR']=self._orig_spool
         self._tmp.cleanup()
 
     def _key(self, **kw) -> dict:

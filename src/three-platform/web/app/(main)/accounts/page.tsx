@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Gift,
   Zap,
@@ -174,6 +174,10 @@ function FullAccountsPage() {
    * 所以这里如实记下，并在积分列旁给一句说明（原实现是裸 `catch {}` 吞掉）。
    */
   const [creditsFailed, setCreditsFailed] = useState(false);
+  const [creditsBusy, setCreditsBusy] = useState(false);
+  const creditScope = useRef(0);
+  const creditRead = useRef(0);
+  const manualCreditRead = useRef<number | null>(null);
 
   /**
    * 账号池 = 这一页的**主数据**，单独一个 hook。
@@ -246,29 +250,40 @@ function FullAccountsPage() {
   // 首次进入应展示真实余额。服务端有 TTL 缓存，重复进入不会频繁请求。
   useEffect(() => {
     let alive = true;
+    creditScope.current += 1;
+    const request = ++creditRead.current;
+    const current = () => alive && request === creditRead.current;
+    const cleanup = () => {
+      alive = false;
+      creditScope.current += 1;
+      creditRead.current += 1;
+    };
     // 换分组就换了一套账号，上一组的实时积分/缓存元信息不再适用，先清掉；
     // 否则同一个 uid 在两组的账目会串味。
     setLiveCredits({});
     setCreditsMeta({});
     setCreditsFailed(false);
+    setCreditsBusy(false);
+    setBusyFile(null);
+    manualCreditRead.current = null;
     // Refreshing may contact the upstream and is an administrator action.
     // Read-only viewers retain the account/status snapshot without issuing it.
-    if (!isAdmin) return;
+    if (!isAdmin) return cleanup;
     (async () => {
       try {
         // force=false：60 秒内重复打开页面直接命中服务端缓存，
         // 不再每次都全量请求腾讯；命中时界面会明确标注「缓存」
         try {
           const snapshot = await accountApi.cachedCredits(groupId);
-          if (!alive) return;
+          if (!current()) return;
           setLiveCredits(Object.fromEntries(Object.entries(snapshot.credits).filter(([uid, value]) =>
             typeof value === 'number' && snapshot.meta[uid]?.source === 'cache')) as Record<string, number>);
           setCreditsMeta(snapshot.meta ?? {});
         } catch {
-          if (!alive) return;
+          if (!current()) return;
         }
         const r = await accountApi.refreshCredits(false, groupId, true);
-        if (!alive) return;
+        if (!current()) return;
         setLiveCredits(previous => ({...previous, ...Object.fromEntries(
             Object.entries(r.credits).filter(([, v]) => typeof v === 'number') as [string, number][],
           )}));
@@ -281,12 +296,10 @@ function FullAccountsPage() {
         // 这次没取到**不是**致命的：上游 /status 自带快照值，界面会照常显示并标注
         // 「上游快照」。但不能像原来那样裸吞——用户会以为快照就是当前余额。
         // 记下来，由积分列旁的一句说明如实交代（见 creditsFailed）。
-        if (alive) setCreditsFailed(true);
+        if (current()) setCreditsFailed(true);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return cleanup;
   }, [groupId, isAdmin]);
 
   // 上游状态（冷却 / 成功计数等）会随时间变化，页面停留时定时刷新，
@@ -303,27 +316,35 @@ function FullAccountsPage() {
   useHeartbeat(heartbeatReload, 30000);
 
   /** 刷新所有账号的实时积分（直接向腾讯查询，非上游缓存值） */
-  const [creditsBusy, setCreditsBusy] = useState(false);
   const refreshCredits = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin || manualCreditRead.current !== null) return;
+    const scope = creditScope.current;
+    const request = ++creditRead.current;
+    manualCreditRead.current = request;
+    const current = () => scope === creditScope.current && request === creditRead.current;
     setCreditsBusy(true);
     try {
       const r = await accountApi.refreshCredits(true, groupId);
+      if (!current()) return;
       setLiveCredits(
         Object.fromEntries(
           Object.entries(r.credits).filter(([, v]) => typeof v === 'number') as [string, number][],
         ),
       );
       setCreditsMeta(r.meta ?? {});
+      setCreditsFailed(r.failed.length > 0);
       if (r.failed.length === 0) {
         notify.ok(t('accounts.creditsRefreshed'), t('accounts.creditsRefreshedDetail', {ok: r.succeeded, total: r.total}));
       } else {
         notify.warn(t('accounts.creditsPartial'), t('accounts.creditsPartialDetail', {ok: r.succeeded, total: r.total}));
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setCreditsBusy(false);
+      if (manualCreditRead.current === request) {
+        manualCreditRead.current = null;
+        if (scope === creditScope.current) setCreditsBusy(false);
+      }
     }
   }, [groupId, isAdmin, t]);
 
@@ -516,6 +537,8 @@ function FullAccountsPage() {
     okMsg: string,
     preferOkMsg = false,
   ) {
+    const scope = creditScope.current;
+    const current = () => scope === creditScope.current;
     setBusyFile(file);
     try {
       const res = (await fn()) as {
@@ -525,6 +548,7 @@ function FullAccountsPage() {
         expiries?: CreditExpiry[];
         reward_status?: string;
       };
+      if (!current()) return;
       const ok = res.ok !== false;
       // 签到 / 测活会带回**刚问到**的实时积分与到期时间。
       //
@@ -533,6 +557,8 @@ function FullAccountsPage() {
       // 原来写进快照位，等于写了一个**看不见的值**（实时值一存在就被盖住），
       // 而且两个值的语义本来就不同——一个是我刚问到的，一个是上游按小时刷的。
       const uid = accounts?.find((a) => a.file === file)?.uid;
+      // A completed account mutation is newer evidence than an earlier bulk read.
+      if (uid && (typeof res.credits === 'number' || res.expiries)) creditRead.current += 1;
       if (typeof res.credits === 'number' && uid) {
         setLiveCredits((prev) => ({...prev, [uid]: res.credits as number}));
       }
@@ -549,9 +575,9 @@ function FullAccountsPage() {
       await reloadAll();
       window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setBusyFile(null);
+      if (current()) setBusyFile(previous => previous === file ? null : previous);
     }
   }
 

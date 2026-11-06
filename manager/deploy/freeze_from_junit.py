@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -44,7 +46,19 @@ def main(argv: list[str]) -> int:
         'skipped': skipped,
         'skip_reasons': {ident: reasons.get(ident, 'no reason') for ident in skipped},
     }
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    if failed or passed == 0:
+        print('拒绝冻结：报告有失败或没有通过用例；目标保持不变')
+        return 3
+    fd, temporary = tempfile.mkstemp(prefix='.' + target.name + '-', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     print('freeze: passed=%d failed=%d skipped=%d collected=%d -> %s'
           % (passed, len(failed), len(skipped), payload['expected_collected'], target))
     if failed:
