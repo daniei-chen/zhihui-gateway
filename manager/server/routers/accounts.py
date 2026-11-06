@@ -1583,6 +1583,7 @@ def checkin_logs(limit: int = 200, uid: str | None = None, offset: int = 0,
 @router.post('/checkin-logs/clear')
 def clear_checkin_logs(user: dict = Depends(security.require_session_admin)) -> dict:
     db.clear_checkin_logs()
+    security.audit(user, 'checkin_logs.clear', '', '清空签到日志')
     return {'ok': True}
 
 
@@ -1708,6 +1709,7 @@ async def collect_task_logs(user: dict = Depends(security.require_admin)) -> dic
 @router.post('/task-logs/clear')
 def clear_task_logs(user: dict = Depends(security.require_session_admin)) -> dict:
     db.clear_task_logs()
+    security.audit(user, 'task_logs.clear', '', '清空任务日志')
     return {'ok': True}
 
 
@@ -2299,6 +2301,7 @@ async def account_delete(filename: str, upstream_id: int | None = Query(None),
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail='账号文件不存在')
+    security.audit(user, 'account.delete', filename, f'upstream={_reload_target(group)}')
     reload.request_restart(upstream=_reload_target(group))
     return {'success': True}
 
@@ -2373,6 +2376,8 @@ async def account_move(
         uid = str((moved.get('account') or {}).get('uid') or '')
     except Exception:  # noqa: BLE001 —— 读不出 uid 不影响移动，只是少了重载收尾
         uid = ''
+    security.audit(user, 'account.move', src_path.name,
+                   f"{src['name']} -> {dst['name']}; uid={uid or '(unknown)'}")
     reload.request_reload_or_restart(uid, upstream=_reload_target(dst))
     return {
         'ok': True,
@@ -2388,6 +2393,7 @@ async def restart(upstream_id: int | None = Query(None),
                   user: dict = Depends(security.require_session_admin)) -> dict:
     group = _group(upstream_id)
     ok, message = await reload.restart_now(upstream=_reload_target(group))
+    security.audit(user, 'account.restart', str(_reload_target(group)), f'ok={ok}')
     return {'ok': ok, 'message': message}
 
 

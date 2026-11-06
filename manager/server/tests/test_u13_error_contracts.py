@@ -292,3 +292,18 @@ class ErrorContractEndpointTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SseErrorSeparatorTest(unittest.TestCase):
+    def test_leading_separator_never_glues_frame_to_partial_line(self) -> None:
+        audit = observability.StreamAudit()
+        audit.feed(b'data: {"choices":[{"delta":{"content":"x"}}]}')
+        raw = observability.sse_error('upstream stream ended', leading_separator=True)
+        audit.feed(raw)
+        audit.finish()
+        self.assertEqual(audit.error, 'upstream stream ended')
+        self.assertFalse(audit.completed)
+
+    def test_default_has_no_leading_blank_line(self) -> None:
+        raw = observability.sse_error('boom')
+        self.assertTrue(raw.startswith(b'data: '))

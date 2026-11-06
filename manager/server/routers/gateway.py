@@ -1664,11 +1664,15 @@ async def list_models(request: Request):
                 return _oai_error('上游模型目录暂不可用，请联系管理员检查公共池连接；不是用户密钥无效',
                                   502, 'api_error', 'portal_model_catalog_unavailable')
         _record(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
-        payload = _scope_models(resp.json(), key)
+        request_platform = forced_platform.get() or 'workbuddy'
+        payload = _scope_models(resp.json(), key, platform=request_platform)
         # 目录收缩（issue #239）：上游模型表可能仍列着腾讯已经下架的 id，
         # 客户端选中后才 503。模型中心直连腾讯的目录是当前可用的权威清单，
         # 取得到且来源是腾讯时按它裁一次；取不到就原样透传。
-        payload = await _drop_models_outside_catalog(payload, key)
+        # qoder/trae 的目录不是 workbuddy/腾讯目录；拿 workbuddy 目录裁它们
+        # 会把整张列表清空（ZG-02）。只有 workbuddy 入口才走这次裁剪。
+        if request_platform == 'workbuddy':
+            payload = await _drop_models_outside_catalog(payload, key)
         # 能力字段兜底（issue #211）：随包上游的版本可能比面板旧 —— 补丁只在上游
         # 侧时，下游经面板拿到的清单仍缺字段，客户端会整条跳过模型。
         payload = _listing_compat_models(payload)
@@ -1833,7 +1837,7 @@ async def _drop_models_outside_catalog(payload: object, key: dict | None) -> obj
     return _filter_catalog_models(payload, key, realm, ids)
 
 
-def _scope_models(payload: object, key: dict | None) -> object:
+def _scope_models(payload: object, key: dict | None, *, platform: str = 'workbuddy') -> object:
     """按密钥的**版本**与**模型白名单**裁剪模型列表。
 
     这个接口要回答的是「**你能用**什么模型」——客户端普遍拿它当模型选择器
@@ -1855,7 +1859,9 @@ def _scope_models(payload: object, key: dict | None) -> object:
         return {**payload, 'data': [item for item in payload['data'] if isinstance(item, dict)
             and portalpolicy.model_allowed(item.get('id'))
             and portalpolicy.model_allowed(_map_model(item.get('id')))]}
-    want = keysvc._norm_realm(key.get('realm'))
+    # qoder/trae 的模型 id 不属于 workbuddy 的 cn/global realm；对它们做
+    # realm 裁剪会把整张清单清空。白名单维度仍然保留（那是密钥授权）。
+    want = '' if platform in ('qoder', 'trae') else keysvc._norm_realm(key.get('realm'))
     allow = [str(x) for x in (key.get('models') or []) if str(x).strip()]
     if not want and not allow:
         return payload
@@ -2519,7 +2525,7 @@ async def _chat(request: Request, upstream_path: str):
                     observability.set_stream_error_detail(
                         code=audit.error_code, hint=audit.error_hint,
                         upstream_request_id=upstream_request_id)
-                    yield observability.sse_error(error_text)
+                    yield observability.sse_error(error_text, leading_separator=True)
         except (asyncio.CancelledError,GeneratorExit):
             cancelled=True
             raise
@@ -2540,7 +2546,7 @@ async def _chat(request: Request, upstream_path: str):
             observability.set_stream_error_detail(
                 code=audit.error_code, hint=audit.error_hint,
                 upstream_request_id=upstream_request_id)
-            yield observability.sse_error(error_text)
+            yield observability.sse_error(error_text, leading_separator=True)
         finally:
             cancelled=cancelled or isinstance(sys.exc_info()[1],(asyncio.CancelledError,GeneratorExit))
             observability.set_stream_state(audit,error_text,cancelled)
