@@ -280,6 +280,7 @@ def recover():
         if committed or budgetowner.alive(row['worker']) is False:
             apply(row['request_id'])
     auto_close_client_cancelled()
+    auto_close_rejected()
 
 
 def _client_cancel_auto_close_enabled():
@@ -293,6 +294,53 @@ def _client_cancel_auto_close_grace():
         return min(3600, max(0, int(raw)))
     except (TypeError, ValueError):
         return 60
+
+
+def _rejected_auto_close_enabled():
+    raw = os.environ.get('WB_PORTAL_AUTO_CLOSE_REJECTED', '1').strip().lower()
+    return raw not in ('0', 'false', 'off', 'no')
+
+
+def auto_close_rejected(limit=100):
+    """Release wallet holds for requests the gateway itself rejected.
+
+    A rejected request has a terminal gateway decision and no supplier usage;
+    unlike an upstream timeout it cannot have reached the provider. Only
+    portal spends with a durable request end and terminal_state=rejected are
+    eligible; everything else stays in the manual queue.
+    """
+    if not _rejected_auto_close_enabled() or not (store.config.DATA_DIR / 'user-portal.sqlite3').exists():
+        return 0
+    limit = max(0, min(500, int(limit)))
+    if not limit:
+        return 0
+    with store.transaction() as conn:
+        quarantine = conn.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()
+        if quarantine and quarantine[0] == 'true':
+            return 0
+        rows = [dict(row) for row in conn.execute(
+            "SELECT s.request_id FROM portal_spends s JOIN portal_request_ends e ON e.request_id=s.request_id "
+            "WHERE s.state='unknown' AND e.owner_id=s.owner_id AND e.key_id=s.key_id AND e.worker=s.worker "
+            "ORDER BY e.ended_at,s.created_at,s.request_id LIMIT ?", (limit,))]
+    if not rows or replay_problem():
+        return 0
+    closed = 0
+    logger = logging.getLogger(__name__)
+    for row in rows:
+        log = db.query_one(
+            'SELECT terminal_state FROM request_logs WHERE request_id=? ORDER BY ts DESC LIMIT 1',
+            (row['request_id'],))
+        if not log or log['terminal_state'] != 'rejected':
+            continue
+        try:
+            resolve_unknown(row['request_id'], 0, AUTO_CLOSE_ACTOR,
+                            '网关拒绝请求，未到达供应商；自动释放用户余额',
+                            'request_logs.terminal_state=rejected')
+            closed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('rejected auto-close deferred request_id=%s error=%s',
+                           row['request_id'], type(exc).__name__)
+    return closed
 
 
 def auto_close_client_cancelled(limit=100):
