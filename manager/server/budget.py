@@ -11,7 +11,7 @@ import os
 import time
 from datetime import date, timedelta
 from decimal import Decimal
-from . import db, observability, budgetowner, ledger, config, outputlimits
+from . import db, observability, budgetowner, ledger, config, outputlimits, metering
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS budget_reservations (
@@ -269,9 +269,18 @@ def settle(usage, pt, ct, credit):
     if not _owned(row, state):
         raise BudgetRejected('预算预留已被恢复进程隔离', 'budget_fenced')
     fresh = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (state.key_id,))
-    known = state.terminal_state == 'completed' and isinstance(usage,dict) and all(k in usage for k in ('prompt_tokens','completion_tokens'))
+    from . import metering
+    measured = metering.parse_usage(usage)
+    pt = ((measured.prompt_tokens or 0) if isinstance(usage, dict) and 'prompt_tokens' in usage
+          else metering._int_or_none(pt)[0] or 0)
+    ct = ((measured.completion_tokens or 0) if isinstance(usage, dict) and 'completion_tokens' in usage
+          else metering._int_or_none(ct)[0] or 0)
+    credit = metering.parse_credit(credit)[0]
+    known = (state.terminal_state == 'completed' and measured.complete
+             and not measured.malformed and measured.storage_tokens() == (pt, ct))
     if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
-    next_state = 'settled' if known else 'released' if row['state']=='reserved' else 'unknown'
+    next_state = ('settled' if known else 'released'
+                  if row['state']=='reserved' and not measured.observed else 'unknown')
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
 

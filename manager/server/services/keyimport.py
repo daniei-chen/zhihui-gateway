@@ -73,9 +73,11 @@ import locale
 import os
 import shutil
 import sqlite3
+import stat
 import string
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import uuid
@@ -839,21 +841,79 @@ def _ensure_writable(client: str) -> Path:
             'cannot_detect',
             f'无法确认 {client} 是否在运行，为避免改坏配置已中止。'
             f'请手动确认它已退出，或改用「导出配置」手动导入。')
-    return Path(st['target'])
+    path = Path(st['target'])
+    _configuration_info(path)
+    return path
 
 
 # ── 备份与原子写入 ──────────────────────────────────────────────────────
 
+def _configuration_info(path: Path):
+    """Only a regular, singly linked config under real directories is writable."""
+    path = Path(path).absolute()
+    reparse = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
+    for parent in reversed(path.parents):
+        item = parent.lstat()
+        if (not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode)
+                or getattr(item, 'st_file_attributes', 0) & reparse):
+            raise ImportRefused('unsafe_path', '配置目录不能经过符号链接或重解析点。')
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or getattr(info, 'st_file_attributes', 0) & reparse):
+        raise ImportRefused('unsafe_path', '配置必须是普通独立文件，不能是链接或特殊文件。')
+    return info
+
+
+def _same_file(left, right) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _private_metadata(fd: int, original, *, mode: int = 0o600) -> None:
+    current = os.fstat(fd)
+    if hasattr(os, 'fchown') and (current.st_uid, current.st_gid) != (original.st_uid, original.st_gid):
+        os.fchown(fd, original.st_uid, original.st_gid)
+    if hasattr(os, 'fchmod'):
+        os.fchmod(fd, mode)
+    # Windows has no POSIX ownership/ACL equivalence. O_CREAT uses a private
+    # requested mode, but native ACL inheritance must be verified separately.
+
+
+@contextlib.contextmanager
+def _configuration_source(path: Path):
+    expected = _configuration_info(path)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    fd = os.open(path, flags)
+    try:
+        actual = os.fstat(fd)
+        if (not _same_file(expected, actual) or not stat.S_ISREG(actual.st_mode)
+                or actual.st_nlink != 1):
+            raise ImportRefused('unsafe_path', '读取期间配置文件已变化，请重新核对。')
+        with os.fdopen(fd, 'rb') as source:
+            fd = None
+            yield source, actual
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _backup(path: Path) -> Path:
-    """写前备份到同目录（同盘才能快速回滚）。返回备份路径。"""
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    dest = path.with_name(f'{path.name}{_BACKUP_SUFFIX}-{stamp}.bak')
-    n = 1
-    while dest.exists():        # 同一秒内连点两次导入也不会覆盖上一份备份
-        n += 1
-        dest = path.with_name(f'{path.name}{_BACKUP_SUFFIX}-{stamp}-{n}.bak')
-    shutil.copy2(path, dest)
-    return dest
+    """Exclusive private backup: never follow a predictable backup-name link."""
+    destination = None
+    try:
+        with _configuration_source(path) as (source, info):
+            fd, name = tempfile.mkstemp(prefix=path.name + _BACKUP_SUFFIX + '-',
+                                        suffix='.bak', dir=path.parent)
+            destination = Path(name)
+            with os.fdopen(fd, 'wb') as output:
+                _private_metadata(output.fileno(), info)
+                shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+        return destination
+    except BaseException:
+        if destination is not None:
+            destination.unlink(missing_ok=True)
+        raise
 
 
 def _restore(backup: Path, path: Path) -> None:
@@ -864,10 +924,57 @@ def _restore(backup: Path, path: Path) -> None:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """先写临时文件再替换：中途崩溃也不会留下半截 JSON。"""
-    tmp = path.with_name(path.name + f'{_BACKUP_SUFFIX}.tmp')
-    tmp.write_text(text, encoding='utf-8')
-    os.replace(tmp, path)
+    """Write privately, preserve owner, and replace only the same regular config.
+
+    POSIX replacement/cleanup is anchored to the opened parent directory. The
+    Windows path avoids unsupported dir_fd/fchown calls; it does not certify ACLs.
+    A directory-fsync error after rename means durability is uncertain, not that
+    the old file may safely be copied back over a concurrently changed path.
+    """
+    path = Path(path).absolute()
+    original = _configuration_info(path)
+    parent = path.parent.stat()
+    directory = None
+    temporary = path.with_name('.' + path.name + _BACKUP_SUFFIX + '-' + uuid.uuid4().hex + '.tmp')
+    created = False
+    try:
+        if os.name == 'posix' and hasattr(os, 'O_DIRECTORY'):
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
+            if not _same_file(parent, os.fstat(directory)):
+                raise ImportRefused('unsafe_path', '配置目录已变化，请重新核对。')
+        kwargs = {'dir_fd': directory} if directory is not None else {}
+        target = temporary.name if directory is not None else temporary
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+                     0o600, **kwargs)
+        created = True
+        with os.fdopen(fd, 'wb') as output:
+            _private_metadata(output.fileno(), original, mode=stat.S_IMODE(original.st_mode) & 0o600)
+            output.write(text.encode('utf-8'))
+            output.flush()
+            os.fsync(output.fileno())
+        current = _configuration_info(path)
+        if (not _same_file(original, current) or current.st_size != original.st_size
+                or current.st_mtime_ns != original.st_mtime_ns
+                or not _same_file(parent, path.parent.stat())):
+            raise ImportRefused('unsafe_path', '写入期间配置已变化，请重新读取后重试。')
+        if directory is not None:
+            os.replace(temporary.name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            os.fsync(directory)
+        else:
+            os.replace(temporary, path)
+    finally:
+        try:
+            if created:
+                try:
+                    if directory is not None:
+                        os.unlink(temporary.name, dir_fd=directory)
+                    else:
+                        temporary.unlink()
+                except FileNotFoundError:
+                    pass
+        finally:
+            if directory is not None:
+                os.close(directory)
 
 
 # 客户端的自定义协议名（注册表 `HKCU\Software\Classes\<协议>\shell\open\command`
@@ -1106,7 +1213,8 @@ def import_zcode(*, fragment: dict, set_current: bool = False) -> dict:
 
     path = _ensure_writable('zcode')
     try:
-        doc = json.loads(path.read_text(encoding='utf-8'))
+        with _configuration_source(path) as (source, _info):
+            doc = json.loads(source.read().decode('utf-8'))
     except (OSError, ValueError) as exc:
         raise ImportRefused(
             'bad_format',
@@ -1167,11 +1275,9 @@ def import_zcode(*, fragment: dict, set_current: bool = False) -> dict:
     ] + incoming
 
     backup = _backup(path)
-    try:
-        _atomic_write_text(path, json.dumps(doc, ensure_ascii=False, indent=2) + '\n')
-    except Exception:
-        _restore(backup, path)
-        raise
+    # Atomic replacement preserves the old file on pre-commit failure. Legacy
+    # copy-back would follow a swapped link or overwrite somebody else's update.
+    _atomic_write_text(path, json.dumps(doc, ensure_ascii=False, indent=2) + '\n')
 
     return {'action': action, 'provider_id': provider_id,
             'provider_name': rule.get('providerName') or '',

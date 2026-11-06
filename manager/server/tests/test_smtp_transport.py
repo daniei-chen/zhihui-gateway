@@ -184,7 +184,7 @@ time.sleep(60)
                 try:
                     fields = Path(f'/proc/{child_pid}/stat').read_text().rsplit(')', 1)[1].split()
                     return fields[0], fields[19]
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     return None
             try:
                 import select

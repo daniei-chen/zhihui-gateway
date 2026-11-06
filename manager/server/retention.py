@@ -57,6 +57,7 @@ ACTION_KEEP = 'keep'
 
 #: 不可变事件表 → 触发器名（K24 要求「不删 no-delete 触发器」）
 IMMUTABLE_TABLES = {
+    'usage_reset_events': ('usage_reset_events_no_update','usage_reset_events_no_delete'),
     'attempt_events': ('attempt_events_no_update', 'attempt_events_no_delete'),
     'usage_events': ('usage_events_no_update', 'usage_events_no_delete'),
     'adjustment_events': ('adjustment_events_no_update', 'adjustment_events_no_delete'),
@@ -142,6 +143,10 @@ class Dataset:
 
 #: 全量分类表。注意：每一项都要能落到真实代码，不允许「看起来合理」。
 DATASETS: tuple[Dataset, ...] = (
+    Dataset(name='usage_reset_events',klass=CLASS_LEDGER_EVENT,action=ACTION_NO_DELETE,
+            retention_days=None,time_column='ts',watermark='id',
+            reconcile='Current quota epoch subtracts the last immutable reset baseline',
+            evidence='keysvc.reset_usage; ledger.usage_reset_events'),
     Dataset(
         name='request_logs', klass=CLASS_DERIVED_LOG, action=ACTION_ARCHIVE_THEN_PRUNE,
         retention_days=90, time_column='ts', watermark='id',

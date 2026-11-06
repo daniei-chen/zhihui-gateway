@@ -1,6 +1,6 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {
   Activity,
   Copy,
@@ -22,6 +22,7 @@ import {notify} from '@/lib/toast';
 import type {ProxyProbe, ProxyRoute, ProxySettings, ProxyPool, RouteAccount} from '@/lib/types';
 import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {EmptyState} from '@/components/common/layout/EmptyState';
+import {LoadError} from '@/components/common/states/LoadError';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
@@ -64,7 +65,7 @@ import {
  */
 export function ProxyPanel() {
   const {t} = useI18n();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
   const [routes, setRoutes] = useState<ProxyRoute[]>([]);
   const [pool, setPool] = useState<ProxyPool | null>(null);
   const [settings, setSettings] = useState<ProxySettings | null>(null);
@@ -83,59 +84,121 @@ export function ProxyPanel() {
   const [accounts, setAccounts] = useState<RouteAccount[]>([]);
   const [autoFor, setAutoFor] = useState<ProxyRoute | null>(null);
   const [autoCount, setAutoCount] = useState('10');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const mounted = useRef(false);
+  const loadGeneration = useRef(0);
+  const reading = useRef(false);
+  const writing = useRef<symbol | null>(null);
+  const globalDirty = useRef(false);
+  const writable = isAdmin && pool !== null && settings !== null && !loadError && !loading && !saving;
+  const invalidate = useCallback(() => {
+    loadGeneration.current++;
+    reading.current = false;
+    writing.current = null;
+  }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (writer?: symbol) => {
+    if (writing.current && writing.current !== writer) return;
+    const generation = ++loadGeneration.current;
+    const current = () => mounted.current && generation === loadGeneration.current;
+    reading.current = true;
+    setLoading(true);
     try {
       const [list, cfg] = await Promise.all([proxyApi.routes(), proxyApi.settings()]);
+      if (!current()) return;
       setRoutes(list.routes);
       setPool(list.pool);
       setSettings(cfg);
-      setGlobalForm({
+      if (!globalDirty.current) setGlobalForm({
         http: cfg.http_configured ? cfg.http_proxy : '',
         update: cfg.update_configured ? cfg.update_proxy : '',
         enabled: cfg.global_proxy_enabled,
       });
+      setLoadError(false);
     } catch (e) {
+      if (!current()) return;
+      setLoadError(true);
       notify.err(errText(e));
+    } finally {
+      if (current()) {
+        reading.current = false;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    globalDirty.current = false;
+    setPool(null);
+    setSettings(null);
+    setSaving(false);
     void load();
-  }, [load]);
+    return () => {
+      mounted.current = false;
+      invalidate();
+    };
+  }, [load, isAdmin, me?.username, invalidate]);
+
+  function beginWrite() {
+    if (!writable || reading.current || writing.current) return null;
+    const request = Symbol('proxy-write');
+    writing.current = request;
+    loadGeneration.current++;
+    setSaving(true);
+    return request;
+  }
+  const currentWrite = (request: symbol) => mounted.current && writing.current === request;
+  function endWrite(request: symbol) {
+    if (!currentWrite(request)) return;
+    writing.current = null;
+    setSaving(false);
+  }
+  function patchGlobal(patch: Partial<typeof globalForm>) {
+    if (!writable) return;
+    globalDirty.current = true;
+    setGlobalForm((previous) => ({...previous, ...patch}));
+  }
 
   async function savePool(patch: Partial<ProxyPool>) {
     if (!pool) return;
-    setSaving(true);
+    const request = beginWrite();
+    if (!request) return;
     try {
-      setPool(await proxyApi.savePool({...pool, ...patch}));
+      const next = await proxyApi.savePool({...pool, ...patch});
+      if (!currentWrite(request)) return;
+      setPool(next);
       notify.ok(t('settings.proxySaved'));
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      endWrite(request);
     }
   }
 
   async function submitRoute() {
+    if (!writable) return;
     const url = form.url.trim();
     if (!url) {
       notify.warn(t('settings.proxyUrlRequired'));
       return;
     }
-    setSaving(true);
+    const request = beginWrite();
+    if (!request) return;
     try {
       const body = {url, weight: Number(form.weight || 100), enabled: form.enabled};
       if (editing) await proxyApi.update(editing, body);
       else await proxyApi.create(form.name.trim(), url, body.weight, form.enabled);
+      if (!currentWrite(request)) return;
       notify.ok(t('settings.proxySaved'));
       setEditing(null);
       setCreating(false);
-      await load();
+      await load(request);
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      endWrite(request);
     }
   }
 
@@ -169,43 +232,53 @@ export function ProxyPanel() {
   }
 
   async function remove(name: string, force: boolean) {
+    const request = beginWrite();
+    if (!request) return;
     try {
       const result = await proxyApi.remove(name, force);
+      if (!currentWrite(request)) return;
       notify.ok(t('settings.proxyDeleted'), result.bound_cleared
         ? t('settings.proxyDeletedBound', {count: String(result.bound_cleared)}) : '');
-      await load();
+      await load(request);
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
+    } finally {
+      endWrite(request);
     }
   }
 
   async function runImport() {
     if (!importing?.trim()) return;
-    setSaving(true);
+    const request = beginWrite();
+    if (!request) return;
     try {
       const result = await proxyApi.import(importing);
+      if (!currentWrite(request)) return;
       notify.ok(t('settings.proxyImportDone', {count: String(result.imported)}),
                 result.problems.length
                   ? t('settings.proxyImportProblems', {count: String(result.problems.length)})
                   : '');
       setImporting(null);
-      await load();
+      await load(request);
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      endWrite(request);
     }
   }
 
   async function saveGlobal() {
-    setSaving(true);
+    const request = beginWrite();
+    if (!request) return;
     try {
       const next = await proxyApi.saveSettings({
         http_proxy: globalForm.http.trim(),
         update_proxy: globalForm.update.trim(),
         global_proxy_enabled: globalForm.enabled,
       });
+      if (!currentWrite(request)) return;
       setSettings(next);
+      globalDirty.current = false;
       setGlobalForm({
         http: next.http_configured ? next.http_proxy : '',
         update: next.update_configured ? next.update_proxy : '',
@@ -213,9 +286,9 @@ export function ProxyPanel() {
       });
       notify.ok(t('settings.proxySaved'));
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      endWrite(request);
     }
   }
 
@@ -240,35 +313,42 @@ export function ProxyPanel() {
   }
 
   async function assign(account: RouteAccount, value: string) {
+    const request = beginWrite();
+    if (!request) return;
     try {
       await accountApi.setProxy(account.file, value === '__pool__' ? '' : value);
+      if (!currentWrite(request)) return;
       setAccounts((prev) => prev.map((a) => (a.file === account.file
         ? {...a, proxy: value === '__pool__' ? '' : value} : a)));
       notify.ok(t('settings.proxySaved'));
-      await load();
+      await load(request);
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
+    } finally {
+      endWrite(request);
     }
   }
 
   async function autoAssign() {
-    if (!autoFor) return;
+    if (!autoFor || !writable) return;
     const count = Number(autoCount || 0);
     if (!Number.isInteger(count) || count <= 0) {
       notify.warn(t('settings.proxyAutoAssignBadCount'));
       return;
     }
-    setSaving(true);
+    const request = beginWrite();
+    if (!request) return;
     try {
       const result = await proxyApi.autoAssign(autoFor.name, count);
+      if (!currentWrite(request)) return;
       notify.ok(t('settings.proxyAutoAssignDone', {count: String(result.updated)}),
                 t('settings.proxyAutoAssignLeft', {count: String(result.unbound_left)}));
       setAutoFor(null);
-      await load();
+      await load(request);
     } catch (e) {
-      notify.err(errText(e));
+      if (currentWrite(request)) notify.err(errText(e));
     } finally {
-      setSaving(false);
+      endWrite(request);
     }
   }
 
@@ -292,8 +372,18 @@ export function ProxyPanel() {
       : settings?.source === 'env' ? 'settings.proxyGlobalSourceEnv'
         : 'settings.proxyGlobalSourceNone';
 
+  if (pool === null || settings === null) {
+    return loading ? (
+      <div role="status" className="rounded-[20px] bg-muted p-5 text-sm text-muted-foreground">
+        {t('common.loading')}
+      </div>
+    ) : <LoadError onRetry={() => load()} />;
+  }
+
   return (
-    <fieldset disabled={!isAdmin} className="min-w-0 space-y-4">
+    <div className="space-y-4" aria-busy={loading}>
+      {loadError && <LoadError onRetry={() => load()} />}
+    <fieldset disabled={!writable} className="min-w-0 space-y-4">
       {!isAdmin && <p className="text-xs text-muted-foreground">{t('settings.readonlyNote')}</p>}
       {/* ── 池配置 + 线路表 ── */}
       <div className="rounded-[20px] bg-muted p-4">
@@ -302,9 +392,10 @@ export function ProxyPanel() {
           {pool && (
             <>
               <Switch checked={pool.enabled}
+                      disabled={!writable}
                       aria-label={t('settings.proxyRoutesTitle')}
                       onCheckedChange={(v) => void savePool({enabled: v})} />
-              <Select value={pool.strategy} onValueChange={(v) => void savePool({strategy: v as ProxyPool['strategy']})}>
+              <Select value={pool.strategy} disabled={!writable} onValueChange={(v) => void savePool({strategy: v as ProxyPool['strategy']})}>
                 <SelectTrigger className="h-8 w-32 rounded-full bg-background text-xs" aria-label={t('settings.proxyStrategyLabel')}>
                   <SelectValue />
                 </SelectTrigger>
@@ -504,6 +595,7 @@ export function ProxyPanel() {
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                           <ConfirmDialog destructive
+                                         confirmDisabled={!writable}
                                          title={t('settings.proxyDeleteTitle', {name: route.name})}
                                          description={route.bound
                                            ? t('settings.proxyDeleteBoundWarning',
@@ -535,8 +627,9 @@ export function ProxyPanel() {
         <div className="mb-1 flex items-center gap-2">
           <span className="text-sm font-medium">{t('settings.proxyGlobalTitle')}</span>
           <Switch checked={globalForm.enabled}
+                  disabled={!writable}
                   aria-label={t('settings.proxyGlobalTitle')}
-                  onCheckedChange={(v) => setGlobalForm({...globalForm, enabled: v})} />
+                  onCheckedChange={(v) => patchGlobal({enabled: v})} />
         </div>
         <div className="mb-3 text-[11px] leading-4 text-muted-foreground">
           <RichText text={t('settings.proxyGlobalDesc')} />
@@ -545,8 +638,9 @@ export function ProxyPanel() {
           <Input className="h-9 min-w-[16rem] flex-1 bg-background font-mono text-xs"
                  placeholder={t('settings.proxyGlobalPlaceholder')}
                  value={globalForm.http}
-                 onChange={(e) => setGlobalForm({...globalForm, http: e.target.value})} />
-          <Button className="rounded-full" disabled={saving} onClick={() => void saveGlobal()}>
+                 disabled={!writable}
+                 onChange={(e) => patchGlobal({http: e.target.value})} />
+          <Button className="rounded-full" disabled={!writable} onClick={() => void saveGlobal()}>
             {t('common.save')}
           </Button>
           <Button variant="outline" className="rounded-full"
@@ -586,8 +680,9 @@ export function ProxyPanel() {
           <Input className="h-9 min-w-[16rem] flex-1 bg-background font-mono text-xs"
                  placeholder="http://user:pass@host:7890"
                  value={globalForm.update}
-                 onChange={(e) => setGlobalForm({...globalForm, update: e.target.value})} />
-          <Button className="rounded-full" disabled={saving} onClick={() => void saveGlobal()}>
+                 disabled={!writable}
+                 onChange={(e) => patchGlobal({update: e.target.value})} />
+          <Button className="rounded-full" disabled={!writable} onClick={() => void saveGlobal()}>
             {t('common.save')}
           </Button>
         </div>
@@ -661,7 +756,7 @@ export function ProxyPanel() {
                     }}>
               {t('common.cancel')}
             </Button>
-            <Button className="rounded-full" disabled={saving} onClick={() => void submitRoute()}>
+            <Button className="rounded-full" disabled={!writable} onClick={() => void submitRoute()}>
               {t('common.save')}
             </Button>
           </DialogFooter>
@@ -687,7 +782,7 @@ export function ProxyPanel() {
             <Button variant="ghost" className="rounded-full" onClick={() => setImporting(null)}>
               {t('common.cancel')}
             </Button>
-            <Button className="rounded-full" disabled={saving} onClick={() => void runImport()}>
+            <Button className="rounded-full" disabled={!writable} onClick={() => void runImport()}>
               {t('settings.proxyImportRun')}
             </Button>
           </DialogFooter>
@@ -723,7 +818,7 @@ export function ProxyPanel() {
             <Button variant="ghost" className="rounded-full" onClick={() => setAutoFor(null)}>
               {t('common.cancel')}
             </Button>
-            <Button className="rounded-full" disabled={saving} onClick={() => void autoAssign()}>
+            <Button className="rounded-full" disabled={!writable} onClick={() => void autoAssign()}>
               {t('settings.proxyAutoAssignRun')}
             </Button>
           </DialogFooter>
@@ -754,6 +849,7 @@ export function ProxyPanel() {
                   {row.nickname || row.uid}
                 </span>
                 <Select value={row.proxy || '__pool__'}
+                        disabled={!writable}
                         onValueChange={(v) => void assign(row, v)}>
                   <SelectTrigger className="h-8 w-56 rounded-full bg-background text-xs" aria-label={t('settings.proxyBindingFor', {name: row.nickname || row.uid})}>
                     <SelectValue />
@@ -777,5 +873,6 @@ export function ProxyPanel() {
         </DialogContent>
       </Dialog>
     </fieldset>
+    </div>
   );
 }

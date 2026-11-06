@@ -287,30 +287,29 @@ class WorkBuddyAdapter(BaseAdapter):
           某个分支漏了分流，得到的也是一个显式错误，而不是悄悄读到本地库、把
           "读不到"伪装成"没有数据"（RV05 的根因）；
         - `mode=ro` + `PRAGMA query_only=1` 双保险，任何写入尝试都会被拒绝；
-        - **schema 探测**：必需表不存在时返回 None，让调用方走"没有数据"分支，
-          而不是把 sqlite3.OperationalError 抛成 500；
+        - **schema 探测**：无法识别或查询失败时显式报错，不把读取失败显示成空数据；
         - 连接由调用方 close（现有调用均已成对）。
         """
         cfg = getattr(self, "cfg", None)
         if cfg is None:
-            return None
+            raise manager_api.UpstreamPayloadError('Manager SQLite 读取配置缺失')
         if self._http_reads_enabled():
             raise RuntimeError(
                 "K26 违规：wb_read_mode=http 时不得直读 Manager SQLite"
                 "（_db() 只服务 sqlite 读模式；HTTP 失败必须向上抛，不得回退 DB）")
         path = Path(cfg.wb_db)
         if not path.exists():
-            return None
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据源不存在')
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
             conn.execute("PRAGMA query_only=1")
             if not _schema_ok(conn, {"api_keys", "request_logs", "usage_daily",
                                      "usage_hourly", "task_logs"}):
                 conn.close()
-                return None
+                raise manager_api.UpstreamPayloadError('Manager SQLite 表结构无法识别')
             return conn
-        except sqlite3.Error:
-            return None
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
 
     def _state(self) -> Dict[str, Any]:
         try:
@@ -419,8 +418,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 (max(1, min(2000, int(limit))),),
             )
             return self._aggregate_checkin([tuple(r) for r in cur.fetchall()])
-        except sqlite3.Error:
-            return []
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -543,8 +542,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 "top_model": str(top[0]) if top else None,
                 "realm": realm or "",
             }
-        except sqlite3.Error:
-            return {}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -605,8 +604,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 for h, n in cur2.fetchall():
                     if h is not None:
                         fails[int(h)] = int(n)
-            except sqlite3.Error:
-                fails = {}
+            except sqlite3.Error as exc:
+                raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
             out: List[Dict[str, Any]] = []
             for h in range(24):
                 r = by_hour.get(h)
@@ -619,8 +618,8 @@ class WorkBuddyAdapter(BaseAdapter):
                     "failed": fails.get(h, 0),
                 })
             return out
-        except sqlite3.Error:
-            return []
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -686,22 +685,26 @@ class WorkBuddyAdapter(BaseAdapter):
                 for dd, c in rows:
                     if dd:
                         income[str(dd)] = float(c or 0)
-            except sqlite3.Error:
-                income = {}
+            except sqlite3.Error as exc:
+                raise manager_api.UpstreamPayloadError('收入账本无法读取') from exc
+            if realm in ('cn','global'):
+                # Legacy task_logs has no immutable historical realm column.
+                # Do not assign whole-pool income to one selected realm.
+                income = None
             daily: List[Dict[str, Any]] = []
             for i in range(d):
                 day = (now.date() - _dt.timedelta(days=d - 1 - i)).isoformat()
-                a = income.get(day, 0.0)
+                a = income.get(day, 0.0) if income is not None else None
                 b = expense.get(day, 0.0)
-                daily.append({"day": day, "income": round(a, 4),
-                              "expense": round(b, 4), "net": round(a - b, 4)})
+                daily.append({"day": day, "income": round(a, 4) if a is not None else None,
+                              "expense": round(b, 4), "net": round(a - b, 4) if a is not None else None})
             week_from = (now.date() - _dt.timedelta(days=6)).isoformat()
 
             def _sum(rows: List[Dict[str, Any]]) -> Dict[str, float]:
-                a = sum(r["income"] for r in rows)
+                a = sum(r["income"] for r in rows) if all(r['income'] is not None for r in rows) and income is not None else None
                 b = sum(r["expense"] for r in rows)
-                return {"income": round(a, 4), "expense": round(b, 4),
-                        "net": round(a - b, 4)}
+                return {"income": round(a, 4) if a is not None else None, "expense": round(b, 4),
+                        "net": round(a - b, 4) if a is not None else None}
 
             return {
                 "days": d,
@@ -712,8 +715,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 "total": _sum(daily),
                 "daily": daily,
             }
-        except sqlite3.Error:
-            return {}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -781,8 +784,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 **cache_requests.get(r[0], cachemetrics.UNKNOWN_REQUEST_RATE),
                 **throughput.get(r[0], {"tokens_per_sec": None, "throughput_samples": 0}),
             } for r in rows]
-        except sqlite3.Error:
-            return []
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -842,8 +845,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 **cache_requests.get(r[7], cachemetrics.UNKNOWN_REQUEST_RATE),
                 **throughput.get(r[7], {"tokens_per_sec": None, "throughput_samples": 0}),
             } for r in rows]
-        except sqlite3.Error:
-            return []
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -887,19 +890,19 @@ class WorkBuddyAdapter(BaseAdapter):
             ).fetchall()]
             # 错误数：request_logs 里 status 不为 2xx 的（含 status=0 未回状态）
             try:
-                failures = {str(d): _i(n) for d, n in conn.execute(
-                    "SELECT date(ts, 'unixepoch', '+8 hours') d,"
+                failures = {(str(d),str(realm or 'unknown')): _i(n) for d, realm, n in conn.execute(
+                    "SELECT date(ts, 'unixepoch', '+8 hours') d, COALESCE(realm,'unknown'),"
                     "       SUM(CASE WHEN status >= 400 OR status = 0 THEN 1 ELSE 0 END)"
                     "  FROM request_logs"
                     " WHERE ts >= strftime('%s', ?)"
-                    " GROUP BY d",
+                    " GROUP BY d, realm",
                     (since + " 00:00:00",),
                 ).fetchall() if d is not None}
-            except sqlite3.Error:
-                failures = {}
+            except sqlite3.Error as exc:
+                raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
             return self._build_usage(days, rows, failures)
-        except sqlite3.Error:
-            return {"usage": [], "credits_daily": []}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -916,7 +919,16 @@ class WorkBuddyAdapter(BaseAdapter):
             rows.append((row["day"], row["model"], row["requests"],
                          row["prompt_tokens"], row["completion_tokens"],
                          row["credit"], row["realm"]))
-        failures = {str(k): _i(v) for k, v in payload["failures"].items()}
+        realm_rows=payload.get('failures_by_realm')
+        if realm_rows is not None:
+            if not isinstance(realm_rows,list) or any(not isinstance(r,dict) or
+                    not isinstance(r.get('day'),str) or not isinstance(r.get('realm'),str) or
+                    type(r.get('count')) is not int or r['count']<0 for r in realm_rows):
+                raise manager_api.UpstreamPayloadError('usage-matrix failures_by_realm 结构异常')
+            failures={(r['day'],r['realm']):r['count'] for r in realm_rows}
+        else:
+            # A legacy day-only count cannot be attributed to any specific realm.
+            failures={str(k):_i(v) for k,v in payload['failures'].items()}
         return rows, failures
 
     def _build_usage(self, days: int, rows: List[tuple],
@@ -925,11 +937,11 @@ class WorkBuddyAdapter(BaseAdapter):
         days = max(1, min(365, int(days)))
         by_day: Dict[str, Dict[str, Any]] = {}
         for day, model, req, pt, ct, credit, realm in rows:
-            b = by_day.setdefault(str(day), {
+            b = by_day.setdefault((str(day),str(realm or 'unknown')), {
                 "date": str(day), "requests": 0, "ok": 0, "errors": 0,
                 "prompt_tokens": 0, "completion_tokens": 0,
                 "credit": 0.0, "models": [], "accounts": [],
-                "realm": str(realm or "cn"),
+                "realm": str(realm or "unknown"),
             })
             req_i = _i(req)
             b["requests"] += req_i
@@ -939,18 +951,31 @@ class WorkBuddyAdapter(BaseAdapter):
             b["credit"] = round(b["credit"] + _f(credit), 4)
             b["models"].append({"name": str(model or ""), "requests": req_i,
                                 "ok": req_i, "errors": 0})
-        for d, errs in failures.items():
-            b = by_day.get(str(d))
-            if b:
-                b["errors"] = _i(errs)
-                b["ok"] = max(0, b["requests"] - b["errors"])
+        unattributed={}
+        for key,errs in failures.items():
+            if isinstance(key,tuple):
+                day,realm=key
+                bucket=by_day.get((str(day),str(realm)))
+                if bucket is not None:
+                    bucket['errors']=_i(errs)
+                    bucket['ok']=max(0,bucket['requests']-bucket['errors'])
+                elif errs:
+                    # An error-only day/realm still belongs in the result.
+                    by_day[(str(day),str(realm))]={'date':str(day),'realm':str(realm),
+                        'requests':0,'ok':0,'errors':_i(errs),'prompt_tokens':0,
+                        'completion_tokens':0,'credit':0.0,'models':[],'accounts':[]}
+            elif errs:
+                # Legacy QTG models coerce null counts to zero. Refuse a
+                # selected read with missing attribution instead of false zero.
+                raise manager_api.UpstreamPayloadError(
+                    '对端只提供按天错误总数，缺少历史地区归属；请升级读取契约后重试')
         usage = [by_day[k] for k in sorted(by_day)]
         credits = [
             {"date": u["date"], "total": round(u["credit"], 4),
              "earned": 0.0, "consumed": round(u["credit"], 4)}
             for u in usage
         ]
-        return {"usage": usage, "credits_daily": credits}
+        return {"usage": usage, "credits_daily": credits, "unattributed_errors": unattributed}
 
     async def usage_analytics(self) -> Dict[str, Any]:
         """全表汇总（requests / prompt_tokens / completion_tokens / credits）。
@@ -988,8 +1013,8 @@ class WorkBuddyAdapter(BaseAdapter):
             )
             row = cur.fetchone() or (0, 0, 0, 0)
             return self._build_analytics(row[0], row[1], row[2], row[3])
-        except sqlite3.Error:
-            return {}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -1042,8 +1067,8 @@ class WorkBuddyAdapter(BaseAdapter):
                     "realm": str(realm or ""),
                 })
             return {"data": {"keys": keys}}
-        except sqlite3.Error:
-            return {"data": {"keys": []}}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -1087,8 +1112,8 @@ class WorkBuddyAdapter(BaseAdapter):
                     "error": str(err or "")[:200], "ip": str(ip or ""),
                 })
             return {"data": out}
-        except sqlite3.Error:
-            return {"data": []}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -1116,8 +1141,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 "SELECT * FROM task_logs ORDER BY rowid DESC LIMIT ?", (limit,))
             cols = [c[0] for c in cur.description or []]
             return {"data": [dict(zip(cols, r)) for r in cur.fetchall()]}
-        except sqlite3.Error:
-            return {"data": []}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -1145,8 +1170,8 @@ class WorkBuddyAdapter(BaseAdapter):
                 "SELECT * FROM audit_logs ORDER BY rowid DESC LIMIT ?", (limit,))
             cols = [c[0] for c in cur.description or []]
             return {"data": [dict(zip(cols, r)) for r in cur.fetchall()]}
-        except sqlite3.Error:
-            return {"data": []}
+        except sqlite3.Error as exc:
+            raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
         finally:
             conn.close()
 
@@ -1221,8 +1246,8 @@ class WorkBuddyAdapter(BaseAdapter):
         if conn is not None:
             try:
                 panel = _read_settings_panel(conn)
-            except sqlite3.Error:
-                panel = {}
+            except sqlite3.Error as exc:
+                raise manager_api.UpstreamPayloadError('Manager SQLite 数据无法读取；未将失败当成空数据') from exc
             finally:
                 conn.close()
         return {

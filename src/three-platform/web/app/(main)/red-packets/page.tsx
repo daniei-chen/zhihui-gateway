@@ -8,6 +8,7 @@ import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {notify} from '@/lib/toast';
 import {redPacketApi, errText} from '@/lib/api';
+import {BASE_PATH} from '@/lib/base-path';
 import type {
   CreatedRedPacket, RedPacket, RedPacketDetail, RedPacketKind, RedPacketMode,
 } from '@/lib/types';
@@ -160,7 +161,7 @@ export default function RedPacketsPage() {
    * code（不可能），而 query 不需要任何路由支持 —— `/claim/` 是普通静态页。
    */
   function claimUrl(code: string): string {
-    return `${window.location.origin}/claim/?code=${encodeURIComponent(code)}`;
+    return `${window.location.origin}${BASE_PATH}/claim/?code=${encodeURIComponent(code)}`;
   }
 
   async function copyLink(code: string) {

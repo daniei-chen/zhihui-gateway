@@ -68,12 +68,16 @@ class UpstashSavedTokenTest(unittest.TestCase):
             'upstash': {'url': 'https://saved.upstash.io', 'token': 'SAVED-TOKEN'},
         }), encoding='utf-8')
         self._patch_cfg = mock.patch.object(config, 'UPSTREAM_CONFIG', self.cfg)
-        self._patch_http = mock.patch.object(config, 'http_client', RecordingClient)
+        self._patch_http = mock.patch.object(wb2api.httpx, 'AsyncClient', RecordingClient)
+        from server.services import pinnedprobe
+        self._patch_dns = mock.patch.object(pinnedprobe, 'resolve_public', mock.AsyncMock(return_value=('8.8.8.8',)))
+        self._patch_dns.start()
         self._patch_cfg.start()
         self._patch_http.start()
 
     def tearDown(self) -> None:
         self._patch_http.stop()
+        self._patch_dns.stop()
         self._patch_cfg.stop()
         self._tmp.cleanup()
 

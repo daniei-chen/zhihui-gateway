@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
+import re
+import tempfile
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 TRUST = Path('/opt/workbuddy-manager/release-trust-ed25519.pem')
 DEFAULT_POOL = Path('/var/www/zhihui-next-pool')
@@ -44,13 +47,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+
 def build_dir(pool: Path, build: str) -> Path:
-    return pool / 'static' / build
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', build or ''):
+        raise ValueError('build ID 格式无效')
+    root = pool / 'static' / build
+    if pool.is_symlink() or (pool/'static').is_symlink() or root.is_symlink():
+        raise ValueError('资源池目录不能是链接')
+    return root
+
 
 
 def iter_assets(root: Path):
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('无效资源目录')
     for path in sorted(root.rglob('*')):
-        if not path.is_file() or path.name in SKIP_NAMES:
+        if path.is_symlink():
+            raise ValueError('资源目录包含链接')
+        if not path.is_file():
+            continue
+        if path.stat().st_nlink != 1:
+            raise ValueError('资源文件不能是硬链接')
+        if path.relative_to(root).as_posix() in SKIP_NAMES:
             continue
         yield path
 
@@ -65,56 +83,68 @@ def write_manifest(root: Path) -> int:
     return len(lines)
 
 
-def sign_manifest(root: Path, key: Path) -> None:
-    manifest = root / MANIFEST_NAME
-    signature = root / SIGNATURE_NAME
-    if signature.exists():
-        signature.unlink()
-    proc = subprocess.run(
-        ['openssl', 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
-         '-in', str(manifest), '-out', str(signature)],
-        capture_output=True, timeout=60)
-    if proc.returncode:
-        raise SystemExit('签名失败：%s' % proc.stderr.decode('utf-8', 'replace')[:300])
-    signature.chmod(0o644)
+
+def sign_manifest(root: Path, key: Path, trust: Path = TRUST) -> None:
+    """Build and sign privately, verify before touching either published file.
+
+    Publishing manifest+signature is not one filesystem transaction. Consumers
+    fail closed on a mismatch; a versioned publisher is required for activation.
+    """
+    assets=list(iter_assets(root))
+    if not assets:
+        raise ValueError('资源目录为空')
+    content=''.join('%s  %d  %s\n'%(sha256_file(p),p.stat().st_size,p.relative_to(root).as_posix()) for p in assets)
+    with tempfile.TemporaryDirectory(prefix='.pool-sign-',dir=root.parent) as name:
+        stage=Path(name)
+        (stage/MANIFEST_NAME).write_text(content,encoding='utf-8')
+        result=subprocess.run(['openssl','pkeyutl','-sign','-inkey',str(key),'-rawin',
+            '-in',str(stage/MANIFEST_NAME),'-out',str(stage/SIGNATURE_NAME)],capture_output=True,timeout=60)
+        if result.returncode:
+            raise ValueError('资源清单签名失败；原清单/签名未修改')
+        verified=subprocess.run(['openssl','pkeyutl','-verify','-pubin','-inkey',str(trust),
+            '-rawin','-in',str(stage/MANIFEST_NAME),'-sigfile',str(stage/SIGNATURE_NAME)],capture_output=True,timeout=30)
+        if verified.returncode:
+            raise ValueError('签名与受信公钥不匹配；原文件未修改')
+        for name in (MANIFEST_NAME,SIGNATURE_NAME):
+            with (stage/name).open('r+b') as handle:
+                os.fsync(handle.fileno())
+            os.replace(stage/name,root/name)
+        if os.name!='nt':
+            fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+
 
 
 def verify_manifest(root: Path, trust: Path = TRUST) -> tuple[bool, str]:
-    manifest = root / MANIFEST_NAME
-    signature = root / SIGNATURE_NAME
-    if not manifest.is_file():
-        return False, '清单缺失'
-    if not signature.is_file():
-        return False, '签名缺失'
-    if not trust.is_file():
-        return False, '信任锚缺失'
-    proc = subprocess.run(
-        ['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(trust),
-         '-rawin', '-in', str(manifest), '-sigfile', str(signature)],
-        capture_output=True, timeout=30)
-    if proc.returncode:
-        return False, '签名校验失败'
-    listed = 0
-    bad = []
-    for line in manifest.read_text(encoding='utf-8').splitlines():
-        parts = line.split('  ')
-        if len(parts) != 3:
-            bad.append('格式错误: %r' % line[:80])
-            continue
-        digest, size, rel = parts
-        path = root / rel
-        if not path.is_file():
-            bad.append('缺失: %s' % rel)
-            continue
-        if path.stat().st_size != int(size) or sha256_file(path) != digest:
-            bad.append('哈希不符: %s' % rel)
-        listed += 1
-    on_disk = sum(1 for _ in iter_assets(root))
-    if on_disk != listed:
-        bad.append('未登记文件 %d 个（磁盘 %d / 清单 %d）' % (on_disk - listed, on_disk, listed))
-    if bad:
-        return False, '; '.join(bad[:5])
-    return True, '%d 个文件通过' % listed
+    try:
+        manifest, signature = root/MANIFEST_NAME, root/SIGNATURE_NAME
+        if any(p.is_symlink() or not p.is_file() for p in (manifest,signature,trust)):
+            return False, '清单、签名或信任锚缺失/为链接'
+        if manifest.stat().st_size > 4*1024*1024:
+            return False, '清单超出预算'
+        proc = subprocess.run(['openssl','pkeyutl','-verify','-pubin','-inkey',str(trust),
+            '-rawin','-in',str(manifest),'-sigfile',str(signature)],capture_output=True,timeout=30)
+        if proc.returncode:
+            return False, '签名校验失败'
+        actual = {p.relative_to(root).as_posix():p for p in iter_assets(root)}
+        listed = set()
+        for line in manifest.read_text(encoding='utf-8').splitlines():
+            digest,size,rel = line.split('  ')
+            name=PurePosixPath(rel)
+            if (not re.fullmatch('[0-9a-f]{64}',digest) or not size.isdecimal()
+                    or name.is_absolute() or name.as_posix()!=rel or '..' in name.parts
+                    or '\\' in rel or rel in listed or rel not in actual):
+                return False, '清单路径、重复条目或摘要格式无效'
+            listed.add(rel)
+            path=actual[rel]
+            if path.stat().st_size!=int(size) or sha256_file(path)!=digest:
+                return False, '资源内容不匹配'
+        if not listed or listed!=set(actual):
+            return False, '资源闭包不匹配或为空'
+        return True, '%d 个文件通过'%len(listed)
+    except (ValueError,OSError,UnicodeError,subprocess.SubprocessError):
+        return False, '无法核实资源清单'
 
 
 def main(argv: list[str]) -> int:
@@ -122,6 +152,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument('--pool', default=str(DEFAULT_POOL))
     parser.add_argument('--build', default=None)
     parser.add_argument('--key', default=None)
+    parser.add_argument('--trust', default=str(TRUST))
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--list', action='store_true')
     args = parser.parse_args(argv)
@@ -137,11 +168,21 @@ def main(argv: list[str]) -> int:
             if not (root / MANIFEST_NAME).is_file():
                 print('%-28s %s' % (name, 'NO-MANIFEST'))
                 continue
-            ok, detail = verify_manifest(root)
+            ok, detail = verify_manifest(root, Path(args.trust))
             print('%-28s %s  %s' % (name, 'OK' if ok else 'FAIL', detail))
         return 0
 
     targets = [args.build] if args.build else builds
+    if not targets:
+        print('没有可验证或签名的 build', file=sys.stderr)
+        return 2
+    try:
+        for name in targets:
+            if not build_dir(pool,name).is_dir():
+                raise ValueError('指定 build 不存在')
+    except ValueError as exc:
+        print(str(exc),file=sys.stderr)
+        return 2
     if args.verify:
         failed = 0
         for name in targets:
@@ -150,7 +191,7 @@ def main(argv: list[str]) -> int:
                 print('%-28s 目录不存在' % name)
                 failed += 1
                 continue
-            ok, detail = verify_manifest(root)
+            ok, detail = verify_manifest(root, Path(args.trust))
             print('%-28s %s  %s' % (name, 'OK' if ok else 'FAIL', detail))
             if not ok:
                 failed += 1
@@ -166,8 +207,12 @@ def main(argv: list[str]) -> int:
         if not root.is_dir():
             print('%-28s 目录不存在，跳过' % name)
             continue
-        count = write_manifest(root)
-        sign_manifest(root, key)
+        try:
+            count = len(list(iter_assets(root)))
+            sign_manifest(root, key, Path(args.trust))
+        except (ValueError,OSError,subprocess.SubprocessError) as exc:
+            print(str(exc),file=sys.stderr)
+            return 3
         print('%-28s 已生成并签名（%d 文件）' % (name, count))
     return 0
 

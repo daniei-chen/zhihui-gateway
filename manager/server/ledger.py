@@ -28,6 +28,15 @@ CREATE TABLE IF NOT EXISTS forwarding_events (
  realm TEXT, protocol TEXT, transform TEXT, config_hash TEXT, outcome TEXT,
  PRIMARY KEY(request_id,attempt,phase)
 );
+CREATE TABLE IF NOT EXISTS usage_reset_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL,
+ event_units_before INTEGER NOT NULL, previous_units INTEGER NOT NULL,
+ previous_tokens INTEGER NOT NULL, ts INTEGER NOT NULL, actor TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS usage_reset_events_no_update BEFORE UPDATE ON usage_reset_events
+ BEGIN SELECT RAISE(ABORT,'usage resets are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS usage_reset_events_no_delete BEFORE DELETE ON usage_reset_events
+ BEGIN SELECT RAISE(ABORT,'usage resets are immutable'); END;
 CREATE TABLE IF NOT EXISTS adjustment_events (
  event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, ts INTEGER NOT NULL,
  key_id INTEGER NOT NULL, token_delta INTEGER NOT NULL, credit_units_delta INTEGER NOT NULL,
@@ -293,8 +302,9 @@ def derive_attempt_billing(request_id: str) -> list[dict]:
         seen = phases[number]
         reached_upstream = number in reached
         if not reached_upstream:
-            fact, source = BILLING_NOT_APPLICABLE, BILLING_SOURCE_ABSENT
-            why = '该 attempt 未到达上游（阶段：%s），本不该产生计费事实' % ','.join(seen)
+            fact, source = BILLING_UNKNOWN, BILLING_SOURCE_ABSENT
+            reached_upstream = None
+            why = '仅有选中/准备事件，缺少发送终态证据；不能由日志缺失推断没有调用上游' 
         elif evidence['reported'] and unambiguous:
             fact, source = BILLING_REPORTED, BILLING_SOURCE_RECEIPT
             why = ('上游回了请求级 usage，且本请求只有这一个 attempt 到达过上游；'

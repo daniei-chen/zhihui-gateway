@@ -166,8 +166,15 @@ def usage_matrix(since: str, request: Request, response: Response,
         " GROUP BY day",
         (f'{since} 00:00:00',),
     )
+    realm_failures=db.query(
+        "SELECT date(ts,'unixepoch','+8 hours') AS day, COALESCE(realm,'unknown') AS realm, "
+        "SUM(CASE WHEN status>=400 OR status=0 THEN 1 ELSE 0 END) AS n "
+        "FROM request_logs WHERE ts>=strftime('%s',?) GROUP BY day,realm",
+        (f'{since} 00:00:00',))
     return _with_scope(request, response, {
         'version': READ_API_VERSION,
+        'failures_by_realm':[{'day':str(r['day']),'realm':str(r['realm']),'count':int(r['n'] or 0)}
+                             for r in realm_failures if r['day']],
         'since': since,
         'rows': [
             {

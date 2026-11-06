@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from server import config, db, drain, instancelease, migrations, tasklease
@@ -122,7 +123,8 @@ class PublishIsolationTest(_LeaseCase):
         # 反向：任务租约过期接管，也不能改实例 fence
         db.execute('UPDATE task_leases SET lease_until=? WHERE task=?',
                    (int(time.time()) - 5, 'r3l2-daily'))
-        re_taken, re_fence = tasklease.claim('r3l2-daily', 120)
+        with mock.patch.object(tasklease,'owner_alive',return_value=False):
+            re_taken, re_fence = tasklease.claim('r3l2-daily', 120)
         self.assertTrue(re_taken)
         self.assertEqual(re_fence, task_fence + 1)
         instance_row = instancelease.describe(third['instance_id'])

@@ -11,6 +11,7 @@ from server.tests.test_user_portal import PortalTests
 class CappedBillingTests(PortalTests):
     pooled = PublicPoolTests.pooled
     make_key = PublicPoolTests.make_key
+    make_legacy_key = PublicPoolTests.make_legacy_key
     state = PublicPoolTests.state
     enabled = PublicPoolTests.enabled
     test_approved_main_commit_failure_replays_capped_receipt_once = PublicPoolTests.test_gateway_failed_main_commit_spools_then_replays_wallet_once
@@ -154,7 +155,8 @@ class CappedBillingTests(PortalTests):
 
     async def test_two_keys_cannot_hold_or_charge_the_same_balance_twice(self):
         await self.pooled(amount=10)
-        made = [await self.make_key(), await self.make_key()]
+        made = [await self.make_key(), await self.make_legacy_key()]
+        self.assertNotEqual(made[0]['id'],made[1]['id'])
         with self.enabled():
             keys = [keysvc.resolve(row['key']) for row in made]
             def run(index):

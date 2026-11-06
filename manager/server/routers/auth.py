@@ -36,6 +36,10 @@ def operations_health(user:dict=Depends(security.require_panel_reader)):
 
 @router.post('/login')
 async def login(request: Request) -> JSONResponse:
+    # Login creates ambient browser authority. Protect the initial login too:
+    # a cross-site form can submit valid JSON with a text/plain content type,
+    # even when the victim has no existing session cookie.
+    security.check_same_origin(request, require_cookie=False)
     ip = client_ip(request)
 
     # 先解析用户名，以便同时做「按 IP」与「按用户名」的锁定判断
@@ -119,7 +123,8 @@ def _complete_login(request: Request, ip: str, username: str, password: str) -> 
 
 
 @router.post('/logout')
-def logout() -> JSONResponse:
+def logout(request: Request) -> JSONResponse:
+    security.check_same_origin(request, require_cookie=False)
     resp = JSONResponse({'ok': True})
     resp.delete_cookie(config.COOKIE_NAME, path='/')
     return resp

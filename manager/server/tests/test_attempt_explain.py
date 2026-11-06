@@ -327,7 +327,11 @@ class HealthFreshnessTest(_Base):
 
     def test_successful_sample_is_fresh_with_evidence(self) -> None:
         """隔离运行器的私有 loopback 上游：/status 可用 → fresh + 证据来源。"""
-        status = asyncio.run(wb2api.get_status())
+        import os
+        from urllib.parse import urlsplit
+        base = os.environ['ZH_FAKE_PROVIDER_BASE']
+        self.assertEqual(urlsplit(base).hostname, '127.0.0.1')
+        status = asyncio.run(wb2api.get_status(base_url=base))
         self.assertTrue(status.get('connected'), status)
         health = status['health']
         self.assertEqual(health['freshness'], 'fresh')

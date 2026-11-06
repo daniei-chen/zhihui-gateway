@@ -15,7 +15,7 @@ def dispatch_ready(conn=None):
         if conn is None:
             if not (store.config.DATA_DIR / 'user-portal.sqlite3').is_file():
                 return False
-            with store.transaction() as opened:
+            with store.transaction(read_only=True) as opened:
                 return dispatch_ready(opened)
         row = conn.execute("SELECT value FROM portal_settings WHERE key='billing_policy'").fetchone()
         return bool(row and row[0] == POLICY)

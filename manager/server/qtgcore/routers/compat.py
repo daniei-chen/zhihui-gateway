@@ -545,6 +545,11 @@ def _split_file(file: str) -> tuple[str, str]:
     return platform or "qoder", uid
 
 
+@router.get('/accounts/export')
+async def compat_accounts_export_entry(request: Request) -> Response:
+    return await compat_accounts_export(request)
+
+
 @router.get("/accounts/{file:path}")
 async def compat_account_detail(request: Request, file: str) -> Dict[str, Any]:
     rt = _rt(request)
@@ -594,13 +599,17 @@ async def compat_account_checkin(request: Request, file: str) -> Dict[str, Any]:
 
 @router.post("/accounts/{file:path}/credits")
 async def compat_account_credits(request: Request, file: str) -> Dict[str, Any]:
+    return await _account_credits(request,file,force=True)
+
+
+async def _account_credits(request: Request, file: str, *, force: bool) -> Dict[str, Any]:
     rt = _rt(request)
     platform, uid = _split_file(file)
-    agg = await build_aggregate(rt, force=True)
+    agg = await build_aggregate(rt, force=force)
     for a in all_accounts(agg):
         if a.platform == platform and a.uid == uid:
-            return {"ok": True, "credits": a.credits_remain, "cached": False, "message": ""}
-    return {"ok": False, "credits": None, "cached": False, "message": "未找到该账号"}
+            return {"ok": True, "credits": a.credits_remain, "cached": not force, "message": ""}
+    return {"ok": False, "credits": None, "cached": not force, "message": "未找到该账号"}
 
 
 
@@ -654,74 +663,20 @@ async def compat_account_delete(request: Request, file: str) -> Dict[str, Any]:
 
 
 
+
 @router.post("/playground/chat")
 async def compat_playground_chat(request: Request):
-    """测试台对话：用管理端登录态直接转发到上游（不走数据面密钥），SSE 原样透传。"""
-    rt = _rt(request)
+    """Use the shared playground's authentication, limits, deadlines and cleanup."""
+    from ... import security
+    from ...routers import playground
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+    user = security.require_session_admin(request, security.require_admin(security.current_user(request)))
     try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
-    model = str(body.get("model") or "")
-    messages = body.get("messages") or []
-
-    from .proxy import _base, _catalog, _upstream_key
-
-    hdr = platform_of(request)
-    platform, upstream_model = (hdr if hdr in ("qoder", "trae") else "qoder"), model
-    if "/" in model:
-        head, _, rest = model.partition("/")
-        if head in ("qoder", "trae") and rest:
-            platform, upstream_model = head, rest
-    else:
-        cat = await _catalog(rt)
-        for plat, ids in (cat or {}).items():
-            if model in ids:
-                platform = plat
-                break
-
-    token = _upstream_key(rt, platform)
-    if not token:
-        from ..errors import ConfigMissing
-
-        raise ConfigMissing(
-            f"未配置 {platform} 上游 API Key：请在「密钥 → 上游凭据」填写", code="missing_upstream_key"
-        )
-
-    payload = {
-        "model": upstream_model,
-        "messages": messages,
-        "stream": True,
-    }
-    client = httpx.AsyncClient(timeout=rt.settings.proxy_timeout_sec)
-    req = client.build_request(
-        "POST",
-        _base(rt, platform) + "/v1/chat/completions",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
-                 "Accept": "text/event-stream"},
-    )
-    resp = await client.send(req, stream=True)
-    if resp.status_code >= 400:
-        err = await resp.aread()
-        await resp.aclose()
-        await client.aclose()
-        return Response(content=err, status_code=resp.status_code,
-                        media_type=resp.headers.get("content-type", "application/json"))
-
-    async def gen():
-        try:
-            async for chunk in resp.aiter_bytes():
-                yield chunk
-        finally:
-            try:
-                await resp.aclose()
-            except Exception:
-                pass
-            await client.aclose()
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        body = playground.ChatIn.model_validate(await request.json())
+    except (ValueError, ValidationError):
+        raise HTTPException(status_code=422, detail='测试台请求格式无效') from None
+    return await playground.chat(body, request, user)
 
 
 
@@ -732,7 +687,7 @@ async def compat_logs_clear(request: Request) -> Dict[str, Any]:
     try:
         n = rt.store.prune(0)
     except Exception:  # noqa: BLE001
-        n = 0
+        return JSONResponse(status_code=503,content={"ok":False,"cleared":None,"detail":"无法核实日志清理结果"})
     return {"ok": True, "cleared": n, "message": f"已清理 {n} 条请求日志"}
 
 
@@ -942,9 +897,12 @@ async def compat_refresh_tokens(request: Request) -> Dict[str, Any]:
         file = f"{a.platform}:{a.uid}"
         adapter = rt.trae if a.platform == "trae" else rt.qoder
         try:
-            await adapter.refresh_account(a.uid)
+            result = await adapter.refresh_account(a.uid)
+            ok = _res_ok(result)
             results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
-                            "ok": True, "message": "已刷新"})
+                            "ok": ok, "message": "已刷新" if ok else "刷新结果未确认"})
+            if not ok:
+                failed.append(file)
         except Exception as exc:  # noqa: BLE001
             results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
                             "ok": False, "message": str(exc)[:160]})
@@ -977,7 +935,6 @@ async def compat_refresh_credits(request: Request, force: str = Query(default="t
     }
 
 
-@router.get("/accounts/export")
 async def compat_accounts_export(request: Request) -> Response:
     """导出账号清单（**不含任何凭据**，只给运维对账用）。"""
     import json as _json
@@ -1063,8 +1020,11 @@ async def compat_refresh_plan_run(request: Request) -> Dict[str, Any]:
         checked += 1
         adapter = rt.trae if a.platform == "trae" else rt.qoder
         try:
-            await adapter.refresh_account(a.uid)
-            renewed += 1
+            result = await adapter.refresh_account(a.uid)
+            if _res_ok(result):
+                renewed += 1
+            else:
+                failed_n += 1
         except Exception:  # noqa: BLE001
             failed_n += 1
     now = int(time.time())

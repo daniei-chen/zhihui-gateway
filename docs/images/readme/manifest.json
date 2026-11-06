@@ -46,13 +46,13 @@
     },
     {
       "path": "docs/images/readme/release-mobile-v0.0.7.svg",
-      "bytes": 5151,
-      "sha256": "c7c81c34d8d1fcf6ac67f6a65bbfb8e63cf6119797b18f468be0658967f46fb5"
+      "bytes": 5197,
+      "sha256": "fe0a8a2086d3a977ff06d16ad1bfecfb90ea8c535055cc9cdf4e67be52e18772"
     },
     {
       "path": "docs/images/readme/release-v0.0.7.svg",
-      "bytes": 5489,
-      "sha256": "06b6f4e2534698f40a9986c2579a1db6f445716c2fb3e85d5aa39ead6eb9eeb8"
+      "bytes": 5535,
+      "sha256": "bf270fcdffa3a832dbbf5c2038c721e1526578abacac0e9eb4bc3c662b28e6f1"
     },
     {
       "path": "docs/images/readme/routing-mobile.svg",

@@ -84,16 +84,17 @@ export function UploadAccountsButton({
     if (busy || (selectedExportGroup && !selectedExportGroup.auth_dir)) return;
     setBusy(true);
     try {
-      const blob = await accountApi.exportZip(selectedExportId);
-      const url = URL.createObjectURL(blob);
+      const exported = await accountApi.exportZip(selectedExportId);
+      const url = URL.createObjectURL(exported.blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = 'accounts.zip';
+      anchor.download = exported.filename;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
-      notify.ok(t('accounts.exportDone'), t('accounts.exportDoneDetail'));
+      notify.ok(t('accounts.exportDone'), exported.format === 'manifest'
+        ? t('accounts.exportManifestDetail') : t('accounts.exportDoneDetail'));
     } catch (error) {
       notify.err(errText(error));
     } finally {

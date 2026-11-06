@@ -14,7 +14,7 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 正式发布与验收" /></a>
+<a href="docs/UPGRADE-20261106.md"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 增补构建、验收与上线状态" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
@@ -29,10 +29,14 @@
 
 把已验证修复合为一个版本：客户端更兼容，页面少做重复工作，失败与恢复都有边界。
 
+**本次增补构建：`v0.0.7+stable.20261106.1`。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产；发布状态以该构建的签名回执与 GitHub Release 为准。
+
+**现网验收 · 2026-11-06：** 已受控切换此构建，用户确认账号页恢复。三平台账号、状态、分组及积分缓存 12 项读取通过，统计 9 项读取通过；Codex Chat / Responses、Claude Messages 与工具结果保真 4 项模型测试通过。维护时返回带中文说明、预计时长和 `Retry-After` 的 JSON 503。测试样本不代表未来零故障或所有长上下文的延迟保证。
+
 <a href="docs/RELEASE-0.0.7.md">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.7.svg" />
-    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；跨层发送预算、按需积分和清晰诊断。固定 Linux 验收 Manager 4403、引擎 1764、发布补充合同 6 项通过，不是实时状态或长期保证。" />
+    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；完整门禁、来源绑定与账本保护。验收以具体构建的签名回执为准。" />
   </picture>
 </a>
 
@@ -47,7 +51,7 @@
 [发布说明与边界](docs/RELEASE-0.0.7.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.7/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7)
 
 > [!NOTE]
-> 数字来自固定构建的 Linux 隔离验收；前端另有 128 项测试通过。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
+> 测试数量必须对应具体构建，旧版或草稿 PR 的通过回执不能替代本次门禁。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
 
 <br />
 

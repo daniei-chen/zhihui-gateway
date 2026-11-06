@@ -22,33 +22,54 @@ from .. import metrics
 
 
 class Breaker:
+    """One owned half-open probe; cancellation always reopens the circuit."""
     def __init__(self, threshold: int, cooldown: float) -> None:
         self.threshold = max(1, threshold)
         self.cooldown = max(1.0, cooldown)
         self.failures = 0
         self.opened_at = 0.0
         self.trips = 0
+        self._probe_owner = None
+
+    @staticmethod
+    def _owner():
+        try:
+            return asyncio.current_task()
+        except RuntimeError:
+            import threading
+            return threading.get_ident()
 
     def allow(self) -> bool:
         if self.opened_at == 0.0:
             return True
+        if self._probe_owner is not None:
+            return False
         if time.monotonic() - self.opened_at >= self.cooldown:
-            # 半开：放一个请求探路
-            self.opened_at = 0.0
-            self.failures = max(0, self.threshold - 1)
+            self._probe_owner = self._owner()
             return True
         return False
 
     def success(self) -> None:
+        if self._probe_owner is not None and self._probe_owner != self._owner():
+            return
+        self._probe_owner = None
         self.failures = 0
         self.opened_at = 0.0
 
     def failure(self) -> None:
+        if self._probe_owner is not None and self._probe_owner != self._owner():
+            return
+        was_probe = self._probe_owner is not None
+        self._probe_owner = None
         self.failures += 1
-        if self.failures >= self.threshold and self.opened_at == 0.0:
+        if was_probe or self.failures >= self.threshold and self.opened_at == 0.0:
             self.opened_at = time.monotonic()
             self.trips += 1
-            metrics.inc("qtg_breaker_open_total", {"upstream": self.name if hasattr(self, "name") else "?"})
+            metrics.inc('qtg_breaker_open_total', {'upstream': getattr(self, 'name', '?')})
+
+    def cancel_probe(self) -> None:
+        if self._probe_owner == self._owner() and self._probe_owner is not None:
+            self.failure()
 
 
 class BaseAdapter:
@@ -60,6 +81,7 @@ class BaseAdapter:
         self._client: Optional[httpx.AsyncClient] = None
         self._auth_lock = asyncio.Lock()
         self._authenticated = False
+        self._auth_generation = 0
         self.breaker = Breaker(settings.breaker_fail_threshold, settings.breaker_cooldown_sec)
         self.breaker.name = self.name  # type: ignore[attr-defined]
         self.last_error = ""
@@ -93,15 +115,22 @@ class BaseAdapter:
     def _credentials(self) -> str:  # pragma: no cover - 抽象
         return ""
 
-    async def ensure_auth(self, force: bool = False) -> None:
+    async def ensure_auth(self, force: bool = False, *, rejected_generation: int | None = None) -> None:
         if self._authenticated and not force:
             return
         async with self._auth_lock:
             if self._authenticated and not force:
                 return
+            if (self._authenticated and rejected_generation is not None
+                    and self._auth_generation != rejected_generation):
+                # Another caller already replaced the exact expired session
+                # rejected by this response. Reuse it instead of serializing
+                # one new upstream login per concurrent 401.
+                return
             try:
                 await self.authenticate()
                 self._authenticated = True
+                self._auth_generation += 1
             except UpstreamError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 统一翻译为上游错误
@@ -110,7 +139,15 @@ class BaseAdapter:
                 raise UpstreamError(f"{self.name} 鉴权失败: {str(exc)[:200]}") from exc
 
     # ---- 请求 ----
-    async def _request(
+    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        if not self.breaker.allow():
+            raise BreakerOpen(f"{self.name} 上游熔断中")
+        try:
+            return await self._request_owned(method, path, **kwargs)
+        finally:
+            self.breaker.cancel_probe()
+
+    async def _request_owned(
         self,
         method: str,
         path: str,
@@ -120,8 +157,6 @@ class BaseAdapter:
         retry: bool = True,
         auth: bool = True,
     ) -> httpx.Response:
-        if not self.breaker.allow():
-            raise BreakerOpen(f"{self.name} 上游熔断中（连续失败 {self.breaker.failures} 次）")
         if auth:
             await self.ensure_auth()
 
@@ -138,6 +173,7 @@ class BaseAdapter:
         for attempt in range(attempts):
             started = time.monotonic()
             try:
+                auth_generation = self._auth_generation
                 resp = await self.client.request(method, path, json=json_body, params=params)
                 elapsed = time.monotonic() - started
                 metrics.observe(
@@ -146,9 +182,10 @@ class BaseAdapter:
                     {"upstream": self.name, "method": method},
                 )
                 metrics.inc("qtg_upstream_requests_total", {"upstream": self.name, "method": method})
-                if resp.status_code == 401 and auth and retry and attempt == 0:
+                if (resp.status_code == 401 and auth and retry and attempt == 0
+                        and attempt + 1 < attempts):
                     # 会话过期：重登后重试一次
-                    await self.ensure_auth(force=True)
+                    await self.ensure_auth(force=True, rejected_generation=auth_generation)
                     continue
                 if resp.status_code >= 500:
                     if retry and attempt + 1 < attempts:

@@ -183,7 +183,8 @@ html:not(.dark) #main-content > div:first-child [role="tab"][aria-selected="true
 }
 
 /* Exact existing surface classes: not every bg-muted element is a card. */
-html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"] {
+html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"],
+html:not(.dark) .user-portal :is([data-slot="stat-card"], .portal-panel, .portal-login-card) {
   background:
     radial-gradient(ellipse 65% 95% at 100% 0, rgba(235, 244, 253, .16), transparent 85%),
     linear-gradient(145deg, #ffffff, #fefeff);
@@ -346,14 +347,16 @@ html:has(#main-content) .skip-link:focus {
 .zh-console-aura[data-active] { opacity: 1; }
 .dark .zh-console-aura { display: none; }
 
-html:not(.dark) #main-content [data-slot="stat-card"] {
+html:not(.dark) #main-content [data-slot="stat-card"],
+html:not(.dark) .user-portal [data-slot="stat-card"] {
   position: relative;
   overflow: hidden;
   isolation: isolate;
   min-height: 112px;
 }
 
-html:not(.dark) #main-content [data-slot="stat-card"]::before {
+html:not(.dark) #main-content [data-slot="stat-card"]::before,
+html:not(.dark) .user-portal [data-slot="stat-card"]::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -364,7 +367,8 @@ html:not(.dark) #main-content [data-slot="stat-card"]::before {
   transition: opacity .5s ease;
 }
 
-html:not(.dark) #main-content [data-slot="stat-card"] > div:first-child > div:last-child:has(svg) {
+html:not(.dark) #main-content [data-slot="stat-card"] > div:first-child > div:last-child:has(svg),
+html:not(.dark) .user-portal [data-slot="stat-card"] > div:first-child > div:last-child:has(svg) {
   background: linear-gradient(145deg, #ffffff, #f6f9fd);
   border: 1px solid #eef3f8;
 }
@@ -413,11 +417,13 @@ html:not(.dark) #main-content [class~="bg-primary"]:hover { background-color: #1
 }
 
 @media (max-width: 479px) {
-  html:not(.dark) #main-content [data-slot="stat-card"] { min-height: 103px; }
+  html:not(.dark) #main-content [data-slot="stat-card"],
+  html:not(.dark) .user-portal [data-slot="stat-card"] { min-height: 103px; }
 }
 
 @media (prefers-reduced-motion: reduce), (hover: none), (pointer: coarse) {
   .zh-console-aura { display: none !important; }
-  html:not(.dark) #main-content [data-slot="stat-card"]::before { display: none; }
+  html:not(.dark) #main-content [data-slot="stat-card"]::before,
+  html:not(.dark) .user-portal [data-slot="stat-card"]::before { display: none; }
   html:not(.dark) #main-content [class~="rounded-[20px]"][class~="bg-muted"] { transition: none; }
 }

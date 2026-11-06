@@ -63,6 +63,12 @@ LEASE_TTL_SEC = max(2, int(os.environ.get('ZH_INSTANCE_LEASE_TTL_SEC', '30') or 
 
 ROLES = ('candidate', 'serving', 'draining', 'handoff', 'stopped')
 
+
+def serving_role():
+    from . import config
+    # A cohort worker is not a second primary/control-plane writer election.
+    return 'candidate' if config.SHARED_ADMISSION and not config.BACKGROUND_JOBS else 'serving'
+
 DDL = (
     '''CREATE TABLE IF NOT EXISTS instance_leases (
   instance_id    TEXT PRIMARY KEY,
@@ -498,7 +504,9 @@ def sync_role(role: str, snapshot: dict | None = None) -> bool:
                        (me['instance_id'],))
     if row is None:
         return False
-    phase = {'draining': 'draining', 'serving': 'serving'}.get(role, role)
+    if role == 'serving':
+        role = serving_role()
+    phase = 'cohort_inference' if role == 'candidate' else role
     return set_role(me['instance_id'], int(row['fence'] or 0),
                     role=role, phase=phase, snapshot=snapshot)
 

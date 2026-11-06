@@ -387,20 +387,24 @@ def batch_message(results):
 async def automatic_once():
     from . import portalwallet
     from .services.asyncwork import joined_thread
-    portalwallet.recover()
+    # Recovery may wait for ledger/portal write locks; it runs on every timer
+    # tick and must not suspend all inference streams on the asyncio loop.
+    await joined_thread(portalwallet.recover)
     try:
         await joined_thread(publish_confirmed_accounts)
     except Exception:
         logging.getLogger(__name__).warning('portal pool publication recovery paused; details withheld')
-    if not store.automatic_enabled():
+    if not await joined_thread(store.automatic_enabled):
         return 0
-    with store.transaction() as conn:
-        ids = [row[0] for row in conn.execute("SELECT a.id FROM portal_accounts a JOIN portal_users u ON u.id=a.owner_id "
-            "LEFT JOIN portal_checkins c ON c.account_id=a.id AND c.day=? "
-            "WHERE u.enabled=1 AND a.status='active' AND (c.state IS NULL OR c.state='failed') ORDER BY a.created_at LIMIT 100", (store.day(),))]
+    def pending_accounts():
+        with store.transaction() as conn:
+            return [row[0] for row in conn.execute("SELECT a.id FROM portal_accounts a JOIN portal_users u ON u.id=a.owner_id "
+                "LEFT JOIN portal_checkins c ON c.account_id=a.id AND c.day=? "
+                "WHERE u.enabled=1 AND a.status='active' AND (c.state IS NULL OR c.state='failed') ORDER BY a.created_at LIMIT 100", (store.day(),))]
+    ids = await joined_thread(pending_accounts)
     completed = 0
     for account_id in ids:
-        if not store.automatic_enabled():
+        if not await joined_thread(store.automatic_enabled):
             break
         def authorized():
             with store.transaction() as conn:

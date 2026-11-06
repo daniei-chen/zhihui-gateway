@@ -290,23 +290,42 @@ _login_ready: dict[str, tuple[dict, str, str, float]] = {}      # state → 国�
 _login_owner: dict[str, str] = {}        # state → 发起人，用于收掉同一用户的旧轮询
 _login_scopes: dict[str, tuple[str, str, int | None, float]] = {}
 _login_bindings: dict[str, str] = {}
+_login_group_bindings: dict[str, tuple[str, str, str]] = {}
 _login_locks: dict[str, asyncio.Lock] = {}
 
 
-def _bind_login(state, user, realm, upstream_id):
+def _login_group_binding(group: dict) -> tuple[str, str, str]:
+    """Bind a grant to its actual credential directory and upstream instance."""
+    return (str(_require_dir(group).resolve()), str(group.get('base_url') or '').rstrip('/'),
+            str(group.get('container') or ''))
+
+
+def _login_group_id(upstream_id):
+    # Both supported spellings of the default group must refer to one scope.
+    return upstream_id if isinstance(upstream_id, int) and upstream_id != 0 else None
+
+
+def _bind_login(state, user, realm, upstream_id, *, expected_group=None):
     user = security.authorization_owner(user)
+    upstream_id = _login_group_id(upstream_id)
+    binding = _login_group_binding(_group(upstream_id))
+    if expected_group is not None and binding != expected_group:
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
     _login_scopes[state] = (user['username'], realm, upstream_id, time.time())
     _login_bindings[state] = user['_authorization_binding']
+    _login_group_bindings[state] = binding
     return user
 
 
 def _check_login_scope(state, user, realm, upstream_id):
     user = security.authorization_owner(user)
     scope = _login_scopes.get(state)
-    if (scope is None or scope[:3] != (user['username'], realm, upstream_id)
+    if (scope is None or scope[:3] != (user['username'], realm, _login_group_id(upstream_id))
             or _login_bindings.get(state) != user['_authorization_binding']
             or time.time() - scope[3] > _LOGIN_RESULT_TTL):
         raise HTTPException(status_code=404, detail='授权会话不存在或与当前平台、版本不匹配')
+    if _login_group_binding(_group(scope[2])) != _login_group_bindings.get(state):
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
     return user
 
 
@@ -322,7 +341,7 @@ def _discard_login(state: str) -> None:
     task = _login_tasks.pop(state, None)
     if task is not None and not task.done():
         task.cancel()
-    for mapping in (_login_scopes, _login_bindings, _login_locks, _login_ready,
+    for mapping in (_login_scopes, _login_bindings, _login_group_bindings, _login_locks, _login_ready,
                     _login_polls, _login_regions, _login_owner, _provisioned_states):
         mapping.pop(state, None)
     tencent.drop_state(state)
@@ -667,9 +686,9 @@ async def auth_start(
         if region:
             raise HTTPException(status_code=409, detail='当前平台不支持 WorkBuddy 的注册地区选项')
         return await platformauth.start(request, user, platform, r, upstream_id, body or {})
-    # 分组在这里只做**提前校验**：真正的落盘发生在 auth/poll（那里也要带
-    # 同一个分组）。先拒掉不存在的分组，用户不会扫完码才发现目标分组没了。
-    _group(upstream_id)
+    # 发码前就要求可管理目录；缺目录不能在最终写入时回落到默认账号池。
+    # 保存解析后的路径，避免取链期间修改目录/实例或重定向目录符号链接。
+    group_binding = _login_group_binding(_group(upstream_id))
     raw_region = region
     if isinstance(body, dict) and body.get('region') is not None:
         raw_region = str(body.get('region'))
@@ -690,7 +709,11 @@ async def auth_start(
         # 起后台轮询：前端是否被节流都不影响检测节奏（见文件上方说明）
         st = str(out.get('state') or '')
         if st:
-            _bind_login(st, user, r, upstream_id)
+            try:
+                _bind_login(st, user, r, upstream_id, expected_group=group_binding)
+            except HTTPException:
+                tencent.drop_state(st)
+                raise
             if reg:
                 _login_regions[st] = reg
             if st not in _login_tasks or _login_tasks[st].done():
@@ -732,7 +755,7 @@ async def auth_poll(
     lock = _login_locks.setdefault(state, asyncio.Lock())
     async with lock:
         user = _check_login_scope(state, user, realm, upstream_id)
-        with tencent.authorization_scope(lambda: security.authorization_owner(user)):
+        with tencent.authorization_scope(lambda: _check_login_scope(state, user, realm, upstream_id)):
             result = await _poll_workbuddy(state, realm, region, upstream_id, user)
         if result.get('status') == 'success':
             # Commit the memo while still serialized; concurrent foreground polls
@@ -784,7 +807,7 @@ async def _poll_workbuddy(state, realm, region, upstream_id, user):
     if result.get('status') != 'ready':
         security.authorization_owner(user)
         return result
-    security.authorization_owner(user)
+    _check_login_scope(state, user, realm, upstream_id)
 
     realm_of_result = result.get('realm') or 'cn'
     if provisioned:
@@ -1073,13 +1096,21 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     # 把它包起来是为了给出可执行的提示 —— 失败的一个常见成因是 auths 目录
     # 权限不对（宝塔/1Panel 用 root 装、却以别的 uid 跑），而那个错误的原文
     # 只有一行 PermissionError，用户看不出「该 chown 哪个目录」。
-    group = group or upstreamsvc.default_upstream()
-    auth_dir = _group_dir(group)
+    auth_dir = None
     try:
         if owner is None:
             raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
         with security.authorization_guard(owner):
-            filename, existed = tencent.write_auth_file(result, auth_dir)
+            # A foreground/background poll may have awaited a provider while the
+            # group was edited or deleted. Re-read under the DB writer lock so a
+            # concurrent settings mutation cannot redirect the final file write.
+            with db.transaction():
+                scope = _login_scopes.get(state)
+                upstream_id = scope[2] if scope is not None else None
+                _check_login_scope(state, owner, realm_of_result, upstream_id)
+                group = _group(upstream_id)
+                auth_dir = Path(_login_group_bindings[state][0])
+                filename, existed = tencent.write_auth_file(result, auth_dir)
     except ValueError as exc:
         # uid 形态异常（`write_auth_file` 会校验后才拼文件名）。这不是权限问题，
         # 给「去 chown」的提示会把用户引到错方向 —— 如实说明是上游返回的数据异常。
@@ -1531,104 +1562,22 @@ async def checkin_all(upstream_id: int | None = Query(None),
     }
 
 
+
 @router.get('/checkin-logs')
-def checkin_logs(
-    limit: int = 200,
-    uid: str | None = None,
-    offset: int = 0,
-    days: int | None = None,
-    realm: str | None = None,
-    user: dict = Depends(security.current_user),
-) -> dict:
-    """签到记录（分页）：**本端触发的 + 上游自动签到的**统一视图。
-
-    为什么要合并：签到记录原先只写本端触发的（手动 / 批量 / 添加账号），而上游
-    定时签到的结果由日志采集器写进 task_logs。于是「自动签到」在签到记录里
-    永远看不到——用户反馈的「自动签到不显示」就是这个。
-
-    上游对签到成功是静默的（只打一行 `checkin done: total=.. ok=..` 汇总 + 失败明细），
-    所以自动签到侧提供的是**每轮汇总/异常行**，不是逐账号成功明细；这一点在
-    界面上如实标注，不假装有更细的数据。
-
-    两张表各自条数都不大，按 ts 归并后在 Python 侧分页，避免为跨表分页写
-    UNION + 双重 LIMIT 的复杂 SQL。
-
-    候选量必须覆盖到「当前页的末尾」，不能固定取前 N 条：合并是按时间排序的，
-    若只取各表最近的 500 条，落在 500 名之后的记录会永远翻不到，而 total 又是
-    真实全量——界面会显示「共 810 条」却翻不出后面 300 条。因此按 offset+limit
-    取候选（各表都取这么多，够覆盖最坏情况：全部记录都来自同一张表）。
-    """
-    start = max(0, int(offset))
-    size = min(500, max(1, int(limit)))
-    # 各表都取到 start+size，保证合并后第 start..start+size 条一定在候选里
-    want = start + size
-
-    # 版本筛选是**按行**做的（日志表没有 realm 列），被筛掉的往往是窗口里的大多数
-    # 行——另一个版本的记录。候选量因此要放大到单表上限，与 /task-logs 重算 stats
-    # 时同一做法。不放大会有两个后果：本版的记录被另一版挤出窗口（页面上「本版
-    # 一条都没有」），以及下面按窗口统计的 total 偏小（issue #51 的次要问题）。
-    realm_map = _realm_uid_filter(realm)
-    if realm_map is not None:
-        want = max(want, 2000)
-
-    local = db.list_checkin_logs(limit=want, uid=uid, offset=0, days=days)
-    local_total = db.count_checkin_logs(uid=uid, days=days)
-    local_items = [{**r, 'auto': False} for r in local]
-
-    # 上游自动签到（采集器落库的 kind='checkin'）
-    auto_rows = db.list_task_logs(limit=want, uid=uid, kind='checkin', offset=0, days=days)
-    auto_total = db.count_task_logs(uid=uid, kind='checkin', days=days)
-    auto_items = [
-        {
-            # 与 checkin_logs 的 id 空间不同，加偏移前缀避免前端 key 冲突
-            'id': 10**9 + int(r['id']),
-            'ts': r['ts'],
-            'uid': r['uid'],
-            'nickname': r.get('nickname') or '',
-            'source': 'auto',
-            'kind': 'checkin',
-            # 汇总行不代表单个账号成功，success 仅用于界面着色，不参与判定
-            'success': r.get('level') != 'error',
-            'code': None,
-            'message': r.get('message_cn') or r.get('message') or '',
-            'auto': True,
-        }
-        for r in auto_rows
-    ]
-
-    merged = sorted(local_items + auto_items, key=lambda x: x['ts'], reverse=True)
-
-    # 按版本过滤（realm 为空则不过滤，保持既有调用行为）
-    if realm_map is not None:
-        merged = [it for it in merged if _uid_matches_realm(str(it.get('uid') or ''), realm_map, realm)]
-
-    # total 必须与**列表同一口径**（issue #51 次要问题）：此前它统计在版本过滤之前，
-    # 界面上「共 6 条 · 仅显示最近 2 条」而列表只有 2 条，用户以为记录丢了。
-    # 过滤生效时用过滤后的条数（窗口已放大到单表上限，见上），未过滤时保持原值。
-    total = len(merged) if realm_map is not None else local_total + auto_total
-    unfiltered_total = local_total + auto_total
-
-    # 自动侧的行也要解析昵称（上游只带 uid 前 8 位）；本端的已有昵称
+def checkin_logs(limit: int = 200, uid: str | None = None, offset: int = 0,
+                 days: int | None = None, realm: str | None = None,
+                 user: dict = Depends(security.current_user)) -> dict:
+    from .. import historylogs
+    result = historylogs.checkin_page(mapping=_realm_uid_filter(realm), realm=realm,
+        limit=max(1,min(int(limit),500)),offset=max(0,min(int(offset),10_000_000)),
+        uid=uid,days=days)
     resolve_nick = _nickname_resolver()
-    for it in merged:
-        if not it.get('nickname'):
-            it['nickname'] = resolve_nick(str(it.get('uid') or ''))
-
-    start = max(0, int(offset))
-    end = start + min(500, max(1, int(limit)))
-    return {
-        'items': merged[start:end],
-        'total': total,
-        # 分别给出，便于界面说明「本端 N 条 / 自动 M 条」。
-        #
-        # **这两个数故意不按版本过滤**（与上面的 `total` 不同）：界面用它说明
-        # 「清空会删掉多少条」，而清空是整表操作、不分版本——按版本过滤会让提示
-        # 少说数量。两个口径各有用途，别把它们「统一」掉。
-        'local_total': local_total,
-        'auto_total': auto_total,
-        # 两个版本合计的条数（版本筛选生效时，`total` 只数当前版本）
-        'unfiltered_total': unfiltered_total,
-    }
+    for row in result['items']:
+        if not row.get('nickname'):
+            row['nickname'] = resolve_nick(str(row.get('uid') or ''))
+        if row['auto']:
+            row['message'] = tasklog.translate_message(row.get('message',''))
+    return result
 
 
 @router.post('/checkin-logs/clear')
@@ -1681,28 +1630,30 @@ def _nickname_resolver() -> object:
     return resolve
 
 
+
 def _realm_uid_filter(realm: str | None) -> dict[str, str] | None:
-    """构造「哪些 uid 属于该版本」的映射；realm 为空返回 None（不过滤）。
-
-    日志表里只有 uid，没有 realm 列（本方案选择不改数据库），所以按
-    账号表把 uid 映射到版本再筛。上游日志里的 uid 是前 8 位，这里同时
-    支持完整 uid 与前缀两种匹配。
-
-    注意：账号已被删除时其历史日志无从判断版本，一律按「不属于任何版本」
-    处理——宁可少显示，也不要把国际版账号的日志挂到国内版视图下。
-    """
+    """Gather every registered pool; missing evidence is an error, not zero."""
     if not realm:
         return None
-    r = 'global' if str(realm).strip().lower() == 'global' else 'cn'
+    if realm not in ('cn','global','unknown'):
+        raise HTTPException(status_code=422,detail='Invalid history realm')
+    directories = [None]
+    for upstream in upstreamsvc.list_upstreams(include_default=False):
+        raw = str(upstream.get('auth_dir') or '').strip()
+        if raw:
+            directories.append(Path(raw))
+    result = {}
     try:
-        accounts = wb2api.list_auth_accounts()
-    except Exception:  # noqa: BLE001
-        return {}
-    return {
-        str(a.get('uid')): str(a.get('realm') or 'cn')
-        for a in accounts
-        if a.get('uid')
-    }
+        for directory in dict.fromkeys(directories):
+            for account in wb2api.list_auth_accounts(directory):
+                uid = str(account.get('uid') or '')
+                value = str(account.get('realm') or 'cn')
+                if not uid:
+                    continue
+                result[uid] = value if uid not in result or result[uid] == value else 'unknown'
+    except (OSError,ValueError,RuntimeError) as exc:
+        raise HTTPException(status_code=503,detail='无法核实全部账号池的历史归属') from exc
+    return result
 
 
 def _uid_matches_realm(uid: str, realm_map: dict[str, str] | None, realm: str) -> bool:
@@ -1730,81 +1681,21 @@ def _uid_matches_realm(uid: str, realm_map: dict[str, str] | None, realm: str) -
     return len(hits) == 1 and hits.pop() == want
 
 
+
 @router.get('/task-logs')
-def task_logs(
-    limit: int = 200,
-    offset: int = 0,
-    uid: str | None = None,
-    kind: str | None = None,
-    days: int | None = None,
-    realm: str | None = None,
-    user: dict = Depends(security.current_user),
-) -> dict:
-    """上游自动任务留痕（猫猫旅行 / 活跃上报 / 自动签到 / 保活）。
-
-    上游把这些结果打在容器日志里，容器重建即丢失；本接口读取的是
-    后台采集器解析后落库的记录，因此能长期保留并统计积分收益。
-
-    分页返回：列表只取当前页，`total` 为**当前筛选下**的总数，
-    概览 `stats` 也按同一时间范围统计，保证数字与列表一致。
-    """
-    limit = max(1, min(int(limit), 500))
-    offset = max(0, min(int(offset), 10_000_000))
-    logs = db.list_task_logs(limit=limit, uid=uid, kind=kind, offset=offset, days=days)
-
-    # 按版本过滤（realm 为空则不过滤）。日志表无 realm 列，按账号表映射 uid
-    realm_map = _realm_uid_filter(realm)
-    if realm_map is not None:
-        logs = [r for r in logs
-                if _uid_matches_realm(str(r.get('uid') or ''), realm_map, realm)]
-
+def task_logs(limit: int = 200, offset: int = 0, uid: str | None = None,
+              kind: str | None = None, days: int | None = None,
+              realm: str | None = None, user: dict = Depends(security.current_user)) -> dict:
+    from .. import historylogs
+    result = historylogs.task_page(mapping=_realm_uid_filter(realm), realm=realm,
+        limit=max(1,min(int(limit),500)),offset=max(0,min(int(offset),10_000_000)),
+        uid=uid,kind=kind,days=days)
     resolve_nick = _nickname_resolver()
-    for row in logs:
-        # 结果文案中文化：数据库留英文原文（排查要看上游原话），
-        # 接口额外给出 message_cn 供界面展示
-        row['message_cn'] = tasklog.translate_message(row.get('message', ''))
+    for row in result['logs']:
+        row['message_cn'] = tasklog.translate_message(row.get('message',''))
         row['nickname'] = resolve_nick(str(row.get('uid') or ''))
-
-    # `total` 是**当前筛选下**的条数（列表分页要用），而 `stats` 是**各类型**的
-    # 汇总（筛选栏要用它显示每个类型的条数与总条数）。
-    #
-    # 两者口径必须分开，不能一起按 kind 过滤 —— 这里踩过坑（issue #35）：
-    # 原先 realm 分支用 `list_task_logs(kind=kind, ...)` 重算 stats，于是
-    # `stats.total` 变成了「当前筛选下」的条数。界面用 `stats.total > 0` 决定
-    # 筛选栏是否渲染，点进一个没有记录的类型时它就变成 0 → **整条筛选栏消失**，
-    # 用户再也切不回「全部」，只能刷新页面。
-    # 也就是说：筛选栏的可见性绝不能依赖筛选结果本身。
-    stats = db.task_log_stats(days=days)
-    total = db.count_task_logs(uid=uid, kind=kind, days=days)
-    if realm_map is not None:
-        # 版本过滤只能按行做（日志表没有 realm 列）。注意这里**不带 kind**：
-        # 要的就是「该版本下所有类型」的分布。
-        all_rows = db.list_task_logs(limit=2000, uid=uid, kind=None, offset=0, days=days)
-        kept = [r for r in all_rows
-                if _uid_matches_realm(str(r.get('uid') or ''), realm_map, realm)]
-        by_kind: dict[str, dict] = {}
-        for r in kept:
-            k = str(r.get('kind') or '')
-            slot = by_kind.setdefault(k, {'count': 0, 'credits': 0})
-            slot['count'] += 1
-            slot['credits'] += int(r.get('credits') or 0)
-        stats = {
-            'by_kind': by_kind,
-            'total': len(kept),
-            'total_credits': sum(v['credits'] for v in by_kind.values()),
-        }
-        # total 同样要按版本口径重算（带 kind），与列表一致
-        scoped = ([r for r in kept if str(r.get('kind') or '') == kind]
-                  if kind else kept)
-        total = len(scoped)
-
-    return {
-        'logs': logs,
-        'total': total,
-        'stats': stats,
-        'kinds': tasklog.KIND_LABELS,
-        'collector': tasklog.state(),
-    }
+    result.update(kinds=tasklog.KIND_LABELS,collector=tasklog.state())
+    return result
 
 
 @router.post('/task-logs/collect')

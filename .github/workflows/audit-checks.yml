@@ -1,0 +1,199 @@
+name: Audit checks
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-audit:
+    name: Linux Python 3.12 / Node 24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+      CI_EVIDENCE: ${{ github.workspace }}/evidence/ci
+    steps:
+      # Exact commits confirmed from the publishers' GitHub release pages.
+      # Evidence and rationale: docs/audits/2026-11-05/CI.md
+      - name: Checkout candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Prepare evidence directories
+        env:
+          AUDIT_TMPDIR: ${{ runner.temp }}/zhihui-audit
+        run: mkdir -p "$CI_EVIDENCE/logs" "$AUDIT_TMPDIR"
+
+      - name: Set up Python 3.12
+        id: python_setup
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            manager/server/requirements.hashes.txt
+            tests/linux_lab/requirements-dev.hashes.txt
+            tests/requirements-audit.hashes.txt
+
+      - name: Install hash-locked Python production and QA dependencies
+        id: python_deps
+        if: ${{ !cancelled() && steps.python_setup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python -m pip --isolated install --index-url https://pypi.org/simple \
+            --require-hashes --only-binary=:all: \
+            -r manager/server/requirements.hashes.txt \
+            -r tests/linux_lab/requirements-dev.hashes.txt \
+            -r tests/requirements-audit.hashes.txt \
+            2>&1 | tee "$CI_EVIDENCE/logs/python-install.log"
+          python -m pip check 2>&1 | tee "$CI_EVIDENCE/logs/pip-check.log"
+          python -m pip list --format=json > "$CI_EVIDENCE/python-packages.json"
+          python --version 2>&1 | tee "$CI_EVIDENCE/logs/python-version.log"
+
+      - name: Set up Node 24
+        id: node_setup
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/three-platform/web/package-lock.json
+
+      - name: Install locked frontend dependencies
+        id: npm_deps
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        working-directory: src/three-platform/web
+        run: |
+          set -euo pipefail
+          node --version 2>&1 | tee "$CI_EVIDENCE/logs/node-version.log"
+          npm --version 2>&1 | tee "$CI_EVIDENCE/logs/npm-version.log"
+          npm ci --no-audit --no-fund 2>&1 | tee "$CI_EVIDENCE/logs/npm-ci.log"
+
+      # Run independent checks after an earlier failure when prerequisites exist.
+      # Failed steps still fail the job; there is no continue-on-error gate bypass.
+      - name: Frontend tests
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
+        working-directory: src/three-platform/web
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee "$CI_EVIDENCE/logs/frontend-test.log"
+
+      - name: Frontend typecheck
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
+        working-directory: src/three-platform/web
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/next typegen 2>&1 | tee "$CI_EVIDENCE/logs/frontend-typegen.log"
+          npm run typecheck 2>&1 | tee "$CI_EVIDENCE/logs/frontend-typecheck.log"
+
+      - name: Frontend lint
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
+        working-directory: src/three-platform/web
+        run: |
+          set -euo pipefail
+          npm run lint 2>&1 | tee "$CI_EVIDENCE/logs/frontend-lint.log"
+
+      - name: Build frontend static export
+        id: web_build
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
+        working-directory: src/three-platform/web
+        run: |
+          set -euo pipefail
+          npm run build:export 2>&1 | tee "$CI_EVIDENCE/logs/frontend-build-export.log"
+
+      - name: Full isolated Manager tests with built frontend
+        if: ${{ !cancelled() && steps.python_deps.outcome == 'success' && steps.web_build.outcome == 'success' }}
+        env:
+          AUDIT_TMPDIR: ${{ runner.temp }}/zhihui-audit
+        run: |
+          set -euo pipefail
+          TMPDIR="$AUDIT_TMPDIR" python -B -X utf8 tests/zhihui_harness/run_tests.py \
+            --target manager-assets --require-built-web --keep \
+            2>&1 | tee "$CI_EVIDENCE/logs/manager-assets.log"
+
+      - name: Root offline tool unit tests
+        if: ${{ !cancelled() && steps.python_deps.outcome == 'success' }}
+        env:
+          AUDIT_TMPDIR: ${{ runner.temp }}/zhihui-audit
+        run: |
+          set -euo pipefail
+          TMPDIR="$AUDIT_TMPDIR" python -B -m unittest discover -s tests -p 'test_*.py' -v \
+            2>&1 | tee "$CI_EVIDENCE/logs/root-unittest.log"
+
+      - name: Collect current-run receipts even on failure
+        if: ${{ always() }}
+        env:
+          AUDIT_TMPDIR: ${{ runner.temp }}/zhihui-audit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          workspace = Path(os.environ['GITHUB_WORKSPACE'])
+          output = Path(os.environ['CI_EVIDENCE'])
+          temporary = Path(os.environ['AUDIT_TMPDIR']).resolve()
+          output.mkdir(parents=True, exist_ok=True)
+          copied = []
+          for isolated in sorted(temporary.glob('zhihui-iso-*')):
+              for name in ('isolation-report.json', 'run-manifest.json'):
+                  source = isolated / 'artifacts' / name
+                  if source.is_file():
+                      destination = output / 'isolation' / isolated.name / name
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(source, destination)
+                      copied.append(str(destination.relative_to(output)))
+              for source in sorted((isolated / 'artifacts').glob('*/junit-*.xml')):
+                  destination = output / 'isolation' / isolated.name / source.parent.name / source.name
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(source, destination)
+                  copied.append(str(destination.relative_to(output)))
+          for stats in sorted((workspace / 'evidence' / 'runs').glob('*/stats-*.json')):
+              data = json.loads(stats.read_text(encoding='utf-8'))
+              isolated = data.get('iso_root')
+              # Do not upload historical receipts from the repository as this run.
+              if not isolated or not Path(isolated).resolve().is_relative_to(temporary):
+                  continue
+              for source in sorted(stats.parent.iterdir()):
+                  if source.is_file() and source.suffix in ('.json', '.xml'):
+                      destination = output / 'runs' / stats.parent.name / source.name
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(source, destination)
+                      copied.append(str(destination.relative_to(output)))
+          receipt = {
+              'github_sha': os.environ.get('GITHUB_SHA'),
+              'github_run_id': os.environ.get('GITHUB_RUN_ID'),
+              'github_run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+              'copied_receipts': copied,
+              'interpretation': 'Receipt collection is not test success; inspect step exits and JUnit/stats.',
+          }
+          (output / 'collection.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Upload audit evidence even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audit-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/ci/
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 14

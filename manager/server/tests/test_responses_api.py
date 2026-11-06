@@ -326,21 +326,18 @@ class RequestConversionTest(unittest.TestCase):
             {'role': 'user', 'content': '子代理任务：\n读取 parser.py 并总结'},
         ])
 
-    def test_agent_message_ciphertext_is_omitted_and_warned(self) -> None:
-        """不可解的 Fernet 风格载荷不应作为乱码转发，也不应把载荷写进日志。"""
+    def test_agent_message_ciphertext_is_rejected_without_echo(self) -> None:
+        """Cannot preserve opaque content: fail before spend instead of deleting it."""
         ciphertext = 'gAAAAABforeign-encrypted-payload'
-        with self.assertLogs(R.logger, level='WARNING') as captured:
-            out = R.to_chat_request({'model': 'm', 'input': [
+        with self.assertRaises(R.StructuredOutputError) as captured:
+            R.to_chat_request({'model': 'm', 'input': [
                 {'type': 'agent_message', 'content': [
                     {'type': 'input_text', 'text': '子代理任务：'},
                     {'type': 'encrypted_content', 'encrypted_content': ciphertext},
                 ]},
             ]})
-        self.assertEqual(out['messages'], [
-            {'role': 'user', 'content': '子代理任务：'},
-        ])
-        self.assertTrue(any('encrypted_content' in line for line in captured.output))
-        self.assertNotIn(ciphertext, '\n'.join(captured.output))
+        self.assertEqual(captured.exception.code,'unsupported_content_type')
+        self.assertNotIn(ciphertext,str(captured.exception))
 
     def test_agent_message_plain_payload_preserves_image_block_order(self) -> None:
         """明文任务与图片混排时，不能因压平成字符串而丢图或改变块顺序。"""
@@ -360,9 +357,9 @@ class RequestConversionTest(unittest.TestCase):
             ],
         }])
 
-    def test_agent_message_invalid_encrypted_content_is_ignored(self) -> None:
-        """空值和非字符串不是明文任务，不得字符串化后送给模型。"""
-        for value in (None, '', 42, {'text': '不是字符串'}, ['任务']):
+    def test_agent_message_empty_encrypted_content_is_ignored(self) -> None:
+        """Absent metadata is not a payload and must not become prompt text."""
+        for value in (None, ''):
             with self.subTest(value=value):
                 out = R.to_chat_request({'model': 'm', 'input': [
                     {'type': 'agent_message', 'content': [
@@ -371,6 +368,13 @@ class RequestConversionTest(unittest.TestCase):
                     ]},
                 ]})
                 self.assertEqual(out['messages'], [{'role': 'user', 'content': '任务：'}])
+
+    def test_agent_message_malformed_encrypted_content_is_rejected(self) -> None:
+        for value in (42,{'text':'不是字符串'},['任务']):
+            with self.subTest(value=value),self.assertRaises(R.StructuredOutputError) as captured:
+                R.to_chat_request({'input':[{'type':'agent_message','content':[{
+                    'type':'encrypted_content','encrypted_content':value}]}]})
+            self.assertEqual(captured.exception.code,'unsupported_content_type')
 
     def test_developer_role_maps_to_system(self) -> None:
         """Chat Completions 没有 developer 角色，原样传会被上游拒。"""
@@ -1212,6 +1216,12 @@ class EndpointTest(unittest.TestCase):
 
         class _JsonResponse:
             status_code = 200
+            headers = {'content-type':'application/json'}
+            is_stream_consumed = True
+            content = json.dumps(replay_data).encode()
+
+            async def aclose(self):
+                return None
 
             def json(self):
                 return replay_data

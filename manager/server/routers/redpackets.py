@@ -43,7 +43,7 @@ class PacketIn(BaseModel):
 @router.post('')
 def create_packet(body: PacketIn, request: Request,
                   user: dict = Depends(security.require_admin)) -> dict:
-    """创建红包。**返回里含明文 key，且仅此一次**（库里只存哈希）。"""
+    """创建红包，响应含明文 key；份额表另存明文以支持领取/同IP找回。"""
     try:
         out = redpacket.create_packet(
             name=body.title,
@@ -93,16 +93,15 @@ def packet_detail(packet_id: int,
 @router.post('/{packet_id}/revoke')
 def revoke_packet(packet_id: int, request: Request,
                   user: dict = Depends(security.require_admin)) -> dict:
-    """收回整批：停用这批密钥（可逆，不删数据）。
+    """收回整批：原子删除这批密钥，并作废未领取份额。
 
-    为什么是停用而不是删除：停用后还能看到「这批红包被用掉多少」，
-    删了就只剩一个数字都没有的空壳。
+    份额和用量历史保留；任一存储操作失败时整批回滚，不能报告部分成功。
     """
     if redpacket.packet_detail(packet_id) is None:
         raise HTTPException(status_code=404, detail='红包不存在')
     n = redpacket.revoke_packet(packet_id)
     security.audit(user, 'revoke_red_packet', str(packet_id),
-                   f'停用 {n} 个密钥；来源 {client_ip(request)}')
+                   f'收回删除 {n} 个密钥；来源 {client_ip(request)}')
     return {'revoked': n}
 
 
@@ -112,9 +111,9 @@ def revoke_packet(packet_id: int, request: Request,
 
 @claim_router.get('/{code}')
 def claim_info(code: str, request: Request) -> dict:
-    """抽奖页要显示的信息（份数、还剩几份、本机抽过没有）。**不含密钥**。
+    """抽奖页信息；同IP持有抽奖码且已领取时包含该份历史明文密钥。
 
-    没点「开启」之前不该能拿到密钥，所以这里只回元信息。
+    这是现有按IP找回契约，不等同于个人身份认证；共享NAT下会共享这一份。
     """
     try:
         return redpacket.claim_info(code, client_ip(request))

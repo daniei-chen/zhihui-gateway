@@ -15,7 +15,7 @@ export const loginCsp = `default-src 'self'; script-src 'self' ${loginHashes.joi
 const loginGuard = `window.fetch=async function(input){var path=new URL(String(input),location.href).pathname;return path==='/api/me'?new Response('{}',{status:401,headers:{'Content-Type':'application/json'}}):new Response(JSON.stringify({detail:'本地原版页面预览，未提交账号或密码。'}),{status:400,headers:{'Content-Type':'application/json'}})};`;
 const types = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8', '.ico': 'image/x-icon'};
 
-export function createPreviewServer({degrade3d = false} = {}) {
+export function createPreviewServer({degrade3d = false, publicDemoRoot = null} = {}) {
   return http.createServer((request, response) => {
     if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405); return response.end(); }
     let pathname;
@@ -26,6 +26,21 @@ export function createPreviewServer({degrade3d = false} = {}) {
       return response.end(request.method === 'HEAD' ? '' : loginGuard);
     }
     if (/^\/(api|v1|qoder|trae|codex)\//.test(pathname)) { response.writeHead(403); return response.end('No business services in preview'); }
+    const demoPrefix='/home-assets/console-flow-20261030-1/';
+    if(publicDemoRoot && pathname.startsWith(demoPrefix)) {
+      const base=path.resolve(publicDemoRoot),relative=pathname.slice(demoPrefix.length);
+      let file=path.resolve(base,relative || 'index.html');
+      if(!file.startsWith(base+path.sep)||relative.includes('\\')){response.writeHead(404);return response.end();}
+      try {if(fs.statSync(file).isDirectory())file=path.join(file,'index.html');
+        if(!fs.statSync(file).isFile())throw new Error('not a file');}
+      catch {response.writeHead(404);return response.end();}
+      response.setHeader('Content-Type',types[path.extname(file)]||'application/octet-stream');
+      response.setHeader('Access-Control-Allow-Origin','*');
+      // Adapt only the explicit source origin to this loopback fixture. No API
+      // proxy is available, and the opaque sandbox cannot make business calls.
+      response.setHeader('Content-Security-Policy',`default-src 'none'; script-src http://127.0.0.1:${request.socket.localPort} 'unsafe-inline'; style-src http://127.0.0.1:${request.socket.localPort} 'unsafe-inline'; img-src http://127.0.0.1:${request.socket.localPort} data:; font-src http://127.0.0.1:${request.socket.localPort} data:; connect-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; sandbox allow-scripts`);
+      response.writeHead(200);return request.method==='HEAD'?response.end():fs.createReadStream(file).pipe(response);
+    }
     if (pathname === '/dashboard/') {
       response.writeHead(200, {'Content-Type': types['.html'], 'Cache-Control': 'no-store'});
       return response.end('<!doctype html><html lang="zh-CN"><title>智汇 · 入口验证</title><h1>控制台入口验证</h1><p>仅验证导航，不连接真实业务。</p></html>');

@@ -24,6 +24,8 @@ from .routers import (
     security as security_router, proxies, settings, stats, system, tokens, upstreams, steward,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
+from .services.asyncwork import joined_thread
+from .services.startupchecks import WeakAdminCheck
 from .routers import budgets
 from .routers import qtg_panel
 from .routers import portal
@@ -71,6 +73,23 @@ def _time_now() -> float:
     return time.time()
 
 
+def _recover_primary_state():
+    from . import ledgerreplay, budget, userroles
+    if not config.BACKGROUND_JOBS:
+        if config.SHARED_ADMISSION and not config.USERS_FILE.is_file():
+            raise RuntimeError('transition_requires_initialized_users')
+        source = security.load_users()
+        if userroles.migration(source)[0] is not source:
+            raise RuntimeError('transition_requires_primary_role_migration')
+        return
+    security.migrate_user_roles()
+    try:
+        ledgerreplay.recover()
+    except Exception:
+        logger.exception('ledger receipt recovery failed at startup')
+    budget.recover()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Fail before creating directories, opening the ledger, or starting jobs.
@@ -78,21 +97,15 @@ async def lifespan(app: FastAPI):
     app.state.configuration_snapshot = validate_environment()
     config.ensure_dirs()
     db.connect()
-    security.migrate_user_roles()
     # U01（2026-10-28）：启动时先消化「上次事务失败留下的完成回执」。失败不阻断
     # 启动——monitor 循环会继续重放，且就绪判定会因积压>0 保持失败。
-    from . import ledgerreplay
-    try:
-        ledgerreplay.recover()
-    except Exception:  # noqa: BLE001
-        logger.exception('ledger receipt recovery failed at startup')
+    _recover_primary_state()
     from . import budget
-    budget.recover()
     async def budget_heartbeat():
         while True:
             await asyncio.sleep(10)
             try:
-                budget.heartbeat()
+                await joined_thread(budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
@@ -105,17 +118,7 @@ async def lifespan(app: FastAPI):
     # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
     # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
     # 先进面板改密码，日志必须足够醒目。
-    def _weak_admin_check():
-        try:
-            weak_admins = security.weak_admin_passwords()
-            if weak_admins:
-                logger.error('管理员仍在使用常见弱口令：%s。请立即在「设置 → 管理用户」'
-                             '中修改；本次生产事故的入口就是 admin123。',
-                             '、'.join(weak_admins))
-        except Exception:  # noqa: BLE001  巡检失败不影响服务
-            logger.exception('weak admin password check failed')
-    threading.Thread(target=_weak_admin_check, daemon=True,
-                     name='wb-weak-pwd-check').start()
+    weak_admin_check = WeakAdminCheck()
     _warn_if_exposed()
     if config.BACKGROUND_JOBS:
         # 后台作业只在「主实例」（systemd 管理的那个）运行。零停机发布的过渡
@@ -157,12 +160,14 @@ async def lifespan(app: FastAPI):
     # failures here only affect the qoder/trae branches.
     _qtg_rt = None
     try:
-        from .qtgcore.config import load_settings as _qtg_load_settings
-        from .qtgcore.runtime import Runtime as _QtgRuntime
-        _qtg_rt = _QtgRuntime(_qtg_load_settings())
-        await _qtg_rt.startup()
+        if not (config.SHARED_ADMISSION and not config.BACKGROUND_JOBS):
+            from .qtgcore.config import load_settings as _qtg_load_settings
+            from .qtgcore.runtime import Runtime as _QtgRuntime
+            _qtg_rt = _QtgRuntime(_qtg_load_settings())
+            await _qtg_rt.startup()
         app.state.rt = _qtg_rt
-        logger.info('qoder/trae control plane merged in (qtgcore started)')
+        if _qtg_rt is not None:
+            logger.info('qoder/trae control plane merged in (qtgcore started)')
         # D-008 修复（2026-10-27 审计 S1）：qtg 合并时**漏了这一步接线**。
         # `checkin_scheduler.start()` 的 docstring 明确写着「在 lifespan 里调用」，
         # 但全仓没有任何调用方，于是 qoder/trae 的每日随机签到静默停摆：
@@ -183,6 +188,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception('qoder/trae control plane failed; workbuddy proxy unaffected')
     try:
+        if config.BACKGROUND_JOBS:
+            weak_admin_check.start()
         from .instance_runtime import InstanceRuntime
         instance_runtime = InstanceRuntime()
         await instance_runtime.start()
@@ -200,6 +207,15 @@ async def lifespan(app: FastAPI):
         await operational.initialize_readiness()
         yield
     finally:
+        # A completed application lifetime must not leave expensive hash workers
+        # running against another lifetime's configuration or competing for CPU.
+        pending_shutdown_cancel = None
+        try:
+            await weak_admin_check.close()
+        except asyncio.CancelledError as error:
+            # joined_thread has already joined the hash worker. Defer its
+            # cancellation until the remaining leases/clients are also closed.
+            pending_shutdown_cancel = error
         if portal_checkins is not None:
             portal_checkins.cancel()
             try:
@@ -248,13 +264,17 @@ async def lifespan(app: FastAPI):
         taskrun.stop_scheduler()
         renew.stop_scheduler()
         cooling.stop_scheduler()
-        dailyplan.stop_scheduler()
+        # Plans retain their task leases until owned work has been cancelled
+        # and joined; finish that cleanup before closing shared HTTP clients.
+        await dailyplan.close_scheduler()
         accountlog.stop_collector()
         await asyncio.to_thread(archiveworker.stop)
         pgsync.stop_scheduler()
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
         await config.close_clients()
+        if pending_shutdown_cancel is not None:
+            raise pending_shutdown_cancel
 
 
 def _warn_if_exposed() -> None:
@@ -326,6 +346,9 @@ MAX_API_BODY_BYTES = 16 * 1024 * 1024
 # 与 `updater.PACKAGE_MAX_BYTES` 必须一致（有测试盯着，别只改一边）。
 MAX_PACKAGE_BODY_BYTES = 64 * 1024 * 1024
 PACKAGE_UPLOAD_PATHS = ('/api/system/update-package',)
+from .portalregistration import BODY_LIMIT as REGISTRATION_BODY_LIMIT
+API_PATH_LIMITS={**{path:MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
+                 '/api/portal/register':REGISTRATION_BODY_LIMIT}
 
 
 app.add_middleware(drain.DrainMiddleware)
@@ -343,11 +366,11 @@ async def limit_api_body(request: Request, call_next):
             declared = int(request.headers.get('content-length') or 0)
         except ValueError:
             declared = 0
-        limit = (MAX_PACKAGE_BODY_BYTES
-                 if request.url.path in PACKAGE_UPLOAD_PATHS else MAX_API_BODY_BYTES)
+        limit = API_PATH_LIMITS.get(request.url.path.rstrip('/'),MAX_API_BODY_BYTES)
         if declared > limit:
+            label=f'{limit//1024} KiB' if limit<1024*1024 else f'{limit//1024//1024} MiB'
             return JSONResponse(
-                {'detail': f'请求体过大（上限 {limit // 1024 // 1024} MB）'},
+                {'detail': f'请求体过大（上限 {label}）'},
                 status_code=413,
             )
     return await call_next(request)
@@ -459,7 +482,9 @@ async def _qtg_platform_route(request, call_next):
             platform = ""
     if platform in ("qoder", "trae") and _qtg_should_route(path):
         try:
-            _user = security.current_user(request)
+            # Identity resolution may wait on a file/SQLite lock. Keep that
+            # blocking work off the loop that also delivers inference streams.
+            _user = await joined_thread(security.current_user, request)
         except Exception as _exc:
             # H-011：区分「鉴权失败」与「内部错误」。此前一律 401，导致
             # DB 抖动 / 用户文件读失败 / 磁盘满都表现为"未登录"——用户被莫名
@@ -528,6 +553,7 @@ async def cache_headers(request: Request, call_next):
     - CSP: 只允许同源资源与内联样式（前端使用内联样式属性）；
       限制外联目标，降低 XSS 得手后的影响面
     """
+    original_path = request.url.path
     response = await call_next(request)
 
     # 会话滑动续期：current_user 判定「该续了」时在这里重签 cookie。
@@ -543,16 +569,22 @@ async def cache_headers(request: Request, call_next):
             and response.status_code < 400 and not cookie_already_set):
         try:
             token = request.cookies.get(config.COOKIE_NAME) or ''
-            cfg = security.load_users()
-            obj = security._unsign(token, cfg['secret']) or {}
-            username = str(obj.get('username') or '')
-            if username:
+            def renew_cookie():
+                cfg = security.load_users()
+                obj = security._unsign(token, cfg['secret']) or {}
+                username = str(obj.get('username') or '')
+                if not username:
+                    return None
                 # orig 原样延续 —— 续期只推后**空闲截止**，不延长**总寿命**。
                 # role 传空：鉴权一律以用户表为准（载荷里的 role 仅作展示参考）。
-                fresh = security.issue_token(
+                return security.issue_token(
                     username, '', orig=int(obj.get('orig') or 0) or None,
                     expected_sv=int(obj.get('sv') or 0),
                 )
+            # File/authorization locks can wait behind an administrator update.
+            # Other streams must keep progressing while this cookie is renewed.
+            fresh = await joined_thread(renew_cookie)
+            if fresh:
                 response.set_cookie(
                     config.COOKIE_NAME, fresh,
                     max_age=config.SESSION_DAYS * 86400, httponly=True,
@@ -565,11 +597,11 @@ async def cache_headers(request: Request, call_next):
             # 续期失败不能让请求失败 —— 用户这次照常，只是下次要重登
             logger.warning('会话续期失败（不影响本次请求）: %s', exc)
 
-    path = request.url.path
+    path = original_path
     if path.startswith('/_next/static/'):
         # 文件名含内容哈希，内容变了文件名就变，可长期强缓存
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
-    elif path == '/metrics' or path.startswith(('/api/', '/v1/', '/v2/', '/healthz')):
+    elif path in {'/metrics', '/readyz', '/responses', '/responses/'} or path.startswith(('/api/', '/v1/', '/v2/', '/healthz', _QTG_INTERNAL + '/api/')):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
     elif path.startswith('/favicon/') or path.endswith(('.png', '.ico', '.svg', '.woff2', '.webmanifest')):
@@ -820,7 +852,8 @@ from .bodyguard import APIBodyGuard
 app.add_middleware(
     APIBodyGuard,
     maximum=MAX_API_BODY_BYTES,
-    path_limits={path: MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
+    path_limits=API_PATH_LIMITS,
+    path_timeouts={'/api/portal/register':5},
 )
 
 if config.BASE_PATH:

@@ -183,6 +183,7 @@ class ReadScopeHttpTest(unittest.TestCase):
         self.c.cookies.clear()
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
 
     @staticmethod
     def _bearer(token: str) -> dict:

@@ -43,6 +43,7 @@ import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from ..outputlimits import bounded_events, OutputLimitExceeded, output_limit_failure
 
 from .. import config, keysvc, upstreamsvc
 from .. import deadline as deadline_mod
@@ -60,6 +61,10 @@ MAX_OUTPUT_ITEMS = 256
 
 class ToolSearchArgumentsError(ValueError):
     """A client tool search must contain complete JSON object arguments."""
+
+
+class ToolArgumentsError(ToolSearchArgumentsError):
+    """A regular function must retain a valid, complete upstream identity/input."""
 
 
 class CustomToolArgumentsError(ValueError):
@@ -91,6 +96,7 @@ class _ToolBridge:
         self._forward: dict[str, str] = {}
         self._reverse: dict[str, tuple[str, str, str | None]] = {}
         self._taken: set[str] = set()
+        self._next_suffix: dict[str, int] = {}
         self.search_names: set[str] = set()
         self.search_name = ''
         self._seen: set[tuple[str, ...]] = set()
@@ -125,12 +131,13 @@ class _ToolBridge:
 
     def _unique(self, preferred: str, fallback: str) -> str:
         base = _sanitize_tool_name(preferred) if preferred else _sanitize_tool_name(fallback)
-        name, n = base, 2
+        name, n = base, self._next_suffix.get(base, 2)
         while name in self._taken:
             suffix = '_' + str(n)
             name = (base[:64 - len(suffix)] + suffix) if len(base) + len(suffix) > 64 else base + suffix
             n += 1
         self._taken.add(name)
+        self._next_suffix[base] = n
         return name
 
     def _walk(self, tools: list, path: tuple[str, ...], *, loaded: bool = False) -> None:
@@ -225,6 +232,12 @@ class _ToolBridge:
             (value, 'custom' if value in self.custom_names else 'function', None),
         )
 
+    def validate_output_name(self, name: str) -> None:
+        # Include dynamically loaded discovery declarations, but do not apply
+        # this output-only check to old conversation history.
+        if self.chat_tools and name not in self._reverse and name not in self.search_names:
+            raise ToolArgumentsError('Upstream tool name does not match a declared tool')
+
     def authorize_search(self, choice: object) -> None:
         allowed = choice not in ('none',)
         if isinstance(choice, dict):
@@ -267,10 +280,7 @@ def _custom_input(raw: object) -> str:
 
 
 def _as_int(value: object) -> int:
-    try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0
+    return gateway.metering._int_or_none(value)[0] or 0
 
 
 def _event(name: str, payload: dict) -> bytes:
@@ -355,13 +365,15 @@ def _text_of_parts(content: object) -> tuple[str, list[dict]]:
     """
     if isinstance(content, str):
         return content, []
-    if not isinstance(content, list):
+    if content is None:
         return '', []
+    if not isinstance(content, list):
+        raise StructuredOutputError('Unsupported input content at input[].content','unsupported_content_type')
     texts: list[str] = []
     blocks: list[dict] = []
     for part in content:
         if not isinstance(part, dict):
-            continue
+            raise StructuredOutputError('Unsupported input content at input[].content[]','unsupported_content_type')
         kind = str(part.get('type') or '')
         if kind in ('input_text', 'output_text', 'text', 'summary_text'):
             text = part.get('text')
@@ -370,13 +382,11 @@ def _text_of_parts(content: object) -> tuple[str, list[dict]]:
                 blocks.append({'type': 'text', 'text': text})
         elif kind == 'encrypted_content':
             text = part.get('encrypted_content')
+            if text is not None and not isinstance(text,str):
+                raise StructuredOutputError('Unsupported reasoning value at input[].content[]','unsupported_content_type')
             if isinstance(text, str) and text:
                 if text.startswith('gAAAAA'):
-                    # 本层无法解密 Fernet 风格载荷；不把密文放进提示词或日志。
-                    logger.warning(
-                        '忽略无法解密的 encrypted_content 输入块'
-                    )
-                    continue
+                    raise StructuredOutputError('Unsupported opaque reasoning at input[].content[]','unsupported_content_type')
                 # 部分客户端把明文任务放进这个字段，按普通文本保留，不能静默丢弃。
                 texts.append(text)
                 blocks.append({'type': 'text', 'text': text})
@@ -387,6 +397,10 @@ def _text_of_parts(content: object) -> tuple[str, list[dict]]:
                 url = url.get('url')
             if isinstance(url, str) and url:
                 blocks.append({'type': 'image_url', 'image_url': {'url': url}})
+            else:
+                raise StructuredOutputError('Unsupported image source at input[].content[]','unsupported_content_type')
+        else:
+            raise StructuredOutputError('Unsupported input content block at input[].content[]', 'unsupported_content_type')
     return '\n'.join(texts), blocks
 
 
@@ -743,6 +757,8 @@ def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
             if not isinstance(item, dict):
                 continue
             kind = str(item.get('type') or '')
+            if kind in ('input_file','document'):
+                raise StructuredOutputError('Unsupported input attachment at input[]', 'unsupported_content_type')
             if kind == 'additional_tools':
                 continue
             if kind == 'tool_search_call':
@@ -1064,14 +1080,16 @@ def _function_call_item(
     return item
 
 
-def _custom_call_item(call_id: str, item_id: str, name: str, raw_input: str) -> dict:
-    return {
+def _custom_call_item(call_id: str, item_id: str, name: str, raw_input: str, namespace: str | None = None) -> dict:
+    item = {
         'type': 'custom_tool_call',
         'id': item_id,
         'call_id': call_id,
         'name': name,
         'input': raw_input,
     }
+    if namespace:item['namespace']=namespace
+    return item
 
 
 def _reasoning_item(text: str, item_id: str) -> dict:
@@ -1161,8 +1179,8 @@ def to_responses_object(
     bridge: _ToolBridge | None = None,
 ) -> dict:
     """Chat Completions 非流式响应 → Responses 响应体。"""
-    custom_tool_names = custom_tool_names or set()
     bridge = bridge or _ToolBridge([])
+    custom_tool_names = custom_tool_names if custom_tool_names is not None else bridge.custom_names
     choice = (data.get('choices') or [{}])[0] if isinstance(data.get('choices'), list) else {}
     message = choice.get('message') or {}
     finish = str(choice.get('finish_reason') or 'stop')
@@ -1174,11 +1192,28 @@ def to_responses_object(
     reasoning = message.get('reasoning_content')
     if isinstance(reasoning, str) and reasoning:
         output.append(_reasoning_item(reasoning, 'rs_' + uuid.uuid4().hex[:20]))
-    calls = [call for call in message.get('tool_calls') or [] if isinstance(call, dict)]
+    calls = message.get('tool_calls') or []
+    if not isinstance(calls,list) or len(calls)>MAX_OUTPUT_ITEMS:
+        raise ToolArgumentsError('Invalid upstream tool call list')
+    identities=set()
+    from ..outputlimits import tool_object
+    for call in calls:
+        if not isinstance(call,dict) or not isinstance(call.get('function'),dict):
+            raise ToolArgumentsError('Invalid upstream tool call')
+        identity,name=call.get('id'),call['function'].get('name')
+        if (not isinstance(identity,str) or not identity or identity in identities or
+                not isinstance(name,str) or not name or max(len(identity.encode()),len(name.encode()))>4096):
+            raise ToolArgumentsError('Missing or duplicate upstream tool identity')
+        identities.add(identity)
+        if name not in custom_tool_names and name not in bridge.search_names:
+            try:tool_object(call['function'].get('arguments'))
+            except ValueError as exc:raise ToolArgumentsError(str(exc)) from exc
     text = message.get('content')
     if isinstance(text, str) and text:
         output.append(_message_item(text, 'msg_' + uuid.uuid4().hex[:20],
                                     _message_phase(finish, bool(calls))))
+    if len(output) + len(calls) > MAX_OUTPUT_ITEMS:
+        raise OutputLimitExceeded('Upstream response exceeds the output item limit.')
     custom_calls = [
         call for call in calls
         if isinstance(call.get('function'), dict)
@@ -1194,7 +1229,7 @@ def to_responses_object(
     for call in search_calls:
         if finish != 'length':
             _search_arguments(call['function'].get('arguments'))
-    suppress_tools = bool(custom_calls or search_calls) and finish == 'length'
+    suppress_tools = bool(calls) and finish == 'length'
     for call in custom_calls:
         _custom_input((call.get('function') or {}).get('arguments'))
     for call in ([] if suppress_tools else calls):
@@ -1206,6 +1241,7 @@ def to_responses_object(
             output.append(_search_call_item(str(call.get('id') or f'call_{uuid.uuid4().hex[:12]}'),
                                             'fc_' + uuid.uuid4().hex[:20], fn.get('arguments')))
             continue
+        bridge.validate_output_name(raw_name)
         name, restored_kind, namespace = bridge.restore(raw_name)
         is_custom = restored_kind == 'custom' or raw_name in custom_tool_names
         output.append(_custom_call_item(
@@ -1213,6 +1249,7 @@ def to_responses_object(
             'ctc_' + uuid.uuid4().hex[:20],
             name,
             _custom_input(fn.get('arguments')),
+            namespace,
         ) if is_custom else _function_call_item(
             str(call.get('id') or f'call_{uuid.uuid4().hex[:12]}'),
             'fc_' + uuid.uuid4().hex[:20],
@@ -1222,7 +1259,9 @@ def to_responses_object(
         ))
     status, incomplete = ('completed', None) if finish != 'length' else (
         'incomplete', {'reason': 'max_output_tokens'})
-    return {
+    if len(output)>MAX_OUTPUT_ITEMS:
+        raise OutputLimitExceeded('Too many translated output items')
+    result = {
         'id': resp_id,
         'object': 'response',
         'created_at': int(time.time()),
@@ -1235,6 +1274,9 @@ def to_responses_object(
         'incomplete_details': incomplete,
         'usage': _usage_object(data.get('usage') or {}),
     }
+    from ..outputlimits import OutputBudget
+    OutputBudget().add(result)
+    return result
 
 
 # ── 流式：Chat Completions SSE → Responses 事件流 ──────────────
@@ -1270,11 +1312,11 @@ class _StreamTranslator:
 
         self.reason_index: int | None = None
         self.reason_id = ''
-        self.reason_buf = ''
+        self.reason_buf = []
 
         self.text_index: int | None = None
         self.text_id = ''
-        self.text_buf = ''
+        self.text_buf = []
 
         # 上游工具序号 → 输出项（上游可能并发给多个工具，各自编号）
         self.tools: dict[int, dict] = {}
@@ -1285,10 +1327,12 @@ class _StreamTranslator:
         self.defer_finish = defer_finish
         self.pending_finish: str | None = None
         self.usage: dict = {}
-        self.custom_tool_names = custom_tool_names or set()
         self.bridge = bridge or _ToolBridge([])
+        self.custom_tool_names = custom_tool_names if custom_tool_names is not None else self.bridge.custom_names
         self.failed = False
-        self.buffer_tool_events = bool(self.custom_tool_names or self.bridge.search_names)
+        self.buffer_tool_events = True  # final identity must agree in added/done/terminal
+        from ..outputlimits import OutputBudget
+        self.output_budget = OutputBudget()
         self.tool_error: ToolSearchArgumentsError | None = None
 
     # ── 事件构造 ──
@@ -1314,7 +1358,8 @@ class _StreamTranslator:
         })]
 
     def _open_reason(self) -> list[bytes]:
-        self.reason_buf = ''
+        self._check_item_budget()
+        self.reason_buf = []
         self.reason_index = self.next_index
         self.next_index += 1
         self.reason_id = 'rs_' + uuid.uuid4().hex[:20]
@@ -1336,7 +1381,8 @@ class _StreamTranslator:
         # 凭据 `encrypted_content` 只能在这里补上——它要等推理全文到齐才能算出。
         # 客户端在 `output_item.done` 上取这个字段（issue #36：此前从没发过，
         # 于是客户端拿不到凭据，下一轮不带推理痕迹，上游报 11155）。
-        item = _reasoning_item(self.reason_buf, self.reason_id)
+        item = _reasoning_item(''.join(self.reason_buf), self.reason_id)
+        self.reason_buf.clear()
         self._record_item(index, item)
         return [_event('response.output_item.done', {
             'type': 'response.output_item.done',
@@ -1345,7 +1391,8 @@ class _StreamTranslator:
         })]
 
     def _open_text(self) -> list[bytes]:
-        self.text_buf = ''
+        self._check_item_budget()
+        self.text_buf = []
         self.text_index = self.next_index
         self.next_index += 1
         self.text_id = 'msg_' + uuid.uuid4().hex[:20]
@@ -1376,8 +1423,10 @@ class _StreamTranslator:
         if self.text_index is None:
             return []
         index, self.text_index = self.text_index, None
-        part = {'type': 'output_text', 'text': self.text_buf, 'annotations': []}
-        item = _message_item(self.text_buf, self.text_id, phase)
+        text = ''.join(self.text_buf)
+        self.text_buf.clear()
+        part = {'type': 'output_text', 'text': text, 'annotations': []}
+        item = _message_item(text, self.text_id, phase)
         self._record_item(index, item)
         return [
             _event('response.output_text.done', {
@@ -1385,7 +1434,7 @@ class _StreamTranslator:
                 'output_index': index,
                 'content_index': 0,
                 'item_id': self.text_id,
-                'text': self.text_buf,
+                'text': text,
             }),
             _event('response.content_part.done', {
                 'type': 'response.content_part.done',
@@ -1402,6 +1451,7 @@ class _StreamTranslator:
         ]
 
     def _open_tool(self, seq: int, call_id: str, name: str) -> list[bytes]:
+        self._check_item_budget()
         index = self.next_index
         self.next_index += 1
         state = {
@@ -1433,6 +1483,18 @@ class _StreamTranslator:
 
     def _close_tools(self) -> list[bytes]:
         out: list[bytes] = []
+        from ..outputlimits import tool_object
+        identities=set()
+        for state in self.tools.values():
+            if not state['call_id'] or not state['name'] or state['call_id'] in identities:
+                raise ToolArgumentsError('Missing or duplicate upstream tool identity')
+            self.bridge.validate_output_name(state['name'])
+            identities.add(state['call_id'])
+            if max(len(state['call_id'].encode()),len(state['name'].encode()))>4096:
+                raise ToolArgumentsError('Upstream tool metadata exceeds the supported limit')
+            if state['name'] not in self.custom_tool_names and state['name'] not in self.bridge.search_names:
+                try:tool_object(state['args'])
+                except ValueError as exc:raise ToolArgumentsError(str(exc)) from exc
         custom_inputs = {
             seq: _custom_input(state['args'])
             for seq, state in self.tools.items()
@@ -1469,7 +1531,7 @@ class _StreamTranslator:
             family = 'custom_tool_call_input' if custom else 'function_call_arguments'
             if custom:
                 item = _custom_call_item(
-                    state['call_id'], state['id'], restored_name, value)
+                    state['call_id'], state['id'], restored_name, value, namespace)
             else:
                 item = _function_call_item(
                     state['call_id'], state['id'], restored_name, value, namespace)
@@ -1502,6 +1564,12 @@ class _StreamTranslator:
         return out
 
     # ── 主循环 ──
+    def _check_item_budget(self):
+        if self.next_index >= MAX_OUTPUT_ITEMS:
+            from ..outputlimits import OutputLimitExceeded
+            raise OutputLimitExceeded('Upstream response exceeds the output item limit')
+
+    @bounded_events
     def feed(self, obj: dict) -> list[bytes]:
         """喂一个上游 SSE 的 data 对象，返回要下发的事件。"""
         out: list[bytes] = []
@@ -1509,12 +1577,13 @@ class _StreamTranslator:
         # bug，或被打穿），客户端会收到终止事件之后的事件，协议被污染。
         if self.finished:
             return out
+        self.output_budget.add(obj)
         if not self.started:
             out += self._created()
 
         usage = obj.get('usage')
         if isinstance(usage, dict):
-            self.usage.update(usage)
+            observability.merge_usage(self.usage, usage)
         if self.pending_finish is not None:
             # Chat stream_options.include_usage sends a separate final usage
             # chunk after finish_reason. Keep it, but ignore any later content.
@@ -1524,6 +1593,7 @@ class _StreamTranslator:
         if not isinstance(choices, list) or not choices:
             return out
         choice = choices[0] if isinstance(choices[0], dict) else {}
+        message_mode = isinstance(choice.get('message'),dict) and not choice.get('delta')
         delta = choice.get('delta') or choice.get('message') or {}
         if not isinstance(delta, dict):
             delta = {}
@@ -1533,7 +1603,7 @@ class _StreamTranslator:
             if self.reason_index is None:
                 out += self._close_text()
                 out += self._open_reason()
-            self.reason_buf += reasoning
+            self.reason_buf.append(reasoning)
             out.append(_event('response.reasoning_summary_text.delta', {
                 'type': 'response.reasoning_summary_text.delta',
                 'output_index': self.reason_index,
@@ -1548,7 +1618,7 @@ class _StreamTranslator:
                 out += self._close_reason()
             if self.text_index is None:
                 out += self._open_text()
-            self.text_buf += text
+            self.text_buf.append(text)
             out.append(_event('response.output_text.delta', {
                 'type': 'response.output_text.delta',
                 'output_index': self.text_index,
@@ -1557,23 +1627,31 @@ class _StreamTranslator:
                 'delta': text,
             }))
 
-        for call in delta.get('tool_calls') or []:
+        calls=delta.get('tool_calls') or []
+        if not isinstance(calls,list):raise ToolArgumentsError('Invalid upstream tool call list')
+        for call_position, call in enumerate(calls):
             if not isinstance(call, dict):
-                continue
-            seq = _as_int(call.get('index'))
+                raise ToolArgumentsError('Invalid upstream tool call')
+            seq = call.get('index',call_position if message_mode else None)
+            if type(seq) is int and seq >= MAX_OUTPUT_ITEMS:
+                raise ToolArgumentsError('Upstream response exceeds the output item limit')
+            if type(seq) is not int or not 0<=seq<MAX_OUTPUT_ITEMS:
+                raise ToolArgumentsError('Invalid upstream tool index')
             fn = call.get('function') or {}
+            if not isinstance(fn,dict):raise ToolArgumentsError('Invalid upstream tool function')
             name = fn.get('name')
+            if (name is not None and not isinstance(name,str)) or (call.get('id') is not None and not isinstance(call['id'],str)):
+                raise ToolArgumentsError('Invalid upstream tool metadata')
             if seq not in self.tools:
                 if len(self.tools) >= MAX_OUTPUT_ITEMS:
-                    logger.warning('工具调用数量超过 %d，忽略后续项', MAX_OUTPUT_ITEMS)
-                    continue
+                    raise ToolArgumentsError('Too many upstream tool calls')
                 if self.text_index is not None:
                     out += self._close_text()
                 if self.reason_index is not None:
                     out += self._close_reason()
                 out += self._open_tool(
                     seq,
-                    str(call.get('id') or f'call_{uuid.uuid4().hex[:12]}'),
+                    str(call.get('id') or ''),
                     str(name or ''),
                 )
             state = self.tools[seq]
@@ -1583,9 +1661,11 @@ class _StreamTranslator:
                 # are ignored so they do not become "BashBash".
                 if state.get('seen_fragment'):
                     if isinstance(name, str) and name != state['name']:
-                        state['name'] += name
+                        state['name'] = name if name.startswith(state['name']) else state['name'] + name
                     if isinstance(call.get('id'), str):
-                        state['call_id'] = call['id']
+                        fragment=call['id']
+                        if fragment != state['call_id']:
+                            state['call_id'] = fragment if fragment.startswith(state['call_id']) else state['call_id'] + fragment
                 state['seen_fragment'] = True
             # 分片参数原样透传，拼接交给客户端
             args = fn.get('arguments')
@@ -1611,6 +1691,7 @@ class _StreamTranslator:
                 out += self.finish(str(finish))
         return out
 
+    @bounded_events
     def finish(self, finish_reason: str | None = None, *, force: bool = False) -> list[bytes]:
         """收尾：关掉打开的输出项并下发终止事件（幂等）。"""
         if self.finished:
@@ -1647,7 +1728,7 @@ class _StreamTranslator:
             has_search = any(state['name'] in self.bridge.search_names for state in self.tools.values())
             if has_search and finish_reason not in ('stop', 'tool_calls', 'length'):
                 raise ToolSearchArgumentsError('Tool search response ended without a complete tool turn.')
-            if finish_reason == 'length' and has_search:
+            if finish_reason == 'length' and not has_custom:
                 pass  # Never execute a truncated discovery call.
             elif finish_reason == 'length' and has_custom:
                 # A complete wrapper at a length stop is still incomplete and
@@ -1669,7 +1750,7 @@ class _StreamTranslator:
                     'model': self.model,
                     'output': self.items,
                     'error': {
-                        'code': 'invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError) else 'invalid_custom_tool_arguments',
+                        'code': 'invalid_tool_arguments' if isinstance(exc, ToolArgumentsError) else 'invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError) else 'invalid_custom_tool_arguments',
                         'message': str(exc),
                     },
                     'usage': _usage_object(self.usage),
@@ -1785,11 +1866,9 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
 
     if not stream:
         try:
-            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))) as client:
-                resp = await deadline_mod.await_total(
-                    client.post(url, content=wire,
-                                headers=gateway._upstream_headers(upstream)),
-                    request_deadline)
+            async with observability.AuditedClientContext(config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)) as client:
+                resp = await deadline_mod.buffered_post(client,url,content=wire,
+                    headers=await gateway._upstream_headers_async(upstream),deadline=request_deadline)
             state=observability.current.get()
             if state:
                 state.account=(getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
@@ -1806,12 +1885,15 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                         raise ValueError('invalid upstream chat response')
                     converted = JSONResponse(to_responses_object(data, model, resp_id, custom_tool_names, bridge))
                 except Exception as exc:
-                    gateway._mark_invalid_response()
+                    if isinstance(exc,OutputLimitExceeded):gateway._mark_output_limit_failure()
+                    else:gateway._mark_invalid_response()
                     gateway._record(key, ip, model, mapped or '', 502,
                                     _as_int(usage.get('prompt_tokens')),
                                     _as_int(usage.get('completion_tokens')), latency,
                                     ua, str(exc), False, usage=usage)
-                    code = ('invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError)
+                    code = ('upstream_output_limit' if isinstance(exc,OutputLimitExceeded)
+                            else 'invalid_tool_arguments' if isinstance(exc, ToolArgumentsError)
+                            else 'invalid_tool_search_arguments' if isinstance(exc, ToolSearchArgumentsError)
                             else 'invalid_custom_tool_arguments' if isinstance(exc, CustomToolArgumentsError)
                             else 'upstream_invalid_body')
                     return _failed('上游返回了无法解析的响应：' + str(exc), 502, 'api_error', code)
@@ -1830,6 +1912,12 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                                hint=gateway._error_hint(data),
                                upstream_request_id=gateway._upstream_request_id(resp))
             return converted
+        except OutputLimitExceeded:
+            gateway._mark_output_limit_failure()
+            message='Upstream output exceeds the configured byte limit'
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+                            int((time.time() - started) * 1000), ua, message, False)
+            return _failed(message, 502, 'api_error', 'upstream_output_limit')
         except (CustomToolArgumentsError, ToolSearchArgumentsError) as exc:
             return _failed(
                 str(exc), 502, 'api_error',
@@ -1839,6 +1927,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             # U13：时间预算用尽 → 仍是 502 api_error（不新增 504，不改既有语义），
             # 文案指明是哪一类预算。
             failure = deadline_mod.classify_budget_exceeded(exc)
+            gateway._mark_pre_stream_failure(exc)
             latency = int((time.time() - started) * 1000)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                             failure.message, False)
@@ -1849,11 +1938,11 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             return _failed(f'上游不可用：{exc}', 502)
 
     # ── 流式 ──
-    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream))
+    client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
     resp = None
     try:
         req = client.build_request('POST', url, content=wire,
-                                   headers=gateway._upstream_headers(upstream))
+                                   headers=await gateway._upstream_headers_async(upstream))
         # 首包预算从「请求发出」算到「响应头到达」——与 gateway `_chat` 同口径。
         resp = await deadline_mod.await_headers(client.send(req, stream=True),
                                                 request_deadline)
@@ -1866,6 +1955,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
     except deadline_mod.BudgetExceeded as exc:
         await gateway._close_pending_response(resp, client, budgets)
         failure = deadline_mod.classify_budget_exceeded(exc)
+        gateway._mark_pre_stream_failure(exc)
         latency = int((time.time() - started) * 1000)
         gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                         failure.message, True)
@@ -1884,7 +1974,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         try:
             # send(..., stream=True) returns an HTTPX Response, which does not
             # implement the async context-manager protocol. Read it directly.
-            raw = await deadline_mod.read_error_body(resp, request_deadline)
+            raw = await deadline_mod.read_error_body(resp, request_deadline, preserve_status=True)
         except (asyncio.CancelledError, GeneratorExit) as exc:
             gateway._mark_pre_stream_failure(exc)
             gateway._record(key, ip, model, mapped or '', 499, 0, 0,
@@ -1942,7 +2032,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             # 转发热路径同一实现）。客户端取消（CancelledError）原样上抛，由外层
             # close_stream 在 client_cancel_s 内有界关闭上游。
             async for chunk in deadline_mod.iterate_with_budgets(
-                    resp.aiter_bytes(), request_deadline,
+                    deadline_mod.decoded_bytes(resp), request_deadline,
                     on_first_chunk=_mark_first_byte):
                 for obj in audit.feed(chunk):
                     if isinstance(obj.get('error'),dict):
@@ -1976,8 +2066,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             failure = deadline_mod.classify_budget_exceeded(exc)
             error_text = failure.message
             audit.error_stage = failure.error_stage
+            audit.error_code = 'upstream_timeout'
             logger.warning('stream budget exceeded request_id=%s kind=%s',
                            state.request_id if state else None, failure.kind)
+        except OutputLimitExceeded:
+            error_text='Upstream output exceeds the configured byte limit'
+            audit.error_stage='protocol'
+            audit.error_code='upstream_output_limit'
         except Exception as exc:
             error_text=f'上游流传输或协议异常：{type(exc).__name__}'
             audit.error_stage='stream_read'
@@ -1996,12 +2091,16 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                         _payload = {'type': 'response.failed', 'response': {
                             'id': resp_id, 'object': 'response',
                             'created_at': translator.created_at, 'status': 'failed',
-                            'model': model, 'output': translator.items,
+                            'model': model, 'output': [] if audit.error_code=='upstream_output_limit' else translator.items,
                             'error': _error}}
                         if state:
                             _payload['request_id'] = state.request_id
                         if upstream_request_id:
                             _payload['upstream_request_id'] = upstream_request_id
+                        if audit.error_code=='upstream_output_limit':
+                            _payload=output_limit_failure('responses',response_id=resp_id,
+                                created_at=translator.created_at,model=model,
+                                request_id=state.request_id if state else None,upstream_request_id=upstream_request_id)
                         yield _event('response.failed', _payload)
                     else:
                         for event in translator.finish(translator.pending_finish,force=True):
@@ -2013,6 +2112,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             except (asyncio.CancelledError,GeneratorExit):
                 cancelled=True
                 raise
+            except OutputLimitExceeded:
+                error_text='Upstream output exceeds the configured byte limit'
+                audit.error_stage='protocol'
+                audit.error_code='upstream_output_limit'
+                translator.failed=True
+                yield _event('response.failed',output_limit_failure('responses',response_id=resp_id,
+                    created_at=translator.created_at,model=model,request_id=state.request_id if state else None))
             finally:
                 observability.set_stream_state(audit,error_text,cancelled)
                 try:

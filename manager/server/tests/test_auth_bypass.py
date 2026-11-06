@@ -40,6 +40,7 @@ def _isolated_auth_data():
     """Exercise real lockout persistence without borrowing another test's database."""
     original_conn = db._conn
     fail_state = (deepcopy(security._fail), deepcopy(security._user_fail), security._FAILS_LOADED)
+    token_fail_state=deepcopy(security._token_fail)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         with mock.patch.multiple(config, DATA_DIR=root, DB_PATH=root / 'auth.db',
@@ -47,6 +48,7 @@ def _isolated_auth_data():
             db._conn = None
             security._fail.clear()
             security._user_fail.clear()
+            security._token_fail.clear()
             security._FAILS_LOADED = False
             try:
                 db.connect()
@@ -60,6 +62,8 @@ def _isolated_auth_data():
                 security._fail.clear()
                 security._fail.update(fail_state[0])
                 security._user_fail.clear()
+                security._token_fail.clear()
+                security._token_fail.update(token_fail_state)
                 security._user_fail.update(fail_state[1])
                 security._FAILS_LOADED = fail_state[2]
 

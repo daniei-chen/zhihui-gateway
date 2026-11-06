@@ -45,6 +45,7 @@ class SessionSecretRotationTest(unittest.TestCase):
         self.client = TestClient(app)
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self._write_users(OLD_SECRET)
 
     def tearDown(self) -> None:
@@ -54,6 +55,7 @@ class SessionSecretRotationTest(unittest.TestCase):
         config.DB_PATH, config.USERS_FILE, config.STATIC_DIR = self._orig
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self._tmp.cleanup()
 
     # ── 工具 ─────────────────────────────────────────────

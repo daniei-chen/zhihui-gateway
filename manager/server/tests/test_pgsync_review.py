@@ -71,187 +71,99 @@ class _StubCursor:
         return False
 
 
-class ImportScopeTest(_Case):
-    """恢复时，**镜像里没有的表不会被清空**（且日志如实这么说）。
+class QuarantinedImportTest(_Case):
+    """A main-only PG mirror is an artifact, never an online ledger rollback."""
 
-    为什么值得单独钉：恢复的直觉是「让本地等于镜像」，于是很容易顺手把这些表也
-    DELETE 掉；但镜像可能来自更早的版本（那时这张表还不存在），清空等于删掉镜像里
-    根本没有的数据，**不可恢复**。第一版的日志写的是「恢复后将保持为空」——
-    与实际行为相反，照着它去理解会以为本地被清干净了。
-    """
+    def _snapshot(self):
+        conn=db.connect()
+        result={}
+        for table in pgsync._local_tables(conn):
+            cols=[{'name':r[1],'type':r[2],'notnull':r[3],'pk':r[5]}
+                  for r in conn.execute('PRAGMA table_info("'+table+'")')]
+            rows=[tuple(r) for r in conn.execute('SELECT * FROM "'+table+'"')]
+            result[table]={'columns':cols,'rows':rows}
+        return result
 
-    def _run_import(self, mirror_tables: dict, logs: list[str]) -> None:
-        class FakeSource:
-            def __init__(self, conn):  # noqa: ANN001
-                pass
+    def _import(self, tables, *, rows_factory=None, counts=None):
+        counts=counts if counts is not None else {t:len(v['rows']) for t,v in tables.items()}
+        class Source:
+            def __init__(self,pg):pass
+            def tables(self):return list(tables)
+            def columns(self,t):return tables[t]['columns']
+            def rows(self,t,columns,batch=pgsync.BATCH):
+                if rows_factory and t=='restore_probe':yield from rows_factory()
+                else:yield tables[t]['rows']
+            def close(self):pass
+        class Pg(_StubPg):
+            def cursor(self):
+                class Cursor(_StubCursor):
+                    def fetchone(self):return (json.dumps(counts),)
+                return Cursor()
+        reporter=type('Reporter',(),{'data':{},'log':lambda *a,**k:None,
+                                   'step':lambda *a,**k:None})()
+        with mock.patch.object(pgsync,'_PgSource',Source), \
+             mock.patch.object(pgsync,'_require_psycopg',lambda:Pg([])), \
+             mock.patch.object(db,'replace_database',side_effect=AssertionError('online replacement forbidden')):
+            return pgsync.import_from_pg({'host':'stub','port':5432,'dbname':'x',
+                'user':'u','password':'synthetic','sslmode':'prefer'},reporter)
 
-            def tables(self):
-                return list(mirror_tables)
+    def test_incomplete_mirror_is_rejected_without_changing_online_rows(self):
+        db.execute("INSERT INTO settings VALUES('live-sentinel','new')")
+        with self.assertRaisesRegex(ValueError,'缺少当前数据表'):
+            self._import({})
+        self.assertEqual(db.query_one("SELECT value FROM settings WHERE key='live-sentinel'")['value'],'new')
 
-            def columns(self, table):
-                return mirror_tables[table]['columns']
+    def test_complete_mirror_is_new_quarantined_artifact_with_immutable_triggers(self):
+        db.execute("INSERT INTO settings VALUES('live-sentinel','old')")
+        tables=self._snapshot()
+        db.execute("UPDATE settings SET value='new' WHERE key='live-sentinel'")
+        result=self._import(tables)
+        self.assertFalse(result['live_database_replaced'])
+        self.assertTrue(result['activation_quarantined'])
+        self.assertEqual(db.query_one("SELECT value FROM settings WHERE key='live-sentinel'")['value'],'new')
+        staged=sqlite3.connect(Path(config.DATA_DIR)/result['artifact'])
+        try:
+            self.assertEqual(staged.execute("SELECT value FROM settings WHERE key='live-sentinel'").fetchone()[0],'old')
+            self.assertTrue(staged.execute('SELECT reason FROM _wb_restore_quarantine').fetchone())
+            triggers=staged.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='admin_events'").fetchall()
+            self.assertGreaterEqual(len(triggers),2)
+        finally:staged.close()
 
-            def rows(self, table, columns, batch=pgsync.BATCH):
-                yield mirror_tables[table]['rows']
+    def test_row_receipt_mismatch_cleans_artifact_and_preserves_online_data(self):
+        tables=self._snapshot()
+        counts={t:len(v['rows']) for t,v in tables.items()};counts['settings']+=1
+        before=set(Path(config.DATA_DIR).glob('.pgsync-restore-*'))
+        with self.assertRaisesRegex(ValueError,'行数回执不匹配'):
+            self._import(tables,counts=counts)
+        self.assertEqual(set(Path(config.DATA_DIR).glob('.pgsync-restore-*')),before)
 
-            def close(self):
-                pass
-
-        class Reporter:
-            data: dict = {}
-
-            def log(self, text, level='info'):
-                logs.append(str(text))
-
-            def step(self, text, percent=None):
-                pass
-
-        with mock.patch.object(pgsync, '_PgSource', FakeSource), \
-             mock.patch.object(pgsync, '_require_psycopg', lambda: _StubPg([])), \
-             mock.patch.object(pgsync, '_local_backup', lambda: None):
-            pgsync.import_from_pg(
-                {'host': 'stub', 'port': 5432, 'dbname': 'x', 'user': 'u',
-                 'password': 'p', 'keep_local_backup': False, 'sslmode': 'prefer'},
-                Reporter())
-
-    def test_tables_missing_from_the_mirror_are_left_alone(self) -> None:
-        self.db.execute('CREATE TABLE IF NOT EXISTS mirror_has(id INTEGER, v TEXT)')
-        self.db.execute('CREATE TABLE IF NOT EXISTS local_only(id INTEGER, v TEXT)')
-        self.db.execute("INSERT INTO mirror_has(id, v) VALUES(1, '旧值')")
-        self.db.execute("INSERT INTO local_only(id, v) VALUES(1, '只在本地的数据')")
-        logs: list[str] = []
-        self._run_import(
-            {'mirror_has': {'columns': [{'name': 'id', 'type': 'INTEGER', 'notnull': False, 'pk': 0},
-                                        {'name': 'v', 'type': 'TEXT', 'notnull': False, 'pk': 0}],
-                            'rows': [(1, '镜像里的新值')]}},
-            logs)
-        mirrored = self.db.query_one('SELECT v FROM mirror_has WHERE id = 1')
-        kept = self.db.query_one('SELECT v FROM local_only WHERE id = 1')
-        self.assertEqual(mirrored['v'], '镜像里的新值', '镜像里有的表没被覆盖')
-        self.assertIsNotNone(kept, '镜像里没有的表被清空了 —— 那是不可恢复的损失')
-        self.assertEqual(kept['v'], '只在本地的数据')
-        said = [l for l in logs if 'local_only' in l]
-        self.assertTrue(said, '没有任何日志提到这张表被跳过')
-        self.assertIn('不会改动', said[0], f'日志口径与实际不符：{said[0]}')
-        self.assertNotIn('保持为空', said[0], f'日志在说反话：{said[0]}')
-
-    def test_mirror_only_tables_are_not_created_locally(self) -> None:
-        """镜像里有、本地没有的表：**不建表、不写入**（镜像来自更新的版本时就是这样）。
-
-        复核时我一度以为这里会走到 `_SqliteSink.accepts` 的「本地没有这张表」分支，
-        写了条测试才发现根本到不了 —— 恢复只遍历 `available & local` 的交集
-        （那条分支是给别的调用方留的防御）。所以这里断言真实行为：镜像独有的表
-        被安静跳过，不凭空建表，也不出现在「恢复不会改动它们」的提示里。
-        """
-        self.db.execute('DROP TABLE IF EXISTS only_in_mirror')
-        logs: list[str] = []
-        self._run_import(
-            {'only_in_mirror': {'columns': [{'name': 'a', 'type': 'TEXT', 'notnull': False, 'pk': 0}],
-                                'rows': [('x',)]}},
-            logs)
-        tables = {str(r['name']) for r in self.db.query(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertNotIn('only_in_mirror', tables, '镜像独有的表被凭空建到了本地')
-        self.assertFalse([line for line in logs if 'only_in_mirror' in line],
-                         f'不该有关于这张表的提示（它不在本地表清单里）：{logs}')
-
-    def test_mirror_table_without_common_columns_is_skipped_not_cleared(self) -> None:
-        """两边同名但列完全对不上：跳过，且**不清空**（清掉等于凭空删数据）。"""
-        self.db.execute('CREATE TABLE IF NOT EXISTS renamed_cols(z INTEGER)')
-        self.db.execute('INSERT INTO renamed_cols(z) VALUES(1)')
-        logs: list[str] = []
-        self._run_import(
-            {'renamed_cols': {'columns': [{'name': 'a', 'type': 'TEXT', 'notnull': False, 'pk': 0}],
-                              'rows': [('y',)]}},
-            logs)
-        self.assertIn('没有公共列', '\n'.join(logs), f'缺「没有公共列」的口径：{logs}')
-        got = self.db.query_one('SELECT COUNT(*) AS c FROM renamed_cols')
-        self.assertEqual(int(got['c']), 1, '列对不上就把本地那张表清空了 —— 数据凭空没了')
-
-
-class RestoreConcurrencyTest(_Case):
-    """恢复的耗时部分不得持有全局 DB 锁（审计 2026-10-18）。
-
-    旧实现把整段「清空 + 灌入」包在 `db._lock` 里：大库恢复几秒到几十秒，
-    期间网关的日志写入、鉴权、统计全部排队。新实现先写临时库，只在
-    「关连接 → 换文件 → 重开」的毫秒级窗口持锁 —— 这两条用例分别钉住
-    「复制期间可读写」与「失败不碰线上库」。
-    """
-
-    TABLE = 'restore_probe'
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.db.execute(f'CREATE TABLE IF NOT EXISTS {self.TABLE}(id INTEGER, v TEXT)')
-        self.db.execute(f"INSERT INTO {self.TABLE} VALUES(1, '旧值')")
-
-    def _run_import(self, rows_factory) -> None:
-        table = self.TABLE
-
-        class FakeSource:
-            def __init__(self, conn):  # noqa: ANN001
-                pass
-
-            def tables(self):
-                return [table]
-
-            def columns(self, _table):
-                return [
-                    {'name': 'id', 'type': 'INTEGER', 'notnull': False, 'pk': 0},
-                    {'name': 'v', 'type': 'TEXT', 'notnull': False, 'pk': 0},
-                ]
-
-            def rows(self, _table, _columns, batch=pgsync.BATCH):
-                yield from rows_factory()
-
-            def close(self):
-                pass
-
-        class Reporter:
-            data: dict = {}
-
-            def log(self, text, level='info'):
-                pass
-
-            def step(self, text, percent=None):
-                pass
-
-        with mock.patch.object(pgsync, '_PgSource', FakeSource), \
-             mock.patch.object(pgsync, '_require_psycopg', lambda: _StubPg([])), \
-             mock.patch.object(pgsync, '_local_backup', lambda: None):
-            pgsync.import_from_pg(
-                {'host': 'stub', 'port': 5432, 'dbname': 'x', 'user': 'u',
-                 'password': 'p', 'keep_local_backup': False, 'sslmode': 'prefer'},
-                Reporter())
-
-    def test_online_queries_are_not_blocked_while_copying(self) -> None:
-        gate = threading.Event()
-
+    def test_online_read_and_write_continue_during_materialization(self):
+        db.execute('CREATE TABLE restore_probe(id INTEGER PRIMARY KEY,v TEXT)')
+        db.execute("INSERT INTO restore_probe VALUES(1,'old')")
+        tables=self._snapshot()
+        gate=threading.Event()
         def rows():
             def probe():
-                # 真正走一遍 query 路径；若全局锁被恢复线程占着，这里会卡住。
-                db.query_one('SELECT 1')
+                db.execute("UPDATE restore_probe SET v='new' WHERE id=1")
                 gate.set()
+            worker=threading.Thread(target=probe)
+            worker.start()
+            self.assertTrue(gate.wait(3),'copy blocked online writes')
+            worker.join(3)
+            yield [(1,'old')]
+        result=self._import(tables,rows_factory=rows)
+        self.assertEqual(db.query_one('SELECT v FROM restore_probe')['v'],'new')
+        self.assertTrue((Path(config.DATA_DIR)/result['artifact']).exists())
 
-            threading.Thread(target=probe, daemon=True).start()
-            self.assertTrue(gate.wait(3), '恢复复制期间在线查询被阻塞')
-            yield [(1, '新值')]
-
-        self._run_import(rows)
-        got = self.db.query_one(f'SELECT v FROM {self.TABLE} WHERE id = 1')
-        self.assertEqual(got['v'], '新值', '恢复没有真正落到线上库')
-
-    def test_failure_during_copy_leaves_live_data_untouched(self) -> None:
+    def test_interrupted_mirror_does_not_change_online_data(self):
+        db.execute('CREATE TABLE restore_probe(id INTEGER PRIMARY KEY,v TEXT)')
+        db.execute("INSERT INTO restore_probe VALUES(1,'live')")
         def rows():
-            yield [(1, '新值')]
-            raise RuntimeError('镜像读到一半断了')
-
-        with self.assertRaises(RuntimeError):
-            self._run_import(rows)
-        got = self.db.query_one(f'SELECT v FROM {self.TABLE} WHERE id = 1')
-        self.assertEqual(got['v'], '旧值', '恢复失败却把线上库改掉了')
-        leftovers = list(Path(self._tmp.name).glob('.pgsync-restore-*.db'))
-        self.assertFalse(leftovers, f'失败后临时库没有清理：{leftovers}')
+            yield [(1,'old')]
+            raise RuntimeError('synthetic disconnected mirror')
+        with self.assertRaisesRegex(RuntimeError,'disconnected'):
+            self._import(self._snapshot(),rows_factory=rows)
+        self.assertEqual(db.query_one('SELECT v FROM restore_probe')['v'],'live')
 
 
 class ReplaceDatabaseTest(_Case):
@@ -389,33 +301,98 @@ class PgSyncPanelPollingTest(unittest.TestCase):
          脏标记清掉。
 
     行为验收在 `dev/verify_pgsync_form_ui.py`（真浏览器里打字等两个轮询周期），
-    这里钉结构：改回「空闲也全量重载」会立刻被拦下。
+    这里钉结构：改回「空闲也全量重载」会立刻被拦下。轮询已改成请求完成后
+    setTimeout，另外检查 single-flight、取消、身份代次和可见性；实际组件竞态
+    在 web/tests/audit-business-state.test.cjs 执行，不依赖此处的源码形状断言。
     """
 
     PANEL = (_ROOT / 'web' / 'components' / 'common' / 'settings'
              / 'PgSyncPanel.tsx')
 
     def setUp(self) -> None:
-        self.src = self.PANEL.read_text(encoding='utf-8')
+        raw = self.PANEL.read_text(encoding='utf-8')
+        # 断言要检查实际代码，不能让解释旧缺陷的注释提供虚假的匹配。
+        self.src = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', raw, flags=re.S))
+        self.api = (_ROOT / 'web' / 'lib' / 'api.ts').read_text(encoding='utf-8')
+
+    def _polling_contract(self, src: str) -> None:
+        effect = re.search(
+            r'^  useEffect\(\(\) => \{\s*(let alive = true;[\s\S]*?)'
+            r'^  \}, \[([^\]]*)\]\);', src, flags=re.M)
+        self.assertIsNotNone(effect, '找不到独立进度轮询的生命周期')
+        body, deps = effect.groups()
+        for dep in ('acceptStatus', 'isAdmin', 'me?.username', 'invalidateStatus'):
+            self.assertIn(dep, deps, f'轮询缺少当前身份/状态依赖 {dep}')
+        tick = re.search(
+            r'^    const tick = async \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(tick, '找不到异步进度读取')
+        request = tick.group(1)
+        self.assertIn('await pgSyncApi.status(request.signal)', request,
+                      '轮询必须把取消 signal 传入进度 API')
+        self.assertNotRegex(request, r'\bload\s*\(|\bsetForm\s*\(',
+                            '轮询又出现完整重载或表单更新 —— issue #122 会覆盖未保存输入')
+        self.assertRegex(request, r'if \(!alive \|\| document\.hidden \|\| inFlight\) return;',
+                         '轮询没有同步在途/可见性门控')
+        self.assertIn('inFlight = true;', request)
+        self.assertLess(request.find('inFlight = true;'), request.find('await pgSyncApi.status('),
+                        '在途锁必须在发请求之前生效')
+        self.assertIn('const request = new AbortController();', request)
+        self.assertIn('controller = request;', request)
+        self.assertRegex(request,
+                         r'if \(alive && !request\.signal\.aborted && generation === statusGeneration\.current\) acceptStatus\(next\)',
+                         '已取消或旧代次的进度不能写入当前状态')
+        finalizer = request.split('} finally {', 1)
+        self.assertEqual(len(finalizer), 2, '请求完成/失败都必须释放锁并安排下一次轮询')
+        self.assertIn('inFlight = false;', finalizer[1])
+        self.assertIn('else schedule();', finalizer[1])
+        self.assertRegex(body,
+                         r'if \(alive && !document\.hidden\) timer = window\.setTimeout\(\(\) => void tick\(\), runningRef\.current \? 1500 : 15000\)',
+                         '完成后轮询必须保留运行 1.5 秒/空闲 15 秒的有界间隔')
+        self.assertNotIn('setInterval(', body, '固定 interval 会堆叠慢请求')
+        self.assertIn('window.clearTimeout(timer)', body, 'clearTimer 必须实际撤掉计时器')
+        visibility = re.search(
+            r'^    const visibility = \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(visibility, '缺少标签页隐藏/恢复处理')
+        self.assertIn('if (document.hidden)', visibility.group(1))
+        self.assertIn('controller?.abort();', visibility.group(1))
+        self.assertIn('statusGeneration.current++;', visibility.group(1))
+        self.assertIn('else if (inFlight) resumeImmediately = true;', visibility.group(1))
+        self.assertIn('else void tick();', visibility.group(1))
+        cleanup = re.search(
+            r'^    return \(\) => \{\n([\s\S]*?)^    \};', body, flags=re.M)
+        self.assertIsNotNone(cleanup, '离开轮询作用域必须取消与清理')
+        for action in ('alive = false;', 'invalidateStatus();', 'clearTimer();',
+                       'controller?.abort();', "document.removeEventListener('visibilitychange', visibility)"):
+            self.assertIn(action, cleanup.group(1), f'轮询清理缺少 {action}')
+        self.assertRegex(src, r'if \(wasRunning\.current && !running\) void load\(\);',
+                         '任务完成时仍需刷新上次导入/导出时间')
 
     def test_轮询回调只拉进度(self) -> None:
-        block = re.search(r'window\.setInterval\(\(\) => \{([\s\S]*?)\}, interval\)', self.src)
-        self.assertIsNotNone(block, '找不到轮询回调')
-        body = block.group(1)
-        self.assertIn('pollStatus', body, '轮询居然不拉进度了')
-        self.assertNotIn('load(', body,
-                         '轮询回调里又出现了完整重载 —— 那就是 issue #122 复发：'
-                         '空闲时用服务端配置整体覆盖表单')
+        self._polling_contract(self.src)
+        self.assertRegex(self.api,
+                         r"status: \(signal\?: AbortSignal\) => get<PgSyncStatus>\('/api/settings/pg-sync/status', undefined, signal\)",
+                         '进度 API 必须把 signal 继续传给 HTTP 层')
 
     def test_回填表单要过脏检查(self) -> None:
         loader = re.search(
-            r'const load = useCallback\(async \(\) => \{([\s\S]*?)\}, \[\]\)', self.src)
+            r'^  const load = useCallback\(async \(\) => \{\n([\s\S]*?)'
+            r'^  \}, \[([^\]]*)\]\);', self.src, flags=re.M)
         self.assertIsNotNone(loader, '找不到配置加载函数')
         body = loader.group(1)
         self.assertIn('dirtyRef.current', body,
                       '回填表单没有脏检查：用户没保存的输入会被旧值打回去')
         self.assertIn('setForm((f) =>', body,
                       '回填要走函数式更新（基于当前表单判断，而不是闭包里的旧值）')
+        self.assertIn('acceptStatus', loader.group(2), '配置读取必须跟随状态提交回调的依赖')
+        self.assertIn('await pgSyncApi.config(controller.signal)', body)
+        self.assertIn('mounted.current && !controller.signal.aborted && generation === configGeneration.current', body,
+                      '旧身份/已取消的配置读取不能回填表单')
+        self.assertIn('if (!current()) return;', body)
+        self.assertLess(body.find('if (!current()) return;'), body.find('setForm((f) =>'),
+                        '配置读取应在回填前拒绝旧代次')
+        self.assertIn('if (statusRead === statusGeneration.current) acceptStatus(r.status)', body)
+        self.assertRegex(self.api,
+                         r"config: \(signal\?: AbortSignal\) => get<PgSyncConfigResponse>\('/api/settings/pg-sync', undefined, signal\)")
 
     def test_脏标记的置位与清零(self) -> None:
         self.assertRegex(self.src, r'const patch = \(next[\s\S]{0,160}?dirtyRef\.current = true',
@@ -424,14 +401,21 @@ class PgSyncPanelPollingTest(unittest.TestCase):
                          '保存成功后没清脏标记 —— 之后服务端值再也回填不进表单')
 
     def test_守卫不是空转(self) -> None:
-        """把轮询回调换回修前的写法，第一条必须能看出来。"""
-        broken = self.src.replace(
-            '      void pollStatus();\n',
-            '      if (running) { void pollStatus(); } else { void load(); }\n', 1)
-        self.assertNotEqual(broken, self.src, '替换没生效，这条反证没有意义')
-        block = re.search(r'window\.setInterval\(\(\) => \{([\s\S]*?)\}, interval\)', broken)
-        self.assertIn('load(', block.group(1),
-                      '换回修前的写法后守卫仍看不出来 —— 这条守卫是空转的')
+        """实际变异轮询实现：恢复整表读取、移除互斥/取消/身份边界都必须失败。"""
+        mutations = (
+            ('const next = await pgSyncApi.status(request.signal);',
+             'await load();\n        const next = await pgSyncApi.status(request.signal);'),
+            ('!alive || document.hidden || inFlight', '!alive || document.hidden'),
+            ('alive && !request.signal.aborted && generation', 'alive && generation'),
+            ('[acceptStatus, isAdmin, me?.username, invalidateStatus]',
+             '[acceptStatus, isAdmin, invalidateStatus]'),
+        )
+        for old, new in mutations:
+            with self.subTest(removed_contract=old):
+                broken = self.src.replace(old, new, 1)
+                self.assertTrue(broken != self.src, '替换没生效，这条反证没有意义')
+                with self.assertRaises(AssertionError):
+                    self._polling_contract(broken)
 
 
 if __name__ == '__main__':

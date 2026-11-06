@@ -39,7 +39,8 @@ class MessageOrderTest(unittest.TestCase):
         self.assertEqual(result['output'][0]['phase'], 'commentary')
 
     def test_stream_progress_and_terminal_array_keep_order(self):
-        bridge = R._ToolBridge([{'type': 'tool_search', 'execution': 'client'}])
+        bridge = R._ToolBridge([{'type': 'tool_search', 'execution': 'client'},
+            {'type': 'function', 'name': 'verify_step', 'parameters': {'type': 'object'}}])
         tr = R._StreamTranslator('m', 'r', bridge=bridge, defer_finish=True)
         raw = tr.feed(frame(content='先检查。'))
         raw += tr.feed(frame(tool=True))

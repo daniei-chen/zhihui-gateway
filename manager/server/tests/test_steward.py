@@ -469,17 +469,21 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.await_count, 1)
 
     async def test_platform_probes_parallel_with_independent_unknowns(self):
+        entered=0
+        all_started=asyncio.Event()
         async def health():
-            await asyncio.sleep(.04)
+            nonlocal entered
+            entered+=1
+            if entered==2:all_started.set()
+            await asyncio.wait_for(all_started.wait(),2)
             return {'up': True, 'latency_ms': 2}
         good = SimpleNamespace(health=health, accounts=AsyncMock(return_value={'accounts': [
             {'uid': 'private-uid', 'access_token': 'must-not-leak', 'enabled': True,
              'credits': {'remain': 20}}]}))
         bad = SimpleNamespace(health=AsyncMock(side_effect=RuntimeError('private-secret')), accounts=AsyncMock(return_value={}))
         with patch.object(steward_snapshot, 'local_facts', return_value={'observed_at': 1}):
-            started = time.monotonic()
             result = await steward_snapshot.collect(SimpleNamespace(wb=good, qoder=good, trae=bad))
-        self.assertLess(time.monotonic() - started, .12)
+        self.assertTrue(all_started.is_set(), 'both independent probes start before either completes')
         self.assertEqual([r['state'] for r in result['platforms']], ['up', 'up', 'unknown'])
         self.assertNotIn('must-not-leak', json.dumps(result))
         self.assertNotIn('private-', json.dumps(result))

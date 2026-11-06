@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -19,7 +20,28 @@ from typing import Any, Dict, Iterator, List, Optional
 
 _GENESIS = "0" * 64
 _LOCK = threading.Lock()
-_LAST_HASH: Dict[str, str] = {}
+_LAST_HASH: Dict[str, str] = {}  # Compatibility only; never authoritative.
+
+
+def _tail_lines(path: Path, limit: int) -> list[str]:
+    """Read a bounded suffix, not the entire historical file."""
+    maximum=16*1024*1024
+    blocks=[]
+    total=count=0
+    with path.open('rb') as source:
+        source.seek(0,os.SEEK_END)
+        position=source.tell()
+        while position and count<=limit and total<maximum:
+            size=min(65536,position,maximum-total)
+            position-=size
+            source.seek(position)
+            block=source.read(size)
+            blocks.append(block);total+=len(block);count+=block.count(b'\n')
+    data=b''.join(reversed(blocks))
+    lines=data.splitlines()
+    if position and lines:
+        lines=lines[1:]  # The first line may start before the bounded suffix.
+    return [line.decode('utf-8') for line in lines[-limit:]]
 
 
 class AuditLog:
@@ -37,29 +59,22 @@ class AuditLog:
             pass
 
     def _last_hash(self) -> str:
-        key = str(self.path)
-        cached = _LAST_HASH.get(key)
-        if cached:
-            return cached
-        last = _GENESIS
-        try:
-            with self.path.open("rb") as fh:
-                fh.seek(0, os.SEEK_END)
-                size = fh.tell()
-                read = min(size, 64 * 1024)
-                fh.seek(size - read)
-                tail = fh.read().decode("utf-8", "replace").strip().splitlines()
-            for line in reversed(tail):
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                last = rec.get("hash") or last
-                break
-        except FileNotFoundError:
-            pass
-        _LAST_HASH[key] = last
-        return last
+        with self.path.open('rb') as source:
+            source.seek(0,os.SEEK_END)
+            if source.tell():
+                source.seek(-1,os.SEEK_END)
+                if source.read(1)!=b'\n':
+                    raise ValueError('Audit tail is unterminated; append refused')
+        lines=_tail_lines(self.path,1)
+        if not lines:
+            if self.path.stat().st_size:
+                raise ValueError('Audit tail is unreadable; append refused')
+            return _GENESIS
+        record=json.loads(lines[-1])
+        digest=record.get('hash')
+        if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest) or self._digest(record)!=digest:
+            raise ValueError('Audit tail is corrupt; append refused')
+        return digest
 
     @staticmethod
     def _digest(record: Dict[str, Any]) -> str:
@@ -78,7 +93,8 @@ class AuditLog:
         request_id: str = "",
         ip: str = "",
     ) -> Dict[str, Any]:
-        with _LOCK:
+        from ..services.filelock import file_lock
+        with _LOCK, file_lock(self.path, writing=True, timeout=2):
             prev = self._last_hash()
             rec: Dict[str, Any] = {
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -94,27 +110,21 @@ class AuditLog:
             }
             rec["hash"] = self._digest(rec)
             with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+                encoded=json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n"
+                if len(encoded.encode('utf-8'))>1024*1024:
+                    raise ValueError('Audit record exceeds the bounded line size')
+                fh.write(encoded)
+                fh.flush()
+                os.fsync(fh.fileno())
             _LAST_HASH[str(self.path)] = rec["hash"]
             return rec
 
     def tail(self, limit: int = 200) -> List[Dict[str, Any]]:
-        if limit <= 0:
-            return []
-        rows: List[Dict[str, Any]] = []
+        if limit<=0:return []
         try:
-            with self.path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rows.append(json.loads(line))
-                    except Exception:
-                        continue
+            return [json.loads(line) for line in _tail_lines(self.path,min(1000,limit)) if line.strip()]
         except FileNotFoundError:
             return []
-        return rows[-limit:]
 
     def verify(self) -> Dict[str, Any]:
         """从第一条开始重算链，返回完整性报告。"""

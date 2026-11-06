@@ -1,0 +1,24 @@
+{
+  "delta_base_source_commitment": "912479125152cc5a740b300f0bc1710e291c15963ce2a78fbf3db03baaeb3c3b",
+  "source_commitment": "01c72e9c0b91a65d4ad24e273ad2e360d9291a5aaa24e653e3db2a1268ede6e0",
+  "source_commitment_algorithm": "sha256 of canonical relative-path to sha256 JSON map",
+  "binary_sha256": "d2334275d0a1325d503173f114ec1db3622a743ef99846e1bdb87e2ccebdbddf",
+  "patch_sha256": "5b09a3f58b979d11316242f84dfc6b7e1f4fbdd836ff2688246fc8cdfc5c589c",
+  "changed_files": [
+    "internal/pool/audit_fixes_test.go",
+    "internal/pool/pool.go",
+    "internal/server/audit_fixes_test.go",
+    "internal/server/handler.go",
+    "internal/server/session_namespace.go",
+    "internal/server/session_namespace_test.go",
+    "internal/upstream/audit_fixes_test.go",
+    "internal/upstream/client.go",
+    "internal/upstream/hint_test.go",
+    "internal/upstream/refresh_singleflight.go",
+    "internal/upstream/remaining_audit_test.go",
+    "internal/upstream/sse.go",
+    "internal/upstream/sse_test.go"
+  ],
+  "full_private_engine_included": false,
+  "apply_note": "Apply in the engine root with git -c core.autocrlf=false apply; canonical LF bytes must match the tested source commitment."
+}

@@ -6,6 +6,7 @@ export interface PortalAccount {
   pool_state?: 'public' | 'pending';
 }
 export interface PortalOverview {
+  owner_id?: string;
   accounts: PortalAccount[]; account_count: number; active_account_count: number;
   balance_units: number; expiring_7d_units: number; today_checkin_units: number;
   grants: {source: string; amount_units: number; remaining_units: number; received_at: number; expires_at: number}[];
@@ -14,6 +15,10 @@ export interface PortalOverview {
   held_units: number; debt_units: number; allowed_models: string[];
   callable_units: number; pending_pool_units: number;
   pool_enabled: boolean;
+}
+export interface PortalWorkspace {
+  me: {id: string; username: string};
+  data: PortalOverview & {owner_id: string};
 }
 export interface PortalMember extends PortalOverview {
   id: string; username: string; enabled: number; created_at: number;
@@ -46,6 +51,8 @@ function validResponse(path: string, method: string, value: unknown) {
   if (!record(value)) return false;
   const route = path.split('?')[0];
   if (method === 'GET') {
+    if (route === 'portal/workspace') return record(value.me) && typeof value.me.id==='string' && !!value.me.id
+      && typeof value.me.username==='string' && overview(value.data) && record(value.data) && value.data.owner_id===value.me.id;
     if (route === 'portal/me') return typeof value.id === 'string' && !!value.id && typeof value.username === 'string';
     if (route === 'portal/overview') return overview(value);
     if (route === 'portal/requests') return whole(value.page) && value.page >= 1 && value.page <= 10000 && whole(value.total)
@@ -56,7 +63,16 @@ function validResponse(path: string, method: string, value: unknown) {
     if (route === 'portal-admin/users') return typeof value.automatic_checkin === 'boolean' && list(value.users,
       row => record(row) && typeof row.id === 'string' && typeof row.username === 'string' && [0, 1].includes(row.enabled as number) && overview(row));
   }
-  if (method === 'POST' && route === 'portal/keys') return whole(value.id) && typeof value.key === 'string' && !!value.key;
+  if (method === 'POST' && route === 'portal/keys') return whole(value.id)
+    && ((typeof value.key === 'string' && !!value.key) || (value.existing === true && value.key === null));
+  if (method === 'GET' && route === 'portal/registration') return typeof value.enabled === 'boolean'
+    && value.invite_required === true && typeof value.device_registered === 'boolean';
+  if (method === 'POST' && route === 'portal/register') return value.registered === true
+    && typeof value.id === 'string' && !!value.id && typeof value.username === 'string';
+  if (route === 'portal-admin/invitations') return Array.isArray(value.items)
+    && value.items.length <= (method === 'POST' ? 20 : 100)
+    && value.items.every(item=>record(item)&&typeof item.id==='string'&&whole(item.expires_at)
+      && (method !== 'POST' || (typeof item.code==='string'&&/^zh-invite-[A-Za-z0-9_-]{32}$/.test(item.code))));
   if (route === 'portal/auth/start') return typeof value.session === 'string' && /^[a-f0-9]{48}$/.test(value.session)
     && typeof value.auth_url === 'string' && whole(value.expires_in) && value.expires_in > 0 && value.expires_in <= 300;
   if (route === 'portal/auth/poll') return ['waiting', 'processing', 'complete', 'expired', 'failed'].includes(value.state as string);
@@ -71,8 +87,9 @@ export async function portalFetch<T>(path: string, options: RequestInit = {}): P
   if (options.signal?.aborted) throw options.signal.reason;
   options.signal?.addEventListener('abort', cancelled, {once: true});
   let timedOut = false;
-  // Only reads have a deadline. Aborting a mutation must never imply rollback.
-  const timer = read ? setTimeout(() => {timedOut = true; controller.abort();}, 15000) : null;
+  // A local deadline bounds UI waiting, never the server-side side effect.
+  // Mutation failures stay uncertain and must be reconciled without replay.
+  const timer = setTimeout(() => {timedOut = true; controller.abort();}, read ? 15000 : 45000);
   try {
     const response = await fetch(`${BASE_PATH}/api/${path}`, {
       ...options, signal: controller.signal, credentials: 'same-origin', cache: 'no-store',
@@ -87,7 +104,8 @@ export async function portalFetch<T>(path: string, options: RequestInit = {}): P
   } catch (err) {
     if (options.signal?.aborted) throw options.signal.reason;
     if (err instanceof PortalError) throw err;
-    if (timedOut) throw new Error('读取超时，请重新读取；没有自动重试。');
+    if (timedOut) throw new Error(read ? '读取超时，请重新读取；没有自动重试。'
+      : '操作等待超时，结果待确认；请先刷新核对，不要重复提交；没有自动重试。');
     throw new Error(read ? '连接或响应数据异常，请重新读取。' : '操作结果待确认，请先刷新核对，不要重复提交；没有自动重试。');
   } finally {
     if (timer !== null) clearTimeout(timer);

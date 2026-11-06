@@ -17,6 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import httpx
+
 from .. import config
 from .filelock import file_lock
 from . import realm as _realm
@@ -81,6 +83,9 @@ def set_account_proxy(filename: str, proxy: str, auth_dir: Path | None = None) -
             raw['proxy'] = proxy
         else:
             raw.pop('proxy', None)
+        # Remove the retired multi-binding field in the same locked edit. A
+        # second unlocked read/write could overwrite a concurrently renewed token.
+        raw.pop('proxy_pool', None)
         _atomic_write_json(path, raw)
     return {'file': filename, 'proxy': proxy}
 
@@ -99,7 +104,7 @@ def _weight_of(raw: dict) -> float:
     """
     try:
         value = float(raw.get('weight') or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     if value != value or value in (float('inf'), float('-inf')) or value < 0:
         return 0.0
@@ -118,7 +123,7 @@ def set_account_weight(filename: str, weight: float,
 
     try:
         value = float(weight)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError('权重必须是数字') from exc
     if value != value or value in (float('inf'), float('-inf')):
         raise ValueError('权重必须是有限数字')
@@ -214,9 +219,16 @@ def list_auth_accounts(auth_dir: Path | None = None) -> list[dict]:
             raw = json.loads(path.read_text(encoding='utf-8'))
         except Exception:
             continue
+        if not isinstance(raw, dict):
+            continue
         acct = raw.get('account', {}) or {}
         auth = raw.get('auth', {}) or {}
-        exp = int(auth.get('expiresAt', 0) or 0)
+        if not isinstance(acct, dict) or not isinstance(auth, dict):
+            continue
+        try:
+            exp = int(auth.get('expiresAt', 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            exp = 0
         token = str(auth.get('accessToken') or '')
 
         # 上游 `Parse` 明确拒绝的情形：accessToken 为空时直接返回
@@ -1551,6 +1563,25 @@ def _mask(v: str) -> str:
     return v[:6] + '*' * max(0, len(v) - 10) + v[-4:] if len(v) > 12 else '******'
 
 
+def _redact_url_credentials(url: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(url)
+        if parts.username is not None or parts.password is not None:
+            return urlunsplit(parts._replace(netloc='***:***@' + parts.netloc.rsplit('@', 1)[-1]))
+        return url
+    except ValueError:
+        return ''  # malformed configuration must never expose embedded credentials
+
+
+def _update_url_credentials(incoming: str, current: str) -> str:
+    if incoming == _redact_url_credentials(current):
+        return current
+    if '***@' in incoming:
+        raise ValueError('修改连接地址时请重新填写凭据；不能把掩码保存为密码')
+    return incoming
+
+
 def load_upstream_config() -> dict:
     """读取 workbuddy2api 的 config.json，敏感字段一律掩码。
 
@@ -1617,7 +1648,8 @@ def load_upstream_config() -> dict:
     up = up if isinstance(up, dict) else {}
     token = str(up.get('token') or '')
     view['upstash'] = {
-        'url': str(up.get('url') or ''),
+        'url': _redact_url_credentials(str(up.get('url') or '')),
+        'has_url_credentials': _redact_url_credentials(str(up.get('url') or '')) != str(up.get('url') or ''),
         'has_token': bool(token),
         'token_masked': _mask(token) if token else '',
     }
@@ -1934,6 +1966,13 @@ def save_upstream_config(patch: dict) -> dict:
             with portalstore.transaction() as conn:
                 if conn.execute('SELECT 1 FROM portal_pool_links LIMIT 1').fetchone():
                     raise ValueError('已有用户账号贡献公共池，请使用总台共享签到；不能重新启用引擎独立签到')
+    # Hold the same path lock as proxy-route edits from the read through replace.
+    # Atomic rename alone prevents torn JSON but cannot prevent lost updates.
+    with file_lock(config.UPSTREAM_CONFIG):
+        return _save_upstream_config_locked(patch)
+
+
+def _save_upstream_config_locked(patch: dict) -> dict:
     path = config.UPSTREAM_CONFIG
     if not path.is_file():
         raise FileNotFoundError(f'未找到上游配置文件 {path}，已取消保存')
@@ -1984,7 +2023,7 @@ def save_upstream_config(patch: dict) -> dict:
             current = {'url': '', 'token': ''}
         else:
             if 'url' in incoming:
-                current['url'] = str(incoming.get('url') or '').strip()
+                current['url'] = _update_url_credentials(str(incoming.get('url') or '').strip(), str(current.get('url') or ''))
             # token 只在传入非空值时替换：前端回显的是掩码，
             # 留空即表示「保持不变」，避免误清空已配置的凭据
             if str(incoming.get('token') or '').strip():
@@ -2050,90 +2089,23 @@ def _is_internal_addr(addr: ipaddress._BaseAddress) -> bool:
                 or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
 
 
+
 def _reject_internal_host(host: str) -> str | None:
-    """判断主机是否指向内网/本机/元数据服务；是则返回拒绝原因，否则 None。
-
-    为什么必须拦：这是个**服务端代发起请求**的接口（SSRF）。它拿用户给的地址
-    去 POST，再把响应片段回显给调用方。若不拦，管理员账号（或被提权到此的
-    攻击者）就能用它探测内网、甚至读取云元数据端点（`169.254.169.254` /
-    `metadata.tencentyun.com` —— 后者常能拿到实例临时凭证）。
-
-    管理员权限不等于「可以随便发请求」：这类探测是典型的**提权后利用**步骤，
-    纵深防御应当在这里就断掉。
-
-    注意允许自定义 Redis 服务商（如自建 Upstash 兼容服务）：所以不是白名单
-    域名，而是**排除内网与元数据**——公网主机名/IP 一律放行。
-
-    实现要点（逐条都对应一个实测可绕过的写法，别简化回去）：
-
-      1. **先剥 userinfo**：`https://evil@127.0.0.1` 里真正被连接的是 `127.0.0.1`
-         （httpx 会把 `evil@` 当认证信息），而按字符串看它不是 IP 字面量 ——
-         不剥就会放行。
-      2. **`localhost` 与 `*.localhost` 必须显式拦**：它不是 IP 字面量，
-         但解析到回环（RFC 6761 规定 localhost 恒为回环）。
-      3. **域名要真的解析再判断**：`127.0.0.1.nip.io` 这类通配 DNS 指向内网，
-         纯字符串判断看不出来。
-      4. **解析失败按拒绝处理**（fail-closed）：拿不准就不要发请求。
-         `test_upstash` 本来就是要探测连通性，拒掉一个解析不出的域名不损失功能。
-
-    已知取舍：
-
-      * 解析与请求之间理论上有 TOCTOU 窗口（DNS 可返回不同结果）。这里不做
-        「解析后固定 IP 再连接」——那需要自己管连接池，复杂度远高于收益；
-        攻击者要利用它得先控制被解析域名的 DNS，而那已超出本接口的威胁边界。
-      * **自建在私网里的 Upstash 兼容服务会被拒**。这是有意的：本接口的职责
-        是探测公网 Redis 服务，放行私网地址就等于给出一个内网探针。原实现
-        本来就拦私网 IP 字面量（只是漏了「域名解析到私网」这条），所以这不算
-        能力回退，只是把同一个口径补齐。确有私网需求时应改用部署侧的网络策略，
-        而不是放开这里。
-      * DNS 查询失败时**放行**（fail-open），而不是拒绝。这一点与直觉相反，
-        但在这里是对的：解析不出来的域名，紧接着的 httpx 请求会**用同一个解析器**
-        再解析一次、同样失败 —— 也就是说根本连不上，放行不产生 SSRF 风险。
-        若改成 fail-closed，代价是「DNS 一时抽风 → 连通性测试报无法解析」，
-        以及**测试环境/离线环境里任何域名都测不了**（我们的假主机名就因此挂掉），
-        换来的是一个不存在攻击面。已知取舍里 DNS rebinding 的窗口本就不在本
-        接口的威胁边界内（需要攻击者控制域名解析）。
-    """
-    # 剥 userinfo（取最后一个 @ 之后的部分）与端口；去掉 IPv6 字面量的方括号
-    h = (host or '').strip().rsplit('@', 1)[-1].strip()
-    h = h.strip('[]').lower()
-    if not h:
-        return '地址为空'
-    # 端口：IPv6 已去括号，剩下的冒号只可能是「host:port」
+    """Legacy precheck, fail closed. REST also pins DNS at actual TCP connect."""
+    h = (host or '').strip().rsplit('@', 1)[-1].strip('[]').lower()
     if h.count(':') == 1:
         h = h.split(':', 1)[0]
-    if not h:
-        return '地址为空'
-    if h in _BLOCKED_HOSTNAMES or h.endswith('.internal') or h.endswith('.local'):
-        return f'{host} 是不允许探测的内部地址'
-    if h == 'localhost' or h.endswith('.localhost'):
-        return f'{host} 是不允许探测的内部地址'
-
-    # 明文 IP：直接判段
+    if not h or h in _BLOCKED_HOSTNAMES or h == 'localhost' or h.endswith(('.internal','.local','.localhost')):
+        return '不允许探测内部地址'
     try:
-        addr = ipaddress.ip_address(h)
+        addresses = [ipaddress.ip_address(h)]
     except ValueError:
-        addr = None
-    if addr is not None:
-        if _is_internal_addr(addr):
-            return f'{host} 是不允许探测的内部地址'
-        return None
-
-    # 域名：解析后逐个地址判断（任一落在内网即拒）。
-    #
-    # 解析失败 → 放行（见 docstring 的说明：解析不出的域名，接下来那次请求也会
-    # 解析失败，连不上就不存在 SSRF）。这里只关心「解析出来的地址是否内网」。
-    try:
-        infos = socket.getaddrinfo(h, None)
-    except Exception:  # noqa: BLE001
-        return None
-    for info in infos:
         try:
-            resolved = ipaddress.ip_address(info[4][0])
-        except (ValueError, IndexError):
-            continue
-        if _is_internal_addr(resolved):
-            return f'{host} 解析到内部地址 {resolved}，不允许探测'
+            addresses = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(h, None)]
+        except (OSError, ValueError, IndexError):
+            return '无法解析并核实探测地址'
+    if not addresses or any(_is_internal_addr(a) or not a.is_global for a in addresses):
+        return '不允许探测内部或非公网地址'
     return None
 
 
@@ -2193,6 +2165,8 @@ async def _resp_read_reply(reader: asyncio.StreamReader) -> tuple[str, str]:
         size = int(body or -1)
         if size < 0:
             return kind, ''
+        if size > 65536:
+            raise ValueError('Redis 探测响应超过 64 KiB 上限')
         data = await reader.readexactly(size + 2)
         return kind, data[:-2].decode('utf-8', 'replace')
     if kind == '*':                               # 数组：这里只关心有没有报错
@@ -2244,7 +2218,7 @@ async def _redis_ping(url: str, timeout: float = 5.0) -> tuple[bool, str]:
             return False, f'Redis 返回错误：{body[:80]}'
         if kind == '+' and body.strip().upper() == 'PONG':
             return True, '连接正常（PONG）'
-        return True, f'已连通，响应：{body[:60]}'
+        return False, '未收到有效 PONG，不能证明 Redis 可用'
     except asyncio.TimeoutError:
         return False, '无法连接：等待响应超时'
     except Exception as exc:  # noqa: BLE001
@@ -2274,9 +2248,11 @@ async def test_upstash(url: str, token: str | None = None) -> tuple[bool, str]:
     if not base:
         return False, '请先填写 Upstash 地址'
     host = base.split('://', 1)[-1].split('/', 1)[0]
-    blocked = _reject_internal_host(host)
-    if blocked:
-        return False, blocked
+    from . import pinnedprobe
+    from urllib.parse import urlsplit
+    target = urlsplit(base)
+    if target.scheme != 'https' or target.username or target.password:
+        return False, 'REST 探测只支持无内嵌认证的 HTTPS 公网地址'
 
     if not token:
         # 用**已保存**的 Token 时，地址也必须是已保存的那一个：只允许测保存过的
@@ -2297,11 +2273,12 @@ async def test_upstash(url: str, token: str | None = None) -> tuple[bool, str]:
         return False, '缺少 Upstash Token'
 
     try:
-        async with config.http_client(10, connect=5) as client:
-            resp = await client.post(
-                f'{base}/ping',
-                headers={'Authorization': f'Bearer {token}'},
-            )
+        from ..upstreambody import BoundedTransport
+        async with asyncio.timeout(10):
+            addresses = await pinnedprobe.resolve_public(target.hostname, target.port or 443)
+            transport = BoundedTransport(pinnedprobe.PinnedTransport(target.hostname, target.port or 443, addresses), 64 * 1024)
+            async with httpx.AsyncClient(transport=transport, timeout=5, trust_env=False, follow_redirects=False) as client:
+                resp = await client.post(f'{base}/ping', headers={'Authorization': f'Bearer {token}'})
         if resp.status_code == 401:
             return False, 'Token 无效（401）'
         if resp.status_code >= 400:
@@ -2309,6 +2286,6 @@ async def test_upstash(url: str, token: str | None = None) -> tuple[bool, str]:
         body = resp.text.strip()
         if 'PONG' in body.upper():
             return True, '连接正常（PONG）'
-        return True, f'已连通，响应：{body[:60]}'
+        return False, '未收到有效 PONG，不能证明 Redis 可用'
     except Exception as exc:  # noqa: BLE001
         return False, f'无法连接：{_err_text(exc)}'

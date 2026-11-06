@@ -2,7 +2,9 @@
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from zhihui_harness.isolation import protected_reason
 
@@ -55,6 +57,85 @@ class PathBoundaryTest(unittest.TestCase):
             root = Path(value)
             (root / 'escape').symlink_to('/etc', target_is_directory=True)
             self.assertIsNotNone(protected_reason(root / 'escape/passwd', root))
+
+
+class NetworkEvidenceTest(unittest.TestCase):
+    def _state(self):
+        return {'net_attempts': [], 'net_attempt_count': 0,
+                'net_blocked': 0, 'net_blocked_samples': [],
+                'started_at': time.time(), 'installed': True,
+                'iso_root': 'synthetic', 'run_id': 'synthetic',
+                'net_policy': 'block', 'env_problems': [],
+                'protected_writes': [], 'outside_writes': [],
+                'outside_write_count': 0}
+
+    def test_blocked_host_is_recorded_after_loopback_sample_limit(self):
+        import socket
+        from zhihui_harness import pytest_plugin as plugin
+        with (mock.patch.dict(plugin._STATE, self._state(), clear=True),
+              mock.patch.object(plugin, '_PATCHES', []),
+              mock.patch.object(socket, 'getaddrinfo', return_value=[]) as resolve,
+              mock.patch.dict(os.environ, {'PYTEST_CURRENT_TEST': 'synthetic-case (call)'})):
+            try:
+                plugin._install_net_guard('block')
+                for _ in range(plugin._MAX_SAMPLES + 5):
+                    socket.getaddrinfo('127.0.0.1', 1)
+                with self.assertRaises(plugin.NetworkBlocked):
+                    socket.getaddrinfo('blocked.invalid', 1)
+                self.assertEqual(resolve.call_count, plugin._MAX_SAMPLES + 5)
+                self.assertEqual(plugin._STATE['net_attempt_count'], plugin._MAX_SAMPLES + 6)
+                self.assertEqual(len(plugin._STATE['net_attempts']), plugin._MAX_SAMPLES)
+                self.assertEqual(plugin._STATE['net_blocked'], 1)
+                blocked = plugin._STATE['net_blocked_samples']
+                self.assertEqual(len(blocked), 1)
+                self.assertEqual(blocked[0]['host'], 'blocked.invalid')
+                self.assertEqual(blocked[0]['test'], 'synthetic-case (call)')
+            finally:
+                plugin.pytest_unconfigure(None)
+
+    def test_numeric_address_parsing_cannot_make_an_external_connection(self):
+        import socket
+        from zhihui_harness import pytest_plugin as plugin
+        with (mock.patch.dict(plugin._STATE,self._state(),clear=True),mock.patch.object(plugin,'_PATCHES',[]),
+              mock.patch.object(socket,'getaddrinfo',return_value=[]) as parse,
+              mock.patch.object(socket.socket,'connect') as connect):
+            try:
+                plugin._install_net_guard('block')
+                socket.getaddrinfo('169.254.169.254',443)
+                self.assertEqual(parse.call_count,1)
+                self.assertEqual(parse.call_args.kwargs['flags']&(socket.AI_NUMERICHOST|socket.AI_NUMERICSERV),socket.AI_NUMERICHOST|socket.AI_NUMERICSERV)
+                with socket.socket() as client:
+                    with self.assertRaises(plugin.NetworkBlocked):client.connect(('169.254.169.254',443))
+                with self.assertRaises(plugin.NetworkBlocked):socket.create_connection(('203.0.113.4',443))
+                with self.assertRaises(plugin.NetworkBlocked):socket.getaddrinfo('metadata.invalid',443)
+                socket.getaddrinfo('metadata.tencentyun.com',443)
+                self.assertEqual(parse.call_args.args[:2],('169.254.169.254',443))
+                self.assertEqual(plugin._STATE['dns_fixture_lookups'],['metadata.tencentyun.com'])
+                connect.assert_not_called()
+            finally:plugin.pytest_unconfigure(None)
+
+    def test_final_stats_include_observation_of_stats_fetch_and_are_snapshotted(self):
+        from zhihui_harness import pytest_plugin as plugin
+        state = self._state()
+        state['net_attempts'] = [{'host': '127.0.0.1'}]
+        state['net_attempt_count'] = 1
+
+        def fake_stats():
+            plugin._STATE['net_attempts'].append({'host': '127.0.0.1'})
+            plugin._STATE['net_attempt_count'] += 1
+            return {'total': 0}
+
+        with (mock.patch.dict(plugin._STATE, state, clear=True),
+              mock.patch.object(plugin, '_fake_provider_stats', side_effect=fake_stats),
+              mock.patch.dict(os.environ, {'ZH_ISO_REPORT': ''})):
+            plugin.pytest_sessionfinish(None, 0)
+            network = plugin._STATE['final_report']['network']
+            self.assertEqual(network['attempt_count'], 2)
+            self.assertEqual(len(network['attempts']), 2)
+            self.assertEqual(network['sample_count'], 2)
+            self.assertFalse(network['samples_truncated'])
+            plugin._STATE['net_attempts'].append({'host': 'later.invalid'})
+            self.assertEqual(len(network['attempts']), 2)
 
 
 if __name__ == '__main__':

@@ -70,7 +70,8 @@ class PlatformAuthTest(unittest.TestCase):
         self.app = app
         self.client = TestClient(app)
         for obj, attr, kwargs in [
-            (accounts, '_group', {'return_value': {'id': 1}}),
+            (accounts, '_group', {'return_value': {'id': 1, 'name': 'synthetic',
+                'auth_dir': str(Path(self.tmp.name) / 'auths')}}),
             (accounts.tencent, 'start_login', {'new': mock.AsyncMock(return_value={
                 'state': '', 'realm': 'cn', 'authUrl': 'https://copilot.tencent.com/'})}),
             (security, 'audit', {'return_value': None}),
