@@ -1,0 +1,14 @@
+{
+  "schema": "zhihui.production-verification",
+  "version": 1,
+  "product_version": "0.0.8",
+  "release_id": "v0.0.8+stable.20261106.1",
+  "previous_release": "v0.0.7+stable.20261106.1",
+  "production_accepted": false,
+  "traffic_switched": false,
+  "state": "awaiting-exact-build-tests-signature-and-controlled-cutover",
+  "engine_binary_changed": false,
+  "business_logic_changed": false,
+  "business_database_restored": false,
+  "interpretation": "This candidate record is not production acceptance. The final public receipt is populated from actual cutover and smoke evidence."
+}

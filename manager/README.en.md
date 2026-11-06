@@ -4,7 +4,7 @@
 
 **One workspace, three clearly separated paths.**
 
-![Version](https://img.shields.io/badge/version-0.0.7-blue)
+![Version](https://img.shields.io/badge/version-0.0.8-blue)
 ![Status](https://img.shields.io/badge/release-signed_%26_controlled-6554c0)
 ![Stack](https://img.shields.io/badge/FastAPI-Next.js-009688)
 
