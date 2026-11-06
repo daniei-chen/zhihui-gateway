@@ -20,8 +20,10 @@ admin_router = APIRouter(prefix='/api/portal-admin', tags=['user-portal-admin'])
 COOKIE = 'zh-user-portal'
 _login_active = 0
 _PORTAL_IP_FAILS: dict[str, list] = {}
+_PORTAL_USER_FAILS: dict[tuple[str, str], list] = {}
 _PORTAL_IP_LOCK = __import__('threading').Lock()
 _PORTAL_IP_MAX = 10
+_PORTAL_USER_MAX = 5
 _PORTAL_IP_WINDOW = 600
 
 
@@ -51,6 +53,30 @@ def _portal_ip_record(ip: str) -> None:
 def _portal_ip_clear(ip: str) -> None:
     with _PORTAL_IP_LOCK:
         _PORTAL_IP_FAILS.pop(ip, None)
+
+
+def _portal_user_blocked(ip: str, username: str) -> bool:
+    import time
+    key = (ip, username.strip().lower())
+    with _PORTAL_IP_LOCK:
+        count, first = _PORTAL_USER_FAILS.get(key, [0, 0.0])
+        return count >= _PORTAL_USER_MAX and time.time() - first < _PORTAL_IP_WINDOW
+
+
+def _portal_user_record(ip: str, username: str) -> None:
+    import time
+    key = (ip, username.strip().lower())
+    with _PORTAL_IP_LOCK:
+        now = time.time()
+        count, first = _PORTAL_USER_FAILS.get(key, [0, now])
+        if now - first >= _PORTAL_IP_WINDOW:
+            count, first = 0, now
+        _PORTAL_USER_FAILS[key] = [count + 1, first]
+
+
+def _portal_user_clear(ip: str, username: str) -> None:
+    with _PORTAL_IP_LOCK:
+        _PORTAL_USER_FAILS.pop((ip, username.strip().lower()), None)
 
 
 def same_origin(request):
@@ -109,7 +135,10 @@ async def login(request: Request, body: dict = Body(...)):
             with store.transaction() as conn:
                 row = conn.execute('SELECT * FROM portal_users WHERE username=?', (username.strip(),)).fetchone()
                 user = dict(row) if row else None
-            if user and user['blocked_until'] > store.now():
+            if (user and user['blocked_until'] > store.now()
+                    and _portal_user_blocked(ip, username)):
+                # 账号级锁定只对“同一来源 IP 的连续失败”生效，防止他人用 5 次错密码
+                # 永久锁死受害者账号；受害者从新 IP 仍可用正确密码登录并清锁。
                 raise HTTPException(status_code=429, detail='登录尝试过多，请稍后重试')
             if not user:
                 security.dummy_verify(password)
@@ -122,6 +151,7 @@ async def login(request: Request, body: dict = Body(...)):
                         conn.execute('UPDATE portal_users SET failed_logins=?,blocked_until=? WHERE id=?',
                                      (failures, store.now() + 600 if failures >= 5 else 0, user['id']))
                     _portal_ip_record(ip)
+                    _portal_user_record(ip, username)
                     rejected = True
                 else:
                     conn.execute('UPDATE portal_users SET failed_logins=0,blocked_until=0 WHERE id=?', (user['id'],))
@@ -132,6 +162,7 @@ async def login(request: Request, body: dict = Body(...)):
     finally:
         _login_active -= 1
     _portal_ip_clear(ip)
+    _portal_user_clear(ip, username)
     # Adopt labels/default selection without issuing or rotating a credential.
     try:await joined_thread(portalkeys.adopt_or_create,user)
     except HTTPException as exc:
