@@ -874,7 +874,15 @@ class _StreamTranslator:
                 if value != tool[name]:
                     raise ToolStreamError('tool identity changed after arguments started')
                 continue  # repeated complete metadata does not create another tool
-            merged = tool[name] + value
+            current = tool[name]
+            if value == current:
+                continue  # 上游重复完整 id/name，不拼成 call_1call_1 / BashBash
+            if current and value.startswith(current) and len(value) > len(current):
+                merged = value  # 先分片、后补全：用补全值替换
+            elif current.endswith(value):
+                merged = current  # 重复尾部片段
+            else:
+                merged = current + value
             if len(merged.encode('utf-8')) > MAX_TOOL_METADATA_BYTES:
                 raise ToolStreamError('tool metadata too large')
             tool[name] = merged

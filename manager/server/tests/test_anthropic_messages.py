@@ -408,6 +408,24 @@ class StreamTranslatorTest(unittest.TestCase):
         self.assertEqual(msg_delta[1]['delta']['stop_reason'], 'tool_use')
 
 
+    def test_duplicate_tool_metadata_is_not_concatenated(self) -> None:
+        """上游重复完整 id/name 时不能拼成 call_1call_1 / BashBash。"""
+        t = _StreamTranslator('m')
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'id': 'call_1', 'function': {'name': 'Bash'}},
+        ]}}]})
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'id': 'call_1', 'function': {'name': 'Bash'}},
+        ]}}]})
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'function': {'arguments': '{"cmd":"ls"}'}},
+        ]}}]})
+        events = _parse(t.finish('tool_calls'))
+        start = next(e for e in events if e[0] == 'content_block_start')
+        self.assertEqual(start[1]['content_block']['id'], 'call_1')
+        self.assertEqual(start[1]['content_block']['name'], 'Bash')
+
+
 class StreamBufferBoundTest(unittest.TestCase):
     """流式解析缓冲必须有上限。
 
