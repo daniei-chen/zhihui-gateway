@@ -2,8 +2,8 @@
 
 <a href="https://zhihui.kaogong.art/">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.7.svg" />
-    <img src="docs/images/readme/cover-v0.0.7.svg" width="100%" alt="智汇网关 0.0.7 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.8.svg" />
+    <img src="docs/images/readme/cover-v0.0.8.svg" width="100%" alt="智汇网关 0.0.8 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -14,29 +14,30 @@
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="docs/UPGRADE-20261106.md"><img src="docs/images/readme/button-release-v0.0.7.svg" width="166" height="44" alt="查看 0.0.7 增补构建、验收与上线状态" /></a>
+<a href="docs/RELEASE-0.0.8.md"><img src="docs/images/readme/button-release-v0.0.8.svg" width="166" height="44" alt="查看 0.0.8 增补构建、验收与上线状态" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#007--稳定合并版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#008--稳定合并版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 0.0.7 · 稳定合并版
+## 0.0.8 · 稳定合并版
 
 把已验证修复合为一个版本：客户端更兼容，页面少做重复工作，失败与恢复都有边界。
 
-**本次增补构建：`v0.0.7+stable.20261106.1`。** 合并外部审计、此前 25 项修复、默认单密钥与邀请注册；补齐配对恢复、回执冲突保护、身份一致性与页面查询优化。[完整变更与验收边界](docs/UPGRADE-20261106.md)。源码、测试结果和现网部署身份分别留证，公开源码更新不等于已切换生产；发布状态以该构建的签名回执与 GitHub Release 为准。
+**本次构建：`v0.0.8+stable.20261106.1`。** 本轮产品编号统一为 0.0.8，继承此前完整审计修复、默认单密钥与邀请注册、配对恢复、回执冲突保护、身份一致性与页面查询优化。模型处理、钱包计费和已验收的引擎二进制保持同一实现。[变更与验收边界](docs/RELEASE-0.0.8.md)。
 
-**现网验收 · 2026-11-06：** 已受控切换此构建，用户确认账号页恢复。三平台账号、状态、分组及积分缓存 12 项读取通过，统计 9 项读取通过；Codex Chat / Responses、Claude Messages 与工具结果保真 4 项模型测试通过。维护时返回带中文说明、预计时长和 `Retry-After` 的 JSON 503。测试样本不代表未来零故障或所有长上下文的延迟保证。
+**构建与现网分别验收。** 新版本需要重新生成前端、通过完整 Linux 门禁并签署制品；生产状态由可信发布器与真实验收回执确认。历史版本、供应商未知费用和原始错误记录保持可追溯，不能用改号替代发布。
 
-<a href="docs/RELEASE-0.0.7.md">
+
+<a href="docs/RELEASE-0.0.8.md">
   <picture>
-    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.7.svg" />
-    <img src="docs/images/readme/release-v0.0.7.svg" width="100%" alt="0.0.7：Codex、Claude、DSH 十一条规则；完整门禁、来源绑定与账本保护。验收以具体构建的签名回执为准。" />
+    <source media="(max-width: 640px)" srcset="docs/images/readme/release-mobile-v0.0.8.svg" />
+    <img src="docs/images/readme/release-v0.0.8.svg" width="100%" alt="0.0.8：Codex、Claude、DSH 十一条规则；完整门禁、来源绑定与账本保护。验收以具体构建的签名回执为准。" />
   </picture>
 </a>
 
@@ -48,7 +49,7 @@
 
 **让页面更轻，让恢复更稳。** 按需查询过期积分、失败退避、复用未变对象；跨语言续期单飞与内核锁；日志先归档校验再删除，未决和不可变证据保留。延续既有内部密钥轮换、取消关闭和双账本修复，代码回退不恢复旧账本；不新增售卖、费用运营、媒体或高级有状态 Responses。
 
-[发布说明与边界](docs/RELEASE-0.0.7.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.7/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.7)
+[发布说明与边界](docs/RELEASE-0.0.8.md) · [完整更新日志](CHANGELOG.md) · [机器可读验收](ops/workbuddy-stability-0.0.8/production-verification.json) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v0.0.8)
 
 > [!NOTE]
 > 测试数量必须对应具体构建，旧版或草稿 PR 的通过回执不能替代本次门禁。9 项原冻结跳过保留，未降低门槛。合成夹具不冒充所有客户端版本或供应商推理基准；真实断电、长期 SLO、国际账号真实推理与完整新主机容灾仍未验证。生产验收窗口和签名制品身份单独留证。
@@ -174,7 +175,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](src/three-platform/web/) · [Manager](manager/server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.7 验收](docs/RELEASE-0.0.7.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [0.0.8 验收](docs/RELEASE-0.0.8.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 
