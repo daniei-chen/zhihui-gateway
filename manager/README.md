@@ -4,7 +4,7 @@
 
 **一个工作台，三条清晰的路径。**
 
-![Version](https://img.shields.io/badge/version-0.0.9-blue)
+![Version](https://img.shields.io/badge/version-0.0.10-blue)
 ![Status](https://img.shields.io/badge/release-signed_%26_controlled-6554c0)
 ![Stack](https://img.shields.io/badge/FastAPI-Next.js-009688)
 
@@ -21,7 +21,7 @@
 
 ### 本地待验收候选：单默认密钥与邀请注册
 
-0.0.9 为 2026-11-06 生产事件后的稳定性补丁；是否切换以受控发布回执为准，不以本文替代上线批准。
+0.0.9 / 0.0.10 为 2026-11-06 生产事件后的两轮受限稳定性补丁；是否切换以受控发布回执为准，不以本文替代上线批准。
 
 - 首页分别提供“用户登录”和“管理员登录”；用户登录页支持邀请码注册。
 - 工作台沿用一个现有默认密钥，不提供创建多个密钥。首次没有密钥时可启用一次；已有密钥的明文不可重读，也不会因此自动轮换。当前密钥标签与统计名称使用所属用户名，历史用量和账本不改写。
@@ -33,6 +33,19 @@
 Manager 提供账号、模型、密钥、日志与管理界面，WorkBuddy 引擎负责账号池与上游请求。Qoder / Trae 保持既有独立适配与权限边界。
 
 这是带本地适配的维护分支，不是“上游一行未改”的纯面板。源码、许可证、测试和构建身份随候选保留；历史安装指南仅作组件参考，不能代替当前受控发布合同。
+
+## v0.0.10 重点
+
+| 问题 | 本版本处理 |
+|---|---|
+| Anthropic 流式工具重复 id/name（call_1call_1 / BashBash） | 连续重复片段去重，单字符分片保持拼接语义（ZG-01） |
+| 账号锁定被第三方滥用 | 锁定维度改为 来源 IP+用户名（ZP-001 收口） |
+| rejected 终态占用 portal 钱包 | 挂起占用自动释放（`WB_PORTAL_AUTO_CLOSE_REJECTED`，默认关闭），未知成本另记不计 0（ZM-002 部分） |
+| 控制台更新日志缺 0.0.9 条目 | `/api/system/changelog` 改读发布树 Manager 日志，版本列表完整呈现 |
+| 限额密钥被一次中断锁死 15 分钟 | 并发/预算闸门 1→8（`WB_KEY_CONCURRENCY_QUOTA` / `WB_KEY_BUDGET_PENDING_QUOTA`） |
+| 卡死请求长时间占用并发槽 | `WB_UPSTREAM_TIMEOUT` 600s→300s；MemoryHigh 1 GiB→1.5 GiB；swappiness 10 |
+
+0.0.9 重点（流式缓冲 ZE-01/02、realm 裁剪 ZG-02、count_tokens 并发豁免、登录失败限速、audit_logs 补写）见 [0.0.9 说明](docs/RELEASE-0.0.9.md)；本版详见 [0.0.10 说明](docs/RELEASE-0.0.10.md)。
 
 ## v0.0.9 重点
 
