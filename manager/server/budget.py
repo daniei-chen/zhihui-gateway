@@ -32,10 +32,15 @@ CREATE TABLE IF NOT EXISTS budget_adjustments (
 '''
 
 class BudgetRejected(Exception):
-    def __init__(self, message, code='budget_unavailable', *, status=429):
+    def __init__(self, message, code='budget_unavailable', *, status=429, retry_after=None):
         super().__init__(message)
         self.code = code
         self.status = status
+        # 0.1.0 / P-4：可选的退避提示（秒）。None = 与历史行为完全一致。
+        # 注意：响应头 Retry-After 在 nginx 反代链路上透传不稳
+        # （routers/gateway.py 里已有同样结论），因此异常处理器必须**同时**
+        # 把它写进错误体字段 retry_after_seconds，那是客户端能可靠读到的通道。
+        self.retry_after = retry_after
 
 #: U27（2026-10-28）：`initialize()` 的**进程级一次性标志**。
 #:
@@ -173,6 +178,14 @@ def prepare(key, body, *, encoded_body=None):
         if q or qc:
             # Concurrency ages out; uncertain spending does not. Already charged
             # tokens are in used_tokens and must not be held a second time.
+            # 0.1.0 撤回 P-2：门禁要求 unknown 必须长期 fail-closed。
+            # test_legacy_unknown_without_estimate_fails_closed_for_total_quota 与
+            # test_old_unknown_credit_remains_unconfirmed_for_lifetime_credit_cap
+            # 明确断言：存在未核对的 unknown 时，准入必须抛
+            # total_token_unconfirmed / credit_quota_unconfirmed 拒绝。
+            # 加「最近 15 分钟」时间窗会让未核对的历史成本被放行 —— 那是安全问题，
+            # 不是自愈。正确解法是把 unknown 核对掉（portal-admin 已有
+            # GET/POST /wallet-pending 接口），而不是自动放行。
             outstanding_total = db.query_one(
                 'SELECT COALESCE(SUM(MAX(0,reserved_tokens-charged_tokens)),0) AS held,'
                 "COALESCE(SUM(CASE WHEN state='unknown' AND reserved_tokens<=0 "

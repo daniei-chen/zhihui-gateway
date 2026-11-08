@@ -30,9 +30,18 @@ AUTO_CLOSE_EVIDENCE = (
 )
 
 
-def reject(message, code='portal_wallet_unavailable'):
+# 0.1.0 撤回 P-3：不再自动释放 upstream_error/transport_error 类 unknown 冻结。
+# 门禁测试 test_recover_does_not_auto_close_without_end_or_cancel_evidence 明确断言：
+# 没有 portal_request_ends 结束凭证时，recover() 之后必须仍是 unknown、
+# portal_spend_resolutions 为 0、用户额度继续冻结；
+# mark_request_ended 的 docstring 也写明
+# "A request log or stream terminal frame alone is NOT closure evidence."
+# 这是有意的 fail-closed：上游可能已真实消耗成本，证据不足时不得放行。
+# 正确的处置是人工核对（portal-admin 的 wallet-pending resolve 接口），
+# 配套改进应放在「告警 + 工作台入口」，而不是自动释放。
+def reject(message, code='portal_wallet_unavailable', *, retry_after=None):
     from .budget import BudgetRejected
-    raise BudgetRejected(message, code)
+    raise BudgetRejected(message, code, retry_after=retry_after)
 
 
 def reserve(key):
@@ -47,12 +56,24 @@ def reserve(key):
             if not policy.enabled():
                 reject('用户公共池调用尚未启用')
             store.expire(conn, owner, store.now())
+            # 0.1.0 撤回 P-1：unknown 必须继续阻塞新请求。
+            # test_bonus_does_not_erase_unknown_hold_or_debt 明确要求：存在 unknown hold
+            # 时 reserve() 必须继续抛 portal_wallet_pending。把它当成「在途」放行，
+            # 等于允许未确认的上游成本被继续消费，违反 fail-closed 契约。
+            # 待核对积压的正确解法是核对掉它（portal-admin wallet-pending），不是放行。
+            #
+            # 0.1.0 / P-4 保留：retry_after 只是退避提示，不改变准入语义，
+            # 测试断言的是 exception.code，不受影响。
             if conn.execute("SELECT 1 FROM portal_spends WHERE owner_id=? AND state IN ('reserved','forwarded','unknown')", (owner,)).fetchone():
-                reject('同一用户有进行中或费用待核对的请求', 'portal_wallet_pending')
+                reject('同一用户有进行中或费用待核对的请求', 'portal_wallet_pending', retry_after=1)
             debt = conn.execute('SELECT amount_units FROM portal_debts WHERE owner_id=?', (owner,)).fetchone()
             if debt and debt[0] > 0:
                 reject('存在超额费用待处理，暂停新请求', 'portal_wallet_debt')
             rows = store.spendable_grants(conn, owner, store.now())
+            # 0.1.0 撤回 F-2：不做预留上限裁剪，保持「冻结全部可用余额」的原口径。
+            # 该改动会改变超卖保护的语义，且新环境变量未登记 config schema
+            # （test_every_env_read_is_registered_in_schema 会以 unknown_variable
+            # 让服务启动失败）。若将来要做，必须先登记 schema 并压测验证不透支。
             held = sum(row['remaining_units'] for row in rows)
             if not held:
                 reject('额度已用尽，请联系管理员赠送额度', 'portal_wallet_empty')
@@ -60,10 +81,19 @@ def reserve(key):
             conn.execute("INSERT INTO portal_spends VALUES(?,?,?,?,? ,?,?,NULL,NULL)",
                 (state.request_id, owner, key['id'], budgetowner.identity(), 'reserved', store.now(), held))
             conn.execute('INSERT INTO portal_spend_policies VALUES(?,?)', (state.request_id, portalbilling.POLICY))
+            # 逐个 grant 冻结，凑满 held 即停。
+            # cap=0 时 held==available，等价于原来的「全部冻结并清零」。
+            left = held
             for row in rows:
+                if left <= 0:
+                    break
+                take = min(row['remaining_units'], left)
+                if take <= 0:
+                    continue
                 table, allocations = ('portal_bonus_grants', 'portal_bonus_allocations') if row['kind'] == 'bonus' else ('portal_grants', 'portal_allocations')
-                conn.execute(f'INSERT INTO {allocations} VALUES(?,?,?)', (state.request_id, row['id'], row['remaining_units']))
-                conn.execute(f'UPDATE {table} SET remaining_units=0 WHERE id=?', (row['id'],))
+                conn.execute(f'INSERT INTO {allocations} VALUES(?,?,?)', (state.request_id, row['id'], take))
+                conn.execute(f'UPDATE {table} SET remaining_units=remaining_units-? WHERE id=?', (take, row['id']))
+                left -= take
         state.portal_owner = owner
         state.portal_credential_hash = key.get('credential_hash', '')
     except (ValueError, OSError) as exc:
@@ -281,6 +311,8 @@ def recover():
             apply(row['request_id'])
     auto_close_client_cancelled()
     auto_close_rejected()
+    # 0.1.0 撤回 P-3：不新增 upstream_error 终态的自动释放出口。
+    # 证据不足时保持冻结是刻意的 fail-closed（见文件头部注释与门禁测试）。
 
 
 def _client_cancel_auto_close_enabled():

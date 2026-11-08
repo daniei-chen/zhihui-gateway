@@ -2112,6 +2112,18 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
         # U21：预算拒绝的原因本身就是稳定码（budget_pending / insufficient_quota /
         # credit_quota_exhausted / ledger_backpressure …），直接沿用。
         observability.mark_error(getattr(exc, 'code', None))
+        # 0.1.0 / P-4：带退避提示的拒绝走错误体通道。
+        # 响应头 Retry-After 在 nginx 反代链路上透传不稳（本文件 118-119 行已有
+        # 同样结论），所以以 body 里的 retry_after_seconds 为准，头部只做双通道补充。
+        _retry_after = getattr(exc, 'retry_after', None)
+        if _retry_after:
+            _err_type = 'server_error' if exc.status >= 500 else 'insufficient_quota'
+            _body = {'error': {'message': str(exc), 'type': _err_type,
+                               'code': exc.code,
+                               'retry_after_seconds': int(_retry_after)}}
+            _resp = JSONResponse(_body, status_code=exc.status)
+            _resp.headers['Retry-After'] = str(int(_retry_after))
+            return _resp
         return _oai_error(str(exc),exc.status,'server_error' if exc.status >= 500 else 'insufficient_quota',exc.code)
     if state and getattr(state, 'performance', None):
         state.performance.size('forward_bytes', len(wire))

@@ -216,6 +216,9 @@ def initialize(conn: sqlite3.Connection | None = None) -> bool:
     for statement in DDL:
         db.execute(statement)
     _SCHEMA_STATE['key'] = key
+    # 0.1.0 / T-1：每进程启动后机会性清理一次远超期租约（默认保留 7 天）。
+    # 只在启动时跑，开销可忽略；失败静默，不影响启动。
+    purge_expired()
     return True
 
 
@@ -414,6 +417,37 @@ def release(instance_id: str | None = None, fence: int | None = None, *,
             sql += ' AND fence=?'
             args.append(int(fence))
         return conn.execute(sql, tuple(args)).rowcount == 1
+
+
+def purge_expired(now: int | None = None, *, keep_seconds: int = 7 * 86400,
+                  limit: int = 500) -> int:
+    """删除「远超期」的租约记录，控制表膨胀。返回删除行数。
+
+    0.1.0 / T-1：现网积累 **188 条**过期租约（最老 `lease_until=0`、`updated_at`
+    停在 2026-10-26），既不影响单写者判定（判据只看 `lease_until > now`），也从未
+    被清理，表只增不减——与 `manager.db` 的膨胀同源。
+
+    安全边界（宁可少删）：
+      - 只删 `lease_until <= now - keep_seconds`，即过期超过 N 天（默认 7 天）；
+      - 绝不删 `lease_until > now` 的行（仍活跃）；
+      - 单次上限 `limit` 行，避免长事务；
+      - 任何异常都返回 0，清理绝不影响租约主流程。
+    """
+    try:
+        from . import db
+        stamp = _now(now)
+        horizon = stamp - max(86400, int(keep_seconds))
+        bound = max(0, int(limit))
+        if not bound:
+            return 0
+        with db.transaction() as conn:
+            return conn.execute(
+                'DELETE FROM instance_leases WHERE instance_id IN ('
+                '  SELECT instance_id FROM instance_leases'
+                '   WHERE lease_until <= ? ORDER BY lease_until LIMIT ?)',
+                (horizon, bound)).rowcount or 0
+    except Exception:  # noqa: BLE001 - 清理失败不是租约主流程的错误
+        return 0
 
 
 def still_holding(instance_id: str | None = None, fence: int | None = None, *,

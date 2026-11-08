@@ -250,7 +250,7 @@ ERROR_SOURCE_NONE = 'none'
 _ERROR_CODE_RE = re.compile(r'[A-Za-z0-9._:-]{1,64}\Z')
 
 #: U21：`request_outcomes` 需要补的列（幂等补，见 `ensure_outcome_schema`）。
-_OUTCOME_EXTRA_COLUMNS = (('error_code', 'TEXT'), ('error_source', 'TEXT'))
+_OUTCOME_EXTRA_COLUMNS = (('error_code', 'TEXT'), ('error_source', 'TEXT'), ('key_id', 'INTEGER'))
 #: 每个连接只探测一次 schema；`conn` 用连接对象身份做键（测试会换连接）。
 _OUTCOME_SCHEMA: dict = {'conn': None, 'ready': False}
 
@@ -1176,11 +1176,15 @@ class RequestAuditMiddleware:
                         db.execute(
                             "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
                             "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id, "
-                            "error_code, error_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "error_code, error_source, key_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
                              state.method, state.protocol, status, terminal, state.error_stage,
                              int((time.monotonic()-state.started)*1000), RELEASE_ID,
-                             error_code, error_source))
+                             error_code, error_source,
+                             # 0.1.0 / O-1：补 key_id 以便把前置拒绝（如
+                             # portal_wallet_pending 429）归因到具体密钥/用户。
+                             # 此前只能看到「有 1,086 次拒绝」却查不出是谁被挡。
+                             getattr(state, 'key_id', None)))
                     else:
                         # 补列失败（只读库/并发竞态）：仍然落轨迹，只是没有稳定码。
                         db.execute(

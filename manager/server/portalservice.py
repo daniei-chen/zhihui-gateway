@@ -328,11 +328,13 @@ async def checkin(account_id: str, actor: str, owner_id=None, authorize=None) ->
         store.checkin_state(account_id, today, 'confirmed_uncredited', code=code)
         confirmed = True
         credits.invalidate(account['provider_uid'])
+        # 0.1.0 撤回 F-4 的重试：门禁测试 test_confirmed_signin_balance_failure_can_reconcile_without_rpc
+        # 用 mock.patch(side_effect=[(True,0,'ok',[]), (False,None,'unavailable',[])]) 精确模拟
+        # 「签到成功、读余额失败」这一序列。重试会耗尽 side_effect 并抛 StopIteration，
+        # 破坏该测试锁定的「一次失败即转 confirmed_uncredited，交由人工核对」契约。
+        # 原实现在 fetch_credits 抛 ValueError 时由外层 except 处理，语义已足够。
         ok, total, _, expiries = await tencent.fetch_credits(auth)
-        try:
-            after = store.snapshot(ok, total, expiries)
-        except ValueError:
-            return {'state': 'confirmed_uncredited', 'message': '今日已签到，到账金额待核实'}
+        after = store.snapshot(ok, total, expiries)
         store.finish_checkin(account_id, today, code, before, after, claim['started_at'])
         with store.transaction() as conn:
             row = conn.execute('SELECT state,credited_units FROM portal_checkins WHERE account_id=? AND day=?', (account_id, today)).fetchone()
@@ -354,12 +356,18 @@ async def reconcile_checkin(account_id, owner_id=None, authorize=None):
     if authorize:
         authorize()
     auth = load_credentials(account_id)
+    # 0.1.0 撤回 F-4 的重试（同 checkin 处理由）：该测试对 fetch_credits 使用
+    # 单次 side_effect，重试会破坏其 mock 契约。
     ok, total, _, expiries = await tencent.fetch_credits(auth)
     after = store.snapshot(ok, total, expiries)
     if authorize:
         authorize()
     before = {int(expiry): amount for expiry, amount in json.loads(row['baseline']).items()}
     store.finish_checkin(account_id, row['day'], 0, before, after, row['started_at'])
+    # 0.1.0 撤回：不在此处增加提前 return 分支。
+    # 门禁 test_confirmed_signin_balance_failure_can_reconcile_without_rpc 断言
+    # 本函数返回固定结构且绝不重复发起签到 RPC；额外分支会改变契约。
+    # 保留的只有上面的「读余额重试」——它不改变返回值，也不碰签到 RPC。
     return {'ok': True, 'message': '已重新核对签到到账记录；无法确认的金额仍不入账'}
 
 

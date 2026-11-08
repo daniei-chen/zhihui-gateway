@@ -3,6 +3,58 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [0.1.0] - 2026-11-08
+
+### 可观测性与准入体验补丁
+
+本版是**受限补丁**：只包含 7 项经完整测试门禁验证的增量改动。
+另有 5 项候选改动在门禁中被否决并撤回（见文末），不予发布。
+
+#### 保留的改动
+
+- **P-4 拒绝退避提示**：`BudgetRejected` 支持可选 `retry_after`（秒）。
+  拒绝响应同时写入 `Retry-After` 头与错误体 `retry_after_seconds` 字段
+  —— 头部在 nginx 反代链路上透传不稳，body 字段是客户端可靠读到的通道。
+  实测 1,086 次 429 中大量客户端在无提示下狂刷，最多重试 41.8 次。
+- **O-1 拒绝归因**：`request_outcomes` 新增 `key_id` 列。
+  此前只能看到「有 N 次拒绝」，查不出是哪个密钥/用户被挡。
+- **U-6 模型可用性**：`/v1/models` 每个模型附带 `availability`
+  （`verified` / `degraded` / `unknown`，按 7 天样本量与成功率判定）。
+- **T-1 过期租约清理**：新增 `purge_expired(keep_seconds=7*86400)`，
+  清理 188 条已过期实例租约。
+- **F-4 签到核对可读性**：`reconcile_checkin` 如实返回原因，
+  区分「已入账」与「无法证明新增积分（可能被期间消耗抵消）」，
+  不再笼统地说「无法确认」。保留原有 `try/except ValueError` 保护。
+- 冻结循环改为按 grant 逐个分配（语义与原「全额冻结」等价）。
+
+#### 门禁中被否决并撤回的改动
+
+项目账目契约要求 **fail-closed**：成本未确认时宁可拒绝服务，不得放行。
+
+- ~~P-1：`unknown` 不再阻塞新请求~~ —— 违反
+  `test_bonus_does_not_erase_unknown_hold_or_debt`。
+- ~~P-2：`unknown` 加 15 分钟时间窗~~ —— 违反
+  `test_legacy_unknown_without_estimate_fails_closed_for_total_quota`
+  与 `test_old_unknown_credit_remains_unconfirmed_for_lifetime_credit_cap`。
+- ~~P-3：`auto_close_upstream_error` 自动释放~~ —— 违反
+  `test_recover_does_not_auto_close_without_end_or_cancel_evidence`；
+  `mark_request_ended` 的契约写明
+  「request log 或流终帧本身不构成结束凭证」。
+- ~~F-2：单请求预留上限~~ —— 新环境变量未登记 config schema，
+  运维一旦设置即 `unknown_variable` 启动失败。
+- ~~F-4：读余额重试~~ —— 破坏
+  `test_confirmed_signin_balance_failure_can_reconcile_without_rpc` 的 mock 契约。
+
+#### 验证
+
+- 完整隔离测试门禁：**4971 passed, 9 skipped, 0 failed**（813.92 秒）
+- Ed25519 签名 + 测试回执封印 + trusted preflight 全部通过
+- 生产切换中断 **7 秒**，启动零异常，`upstream_ok: true`
+
+#### 说明
+
+`unknown` 状态的冻结仍**需要人工核对**（`POST /api/portal-admin/wallet-pending/{id}/resolve`）。
+本版不改变该语义；配套的「核对告警」与「工作台核对入口」留待后续版本。
 ## [0.0.10] - 2026-11-07
 
 ### 受限稳定性补丁二（后续候选）
