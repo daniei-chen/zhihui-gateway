@@ -41,26 +41,31 @@ class RedactCredentialsTest(unittest.TestCase):
 
 
 class UpdateStatusVisibilityTest(unittest.TestCase):
-    """viewer 不看日志；管理员照常拿到（含脱敏后的行）。"""
+    """viewer 不看阶段事件；管理员只读取智汇结构化回执。"""
 
     def _call(self, role: str) -> dict:
-        with mock.patch.object(updater, 'read_status', return_value={
-            'running': False, 'version': '2.2.1',
-            'logs': ['开始更新', '代理 http://u:p@1.2.3.4:7890 连不上'],
-        }), mock.patch.object(updater, 'tail_log', return_value='line with http://u:p@h:1'):
-            return system_router.update_status(user={'role': role})
+        def receipt(*, include_logs):
+            return {'running': False, 'version': '0.0.7', 'log_tail': '',
+                    'logs': [{'text': 'activated'}, {'text': 'ready_verified'}] if include_logs else []}
+        with mock.patch.object(system_router.productupdates, 'read_status', side_effect=receipt) as read, \
+                mock.patch.object(updater, 'read_status', side_effect=AssertionError('legacy source forbidden')), \
+                mock.patch.object(updater, 'tail_log', side_effect=AssertionError('legacy tail forbidden')):
+            result = system_router.update_status(user={'role': role})
+            read.assert_called_once_with(include_logs=role == 'admin')
+            return result
 
     def test_viewer_gets_no_logs(self) -> None:
         status = self._call('viewer')
         self.assertEqual(status['logs'], [])
         self.assertEqual(status['log_tail'], '')
         # 非日志字段仍可见：只读账号也需要知道「是否在更新 / 当前版本」
-        self.assertEqual(status['version'], '2.2.1')
+        self.assertEqual(status['version'], '0.0.7')
 
     def test_admin_keeps_logs(self) -> None:
         status = self._call('admin')
         self.assertEqual(len(status['logs']), 2)
-        self.assertIn('line with', status['log_tail'])
+        self.assertEqual(status['log_tail'], '')
+        self.assertEqual(status['logs'][1]['text'], 'ready_verified')
 
 
 class OutcomeRedactionTest(unittest.TestCase):

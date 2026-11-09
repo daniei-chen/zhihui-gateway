@@ -6,9 +6,17 @@ import ipaddress
 import json
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from .configcontract import validate_environment
+
+# Some consumer modules parse numeric environment values during import. Validate
+# first so a malformed value never falls back silently or leaks through a raw
+# int()/float() exception before the application's lifespan guard runs.
+validate_environment()
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓库根目录
 
@@ -35,11 +43,41 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 PORT = _env_int('WB_MANAGER_PORT', 7864)
 HOST = _env('WB_MANAGER_HOST', '0.0.0.0')
+LAUNCH_ARGUMENTS = None  # managed launcher records explicit CLI/environment resolution
+
+# ── U16（2026-10-28）：配置的权威顺序与「允许的默认值差异」─────────────────
+#
+# 一个设置值可能同时存在于四处：schema 默认值、下面这些 `_env*` 的第二参数、
+# systemd unit/drop-in 的 `Environment=`、进程实际环境。四者会漂移，因此定死顺序：
+#
+#   1. **`server/config-schema.json` 是唯一配置模型**：它声明每个 `WB_*` 的类型、
+#      单位、默认值与是否敏感。没登记的变量一旦出现在环境里，`validate_environment`
+#      会让服务**启动失败**（宁可拒绝启动，也不要带着没被模型描述的配置运行）。
+#   2. **源码默认值必须等于 schema 默认值**：下面 `_env*('X', <默认>)` 里的字面量
+#      是「未设置时真正生效的值」，schema 的 `default` 必须描述它（不是反过来）。
+#      表达式型默认值（`str(ROOT / 'data')` 这类）按**文本**比较，与 schema 的
+#      `default_expression` 逐字一致。漂移由 `server/tests/test_config_drift.py`
+#      在 CI 阶段拦截 —— 不在 import 时抛错：默认值写错不该让线上起不来。
+#   3. **unit/drop-in 只写「与 schema 默认不同的项」**，且一个键只允许出现在一个
+#      文件里（两个 drop-in 各写一份 = 谁生效取决于文件名排序，没人读得出来）。
+#   4. 进程值是运行时事实；`GET /api/system/config`（admin）把四源并排输出并标出
+#      漂移，其中「unit 声明值 != 进程实际值」代表**改了没重启**。
+#
+# 允许的例外必须登记在下面这张表里（键 → 为什么允许），并由测试强制：
+# 表里没有的差异一律算缺陷。当前**没有**例外：schema 与源码默认值已经对齐。
+SCHEMA_DRIFT_ALLOWED: dict[str, str] = {}
+# 发布排空（K12）：进程收到退出信号后，等待在途请求归零的上限（秒）。
+# 必须 <= systemd TimeoutStopSec，否则会在"还在等"的时候被 SIGKILL；
+# 该值只决定"最多等多久"，不决定"接不接新请求"（那由 /api/readyz 负责）。
+DRAIN_TIMEOUT_SEC = _env_int('WB_DRAIN_TIMEOUT_SEC', 25)
+GATEWAY_BODY_READ_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_READ_TIMEOUT_S', 180)
+GATEWAY_BODY_IDLE_TIMEOUT_S = _env_int('WB_GATEWAY_BODY_IDLE_TIMEOUT_S', 60)
+GATEWAY_MAX_RESPONSE_MB = _env_int('WB_GATEWAY_MAX_RESPONSE_MB', 64)
 
 # 上游 workbuddy2api（Go）
 WB2API_BASE = _env('WB2API_BASE', 'http://127.0.0.1:7863').rstrip('/')
 WB2API_KEY = _env('WB2API_KEY', '')
-WB2API_CONTAINER = _env('WB2API_CONTAINER', 'workbuddy2api')
+WB2API_CONTAINER = _env('WB2API_CONTAINER', 'zhihui-workbuddy')
 WB2API_MODE = _env('WB2API_MODE', 'docker').lower()  # docker | native
 
 # 上游数据文件（与 workbuddy2api 共享）
@@ -58,9 +96,37 @@ WB2API_LOG_FILE = Path(_env(
 
 # 本管理端数据
 DATA_DIR = Path(_env('WB_DATA_DIR', str(ROOT / 'data')))
+BACKUP_STATUS_FILE = Path(_env('WB_BACKUP_STATUS_FILE', '/var/lib/zhihui-gateway/backup-status.json'))
 DB_PATH = Path(_env('WB_DB', str(DATA_DIR / 'manager.db')))
 USERS_FILE = Path(_env('WB_USERS_FILE', str(DATA_DIR / 'users.json')))
 STATIC_DIR = Path(_env('WB_STATIC_DIR', str(ROOT / 'web' / 'out')))
+# Operator-owned files, never returned by the settings API or written by the model.
+STEWARD_SMTP_FILE = _env('WB_STEWARD_SMTP_FILE', '')
+STEWARD_KEY_FILE = _env('WB_STEWARD_KEY_FILE', '')
+# Independent scrape credential. It is never accepted by management/inference auth.
+# A 0600 file supports atomic rotation without restarting the gateway.
+METRICS_TOKEN_FILE = _env('WB_METRICS_TOKEN_FILE', '')
+METRICS_TOKEN = _env('WB_METRICS_TOKEN', '')
+# Shared only by Manager and QTG; Nginx receives per-request assertions, no secret.
+# Empty means the optional identity bridge fails closed (503).
+QTG_IDENTITY_SECRET_FILE = _env('WB_QTG_IDENTITY_SECRET_FILE', '')
+
+# ── QTG 适配器契约（U3 阶段 2）：Manager 读引擎侧数据的反向通道 ──────────────
+# K26 的 read_api 是「QTG 读 Manager」；这里是对称的「Manager 读 QTG」。引擎侧的
+# 账号运行态 / 模型目录 / 真实用量 / 上游健康只有 QTG 能拿到（它直连各适配器），
+# Manager 自己的库里只有「同步过来的副本」，两者不是同一份数据。
+#
+# 三条语义都重要：
+#   1. BASE 为空 = 未启用。端点必须如实返回 available=false + reason，绝不能
+#      静默返回空列表——那会让面板显示「引擎上零账号」，比直接报错更难排查；
+#   2. 令牌走文件、不走环境变量：避免它出现在 systemd unit 与进程环境快照里
+#      （与 WB_METRICS_TOKEN_FILE 同一考虑）；
+#   3. 调用必须直连、不吃出口代理：内部通道被面板设置的代理劫持会变成
+#      「时好时坏」，而这种间歇故障最难归因。
+QTG_ADAPTER_BASE = _env('WB_QTG_ADAPTER_BASE', '').rstrip('/')
+QTG_ADAPTER_TOKEN_FILE = _env('WB_QTG_INTERNAL_TOKEN_FILE',
+                              '/opt/workbuddy-manager/engine/secrets/internal_service_token')
+QTG_ADAPTER_TIMEOUT_S = _env_int('WB_QTG_ADAPTER_TIMEOUT_S', 3)
 
 # 子路径部署时的 URL 前缀，留空 = 根路径部署（默认）。
 #
@@ -113,6 +179,16 @@ TRUSTED_PROXY_CIDRS = [
 ]
 # 是否暴露 /docs、/openapi.json、/redoc。生产环境建议关闭（默认关闭）。
 ENABLE_DOCS = _env('WB_ENABLE_DOCS', '0') == '1'
+
+# 后台作业总开关（2026-10-27 零停机发布改造）：
+# 主实例（systemd 管理）保持默认开启；零停机发布的过渡实例以
+# WB_BACKGROUND_JOBS=0 启动——只对外服务请求，不运行签到/任务/巡检等
+# 调度器与日志采集器，避免过渡窗口内双实例重复执行后台动作。
+BACKGROUND_JOBS = _env_bool('WB_BACKGROUND_JOBS', True)
+SHARED_ADMISSION = _env_bool('WB_SHARED_ADMISSION', False)
+ARCHIVE_ENABLED = _env_bool('WB_ARCHIVE_ENABLED', True)
+ARCHIVE_INTERVAL_SEC = max(60, min(86400, _env_int('WB_ARCHIVE_INTERVAL_SEC', 300)))
+ARCHIVE_BATCH_ROWS = max(1, min(1000, _env_int('WB_ARCHIVE_BATCH_ROWS', 200)))
 # 入站访问日志（安全页的「IP 访问日志」）是否记录**放行**的请求。
 #
 # 默认关闭：那张表的用途是安全审计（谁在扫我、谁被挡了），记全量会把信号淹没。
@@ -493,43 +569,28 @@ def new_secret() -> str:
 # 键里带**事件循环**：httpx 的客户端（连接池）绑在创建它的那个循环上，跨循环
 # 复用会炸（同步路由里 `asyncio.run` 另起循环那条路就是例子，见
 # `modelcatalog.fetch_ids_blocking`）。不同循环各建一个，互不干扰。
-_CLIENTS: dict[tuple, tuple] = {}
-_CLIENTS_MAX = 24
+_CLIENTS: dict = {}
+_CLIENTS_MAX = max(1, _env_int('WB_HTTP_MAX_POOLS', 24))
+_HTTP_POOL = None
+_HTTP_POOL_INIT_LOCK = threading.RLock()
+HTTP_POOL_CONNECTIONS = max(1, _env_int('WB_HTTP_POOL_CONNECTIONS', 8))
+HTTP_POOL_KEEPALIVE = min(HTTP_POOL_CONNECTIONS, max(0, _env_int('WB_HTTP_POOL_KEEPALIVE', 4)))
 
 
-class _BorrowedClient:
-    """借出去用的客户端：退出 `async with` 时**不关闭**（归还给池）。
+def _transport_pool():
+    global _HTTP_POOL
+    with _HTTP_POOL_INIT_LOCK:
+        if _HTTP_POOL is None:
+            from .http_pool import TransportPool
+            _HTTP_POOL = TransportPool(_CLIENTS)
+        return _HTTP_POOL
 
-    调用点大多是 `async with config.http_client(...) as client:` 的写法，所以这里
-    只把「上下文管理」这层语义接过来，避免改十几个调用点。关闭由
-    `close_clients()`（应用退出）或池满淘汰时统一做。
 
-    另外**代理属性访问**（`__getattr__`）并让 `aclose()` 变成「归还」而不是真关：
-    有几处调用点是不用 `async with`、自己 `client = http_client(...)` 然后
-    `finally: await client.aclose()` 的写法（网关、Anthropic 兼容、测试台、Responses
-    各一处）。共享之后，那些 `aclose()` 一旦真关，就会把别人正在用的连接池一起关掉
-    ——并发下表现为「偶发请求失败」。所以借来的客户端只支持「还」，真关只发生在池
-    淘汰与退出清理里。
-    """
-
-    __slots__ = ('_client',)
-
-    def __init__(self, client) -> None:  # noqa: ANN001
-        self._client = client
-
-    def __getattr__(self, name: str):  # noqa: ANN201
-        # 借用包装要能当客户端用（post/stream/headers/... 一律转发）
-        return getattr(self._client, name)
-
-    async def __aenter__(self):  # noqa: ANN201
-        return self._client
-
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-    async def aclose(self) -> None:
-        """借用语义：只归还，不真关（共享客户端由池统一管理）。"""
-        return None
+def _http_limits():
+    import httpx
+    return httpx.Limits(max_connections=HTTP_POOL_CONNECTIONS,
+                        max_keepalive_connections=HTTP_POOL_KEEPALIVE,
+                        keepalive_expiry=15)
 
 
 def _timeout_key(tmo) -> tuple:  # noqa: ANN001
@@ -575,8 +636,8 @@ def _proxy_transport(proxy: str):  # noqa: ANN202
 
     class _DirectForInternalTransport(httpx.AsyncBaseTransport):
         def __init__(self) -> None:
-            self._proxied = httpx.AsyncHTTPTransport(proxy=proxy)
-            self._direct = httpx.AsyncHTTPTransport()
+            self._proxied = httpx.AsyncHTTPTransport(proxy=proxy, trust_env=False, limits=_http_limits())
+            self._direct = httpx.AsyncHTTPTransport(trust_env=False, limits=_http_limits())
 
         async def handle_async_request(self, request):  # noqa: ANN001, ANN201
             transport = (self._direct if _is_internal_host(request.url.host)
@@ -590,39 +651,32 @@ def _proxy_transport(proxy: str):  # noqa: ANN202
     return _DirectForInternalTransport()
 
 
-def _build_client(tmo, proxy: str | None):  # noqa: ANN001, ANN202
+def _build_transport(proxy: str | None):
     import httpx
-
-    kwargs: dict = {'timeout': tmo, 'trust_env': False}
     if proxy:
-        kwargs['transport'] = _proxy_transport(proxy)
-    return httpx.AsyncClient(**kwargs)
+        return _proxy_transport(proxy)
+    return httpx.AsyncHTTPTransport(trust_env=False, limits=_http_limits())
+
+
+def _build_client(tmo, proxy: str | None, *, bounded_response: bool = False):
+    import httpx
+    transport = _build_transport(proxy)
+    headers = None
+    if bounded_response:
+        from .upstreambody import BoundedTransport
+        transport = BoundedTransport(transport, GATEWAY_MAX_RESPONSE_MB * 1024**2)
+        headers = {'Accept-Encoding': 'identity'}
+    return httpx.AsyncClient(timeout=tmo, transport=transport, headers=headers, trust_env=False)
 
 
 async def close_clients() -> None:
-    """关掉池里所有客户端（应用退出时调用；幂等）。"""
-    clients = [entry[1] for entry in _CLIENTS.values()]
-    _CLIENTS.clear()
-    for client in clients:
-        try:
-            await client.aclose()
-        except Exception:  # noqa: BLE001 —— 退出路径上的清理失败不该再抛
-            continue
+    """Retire this loop's transports; existing bodies retain their references.
 
-
-def _evict(loop) -> None:  # noqa: ANN001
-    """池满了淘汰最早的一个（按插入顺序）。"""
-    while len(_CLIENTS) > _CLIENTS_MAX:
-        key = next(iter(_CLIENTS))
-        entry = _CLIENTS.pop(key, None)
-        if not entry or entry[1].is_closed:
-            continue
-        old_loop, client = entry
-        try:
-            if old_loop is loop:
-                loop.create_task(client.aclose())      # 同一循环才能安全关闭
-        except Exception:  # noqa: BLE001
-            continue
+    The loop lifetime guard performs final forced cleanup when the loop exits.
+    Normal application shutdown first drains admitted requests.
+    """
+    if _HTTP_POOL is not None:
+        await _HTTP_POOL.close_loop()
 
 
 def stored_http_proxy() -> str:
@@ -645,7 +699,7 @@ def effective_http_proxy() -> str:
 
 
 def http_client(timeout, *, connect: float | None = None, proxy: str | None = None,
-                lane: str = '', identity: str | None = None):
+                lane: str = '', identity: str | None = None, bounded_response: bool = False):
     """统一的 httpx 客户端：默认忽略系统/环境代理，避免内网请求被代理劫持。
 
     需要走代理时显式设置 WB_HTTP_PROXY。
@@ -654,15 +708,14 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     注意：httpx 不允许「Timeout 实例 + connect 关键字」同时传，
     因此传入实例时忽略 connect，避免 AssertionError。
 
-    **返回的是借用语义的上下文管理器**（退出时不关客户端，见 `_BorrowedClient`）：
-    同一事件循环 + 同一组超时/代理只建一次，连接池复用（issue #144：Windows 上
-    每次新建要 ~1 秒，正好是页面切换的耗时）。
+    每次返回独立客户端，Cookie/headers 不跨调用共享。真正昂贵的 TLS/keepalive
+    transport 按循环、超时、代理、lane 和身份复用。容量耗尽等待 pool 预算，
+    不关闭在途响应；流的引用一直持有到正文完成或关闭。短生命周期循环退出时
+    自动关闭其传输，主服务使用 close_clients + 应用排空。
 
-    `lane` 把客户端**按用途分池**（issue #161）：池是 httpx 的私有属性，缓存键
-    一样就共用一个池，于是「批量刷积分的几十个请求」和「用户手点的单号测活」
-    会互相排队——批量把池占满时，交互操作得等到 pool 超时才报 PoolTimeout，
-    看起来像是「测活坏了」。给交互操作单独的 lane，两边各有各的连接预算。
-    留空 = 默认车道（既有调用点全部不受影响）。
+    推理入口显式传 bounded_response=True：wire 与解压后累计正文受
+    WB_GATEWAY_MAX_RESPONSE_MB 约束，SSE 也计入累计值。其它管理下载保留
+    各自的大小/压缩策略，不因推理响应配置而截断合法的大文件。
     """
     import httpx
 
@@ -673,22 +726,26 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     else:
         tmo = httpx.Timeout(timeout)
     selected_proxy = effective_http_proxy() if proxy is None else proxy
-    if identity and not lane:
-        # 本地定制：按上游身份（密钥+上游）分池，避免不同账号共用连接（原 pooledhttp 语义）
-        lane = identity
 
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         # 事件循环外（同步夹具/脚本场景）：不缓存，按老样子建一个即用即弃的，
         # 免得把一个绑在未知循环上的客户端留在池里。
-        return _build_client(tmo, selected_proxy)
+        return _build_client(tmo, selected_proxy, bounded_response=bounded_response)
 
-    key = (*_timeout_key(tmo), selected_proxy or '', lane)
-    entry = _CLIENTS.get(key)
-    if entry is not None and entry[0] is loop and not entry[1].is_closed:
-        return _BorrowedClient(entry[1])
-    client = _build_client(tmo, selected_proxy)
-    _CLIENTS[key] = (loop, client)
-    _evict(loop)
-    return _BorrowedClient(client)
+    import hashlib
+    from .http_pool import LeaseTransport
+    # Neither a diagnostic key nor its repr may contain proxy credentials.
+    proxy_key = hashlib.sha256((selected_proxy or '').encode()).hexdigest()
+    identity_key = hashlib.sha256((identity or '').encode()).hexdigest()
+    key = (*_timeout_key(tmo), proxy_key, lane, identity_key)
+    transport = LeaseTransport(_transport_pool(), key,
+                               lambda: _build_transport(selected_proxy), lambda: _CLIENTS_MAX)
+    headers = None
+    if bounded_response:
+        from .upstreambody import BoundedTransport
+        transport = BoundedTransport(transport, GATEWAY_MAX_RESPONSE_MB * 1024**2)
+        headers = {'Accept-Encoding': 'identity'}
+    return httpx.AsyncClient(transport=transport, timeout=tmo, headers=headers,
+                             trust_env=False, follow_redirects=False)

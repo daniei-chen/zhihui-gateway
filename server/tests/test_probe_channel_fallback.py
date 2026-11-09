@@ -73,6 +73,7 @@ class _PathAwareClient:
 
             async def aiter_bytes(self):
                 if is_v2:
+                    yield cls.body
                     return
                 yield b'data: {"choices":[{"delta":{"content":"h"}}]}\n\n'
 
@@ -96,6 +97,9 @@ class _BothPathsRejected(_PathAwareClient):
 
             async def aread(self):
                 return cls.body
+
+            async def aiter_bytes(self):
+                yield cls.body
 
         return _Resp()
 

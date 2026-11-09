@@ -1,6 +1,10 @@
 import axios, {AxiosError} from 'axios';
+import type {AxiosRequestConfig, InternalAxiosRequestConfig} from 'axios';
 import {BASE_PATH} from './base-path';
+import {validateAccountExport} from './account-export.mjs';
+import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
 import {t, tp} from './i18n';
+import {platformStore, type Platform} from './platform-store';
 import type {Realm} from './realm-context';
 import type {
   Account,
@@ -53,7 +57,6 @@ import type {
   TaskLogResponse,
   TaskRunStatus,
   UpdateCheck,
-  UpdatePackageMeta,
   UpdateStatus,
   UpstreamConfig,
   UpstreamEndpoint,
@@ -67,6 +70,8 @@ import type {
 } from './types';
 
 export const http = axios.create({
+  ...(process.env.NEXT_PUBLIC_ZHIHUI_DEMO === '1' ? {adapter: async (config: InternalAxiosRequestConfig) =>
+    (await import('./public-demo')).publicDemoAdapter(config)} : {}),
   // 子路径部署时接口也挂在前缀下（反向代理剥掉前缀再转发给本服务）。
   // 这里必须用 basePath，否则所有请求都会打到域名根路径的 /api 上。
   baseURL: BASE_PATH,
@@ -90,26 +95,78 @@ export const http = axios.create({
  * 兜底只在后端**没给**文案时生效。那种情况下原本会露出 axios 自己的英文
  * message（"Request failed with status code 403"）——界面明明是多语言的，
  * 偏偏在这条路径上漏出英文，而且对用户没有任何指导意义。
+ *
+ * 文案的**挑选**（字符串 / `detail` / 结构化 `error.message`）在 lib/err-envelope.ts
+ * （纯函数，可单测）。这里只负责 i18n 与兜底——不能把结构化信封对象直接返回：
+ * 那会漏进 React 文本节点抛 #31（N14）。
  */
 export function errText(e: unknown): string {
-  const ax = e as AxiosError<{detail?: string; error?: string}>;
-  const d = ax?.response?.data;
-  const raw = (typeof d === 'string' ? d : d?.detail || d?.error) || '';
-  if (raw) return tp(raw);
+  const ax = e as AxiosError;
+  const channel = channelCheckDetails(ax?.response?.data);
+  if (channel) return channelRejectionText(channel);
+  const raw = backendErrorText(ax?.response?.data);
+  if (raw) {
+    if ((ax?.response?.status ?? 0) >= 500) return t('error.serverDetail', {detail: tp(raw)});
+    return tp(raw);
+  }
   if (ax?.response?.status === 403) return t('error.forbidden');
   const fallback = ax?.message || '';
   return fallback ? tp(fallback) : tp('请求失败');
 }
 
+export function channelRejectionText(detail: ChannelRejection): string {
+  const ids = [
+    detail.requestId ? t('error.requestId', {id: detail.requestId}) : '',
+    detail.upstreamRequestId ? t('error.upstreamRequestId', {id: detail.upstreamRequestId}) : '',
+  ].filter(Boolean);
+  return [t('error.channelRejected'), ...ids].join(' · ');
+}
+
+/**
+ * 平台隔离：所有请求带 `X-QTG-Platform`。
+ *
+ * **不再直接读 `localStorage`**（K32）：读的是 `lib/platform-store.ts` 那份与
+ * `PlatformProvider` 共用的内存状态，持久化只是它的回退。历史上这里直接读
+ * `window.localStorage.getItem` 有三个后果，全都不报错：
+ *   · 存储被禁/无痕下 `getItem` 可能抛错，一个平台切换器的问题会带崩所有请求；
+ *   · 多标签页里请求已经跟着新平台走了，界面还停在旧平台（两份事实来源）；
+ *   · 非法/历史值一边被忽略、一边被原样发送。
+ *
+ * 语义与改造前保持一致：**只有用户显式选择过平台（内存或持久化里有合法值）才带
+ * 这个头**；从未选择过就不带，由后端按自己的默认平台处理（`explicit()` 的注释）。
+ */
+http.interceptors.request.use((config) => {
+  // An in-flight authorization belongs to its captured scope, not to a later
+  // platform switch. Explicit request scope must win over the global store.
+  const scoped = typeof config.headers.get === 'function' ? config.headers.get('X-QTG-Platform') :
+    (config.headers['X-QTG-Platform'] ?? config.headers['x-qtg-platform']);
+  const platform = typeof scoped === 'string' ? scoped : platformStore.explicit();
+  if (platform) {
+    (config.headers as Record<string, string>)['X-QTG-Platform'] = platform;
+    if (config.params instanceof URLSearchParams) {
+      if (!config.params.has('platform')) config.params.set('platform', platform);
+    } else if (config.params == null || typeof config.params === 'object') {
+      config.params = {...config.params};
+      if (config.params.platform === undefined) config.params.platform = platform;
+    }
+  }
+  return config;
+});
+
 http.interceptors.response.use(
   (r) => r,
   (error: AxiosError) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    if (error.response?.status === 401 && !error.config?.signal?.aborted && typeof window !== 'undefined') {
       // 会话失效：清掉缓存的登录态，避免仍显示管理员入口。
       // `hadSession` 决定要不要说「会话已过期」：首次访问本来就没有会话，
       // 那是「请登录」而不是「过期了」（用户会以为面板坏了）。
-      const hadSession = !!window.sessionStorage.getItem('wb-me');
-      window.sessionStorage.removeItem('wb-me');
+      let hadSession = false;
+      try {
+        hadSession = !!window.sessionStorage.getItem('wb-me');
+        window.sessionStorage.removeItem('wb-me');
+      } catch {
+        // Storage restrictions must not prevent handling an expired session.
+      }
       const path = window.location.pathname;
       // **公开页不跳登录页**：红包抽奖页就是给没账号的人看的（同事朋友收到链接
       // 直接打开），而它自己也会加载 /api/me（根 layout 的 AuthProvider 一挂载
@@ -120,7 +177,7 @@ http.interceptors.response.use(
       // 路径必须带 basePath：basePath 只自动作用于 next/router 的跳转，裸的
       // window.location.href 会跳到域名根（通常 404）—— 登录页与公开页都一样。
       const loginPath = `${BASE_PATH}/login`;
-      const publicPaths = [loginPath, `${BASE_PATH}/claim`];
+      const publicPaths = [loginPath, `${BASE_PATH}/claim`, `${BASE_PATH}/portal`];
       // 根路径只是「跳到 /dashboard」的中转页，不在这里拦（否则首次访问者
       // 会先被重定向到登录页并显示「会话已过期」）。
       const isRoot = path === BASE_PATH || path === `${BASE_PATH}/`;
@@ -135,10 +192,10 @@ http.interceptors.response.use(
   },
 );
 
-const get = async <T>(url: string, params?: Record<string, unknown>): Promise<T> =>
-  (await http.get<T>(url, {params})).data;
-const post = async <T>(url: string, body?: unknown): Promise<T> =>
-  (await http.post<T>(url, body)).data;
+const get = async <T>(url: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> =>
+  (await http.get<T>(url, {params, ...(signal ? {signal} : {})})).data;
+const post = async <T>(url: string, body?: unknown, scope?: AxiosRequestConfig): Promise<T> =>
+  (await (scope ? http.post<T>(url, body, scope) : http.post<T>(url, body))).data;
 const patch = async <T>(url: string, body?: unknown): Promise<T> =>
   (await http.patch<T>(url, body)).data;
 const put = async <T>(url: string, body?: unknown): Promise<T> =>
@@ -147,7 +204,7 @@ const del = async <T>(url: string): Promise<T> => (await http.delete<T>(url)).da
 
 /* ── 鉴权 ───────────────────────────────────────────── */
 export const authApi = {
-  me: () => get<Me>('/api/me'),
+  me: (signal?: AbortSignal) => http.get<Me>('/api/me', {signal}).then(response => response.data),
   login: (username: string, password: string) =>
     post<{ok: boolean; username: string; role: string}>('/api/login', {username, password}),
   logout: () => post<{ok: boolean}>('/api/logout'),
@@ -162,6 +219,50 @@ export const authApi = {
  */
 const groupQs = (upstreamId?: number | null): string =>
   upstreamId == null ? '' : `?upstream_id=${encodeURIComponent(String(upstreamId))}`;
+
+export interface AccountAuthStart {
+  state: string;
+  authUrl: string;
+  platform: Platform;
+  realm: Realm;
+  mode: 'poll' | 'callback';
+  expires_at?: number;
+}
+
+export interface AccountAuthResult {
+  status: 'waiting' | 'success' | 'expired' | 'invalid' | 'realm_mismatch' | 'unconfirmed';
+  platform?: Platform;
+  realm?: Realm;
+  uid?: string;
+  nickname?: string;
+  updated?: boolean;
+  region_note?: string;
+  expected?: Realm;
+  got?: Realm;
+}
+
+export interface AccountAuthReviewItem {
+  reference: string;
+  platform: Platform;
+  realm: Realm;
+  status: 'waiting' | 'processing' | 'success' | 'expired' | 'invalid' | 'unconfirmed' | 'engine_changed';
+  engine_binding: 'current' | 'changed' | 'unavailable';
+  expires_at: number;
+  requires_reconciliation: boolean;
+  uid?: string;
+  nickname?: string;
+}
+
+export interface AccountAuthReview {
+  platform: Platform;
+  realm: Realm;
+  reviewed_at: number;
+  sessions: AccountAuthReviewItem[];
+}
+
+const authScope = (platform: Platform, realm?: Realm): AxiosRequestConfig => ({
+  headers: {'X-QTG-Platform': platform}, params: {platform, realm},
+});
 
 export const accountApi = {
   proxies: () => get<{routes: string[]; default: string}>('/api/proxies'),
@@ -190,7 +291,7 @@ export const accountApi = {
     const response = await http.get<Blob>('/api/accounts/export' + groupQs(upstreamId), {
       responseType: 'blob',
     });
-    return response.data;
+    return validateAccountExport(response.data);
   },
   upload: (files: File[], upstreamId?: number | null, overwrite = false) => {
     const body = new FormData();
@@ -207,29 +308,26 @@ export const accountApi = {
     }>('/api/accounts/upload' + group + separator + `overwrite=${overwrite ? 'true' : 'false'}`, body)
       .then((r) => r.data);
   },
-  /**
-   * 发起扫码登录；realm 决定国内版 / 国际版端点。
-   *
-   * region 也一并带上：服务端会替我们盯着这张码（前端被节流也不影响），
-   * 而地区登记必须在落盘**前**完成 —— 后台那条路径拿不到 region 就会漏掉它
-   * （国际版新号聊天报 14017）。用户在弹窗里改地区会重新发码，所以这里带的
-   * 总是当前这张码对应的地区。
-   */
-  start: (realm: Realm = 'cn', upstreamId?: number | null, region?: string, proxy?: string) =>
-    post<{state: string; authUrl: string; realm: Realm}>(
-      '/api/auth/start' + groupQs(upstreamId), {realm, region, proxy}),
+  /** Explicit captured platform/realm; only WorkBuddy accepts region/proxy/group. */
+  start: (realm: Realm = 'cn', upstreamId?: number | null, region?: string, proxy?: string,
+          platform: Platform = platformStore.peek()) =>
+    post<AccountAuthStart>(
+      '/api/auth/start' + groupQs(upstreamId),
+      {realm, region, proxy, platform}, authScope(platform, realm)),
   /** 轮询扫码结果。region 仅国际版需要（新号必须先做地区注册） */
-  poll: (state: string, realm?: Realm, region?: string, upstreamId?: number | null) =>
-    get<{
-      status: 'waiting' | 'success' | 'expired' | 'invalid' | 'realm_mismatch';
-      uid?: string;
-      nickname?: string;
-      updated?: boolean;
-      realm?: Realm;
-      region_note?: string;
-      expected?: Realm;
-      got?: Realm;
-    }>('/api/auth/poll', {state, realm, region, upstream_id: upstreamId ?? undefined}),
+  poll: (state: string, realm?: Realm, region?: string, upstreamId?: number | null,
+         platform: Platform = platformStore.peek()) =>
+    http.get<AccountAuthResult>('/api/auth/poll', {
+      ...authScope(platform, realm),
+      params: {state, realm, region, platform, upstream_id: upstreamId ?? undefined},
+    }).then(r => r.data),
+  finish: (state: string, callbackUrl: string, platform: Platform, realm: Realm) =>
+    post<AccountAuthResult>('/api/auth/finish', {state, callback_url: callbackUrl, platform, realm},
+                           authScope(platform, realm)),
+  review: (state: string | undefined, platform: Platform, realm: Realm) =>
+    post<AccountAuthReview>('/api/auth/review', {state, platform, realm}, authScope(platform, realm)),
+  cancel: (state: string, platform: Platform, realm: Realm) =>
+    post<{ok: boolean}>('/api/auth/cancel', {state, platform, realm}, authScope(platform, realm)),
   remove: (file: string, upstreamId?: number | null) =>
     del<{success: boolean}>(`/api/accounts/${encodeURIComponent(file)}${groupQs(upstreamId)}`),
   /**
@@ -255,6 +353,8 @@ export const accountApi = {
       message: string;
       /** 今天已经签过：后端没打上游请求，直接就地返回。提示语要与「刚签上」分开 */
       already?: boolean;
+      reward_status?: string;
+      earned_credit?: number | null;
       credits?: number | null;
     }>(`/api/accounts/${encodeURIComponent(file)}/checkin${groupQs(upstreamId)}`),
   /** 单个账号的实时积分（直接向腾讯查询） */
@@ -269,8 +369,12 @@ export const accountApi = {
     }>(`/api/accounts/${encodeURIComponent(file)}/credits`,
        upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 并发刷新所有账号的实时积分 */
+  cachedCredits: (upstreamId?: number | null) =>
+    get<{total: number; succeeded: number; credits: Record<string, number | null>;
+         meta: Record<string, CreditsMeta>; failed: string[]; provider_called: false}>(
+      '/api/accounts/credits-cached', upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 查询全部账号积分；force=false 时 60 秒内命中服务端缓存 */
-  refreshCredits: (force = true, upstreamId?: number | null) =>
+  refreshCredits: (force = true, upstreamId?: number | null, staleOnly = false) =>
     post<{
       total: number;
       succeeded: number;
@@ -278,20 +382,22 @@ export const accountApi = {
       meta: Record<string, CreditsMeta>;
       failed: string[];
     }>('/api/accounts/refresh-credits?force=' + (force ? 'true' : 'false')
-       + (upstreamId == null ? '' : `&upstream_id=${encodeURIComponent(String(upstreamId))}`)),
+       + (upstreamId == null ? '' : `&upstream_id=${encodeURIComponent(String(upstreamId))}`)
+       + (staleOnly ? '&stale_only=true' : '')),
   checkinAll: (upstreamId?: number | null) =>
     post<{
       /**
-       * 只统计**本次真正发起签到**的账号：国际版（不适用）与今天已签到的都不进
-       * 分母，分别见 skipped / already。原先 total 里混着「今天已签过」的账号，
-       * 界面会把「无需重复」说成「刚签成功」。
+       * Completed/new attempts only. Already-claimed, inapplicable, zero-reward
+       * and pending outcomes are reported separately, not as fresh rewards.
        */
       total: number;
       succeeded: number;
-      /** 今天已签到、本次被跳过的账号数（没打上游请求） */
+      /** Provider-confirmed already-claimed outcomes; a check may have been sent. */
       already: number;
-      /** 不适用的账号数（国际版没有签到体系）。它既不算成功也不算失败 */
+      /** 未新增积分、不适用或仍待确认的账号，不计入新签成功。 */
       skipped: number;
+      no_reward?: number;
+      message?: string;
       results: {
         nickname: string; ok: boolean; message: string;
         code?: number; skipped?: boolean; already?: boolean;
@@ -701,13 +807,11 @@ export const settingsApi = {
 
 export type {Account};
 
-/* ── 系统维护（一键更新）──────────────────────────────── */
 export const systemApi = {
   updateStatus: () => get<UpdateStatus>('/api/system/update-status'),
   /** 检测新版本；force=true 绕过 6 小时缓存 */
   checkUpdate: (force = false) => get<UpdateCheck>('/api/system/check-update', {force}),
   versions: () => get<Versions>('/api/system/versions'),
-  /** GitHub Token（版本检测 / 一键更新的认证）：读回掩码，写只传明文 */
   githubToken: () => get<{configured: boolean; masked: string; source: 'env' | 'panel' | ''}>(
     '/api/settings/github-token'),
   saveGithubToken: (token: string) =>
@@ -716,41 +820,15 @@ export const systemApi = {
   githubMirror: () => get<GithubMirror>('/api/settings/github-mirror'),
   saveGithubMirror: (mirror: string) =>
     put<GithubMirror>('/api/settings/github-mirror', {mirror}),
-  /**
-   * 启动一键更新；target: manager | upstream | both。
-   * source='uploaded' 用面板里已上传的离线升级包（issue #153）。
-   */
-  startUpdate: (target: 'manager' | 'upstream' | 'both', source: 'release' | 'uploaded' = 'release') =>
-    post<{ok: boolean; message: string}>('/api/system/update', {target, source}),
-  /** 已上传的离线升级包元信息 */
-  packageMeta: () => get<UpdatePackageMeta>('/api/system/update-package'),
-  /**
-   * 上传离线升级包（发布页下载的 .tar.gz）。
-   * `expectedSha256` 是发布页那串摘要；服务端默认必填，缺失会直接拒收。
-   */
-  uploadPackage: (file: File, expectedSha256: string) => {
-    const body = new FormData();
-    body.append('file', file, file.name);
-    body.append('expected_sha256', expectedSha256);
-    return post<UpdatePackageMeta>('/api/system/update-package', body);
-  },
-  deletePackage: () => del<{ok: boolean}>('/api/system/update-package'),
-  /**
-   * 清除上次更新的结果与日志（issue #105）。
-   *
-   * 此前失败记录只能靠「下次发起更新」覆盖：状态文件与 update.log 都留着，
-   * 界面上那条「更新未完成」与日志永远擦不掉，用户得进容器手删文件。
-   * 更新进行中后端会拒绝（409）——那会把「正在更新」看丢。
-   */
   clearUpdateStatus: () =>
-    del<{ok: boolean; message: string}>('/api/system/update-status'),
+    del<{ok: boolean; archived: number; message: string}>('/api/system/update-status'),
   /** 更新日志（解析仓库根目录 CHANGELOG.md，离线可用） */
   changelog: () => get<Changelog>('/api/system/changelog'),
 };
 
 /* ── PostgreSQL 异地备份（设置 → 数据备份）────────────── */
 export const pgSyncApi = {
-  config: () => get<PgSyncConfigResponse>('/api/settings/pg-sync'),
+  config: (signal?: AbortSignal) => get<PgSyncConfigResponse>('/api/settings/pg-sync', undefined, signal),
   /** 保存连接配置；password 传掩码或空串表示沿用已保存的值 */
   save: (body: Partial<PgSyncConfig>) =>
     post<{config: PgSyncConfig}>('/api/settings/pg-sync', body),
@@ -763,5 +841,5 @@ export const pgSyncApi = {
   /** 从 PostgreSQL 拉回数据。**会覆盖本地数据**，前端必须先二次确认 */
   importData: () =>
     post<{ok: boolean; message: string; status: PgSyncStatus}>('/api/settings/pg-sync/import'),
-  status: () => get<PgSyncStatus>('/api/settings/pg-sync/status'),
+  status: (signal?: AbortSignal) => get<PgSyncStatus>('/api/settings/pg-sync/status', undefined, signal),
 };

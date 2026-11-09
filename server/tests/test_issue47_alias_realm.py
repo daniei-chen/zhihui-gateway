@@ -144,7 +144,9 @@ class AuthorizeResolvesMappingTest(unittest.TestCase):
             seen.append({'model': model, **kw})
             return real(key, ip, model, **kw)
 
-        req = mock.Mock()
+        from starlette.requests import Request
+        req = Request({'type': 'http', 'method': 'POST', 'path': '/v1/chat/completions',
+                       'headers': [], 'query_string': b'', 'client': ('127.0.0.1', 10000)})
         with mock.patch.object(db, 'get_setting', lambda k, d=None: MAP if k == 'model_map' else d), \
              mock.patch.object(db, 'query', lambda *a, **k: []), \
              mock.patch.object(G, '_bearer', lambda r: 'wbk_x'), \
@@ -178,7 +180,10 @@ class RejectionRecordsMappingTest(unittest.TestCase):
         key = _key(realm='cn')          # 国内版密钥 + 指向国际版的别名 → 必被拒
         with mock.patch.object(db, 'get_setting',
                                lambda k, d=None: MAP if k == 'model_map' else d),              mock.patch.object(db, 'query', lambda *a, **k: []),              mock.patch.object(G, '_bearer', lambda r: 'wbk_x'),              mock.patch.object(keysvc, 'resolve', lambda t: key),              mock.patch.object(G, '_record', lambda *a, **k: calls.append(a)),              mock.patch.object(G, '_log_ip', lambda *a, **k: None),              mock.patch.object(G, 'get_security_config', lambda: {'enabled': False}):
-            G._authorize(mock.Mock(), model)
+            from starlette.requests import Request
+            request = Request({'type': 'http', 'method': 'POST', 'path': '/v1/chat/completions',
+                               'headers': [], 'query_string': b'', 'client': ('127.0.0.1', 10000)})
+            G._authorize(request, model)
         return calls
 
     def test_realm_rejection_carries_mapped_name(self) -> None:

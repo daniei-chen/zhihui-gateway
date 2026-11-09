@@ -93,6 +93,7 @@ class GatewayPassthroughTest(unittest.TestCase):
     """确认网关没有「改写 SSE」的代码路径 —— 这是上面结论的前提。"""
 
     def test_gateway_source_does_not_rewrite_sse(self) -> None:
+        import inspect
         src = (Path(__file__).resolve().parents[2] / 'server' / 'routers' / 'gateway.py'
                ).read_text(encoding='utf-8')
         # 转发热路径只 yield 上游 chunk；不应出现「重新构造/替换帧」的迹象
@@ -101,8 +102,12 @@ class GatewayPassthroughTest(unittest.TestCase):
         # 所有 yield 出来的都必须是上游原样的 chunk（不能有第二个变量名混进来）
         # 注意：这里按**出现次数**断言，只查包含太弱——文件里有两处 yield，
         # 改掉其中一处仍会通过（这个弱点是被反证试出来的）。
-        yields = [ln.strip() for ln in src.splitlines() if ln.strip().startswith('yield ')]
-        self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text)','yield observability.sse_error(error_text)'],
+        # Inspect the complete forwarding handler, including its async stream.
+        # The module also has a synchronous Unicode-tree iterator whose yields
+        # are unrelated to response bytes and must not count as SSE rewrites.
+        forwarding_src = inspect.getsource(gateway._chat)
+        yields = [ln.strip() for ln in forwarding_src.splitlines() if ln.strip().startswith('yield ')]
+        self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text, leading_separator=True)','yield observability.sse_error(error_text, leading_separator=True)'],
                          f'转发热路径出现了非透传的 yield：{yields}')
 
     def test_no_tool_calls_handling_anywhere(self) -> None:
@@ -128,7 +133,13 @@ class GatewayPassthroughTest(unittest.TestCase):
         有人复核，静默放行会让这条约束慢慢失效。
         """
         # 例外：协议转换层（不是转发热路径）
-        allow = {'routers/anthropic.py', 'routers/responses.py', 'observability.py'}
+        allow = {'routers/anthropic.py', 'routers/responses.py', 'observability.py',
+                 # The metered steward is a tool-calling CLIENT, not a proxy
+                 # transformer. Its two-round/tool budget has dedicated tests.
+                 'steward_ai.py',
+                 # These three expose model capability metadata; they do not
+                 # process or rewrite generation payloads or SSE deltas.
+                 'qtgcore/models.py', 'qtgcore/service.py', 'qtgcore/routers/compat_fixes.py'}
         # Observation reads tool deltas for timing; it never mutates forwarded chunks.
         root = Path(__file__).resolve().parents[2] / 'server'
         hits = []
@@ -141,6 +152,13 @@ class GatewayPassthroughTest(unittest.TestCase):
             if 'tool_calls' in f.read_text(encoding='utf-8'):
                 hits.append(str(f.relative_to(root)))
         self.assertEqual(hits, [], f'以下文件开始处理 tool_calls：{hits}')
+
+    def test_steward_is_not_imported_into_proxy_forwarding(self) -> None:
+        import ast
+        tree = ast.parse(Path(gateway.__file__).read_text(encoding='utf-8'))
+        imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertFalse(any('steward' in (getattr(node, 'module', '') or '')
+                            or any('steward' in alias.name for alias in node.names) for node in imports))
 
 
 if __name__ == '__main__':

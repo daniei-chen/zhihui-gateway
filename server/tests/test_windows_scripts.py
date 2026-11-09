@@ -152,80 +152,37 @@ class GitAttributesTest(unittest.TestCase):
     def test_rule_is_not_vacuous(self) -> None:
         """反证：确认这条规则真的会作用于我们的脚本路径（而不是没匹配上）。"""
         import subprocess
-
-        r = subprocess.run(
-            ['git', 'check-attr', 'eol', '--', 'deploy/windows-native/start-workbuddy2api.cmd'],
-            cwd=str(_ROOT), capture_output=True, text=True, timeout=60,
-        )
-        if r.returncode != 0:
-            self.skipTest('本环境没有 git，跳过（CI 上会跑）')
+        import shutil
+        import tempfile
+        if shutil.which('git') is None:
+            self.skipTest('git is not installed')
+        # Release archives intentionally omit .git. Test the actual attributes
+        # in a temporary repository instead of silently skipping archive builds.
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / '.gitattributes').write_bytes((_ROOT / '.gitattributes').read_bytes())
+            subprocess.run(['git', 'init', '-q', name], check=True, capture_output=True, timeout=60)
+            r = subprocess.run(
+                ['git', 'check-attr', 'eol', '--', 'deploy/windows-native/start-workbuddy2api.cmd'],
+                cwd=name, capture_output=True, text=True, timeout=60, check=True)
         self.assertIn('eol: crlf', r.stdout, f'git 没把该文件判成 crlf：{r.stdout!r}')
 
 
 
 class WindowsUpdaterIntegrityTest(unittest.TestCase):
-    """Windows 一键更新脚本（`update.ps1`）的完整性守卫。
+    """Retired installers must fail before network, replacement or service control."""
+    SCRIPTS=('windows/update.ps1','windows/prepare.ps1','windows/start.ps1','windows/launcher/build.ps1')
 
-    2026-10-13 起这里不再有「离线私钥验签」（原因见 docs/release-signing.md），
-    改为核对发布包 sha256。这条门禁的特点是**失效时不报错**：一句 `-not` 写反、
-    或校验结果没被用来中止流程，就变成「装什么都放行」，而界面看起来一切正常。
-    所以按文本机械地钉住四件事。
-    """
-
-    UPDATER = _ROOT / 'windows' / 'update.ps1'
-
-    def _src(self) -> str:
-        return self.UPDATER.read_text(encoding='utf-8-sig')
-
-    def test_script_exists(self) -> None:
-        self.assertTrue(self.UPDATER.is_file(), f'找不到 {self.UPDATER}')
-
-    def test_hashes_with_sha256(self) -> None:
-        src = self._src()
-        self.assertIn('Test-PackageDigest', src, '没有摘要校验函数')
-        self.assertIn('Get-FileHash', src, '没有真的算哈希')
-        self.assertIn('-Algorithm SHA256', src, '算的不是 sha256 —— 发布页给的是 sha256')
-
-    def test_digest_mismatch_is_fatal(self) -> None:
-        """摘要不符必须中止：函数返回 $false，且调用点据此 exit。"""
-        src = self._src()
-        body = src.split('function Test-PackageDigest', 1)[1].split('\n# ──', 1)[0]
-        self.assertIn('return $false', body, '摘要不符的分支没有报失败')
-        self.assertIn('已拒绝安装', body, '摘要不符时没有给出明确拒绝语')
-        call = [l.strip() for l in src.splitlines() if 'Test-PackageDigest -archivePath' in l]
-        self.assertTrue(call, '没有任何地方调用摘要校验')
-        self.assertTrue(any(l.startswith('if (-not (Test-PackageDigest') for l in call),
-                            f'调用点没有按「失败即中止」写：{call}')
-        after = src.split('Test-PackageDigest -archivePath', 1)[1]
-        self.assertIn('exit 1', after.split('# ──', 1)[0],
-                      '校验失败后没有中止更新流程')
-
-    def test_signature_machinery_is_gone(self) -> None:
-        """旧的公钥验签要不留残渣：留着会让人以为还有这道门禁。"""
-        src = self._src()
-        for token in ('Test-PackageSignature', 'ssh-ed25519', 'allowed_signers',
-                      'tar.gz.sig'):
-            self.assertNotIn(token, src, f'{token} 仍在脚本里 —— 旧的签名门禁没清干净')
-
-    def test_no_unverified_source_update(self) -> None:
-        """不许在更新流程里 `git reset/fetch`：那是**第二条代码来源**。
-
-        会把 origin 指向的任意代码（fork、镜像）铺进用户目录，并丢弃本地改动。
-        """
-        src = self._src()
-        offending = [l.strip() for l in src.splitlines()
-                     if re.search(r'\bgit\s+(reset|fetch|pull|checkout)\b', l)
-                     and not l.strip().startswith('#')]
-        self.assertEqual(offending, [], f'更新流程里出现了 git 代码来源：{offending}')
-
-    def test_confirm_before_destructive_phase(self) -> None:
-        """停服务 / 清 web/out / 覆盖文件之前必须有一次确认。"""
-        src = self._src()
-        self.assertRegex(src, r'Read-Host\s+"[^"]*确认', '更新前没有确认提示')
-        # 且确认必须在「停服务」之前
-        self.assertLess(src.index('Read-Host'), src.index('stop.ps1'),
-                        '确认排在了停服务之后 —— 用户点「不要」时服务已经被停了')
-
+    def test_retired_entries_have_no_side_effecting_program(self):
+        for name in self.SCRIPTS:
+            with self.subTest(script=name):
+                src=(_ROOT/name).read_text(encoding='utf-8-sig')
+                statements=[line.strip() for line in src.splitlines()
+                            if line.strip() and not line.lstrip().startswith('#')]
+                self.assertEqual(len(statements),2)
+                self.assertTrue(statements[0].startswith('Write-Error '))
+                self.assertEqual(statements[1],'exit 2')
+                self.assertNotRegex(src,r'https?://|Invoke-WebRequest|Start-Process|Stop-Service')
 
 
 class WindowsScriptLayoutTest(unittest.TestCase):
@@ -258,7 +215,7 @@ class WindowsScriptLayoutTest(unittest.TestCase):
     def test_root_is_the_parent_directory(self) -> None:
         """项目根必须由**脚本目录的上一级**算出，而不是脚本自己所在目录。"""
         for name, src in self._scripts().items():
-            if not name.endswith('.ps1'):
+            if not name.endswith('.ps1') or name in ('start.ps1','update.ps1'):
                 continue
             with self.subTest(script=name):
                 self.assertIn('$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path', src)

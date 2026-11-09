@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from .. import budget, security
+from .. import budgetreview
 
 router=APIRouter(prefix='/api/budgets',tags=['budgets'])
 
@@ -9,14 +10,48 @@ class Resolution(BaseModel):
     tokens: int = Field(ge=0)
     credit: float = Field(ge=0,allow_inf_nan=False)
     reason: str = Field(min_length=1,max_length=500)
+    evidence: str = Field(min_length=8,max_length=500)
+
+
+@router.get('/review')
+def review(limit: int = 25, bucket: str = 'all', cursor: str | None = None,
+           user=Depends(security.require_admin)):
+    try:
+        return budgetreview.page(limit=limit, bucket=bucket, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from None
+
+
+@router.get('/review/evidence')
+def review_evidence(request_id: str, user=Depends(security.require_admin)):
+    try:
+        return budgetreview.evidence(request_id)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(404, detail=str(exc)) from None
 
 @router.get('/unresolved')
-def unresolved(user=Depends(security.require_admin)):
-    return {'items':budget.unresolved()}
+def unresolved(user=Depends(security.require_panel_reader)):
+    """未结算预留 + unknown 分类汇总（U02）。
+
+    返回结构向后兼容（`items` 原样保留），新增 `summary`：
+      · by_class          六类互斥分类的计数
+      · auto_reconcilable 完整上游回执与不可变用量事件均确认零用量的条数
+      · needs_human       其余待核对请求，包括只有拒绝错误、没有完整用量证据的请求
+      · review_buckets   按新增/历史、7 天以上、明确拒绝拆分的人工队列
+      · token_lower_bound 预留估算之和（**不是**实际用量）
+      · credit_lower_bound 恒为 0 —— 本地没有定价表，不编造金额
+    """
+    return budget.unresolved_summary()
 
 @router.post('/{request_id}/resolve')
-def resolve(request_id:str,body:Resolution,user=Depends(security.require_admin)):
+def resolve(request_id:str,body:Resolution,user=Depends(security.require_recent_session_admin)):
     try:
-        return {'changed':budget.resolve(request_id,body.tokens,body.credit,user['username'],body.reason)}
+        if len(body.reason.strip()) < 8 or len(body.evidence.strip()) < 8:
+            raise ValueError('核销原因和凭证说明至少8字符')
+        with security.authorization_guard(user):
+            return {'changed':budget.resolve(request_id,body.tokens,body.credit,user['username'],body.reason,
+                                             human_evidence=body.evidence)}
     except ValueError as exc:
         raise HTTPException(409,detail=str(exc)) from None

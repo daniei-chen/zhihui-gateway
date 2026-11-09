@@ -1,4 +1,4 @@
-"""WorkBuddy Manager 入口：管理 API + 对外反代网关 + 静态前端托管。"""
+"""智汇网关（zhihui-gateway）入口：管理 API + 对外反代网关 + 静态前端托管。"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -10,80 +10,244 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import logging
+import os
 import asyncio
+import threading
+import time
 
-from . import config, db, redpacket, security
+from . import archiveworker, config, db, drain, redpacket, security
 from .iputil import client_ip
 from .stdio_utf8 import force_utf8_stdio
 from .routers import (
-    accounts, anthropic, auth, gateway, keys, logs, models, playground,
-    pgsync as pgsync_router, redpackets, responses, security as security_router,
-    proxies, settings, stats, system, tokens, upstreams,
+    accounts, anthropic, auth, engine, gateway, keys, logs, models, playground,
+    pgsync as pgsync_router, read_api, redpackets, responses,
+    security as security_router, proxies, settings, stats, system, tokens, upstreams, steward,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
+from .services.asyncwork import joined_thread
+from .services.startupchecks import WeakAdminCheck
 from .routers import budgets
+from .routers import qtg_panel
+from .routers import portal
 
 # 最早时刻把标准输出/错误钉成 UTF-8：Windows 中文区域默认按 cp936 编码，日志里
 # 一旦出现 emoji（账号昵称就可能带）就会抛 UnicodeEncodeError —— 与「成长任务」
 # 那次崩溃同源（issue #147），只是触发条件更少。
 force_utf8_stdio()
 
+def _configure_app_logging() -> None:
+    """给应用 logger 装 handler（2026-10-27 审计：此前一个都没有）。
+
+    为什么必须做：root logger 默认 WARNING，而全仓有 38 处 `logger.info(...)`
+    —— 包括启动事件、签到调度、令牌刷新、保留期清理。没有 handler 时它们**全部
+    被丢弃**，出问题时只能翻 uvicorn 的 access log 猜。实测：签到调度确实在跑
+    （random_checkin.json 里有 done 记录），日志里却一条都没有。
+
+    为什么只压这几个库：httpx / httpcore / urllib3 / docker / asyncio 每请求都打
+    INFO，不压会把应用日志淹掉。应用自身的 INFO 只有 38 处且无每请求级调用。
+
+    可用 `WB_LOG_LEVEL` 覆盖（DEBUG/INFO/WARNING/ERROR）。
+    """
+    if logging.getLogger().handlers:
+        return          # 已被 pytest / uvicorn --log-config 等配置过，不重复加
+    level_name = (os.environ.get('WB_LOG_LEVEL') or 'INFO').upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    )
+    for _noisy in ('httpx', 'httpcore', 'urllib3', 'docker', 'asyncio', 'watchfiles'):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+_configure_app_logging()
+
 logger = logging.getLogger(__name__)
+
+# 进程启动时刻（墙上钟）：/metrics 的 uptime 用它与当前时间求差。
+# 此前误用 time.monotonic()（单调钟只保证递增，不是运行时长），数值无意义。
+_PROCESS_STARTED_AT = time.time()
+
+
+def _time_now() -> float:
+    return time.time()
+
+
+def _recover_primary_state():
+    from . import ledgerreplay, budget, userroles
+    if not config.BACKGROUND_JOBS:
+        if config.SHARED_ADMISSION and not config.USERS_FILE.is_file():
+            raise RuntimeError('transition_requires_initialized_users')
+        source = security.load_users()
+        if userroles.migration(source)[0] is not source:
+            raise RuntimeError('transition_requires_primary_role_migration')
+        return
+    security.migrate_user_roles()
+    try:
+        ledgerreplay.recover()
+    except Exception:
+        logger.exception('ledger receipt recovery failed at startup')
+    budget.recover()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail before creating directories, opening the ledger, or starting jobs.
+    from .configcontract import validate_environment
+    app.state.configuration_snapshot = validate_environment()
     config.ensure_dirs()
     db.connect()
+    # U01（2026-10-28）：启动时先消化「上次事务失败留下的完成回执」。失败不阻断
+    # 启动——monitor 循环会继续重放，且就绪判定会因积压>0 保持失败。
+    _recover_primary_state()
     from . import budget
-    budget.recover()
     async def budget_heartbeat():
         while True:
             await asyncio.sleep(10)
             try:
-                budget.heartbeat()
+                await joined_thread(budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
     monitor_task = asyncio.create_task(operational.monitor())
-    security.load_users()  # 首次启动会自动生成管理员并打印一次密码
-    weak_admins = security.weak_admin_passwords()
-    if weak_admins:
-        # 不拒绝启动：用户需要先进面板改密码。日志必须足够醒目。
-        logger.error('管理员仍在使用常见弱口令：%s。请立即在「设置 → 管理用户」'
-                     '中修改；本次生产事故的入口就是 admin123。',
-                     '、'.join(weak_admins))
+    # Portal accounts use a separate store; the persisted opt-in is off by default.
+    from . import portalservice
+    portal_checkins = None
+    # 弱口令巡检改后台线程（原 sitecustomize 猴子补丁收编进源码，2026-10-27）：
+    # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
+    # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
+    # 先进面板改密码，日志必须足够醒目。
+    weak_admin_check = WeakAdminCheck()
     _warn_if_exposed()
-    # 给「抽奖码」这一列上线之前建的红包补码（幂等）：没有码就拼不出抽奖链接，
-    # 等于那些红包只能自己发 key、没法让大家抽。
-    filled = redpacket.backfill_codes()
-    if filled:
-        logger.info('为 %d 个旧红包补上了抽奖码', filled)
-    # 后台采集上游自动任务日志（旅行/活跃/签到/保活），容器日志会被重建清掉，
-    # 这里解析后落库长期保留，界面才能看到「这趟旅行领了多少积分」
-    tasklog.start_collector()
-    # 定时领奖（成长任务里幂等的那一半）：只把已完成任务的奖励领回来，不伪造
-    # 任何活跃上报，因此可以安全地到点自动跑。点亮那半只允许手动（见 taskrun）
-    taskrun.start_scheduler()
-    # token 自动续期（issue #40）：上游只在「保活时刻」与「有流量时」刷新，
-    # 长期闲置的账号会一路走到过期。这里按剩余寿命巡检补齐那个空档。
-    renew.start_scheduler()
-    # 强制冷却到期清理：manual_disabled 不会随 until 自动消失，不清理会让
-    # 定时冷却变成永久停用（见 services/cooling.py）。
-    cooling.start_scheduler()
-    # 每日任务计划（签到 / 领奖 / 做任务）：管理端自己的调度器，把「一键」动作
-    # 做成每天到点自动跑。默认全部关闭，由用户在账号页显式开启（full 有风控风险）。
-    dailyplan.start_scheduler()
-    # 请求日志的「账号」回填（issue #69）：账号是上游选的、不在响应里回传，
-    # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
-    accountlog.start_collector()
-    # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
-    # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
-    pgsync.start_scheduler()
+    if config.BACKGROUND_JOBS:
+        # 后台作业只在「主实例」（systemd 管理的那个）运行。零停机发布的过渡
+        # 实例以 WB_BACKGROUND_JOBS=0 启动：只服务请求，不跑调度器/采集器，
+        # 避免过渡窗口内双实例重复签到、重复回填、重复对账（预算心跳除外——
+        # 它只更新自己名下的预留，必须随请求路径存在）。
+        # 给「抽奖码」这一列上线之前建的红包补码（幂等）：没有码就拼不出抽奖链接，
+        # 等于那些红包只能自己发 key、没法让大家抽。
+        filled = redpacket.backfill_codes()
+        if filled:
+            logger.info('为 %d 个旧红包补上了抽奖码', filled)
+        # 后台采集上游自动任务日志（旅行/活跃/签到/保活），容器日志会被重建清掉，
+        # 这里解析后落库长期保留，界面才能看到「这趟旅行领了多少积分」
+        tasklog.start_collector()
+        # 定时领奖（成长任务里幂等的那一半）：只把已完成任务的奖励领回来，不伪造
+        # 任何活跃上报，因此可以安全地到点自动跑。点亮那半只允许手动（见 taskrun）
+        taskrun.start_scheduler()
+        # token 自动续期（issue #40）：上游只在「保活时刻」与「有流量时」刷新，
+        # 长期闲置的账号会一路走到过期。这里按剩余寿命巡检补齐那个空档。
+        renew.start_scheduler()
+        # 强制冷却到期清理：manual_disabled 不会随 until 自动消失，不清理会让
+        # 定时冷却变成永久停用（见 services/cooling.py）。
+        cooling.start_scheduler()
+        # 每日任务计划（签到 / 领奖 / 做任务）：管理端自己的调度器，把「一键」动作
+        # 做成每天到点自动跑。默认全部关闭，由用户在账号页显式开启（full 有风控风险）。
+        dailyplan.start_scheduler()
+        # 请求日志的「账号」回填（issue #69）：账号是上游选的、不在响应里回传，
+        # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
+        accountlog.start_collector()
+        archiveworker.start()
+        # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
+        # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
+        pgsync.start_scheduler()
+    else:
+        logger.info('WB_BACKGROUND_JOBS=0：后台调度器/采集器已停用（过渡实例形态）')
+    instance_runtime = None
+    # Qoder/Trae control plane (folded in from the standalone qtg service).
+    # Routers read request.app.state.rt, so start the runtime before yield;
+    # failures here only affect the qoder/trae branches.
+    _qtg_rt = None
     try:
+        if not (config.SHARED_ADMISSION and not config.BACKGROUND_JOBS):
+            from .qtgcore.config import load_settings as _qtg_load_settings
+            from .qtgcore.runtime import Runtime as _QtgRuntime
+            _qtg_rt = _QtgRuntime(_qtg_load_settings())
+            await _qtg_rt.startup()
+        app.state.rt = _qtg_rt
+        if _qtg_rt is not None:
+            logger.info('qoder/trae control plane merged in (qtgcore started)')
+        # D-008 修复（2026-10-27 审计 S1）：qtg 合并时**漏了这一步接线**。
+        # `checkin_scheduler.start()` 的 docstring 明确写着「在 lifespan 里调用」，
+        # 但全仓没有任何调用方，于是 qoder/trae 的每日随机签到静默停摆：
+        # compat-plans.json 里 daily.checkin.enabled 一直是 true，last_run 却停在
+        # 2026-10-22-18，random_checkin.json 的 done/attempts/last 全空。
+        # 是否真的签到仍由两道既有开关控制（checkin_scheduler_enabled 与
+        # compat-plans 的 daily.checkin.enabled），这里只恢复代码路径。
+        try:
+            from .qtgcore import checkin_scheduler as _qcheckin
+            # 过渡实例（WB_BACKGROUND_JOBS=0）不跑签到调度，其余 qtg 运行时照常。
+            _qtg_checkin_task = _qcheckin.start(_qtg_rt) if config.BACKGROUND_JOBS else None
+            app.state.qtg_checkin_task = _qtg_checkin_task
+            if _qtg_checkin_task is not None:
+                logger.info('qtgcore 每日随机签到调度已接线并在运行')
+        except Exception:
+            app.state.qtg_checkin_task = None
+            logger.exception('qtgcore 签到调度启动失败（不影响其它功能）')
+    except Exception:
+        logger.exception('qoder/trae control plane failed; workbuddy proxy unaffected')
+    try:
+        if config.BACKGROUND_JOBS:
+            weak_admin_check.start()
+        from .instance_runtime import InstanceRuntime
+        instance_runtime = InstanceRuntime()
+        await instance_runtime.start()
+        app.state.instance_runtime = instance_runtime
+        from .steward_runtime import StewardRuntime
+        steward_instance = StewardRuntime(_qtg_rt)
+        app.state.steward = steward_instance
+        try:
+            await steward_instance.start()
+        except Exception:
+            await steward_instance.close()
+            logger.error('steward startup failed; status is unavailable, gateway remains serving')
+        if config.BACKGROUND_JOBS:
+            portal_checkins = asyncio.create_task(portalservice.automatic_loop())
+        await operational.initialize_readiness()
         yield
     finally:
+        # A completed application lifetime must not leave expensive hash workers
+        # running against another lifetime's configuration or competing for CPU.
+        pending_shutdown_cancel = None
+        try:
+            await weak_admin_check.close()
+        except asyncio.CancelledError as error:
+            # joined_thread has already joined the hash worker. Defer its
+            # cancellation until the remaining leases/clients are also closed.
+            pending_shutdown_cancel = error
+        if portal_checkins is not None:
+            portal_checkins.cancel()
+            try:
+                await portal_checkins
+            except asyncio.CancelledError:
+                pass
+        if getattr(app.state, 'steward', None) is not None:
+            await app.state.steward.close()
+        # D-008：先停签到调度，再关 runtime —— 顺序反了会出现"runtime 已关、
+        # 调度还在签到"的窗口。
+        _qct = getattr(app.state, 'qtg_checkin_task', None)
+        if _qct is not None:
+            _qct.cancel()
+            try:
+                await _qct
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception('qtgcore 签到调度关闭异常')
+        if _qtg_rt is not None:
+            try:
+                await _qtg_rt.shutdown()
+            except Exception:
+                logger.exception('qtgcore shutdown failed')
+        # A managed launcher/pre-stop controller marks drain BEFORE uvicorn
+        # starts shutdown. Lifespan shutdown is only the final cleanup stage.
+        _drain = await drain.wait_until_drained(config.DRAIN_TIMEOUT_SEC)
+        if not _drain['drained']:
+            logger.error('Shutdown reached cleanup with requests outstanding: %s',
+                         _drain['remaining'])
+        if instance_runtime is not None:
+            await instance_runtime.close()
         heartbeat_task.cancel()
         monitor_task.cancel()
         try:
@@ -100,12 +264,17 @@ async def lifespan(app: FastAPI):
         taskrun.stop_scheduler()
         renew.stop_scheduler()
         cooling.stop_scheduler()
-        dailyplan.stop_scheduler()
+        # Plans retain their task leases until owned work has been cancelled
+        # and joined; finish that cleanup before closing shared HTTP clients.
+        await dailyplan.close_scheduler()
         accountlog.stop_collector()
+        await asyncio.to_thread(archiveworker.stop)
         pgsync.stop_scheduler()
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
         await config.close_clients()
+        if pending_shutdown_cancel is not None:
+            raise pending_shutdown_cancel
 
 
 def _warn_if_exposed() -> None:
@@ -125,9 +294,15 @@ def _warn_if_exposed() -> None:
     )
 
 
+def _release_version() -> str:
+    """Product version is independent of the inherited Manager baseline."""
+    from .product import identity
+    return 'v' + identity()['version']
+
+
 app = FastAPI(
-    title='WorkBuddy Manager',
-    version='2.8.3',
+    title='智汇网关',
+    version=_release_version(),
     lifespan=lifespan,
     # 生产环境默认关闭交互式文档与 OpenAPI 描述：
     # 它们会把管理接口全貌（路径、参数、结构）暴露给任何未认证访问者，
@@ -146,9 +321,10 @@ if config.CORS_ORIGINS:
     # 管理员的 Cookie 调 /api/* 并读到响应 —— 等于把控制台交给任何网页。
     # 留空（默认）即同源部署，安全。
     if any(o.strip() == '*' for o in config.CORS_ORIGINS):
-        logging.getLogger('workbuddy').error(
-            'WB_CORS_ORIGINS 含 `*` 且已启用凭据：任意网站都能冒用管理员身份读取 '
-            '/api/*。请改为列出具体来源，或留空（同源部署）。'
+        # v2.10.2：误配 `*` 等于把控制台交给任意网站，直接拒绝启动。
+        raise RuntimeError(
+            'WB_CORS_ORIGINS 含 `*` 且已启用 Cookie 凭据：请改为列出具体来源，'
+            '或留空（同源部署，默认）。'
         )
     app.add_middleware(
         CORSMiddleware,
@@ -170,6 +346,12 @@ MAX_API_BODY_BYTES = 16 * 1024 * 1024
 # 与 `updater.PACKAGE_MAX_BYTES` 必须一致（有测试盯着，别只改一边）。
 MAX_PACKAGE_BODY_BYTES = 64 * 1024 * 1024
 PACKAGE_UPLOAD_PATHS = ('/api/system/update-package',)
+from .portalregistration import BODY_LIMIT as REGISTRATION_BODY_LIMIT
+API_PATH_LIMITS={**{path:MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
+                 '/api/portal/register':REGISTRATION_BODY_LIMIT}
+
+
+app.add_middleware(drain.DrainMiddleware)
 
 
 @app.middleware('http')
@@ -184,17 +366,19 @@ async def limit_api_body(request: Request, call_next):
             declared = int(request.headers.get('content-length') or 0)
         except ValueError:
             declared = 0
-        limit = (MAX_PACKAGE_BODY_BYTES
-                 if request.url.path in PACKAGE_UPLOAD_PATHS else MAX_API_BODY_BYTES)
+        limit = API_PATH_LIMITS.get(request.url.path.rstrip('/'),MAX_API_BODY_BYTES)
         if declared > limit:
+            label=f'{limit//1024} KiB' if limit<1024*1024 else f'{limit//1024//1024} MiB'
             return JSONResponse(
-                {'detail': f'请求体过大（上限 {limit // 1024 // 1024} MB）'},
+                {'detail': f'请求体过大（上限 {label}）'},
                 status_code=413,
             )
     return await call_next(request)
 
 # ── 路由注册顺序很重要：先 API / 网关，最后挂静态文件 ──
 app.include_router(auth.router)
+app.include_router(portal.router)
+app.include_router(portal.admin_router)
 app.include_router(accounts.router)
 app.include_router(keys.router)
 # 红包：批量发放带额度的密钥（与密钥同属「分发」这件事，所以挨着放）
@@ -215,13 +399,143 @@ app.include_router(pgsync_router.router)
 app.include_router(upstreams.router)
 app.include_router(system.router)
 app.include_router(models.router)
+# 内部只读 API 的版本/能力探测（K26）：QTG 先探测契约版本再决定能否读，
+# 不可用时必须报错而不是回退直读 Manager SQLite。
+app.include_router(read_api.router)
+# 引擎侧数据（U3 阶段 2）：Manager 读 QTG 的 `/api/v1/adapter/*` 契约。
+# 与上面 K26 的方向相反 —— 两者合起来才是双向通道：QTG 读 Manager 的账本，
+# Manager 读 QTG 的引擎运行态；缺口在任一侧都必须是显式错误，不许回退直读对端库。
+app.include_router(engine.router)
 app.include_router(playground.router)
+app.include_router(steward.router)
+
+
+@app.get('/readyz', include_in_schema=False)
+def public_ready():
+    from . import operational
+    ready = operational.public_readiness()
+    return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
+
+
 app.include_router(gateway.router)
 # Anthropic Messages API 兼容层（/v1/messages）——给只认该协议的客户端用
 app.include_router(anthropic.router)
 # OpenAI Responses API 兼容层（/v1/responses、/responses）——给 Codex /
 # DeepSeek Harness 的 openai-responses 协议用
 app.include_router(responses.router)
+# Qoder / Trae control plane (folded in from the standalone qtg service):
+# same login as every other manager endpoint, no second credential set.
+app.include_router(qtg_panel.router)
+
+# Qoder/Trae compat control plane (was qtg:8795), mounted under an internal
+# prefix so its /api/* handlers cannot collide with manager own endpoints.
+# 2026-10-27 审计 H-001（第一步）：以下 11 个 router 文件的**全部端点**都不在
+# _QTGP_ROUTE_PREFIXES 白名单内（67 条路由、命中 0 次），已整文件删除：
+#   actions adapter anthropic auth authz capabilities data_admin health ip_guard read system
+# proxy.py **未删**：路由同样不可达，但 compat.py 依赖其中的
+# _base / _catalog / _upstream_key（函数级引用）。
+from .qtgcore.routers import (compat as _qc,
+    compat_accounts_ext as _qace, compat_fixes as _qcf, compat_settings as _qcs,
+    compat_stats as _qst)
+_QTG_INTERNAL = "/__qtg"
+# Only PLATFORM DATA endpoints are routed to the merged qtg control plane.
+# Everything else (login/session/users/tokens/system/settings/keys/security)
+# MUST stay on manager: nginx auth_request calls /api/system/internal-session-verify
+# with the same X-QTG-Platform header, and rewriting it yields a 501 there which
+# nginx turns into a hard 500 for the real request.
+_QTGP_ROUTE_PREFIXES = ("/api/accounts", "/api/stats/", "/api/models",
+                        "/api/model-catalog", "/api/upstreams", "/api/platforms",
+                        "/api/status", "/api/checkin-logs", "/api/logs",
+                        "/api/playground")
+
+def _qtg_should_route(path):
+    if not path.startswith("/api/"):
+        return False
+    for _p in _QTGP_ROUTE_PREFIXES:
+        # H-010：必须按路径段边界匹配。/api/logs 这类无尾斜杠的前缀此前用
+        # startswith 会让 /api/logsXXX 也命中，使"哪些路径走 qtgcore"不可静态推断。
+        _base = _p.rstrip("/")
+        if path == _base or path.startswith(_base + "/"):
+            return True
+    return False
+# Order matters: qtg registers compat LAST (catch-all fallback, see
+# qtg/routeaudit.py REGISTRATION_ORDER); real handlers must come first,
+# otherwise /api/accounts hits compat not_implemented stub.
+for _qr in (_qcf, _qst, _qcs, _qace, _qc):
+    app.include_router(_qr.router, prefix=_QTG_INTERNAL)
+
+@app.middleware('http')
+async def _qtg_platform_route(request, call_next):
+    from fastapi.responses import JSONResponse
+    path = request.url.path
+    if path.startswith(_QTG_INTERNAL) and not getattr(request.state, "qtg_rewritten", False):
+        return JSONResponse({'detail': 'not found'}, status_code=404)
+    platform = (request.headers.get("x-qtg-platform") or "").strip().lower()
+    if not platform:
+        # H-001 / B1（2026-10-27 审计）：平台选择同时接受 `?platform=` 查询参数。
+        # 迁移理由：用请求头承载业务语义，URL 里看不出来、缓存与日志无法区分两种
+        # 响应、任何中间层都可能丢掉它，前端只能靠全局拦截器注入。
+        # 兼容策略：**header 优先**，缺省时才看 query —— 旧前端零影响。
+        try:
+            platform = (request.query_params.get("platform") or "").strip().lower()
+        except Exception:  # noqa: BLE001  取不到就当没有
+            platform = ""
+    if platform in ("qoder", "trae") and _qtg_should_route(path):
+        try:
+            # Identity resolution may wait on a file/SQLite lock. Keep that
+            # blocking work off the loop that also delivers inference streams.
+            _user = await joined_thread(security.current_user, request)
+        except Exception as _exc:
+            # H-011：区分「鉴权失败」与「内部错误」。此前一律 401，导致
+            # DB 抖动 / 用户文件读失败 / 磁盘满都表现为"未登录"——用户被莫名
+            # 踢到登录页，监控上只见大量 401，真实故障（5xx 级）被完全掩盖。
+            if getattr(_exc, 'status_code', 500) == 401:
+                return JSONResponse({'detail': 'auth required'}, status_code=401,
+                                    headers={'WWW-Authenticate': 'Bearer'})
+            if getattr(_exc, 'status_code', 500) == 403:
+                return JSONResponse({'detail': getattr(_exc, 'detail', 'Forbidden')},
+                                    status_code=403, headers=getattr(_exc, 'headers', None))
+            logger.exception('qtg 平台路由：身份解析出现内部错误')
+            return JSONResponse({'detail': 'internal error'}, status_code=500)
+        import time as _t
+        from .qtgcore.identity import Identity as _I
+        _role = 'admin' if _user.get('role') == 'admin' else 'viewer'
+        # ── S0 授权闸门（H-000 / B-001 / D-001，2026-10-27 审计修复）────────
+        # qtgcore 的 handler 签名里没有任何 Depends 授权依赖，而 manager 原生
+        # 同路径 handler 全部有 require_admin。若不在此拦，已登录的 viewer 与
+        # scope=read/keys 服务令牌都能通过 X-QTG-Platform 头执行写操作
+        # （实测 viewer 会话成功对真实账号完成签到）。
+        #
+        # 判据：写方法必须同时满足「cookie 身份 role=admin」且「不是服务令牌」
+        # （_token_identity 会设 request.state.token_id；cookie 路径不设）。
+        # 读方法（GET/HEAD/OPTIONS）行为不变，面板查看不受影响。
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            _is_privileged = (_user.get('role') == 'admin'
+                              and not getattr(request.state, 'token_id', None))
+            if not _is_privileged:
+                return JSONResponse({'detail': '需要管理员权限'}, status_code=403)
+        _now = int(_t.time())
+        request.state.identity = _I(sub=str(_user.get("username") or "manager"),
+            role=_role, scopes=frozenset({"*"} if _role == "admin" else {"read"}),
+            auth_method="manager_session", aud="qtg", exp=_now + 60,
+            iat=_now, iss="manager", jti="")
+        # H-001/B3（2026-10-27 审计）：平台解析结果落到请求上下文，
+        # qtgcore 统一读 state（identity.platform_of），不再各自解析请求头。
+        request.state.qtg_platform = platform
+        request.state.qtg_rewritten = True
+        request.scope["path"] = _QTG_INTERNAL + path
+        request.scope["raw_path"] = (_QTG_INTERNAL + path).encode()
+        # H-001/B1（2026-10-27 审计）：平台若来自 `?platform=`（客户端没发请求头），
+        # 这里把它补进 scope 的 headers —— qtgcore 内部有 10+ 处独立读
+        # `x-qtg-platform`（compat.py 8 处、authz.py、proxy.py），不补的话它们
+        # 读到空值就按「不过滤」处理，返回全部平台数据（实测 total 从 1 变 34）。
+        # 注意：这只是让两种入口行为一致；真正统一语义要改那 10+ 处为显式参数。
+        if not (request.headers.get("x-qtg-platform") or "").strip():
+            _h = [(k, v) for k, v in request.scope.get("headers") or []
+                  if k.lower() != b"x-qtg-platform"]
+            _h.append((b"x-qtg-platform", platform.encode("latin-1")))
+            request.scope["headers"] = _h
+    return await call_next(request)
 
 
 @app.middleware('http')
@@ -239,6 +553,7 @@ async def cache_headers(request: Request, call_next):
     - CSP: 只允许同源资源与内联样式（前端使用内联样式属性）；
       限制外联目标，降低 XSS 得手后的影响面
     """
+    original_path = request.url.path
     response = await call_next(request)
 
     # 会话滑动续期：current_user 判定「该续了」时在这里重签 cookie。
@@ -246,30 +561,47 @@ async def cache_headers(request: Request, call_next):
     # 为什么放中间件而不是 current_user 里：那个函数是 FastAPI 依赖，只负责
     # **解析身份**，在它里面写响应会耦合出不必要的层，而且它被大量接口调用、
     # 有的还是只读的。中间件是唯一能看到「响应对象 + 请求状态」的地方。
-    if getattr(request.state, 'session_renew', False):
+    cookie_already_set = any(
+        value.split('=', 1)[0].strip() == config.COOKIE_NAME
+        for value in response.headers.getlist('set-cookie')
+    )
+    if (getattr(request.state, 'session_renew', False)
+            and response.status_code < 400 and not cookie_already_set):
         try:
             token = request.cookies.get(config.COOKIE_NAME) or ''
-            cfg = security.load_users()
-            obj = security._unsign(token, cfg['secret']) or {}
-            username = str(obj.get('username') or '')
-            if username:
+            def renew_cookie():
+                cfg = security.load_users()
+                obj = security._unsign(token, cfg['secret']) or {}
+                username = str(obj.get('username') or '')
+                if not username:
+                    return None
                 # orig 原样延续 —— 续期只推后**空闲截止**，不延长**总寿命**。
                 # role 传空：鉴权一律以用户表为准（载荷里的 role 仅作展示参考）。
-                fresh = security.issue_token(username, '', orig=int(obj.get('orig') or 0) or None)
+                return security.issue_token(
+                    username, '', orig=int(obj.get('orig') or 0) or None,
+                    expected_sv=int(obj.get('sv') or 0),
+                )
+            # File/authorization locks can wait behind an administrator update.
+            # Other streams must keep progressing while this cookie is renewed.
+            fresh = await joined_thread(renew_cookie)
+            if fresh:
                 response.set_cookie(
                     config.COOKIE_NAME, fresh,
                     max_age=config.SESSION_DAYS * 86400, httponly=True,
                     samesite='lax', secure=security.cookie_secure(request), path='/',
                 )
+        except security.HTTPException:
+            # Revoked/deleted while the request was running: do not renew it.
+            pass
         except Exception as exc:  # noqa: BLE001
             # 续期失败不能让请求失败 —— 用户这次照常，只是下次要重登
             logger.warning('会话续期失败（不影响本次请求）: %s', exc)
 
-    path = request.url.path
+    path = original_path
     if path.startswith('/_next/static/'):
         # 文件名含内容哈希，内容变了文件名就变，可长期强缓存
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
-    elif path.startswith(('/api/', '/v1/', '/v2/', '/healthz')):
+    elif path in {'/metrics', '/readyz', '/responses', '/responses/'} or path.startswith(('/api/', '/v1/', '/v2/', '/healthz', _QTG_INTERNAL + '/api/')):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
     elif path.startswith('/favicon/') or path.endswith(('.png', '.ico', '.svg', '.woff2', '.webmanifest')):
@@ -290,6 +622,10 @@ async def cache_headers(request: Request, call_next):
         "style-src 'self' 'unsafe-inline'; "
         "script-src 'self' 'unsafe-inline'; "
         "connect-src 'self'; "
+        # object-src 必须显式写 'none'：只靠 default-src 'self' 回退时，
+        # 同源的 <object>/<embed> 仍可加载插件内容（CSP3 §6.1 推荐显式声明）。
+        # 本应用没有任何插件内容，收紧到 none 无兼容成本。
+        "object-src 'none'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'",
@@ -301,7 +637,7 @@ async def cache_headers(request: Request, call_next):
 def sysinfo(user: dict = Depends(security.current_user)) -> dict:
     """服务信息。需要登录 —— 路径类信息不应对未认证访问者暴露。"""
     return {
-        'service': 'workbuddy-manager',
+        'service': 'zhihui-gateway',
         'version': app.version,
     }
 
@@ -402,6 +738,25 @@ if config.STATIC_DIR.is_dir():
 
     @app.get('/{full_path:path}', include_in_schema=False)
     def spa(full_path: str, request: Request):
+        if full_path == "metrics":
+            return prometheus_metrics(request)
+        # H-004：/api/* 走到这里意味着「没有任何业务路由匹配」（路径不存在，
+        # 或路径存在但方法不对被 Starlette 跳过后落到本兜底）。此前会返回
+        # 11777 字节的 404.html，前端 res.json() 抛 SyntaxError 被伪装成
+        # "数据加载失败"，真实原因完全被掩盖。这里明确回 JSON，
+        # 并给出 method 已注册时正确的 405 语义。
+        if full_path == "api" or full_path.startswith("api/"):
+            _path = "/" + full_path
+            _allow = sorted({
+                m for r in app.routes
+                for m in (getattr(r, "methods", None) or ())
+                if getattr(r, "path", None) == _path and m not in ("HEAD", "OPTIONS")
+            })
+            if _allow:
+                return JSONResponse(
+                    {"detail": "method not allowed", "allow": _allow},
+                    status_code=405, headers={"Allow": ", ".join(_allow)})
+            return JSONResponse({"detail": "not found"}, status_code=404)
         # 优先命中导出的静态页面 / 资源，否则回退到 404 页面。
         # 所有路径都必须先通过 _safe_static_path（越界即 None → 404）。
         #
@@ -492,7 +847,14 @@ class StripBasePathMiddleware:
 
 
 from .bodyguard import APIBodyGuard
-app.add_middleware(APIBodyGuard)
+# N39：bodyguard 的实际上限必须与上面的声明长度预检一致，否则会出现
+# "声明 64 MiB 放行、读取到 16 MiB 被 413"（实测 17 MiB 升级包传不上去）。
+app.add_middleware(
+    APIBodyGuard,
+    maximum=MAX_API_BODY_BYTES,
+    path_limits=API_PATH_LIMITS,
+    path_timeouts={'/api/portal/register':5},
+)
 
 if config.BASE_PATH:
     # add_middleware 后注册的在外层，所以这行放在文件末尾：请求进来先过它，
@@ -502,3 +864,57 @@ if config.BASE_PATH:
 
 from .observability import RequestAuditMiddleware
 app.add_middleware(RequestAuditMiddleware)
+
+
+# ── 三平台 URL 前缀（2026-10-23）───────────────────────────────────────────
+# /qoder/v1/* 与 /trae/v1/* 各自锁定一个上游：路径重写成 /v1/* 后复用同一条
+# 鉴权 / 限流 / 预算 / 记账链路，模型名保持各平台原生（Auto、glm-5.3-flash）。
+# 注册在文件末尾 = 包在最外层，路由看到的就是重写后的路径。
+from .routers import gateway as _threeway_gateway
+
+
+from .platformpolicy import PlatformRoutingMiddleware
+app.add_middleware(PlatformRoutingMiddleware, base_path=config.BASE_PATH)
+
+
+
+# ── Prometheus 指标（2026-10-23 审计补充：manager 之前完全没有 /metrics）──────
+# Application authentication is mandatory even behind a proxy or static fallback.
+# Collectors use an independent credential; normal readonly/keys tokens do not qualify.
+@app.get('/metrics')
+def prometheus_metrics(request: Request):
+    from .metricsauth import require_metrics
+    require_metrics(request)
+    from fastapi.responses import PlainTextResponse
+
+    from .runtimemetrics import METRICS
+    lines: list[str] = METRICS.render()
+
+    def _m(name: str, mtype: str, help_: str, value) -> None:
+        if not any(x.startswith('# HELP ' + name + ' ') for x in lines):
+            lines.append('# HELP %s %s' % (name, help_))
+            lines.append('# TYPE %s %s' % (name, mtype))
+        lines.append('%s %s' % (name, value))
+
+    _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
+    _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
+       int(time.time() - _PROCESS_STARTED_AT))
+
+    try:
+        from . import observability as _obs
+        snap = _obs.admission_snapshot()
+        if snap is not None:
+            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', snap['active'])
+            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', snap['large'])
+            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', snap['maximum'])
+            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', snap['inflight_body_bytes'])
+            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', snap['maximum_body_bytes'])
+            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', snap['capacity_rejections'])
+            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', snap['key_slots'])
+            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', snap['queued'])
+            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', snap['queue_timeouts'])
+            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', snap['queue_overflows'])
+    except Exception as exc:                                    # noqa: BLE001
+        logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
+
+    return PlainTextResponse('\n'.join(lines) + '\n', media_type='text/plain; version=0.0.4')

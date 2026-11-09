@@ -1,11 +1,12 @@
 """上游配置、模型映射与管理端用户。"""
 from __future__ import annotations
 
+import json
 import os
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import db, security
 from ..iputil import client_ip
@@ -117,7 +118,7 @@ def save_model_map(body: dict[str, str], user: dict = Depends(security.require_a
 
 # ── GitHub Token（版本检测 / 一键更新）────────────────────
 @router.get('/settings/github-token')
-def get_github_token(user: dict = Depends(security.require_admin)) -> dict:
+def get_github_token(user: dict = Depends(security.require_panel_reader)) -> dict:
     """读当前生效的 GitHub Token（**只回掩码**）。
 
     为什么只给管理员：它是凭据，能操作对应的 GitHub 账号配额；普通用户不需要它。
@@ -153,7 +154,7 @@ def save_github_token(body: dict, user: dict = Depends(security.require_admin)) 
 
 # ── GitHub 镜像（issue #216）─────────────────────────────────
 @router.get('/settings/github-mirror')
-def get_github_mirror(user: dict = Depends(security.require_admin)) -> dict:
+def get_github_mirror(user: dict = Depends(security.require_panel_reader)) -> dict:
     """当前生效的 GitHub 镜像基址 + 来源（面板 / 环境变量 / 未配置）。"""
     env_value = updater.normalize_mirror(os.environ.get('WB_GITHUB_MIRROR') or '')
     stored = updater.stored_github_mirror()
@@ -194,24 +195,106 @@ def save_github_mirror(body: dict, user: dict = Depends(security.require_admin))
 class UserIn(BaseModel):
     username: str = Field(min_length=1, max_length=32)
     password: str = Field(min_length=1)
-    role: str = Field(pattern='^(admin|viewer)$')
+    role: str = Field(pattern='^(admin|account_admin)$')
+
+    @field_validator('username')
+    @classmethod
+    def valid_username(cls, value: str) -> str:
+        if (value in ('.', '..') or any(c.isspace() or ord(c) < 32 or ord(c) == 127
+                                      or c in '/\\?#%' for c in value)):
+            raise ValueError('用户名不能含空白、控制字符或路径分隔符')
+        return value
 
 
 class UserPatch(BaseModel):
     password: str | None = None
-    role: str | None = Field(default=None, pattern='^(admin|viewer)$')
+    role: str | None = Field(default=None, pattern='^(admin|account_admin)$')
 
 
 def _public(cfg: dict) -> list[dict]:
     return [{'username': u['username'], 'role': u.get('role', 'viewer')} for u in cfg.get('users', [])]
 
 
+#: `/api/settings/panel` 对外暴露的设置键**白名单**（U19）。
+#:
+#: 为什么是白名单而不是"全表返回后再剔除敏感键"：黑名单的失效模式是「将来新增
+#: 一个凭据类键 → 静默泄露给任何登录用户」；白名单的失效模式是「新键不显示，
+#: 用户去它自己的页面看」——安全方向相反（与 wb2api.load_upstream_config 同一
+#: 口径）。被排除的敏感键（保留在此仅为审计对照，不参与运行）：
+#:   · `github_token`   —— GitHub 凭据（另有 admin-only 的掩码读端点）
+#:   · `pg_sync_config` —— 含数据库连接串（带密码）
+#:   · `update_proxy` / `proxy_pool` / `proxy_health` / `proxy_sticky`
+#:                      —— 代理地址与绑定表，userinfo 里带账号密码
+#:   · `security`       —— 安全策略（另有 /api/security/* 管理端点）
+_PANEL_SETTING_KEYS = frozenset({
+    # 模型别名映射（同一份数据已在 GET /api/settings/model-map 对 current_user 开放）
+    'model_map',
+    # 提示词兼容开关与脱敏规则（网关行为，非凭据）
+    'prompt_compat_enabled',
+    'prompt_defuse_rules',
+    # 全局出口代理的**总开关**（只是布尔；地址/凭据在别的键里，不在白名单）
+    'global_proxy_enabled',
+    # 调度与计划类（时间窗口、计划、快照，均非凭据）
+    'task_claim_schedule',
+    'daily_tasks_plan',
+    'token_refresh_plan',
+    'credits_snapshot',
+    # 离线升级包的元信息（文件名/大小/摘要/版本，不含包内容）
+    'update_package',
+})
+
+
+def _panel_value(raw: object) -> object:
+    """`settings.value` 是 JSON 文本；解析失败就回原文（不猜、不丢）。"""
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+@router.get('/settings/panel')
+def settings_panel(user: dict = Depends(security.current_user)) -> dict:
+    """管理端设置面板（`settings` 表，**key/value 形状**）。
+
+    U19（2026-10-28）修正：`settings` 是 `(key TEXT PRIMARY KEY, value TEXT)` 的
+    key/value 表，旧实现却用 `SELECT * FROM settings LIMIT 1` 取**一行**，于是
+    响应变成 `{'key': …, 'value': …}`：
+
+      · **形状不对**：调用方拿到的是"某一行的两个列"，不是配置本身；
+      · 取到哪一行完全由扫描顺序决定 —— 可能正好是 `github_token`，于是
+        **任何登录用户（含 viewer）都能读到凭据明文**。
+
+    现在按 key 逐个取值，并且只发白名单 `_PANEL_SETTING_KEYS` 里的键；值按 JSON
+    解析（与 `db.get_setting` 同一口径），解析不了就回原文。
+
+    返回空 dict = 尚未写入任何设置（与"读不到"区分：后者会 5xx）——QTG 的读通道
+    依赖这个契约（`allow_empty_object`），不能改成 null 或抛错。
+    """
+    import sqlite3
+    try:
+        with db.transaction() as conn:
+            rows = conn.execute('SELECT key, value FROM settings').fetchall()
+    except sqlite3.Error as exc:
+        # 结构异常/无表：明确失败，不返回空对象（否则调用方会把"读不到"当成"没配置"）
+        raise HTTPException(status_code=503, detail=f'设置表不可读：{exc}') from exc
+    panel: dict = {}
+    for row in rows:
+        key = str(row[0])
+        if key not in _PANEL_SETTING_KEYS:
+            continue
+        panel[key] = _panel_value(row[1])
+    return panel
+
+
 @router.get('/users')
-def list_users(user: dict = Depends(security.current_user)) -> list[dict]:
+def list_users(user: dict = Depends(security.require_session_reader)) -> list[dict]:
     return _public(security.load_users())
 
 
 @router.post('/users')
+@security.user_mutation
 def add_user(body: UserIn, request: Request,
              user: dict = Depends(security.require_session_admin)) -> dict:
     """新建管理用户。
@@ -220,9 +303,10 @@ def add_user(body: UserIn, request: Request,
     而这一步当时没有任何记录。新建用户写随机 sv，避免同名重建后旧 cookie 复活。
     """
     pw = str(body.password)
-    problem = security.password_problem(pw, body.username)
+    problem = security.managed_user_password_problem(pw, body.username)
     if problem:
         raise HTTPException(status_code=400, detail=problem)
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     if any(u.get('username') == body.username for u in cfg.get('users', [])):
         raise HTTPException(status_code=409, detail='用户名已存在')
@@ -241,6 +325,7 @@ def add_user(body: UserIn, request: Request,
 
 
 @router.patch('/users/{username}')
+@security.user_mutation
 def update_user(username: str, body: UserPatch, request: Request,
                 user: dict = Depends(security.require_session_admin)) -> dict:
     """改密码 / 改角色。
@@ -252,21 +337,26 @@ def update_user(username: str, body: UserPatch, request: Request,
 
     吊销按用户进行（递增其 sv），不影响其他已登录用户。
     """
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     target = next((u for u in cfg.get('users', []) if u.get('username') == username), None)
     if not target:
         raise HTTPException(status_code=404, detail='用户不存在')
 
     changed_pwd = changed_role = False
-    if body.password:
+    if body.password is not None:
         pw = str(body.password)
-        # 管理端是公网入口：弱口令等于没有防护，统一走与启动时相同的策略。
-        problem = security.password_problem(pw, username)
+        # The root keeps its strong policy; role changes do not change other
+        # users' password format or invalidate existing passwords by themselves.
+        problem = (security.password_problem(pw, username) if username == 'admin'
+                   else security.managed_user_password_problem(pw, username))
         if problem:
             raise HTTPException(status_code=400, detail=problem)
         target['pwd_hash'] = security.make_hash(pw)
         changed_pwd = True
     if body.role and body.role != target.get('role'):
+        if username == 'admin':
+            raise HTTPException(status_code=400, detail='admin 主账号必须保留超级管理员权限')
         admins = [u for u in cfg.get('users', []) if u.get('role') == 'admin']
         if target.get('role') == 'admin' and len(admins) <= 1:
             raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
@@ -294,7 +384,7 @@ def update_user(username: str, body: UserPatch, request: Request,
         security.audit(user, 'update_user', username,
                        '、'.join(parts) + f'；来源 {ip}', ip=ip)
     # 把自己的密码改了，当前会话也会失效——前端据此提示重新登录
-    self_revoked = bool(changed_pwd and username == user.get('username'))
+    self_revoked = bool((changed_pwd or changed_role) and username == user.get('username'))
     return {
         'username': target['username'],
         'role': target.get('role', 'viewer'),
@@ -304,13 +394,17 @@ def update_user(username: str, body: UserPatch, request: Request,
 
 
 @router.delete('/users/{username}')
+@security.user_mutation
 def delete_user(username: str, request: Request,
                 user: dict = Depends(security.require_session_admin)) -> dict:
+    user = security.require_session_admin(request, security.current_user(request))
     cfg = security.load_users()
     users = cfg.get('users', [])
     target = next((u for u in users if u.get('username') == username), None)
     if not target:
         raise HTTPException(status_code=404, detail='用户不存在')
+    if username == 'admin':
+        raise HTTPException(status_code=400, detail='不能删除 admin 主账号')
     admins = [u for u in users if u.get('role') == 'admin']
     if target.get('role') == 'admin' and len(admins) <= 1:
         raise HTTPException(status_code=400, detail='至少保留一个最高管理员')
@@ -329,11 +423,14 @@ def delete_user(username: str, request: Request,
 def audit_logs(
     limit: int = 200,
     offset: int = 0,
-    user: dict = Depends(security.require_admin),
+    user: dict = Depends(security.require_admin_or_read_scope),
 ) -> dict:
     """管理端审计日志（登录、改密码、增删用户、改安全配置等）。
 
-    仅管理员可读：里面含用户名与来源 IP，属于敏感信息。
+    含用户名与来源 IP，属于敏感信息，因此**不是**普通登录用户可读：
+    只有管理员，以及 K26 的 `scope=read` 内部只读服务令牌（QTG 读通道）能读。
+    `viewer`/`readonly` 仍被拒绝——放开到 `current_user` 会把人类用户的权限一起
+    扩大，那不是 K26 要的东西。
     """
     return {
         'items': db.list_audit_logs(limit=limit, offset=offset),

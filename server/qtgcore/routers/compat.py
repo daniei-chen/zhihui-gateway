@@ -1,0 +1,1132 @@
+"""WorkBuddy 前端兼容层（/api/*）。
+
+背景：前端直接移植自 WorkBuddy Manager（Next.js + React + motion），
+它按自己的契约调用 `/api/*`。本模块把 qtg 的 qoder/trae 数据**映射**成
+WorkBuddy 期望的结构，从而不改前端也能跑起来。
+
+约定：
+* 读端点**不再默认公开**：`main.py` 的 `_auth_gate` 对全部 `/api/*` 要求
+  会话 Cookie 或管理令牌 Bearer，白名单只留 `/api/login`、`/api/logout`、`/api/me`；
+* 写端点（login/logout）单独处理；
+* 未实现的端点返回**结构正确的空值**，绝不让前端 500。
+"""
+from __future__ import annotations
+from ..identity import platform_of
+
+import secrets
+import datetime as dt
+import hashlib
+import math
+import time
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+
+from .. import manager_api
+from ..checkin_result import classify_result, reward_amount
+from ..checkin_scheduler import dispatch_checkin
+from ..manager_session import forward_logout, wb_cookie_header
+from ..service import all_accounts, build_aggregate, now_iso, summarize, tasks_payload
+# U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
+# 现在统一从 `_shared` 引入并**在此继续导出**，`compat._rt` 仍然可用。
+from ._shared import _rt
+
+router = APIRouter(prefix="/api", tags=["compat"])
+
+
+# ------------------------------------------------------------------ 认证
+class LoginBody(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
+# 登录节流（2026-10-23 审计：compat /api/login 原本无任何节流，配合 10 位纯数字
+# 弱口令可被本机任意进程爆破；与 auth.py 的 /api/v1/auth/login 同一档位 8 次/分钟）
+_LOGIN_WINDOW = 60.0
+_LOGIN_MAX = 8
+_login_attempts: Dict[str, list] = defaultdict(list)
+
+
+def _login_throttle(request: Request) -> None:
+    ip = (request.headers.get("x-real-ip") or "").strip() or (
+        request.client.host if request.client else "?"
+    )
+    now = time.monotonic()
+    q = [t for t in _login_attempts.get(ip, []) if now - t <= _LOGIN_WINDOW]
+    if len(q) >= _LOGIN_MAX:
+        _login_attempts[ip] = q
+        raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试")
+    q.append(now)
+    _login_attempts[ip] = q
+
+
+
+
+
+
+# ------------------------------------------------------------------ 账号
+def _note_of(rt, uid: str) -> str:
+    """账号备注（本端存的，按 uid 关联）——上游账号文件里没有这个字段。"""
+    import json as _json
+    from pathlib import Path
+
+    try:
+        data = _json.loads((Path(rt.settings.data_dir) / "account_notes.json").read_text(encoding="utf-8"))
+        return str(data.get(uid) or "") if isinstance(data, dict) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _checkin_epoch(a) -> Optional[int]:
+    """把账号的签到状态折算成 `checkin_today`（epoch 秒；None = 今天未签）。
+
+    qtg 的 Account 只有布尔 `checked_today` 和字符串 `last_checkin`，而前端
+    的 accounts 页需要时间戳：非 null 才渲染「已完成」并计入 pendingCheckin。
+    """
+    if not bool(getattr(a, "checked_today", False)):
+        return None
+    tz = dt.timezone(dt.timedelta(hours=8))
+    now = dt.datetime.now(tz)
+    today0 = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    raw = str(getattr(a, "last_checkin", "") or "").strip()[:19]
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            naive = dt.datetime.strptime(raw, fmt)
+        except (ValueError, TypeError):
+            continue
+        ts = int(naive.replace(tzinfo=tz).timestamp())
+        # 已知 checked_today=True，但 last_checkin 落在更早的日子
+        # （trae 的 last_checkin 是 auth_saved_at）：用今天 0 点，别倒填历史时间。
+        return max(ts, today0)
+    return today0
+
+
+def _map_account(rt, a) -> Dict[str, Any]:
+    now = time.time()
+    expires = a.expires_at or 0
+    remain = max(0, int(expires - now)) if expires else 0
+    healthy = a.state == "ready"
+    return {
+        "file": f"{a.platform}:{a.uid}",
+        "uid": a.uid,
+        "nickname": a.name or a.uid[:8],
+        "enterprise_id": a.platform,  # 平台标识，用于顶部平台切换
+        "expires_at": expires,
+        "is_expired": a.state == "expired",
+        "remain_seconds": remain,
+        "credits": a.credits_remain,
+        "healthy": healthy,
+        "disabled": a.state == "disabled",
+        "disabled_reason": a.note or None,
+        "note": _note_of(rt, a.uid),
+        "in_flight": a.in_flight,
+        "cooling": a.in_cooldown,
+        "cool_remaining_sec": None,
+        "weight": 1,
+        # 前端 availabilityOf() 的判据：在线 = 在池、上游状态已知、无错误累积。
+        # 直接给齐这些字段，避免它落到 unknown / notLoaded 分档。
+        # None = 该平台没有池概念（qoder/workbuddy），前端按旧行为当 true
+        "in_pool": True if a.in_pool is None else bool(a.in_pool),
+        "poolUnknown": a.in_pool is None,
+        "success_count": 1,
+        "err_total": 0,
+        "manual_disabled": False,
+        "disabled_by_panel": False,
+        "platform": a.platform,
+        # realm 是「版本」维度（cn / global），与 platform（平台维度）独立：
+        # Qoder 账号本身带 cn/intl；Trae 目前只有国内站，一律算 cn。
+        "realm": "global" if str(a.realm).lower() in ("intl", "global") else "cn",
+        "state": a.state,
+        # 前端 pendingCheckin / 每行「已完成」都读这个字段（null = 今天还没签）
+        "checkin_today": _checkin_epoch(a),
+        "checked_today": bool(getattr(a, "checked_today", False)),
+    }
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------ 密钥
+
+
+# ------------------------------------------------------------------ 模型
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@router.get("/stats/upstream")
+async def compat_stats_upstream(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    st = rt.store.stats(1)
+    return {"requests": st["requests"], "tokens": st["tokens"], "errors": st["errors"],
+            "by_platform": st.get("by_platform") or [], "available": True}
+
+
+
+
+
+@router.get("/stats/credits-flow")
+async def compat_credits_flow(request: Request, days: int = Query(default=7), realm: str = Query(default="")) -> Dict[str, Any]:
+    rt = _rt(request)
+    agg = await build_aggregate(rt)
+    daily = []
+    import datetime as dt
+
+    n = max(1, min(90, days))
+    for i in range(n - 1, -1, -1):
+        day = (dt.date.today() - dt.timedelta(days=i)).isoformat()
+        daily.append({"day": day, "income": 0.0, "expense": 0.0, "net": 0.0})
+    total = {"income": 0.0, "expense": 0.0, "net": 0.0}
+    return {
+        "days": n,
+        "from": daily[0]["day"] if daily else "",
+        "to": daily[-1]["day"] if daily else "",
+        "today": {"income": 0.0, "expense": 0.0, "net": 0.0},
+        "week": {"income": 0.0, "expense": 0.0, "net": 0.0},
+        "total": total,
+        "daily": daily,
+    }
+
+
+# ------------------------------------------------------------------ 日志
+async def _wb_logs(rt, days: int, status: str, page: int, size: int,
+                    offset: int) -> Dict[str, Any]:
+    """workbuddy 的请求日志（manager.db request_logs，17 万条）。
+
+    它自己就有完整流水，没必要也不应该转存到 qtg 的 store：
+    三合一只是把两个来源按平台分开展示。
+    """
+    import time as _time
+
+    w = getattr(rt, "wb", None)
+    if w is None:
+        return {"total": 0, "items": [], "page": 1, "size": size}
+    try:
+        data = await w.logs(500)
+    except Exception:  # noqa: BLE001
+        return {"total": 0, "items": [], "page": 1, "size": size}
+    since = _time.time() - max(1, min(90, days)) * 86400
+    rows = [r for r in (data.get("data") or []) if float(r.get("ts") or 0) >= since]
+    if status == "ok":
+        rows = [r for r in rows if int(r.get("status") or 0) < 400]
+    elif status == "error":
+        rows = [r for r in rows if int(r.get("status") or 0) >= 400]
+    total = len(rows)
+    p = max(1, page)
+    s = max(1, min(200, size))
+    off = offset if offset else (p - 1) * s
+    items = []
+    for i, r in enumerate(rows[off: off + s]):
+        items.append({
+            "id": off + i + 1,
+            "ts": int(r.get("ts") or 0),
+            "key_id": None,
+            "key_name": None,
+            "ip": r.get("ip") or "",
+            "model": r.get("model") or None,
+            "mapped_model": r.get("mapped_model") or None,
+            "status": int(r.get("status") or 0),
+            "prompt_tokens": int(r.get("prompt_tokens") or 0),
+            "completion_tokens": int(r.get("completion_tokens") or 0),
+            "latency_ms": int(r.get("latency_ms") or 0),
+            "ttft_ms": int(r.get("first_token_ms") or 0) or None,
+            "stream": False,
+            "platform": "workbuddy",
+        })
+    return {"total": total, "items": items, "page": p, "size": s}
+
+
+@router.get("/logs")
+async def compat_logs(
+    request: Request,
+    page: int = Query(default=1),
+    size: int = Query(default=20),
+    days: int = Query(default=7),
+    realm: str = Query(default=""),
+    status: str = Query(default=""),
+    limit: int = Query(default=0),
+    offset: int = Query(default=0),
+) -> Dict[str, Any]:
+    """请求日志：按平台（X-QTG-Platform）与时间范围过滤，支持前端分页参数。
+
+    数据源是 qtg 自己的代理流水（`proxy_requests`）——只有经过本网关的调用才会
+    出现在这里。本部署还没有下游调用时为空是真实情况，不是没实现。
+    """
+    import time as _time
+
+    rt = _rt(request)
+    plat = platform_of(request)
+    if plat == "workbuddy":
+        return await _wb_logs(rt, days, status, page, size or limit or 20, offset)
+    if plat not in ("qoder", "trae"):
+        plat = ""
+    rows = rt.store.list_requests(1000, platform=plat)
+    since = _time.time() - max(1, min(90, days)) * 86400
+    rows = [r for r in rows if float(r.get("epoch") or 0) >= since]
+    if status == "ok":
+        rows = [r for r in rows if int(r.get("status") or 0) < 400]
+    elif status == "error":
+        rows = [r for r in rows if int(r.get("status") or 0) >= 400]
+    total = len(rows)
+    p = max(1, page)
+    s = max(1, min(200, size or limit or 20))
+    off = offset if offset else (p - 1) * s
+    items = []
+    for r in rows[off: off + s]:
+        items.append({
+            "id": r.get("id"),
+            "ts": int(r.get("epoch") or 0),
+            "key_id": None,
+            "key_name": r.get("key_name") or None,
+            "ip": "",
+            "model": r.get("model") or None,
+            "mapped_model": r.get("model") or None,
+            "status": int(r.get("status") or 0),
+            "prompt_tokens": int(r.get("prompt_tokens") or 0),
+            "completion_tokens": int(r.get("completion_tokens") or 0),
+            "latency_ms": int(r.get("duration_ms") or 0),
+            "ttft_ms": int(r.get("ttft_ms") or 0) or None,
+            "stream": bool(r.get("stream")),
+            "platform": r.get("platform"),
+        })
+    return {"total": total, "items": items, "page": p, "size": s}
+
+
+@router.get("/checkin-logs")
+async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
+                              limit: int = Query(default=20, ge=1, le=200),
+                              offset: int = Query(default=0, ge=0, le=100000),
+                              days: int = Query(default=30, ge=1, le=365),
+                              uid: str = Query(default="")) -> Dict[str, Any]:
+    """签到记录：按平台分开。
+
+    * trae：上游 `/api/checkin` 的历史留痕（按天汇总）；
+    * qoder2：本地动作流水；处理成功与实际新增积分分开呈现。
+    * 旧 qoder：只有账号签到日期，不能冒充逐条奖励历史。
+    """
+    rt = _rt(request)
+    plat = platform_of(request)
+    items: List[Dict[str, Any]] = []
+    if plat == "qoder" and callable(getattr(rt.qoder, "checkin_activity", None)):
+        if realm not in ('', 'cn', 'global'):
+            raise HTTPException(status_code=422, detail='Invalid history realm')
+        selected_realm = 'intl' if realm == 'global' else realm
+        payload = await rt.qoder.checkin_activity()
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or len(rows) > 1000 or payload.get('ok') is False:
+            raise HTTPException(status_code=502, detail="签到流水格式异常，结果未确认")
+        # History must not depend on Trae, WorkBuddy or every statistics endpoint.
+        # Resolve the engine's shortened IDs only against this same account pool.
+        account_payload = await rt.qoder.accounts()
+        account_rows = account_payload.get('accounts') if isinstance(account_payload, dict) else None
+        if not isinstance(account_rows, list) or len(account_rows) > 10000 or account_payload.get('ok') is False:
+            raise HTTPException(status_code=502, detail='账号范围未确认，无法关联签到流水')
+        account_ids = set()
+        for account in account_rows:
+            if (not isinstance(account, dict) or not isinstance(account.get('uid'), str)
+                    or not account['uid'] or len(account['uid']) > 256):
+                raise HTTPException(status_code=502, detail='账号范围格式异常，无法关联签到流水')
+            account_ids.add(account['uid'])
+        cutoff = time.time() - days * 86400
+        identities: Dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict) or row.get("kind") != "checkin":
+                continue
+            stamp = row.get("ts")
+            if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp) or stamp < cutoff:
+                continue
+            if selected_realm and row.get('realm') != selected_realm:
+                continue
+            short_uid = str(row.get("uid") or "")
+            matches = [account_id for account_id in account_ids if account_id.startswith(short_uid)] if short_uid else []
+            full_uid = matches[0] if len(matches) == 1 else short_uid
+            if uid and (len(matches) != 1 or full_uid != uid):
+                continue
+            amount = reward_amount(row.get("amount"))
+            processed = row.get("ok") is True
+            kind = classify_result({'ok': row.get('ok'), 'earned_credit': amount})
+            message = f"本次新增 {amount:g} 积分" if kind == "rewarded" else "处理完成，本次新增 0 积分（不等同于今日已领取）" if kind == "no_reward" else "处理完成，新增积分未确认" if processed else "签到处理失败，未确认奖励"
+            signature = f"qoder:{stamp}:{short_uid}:{row.get('realm')}:{kind}:{amount}"
+            ordinal = identities.get(signature, 0)
+            identities[signature] = ordinal + 1
+            identity = f"{signature}:{ordinal}".encode()
+            items.append({"id": int.from_bytes(hashlib.sha256(identity).digest()[:6], "big"),
+                          "ts": stamp, "uid": full_uid, "nickname": str(row.get("nickname") or ""),
+                          "source": "engine", "kind": "checkin", "success": processed,
+                          "code": None, "message": message, "earned_credit": amount,
+                          "reward_status": kind})
+        items.sort(key=lambda row: row['ts'], reverse=True)
+        from pathlib import Path
+        from ..checkin_scheduler import _load, _today, automatic_owner, dispatch_state
+        try:
+            state = _load(Path(rt.settings.data_dir) / 'random_checkin.json')
+            scheduler_state = 'uncertain' if 'qoder' in state.get('uncertain', {}) else 'confirmed' if state.get('day') == _today() and 'qoder' in state.get('done', {}) else 'scheduled' if state.get('day') == _today() else 'unknown'
+            dispatch = dispatch_state(Path(rt.settings.data_dir), 'qoder')
+            if dispatch == 'uncertain':
+                scheduler_state = 'uncertain'
+            elif dispatch == 'unknown':
+                scheduler_state = 'unknown'
+        except (RuntimeError, AttributeError):
+            scheduler_state = 'unknown'
+        return {"total": len(items), "items": items[offset:offset + limit],
+                "local_total": len(items), "auto_total": 0,
+                "scheduler": {"state": scheduler_state, "automation_owner": await automatic_owner(rt, 'qoder')},
+                "evidence_source": "engine_local_activity", "history_limit": 1000,
+                "note": "引擎本地动作流水，不是上游发放凭证；零奖励不等于今日已领"}
+    agg = await build_aggregate(rt)
+    if plat == "qoder":
+        for a in agg.qoder_accounts:
+            if not a.last_checkin and not a.checked_today:
+                continue
+            date = str(a.last_checkin or "")[:10]
+            items.append({
+                "id": abs(hash(str(a.uid) + date)) % 100000,
+                "ts": 0, "uid": a.uid, "nickname": a.name or a.uid[:8],
+                "source": "auto", "kind": "checkin",
+                "success": True, "code": None, "date": date,
+                "ok": 1, "already": 0, "failed": 0,
+                "message": f"最近签到记录：{date or '日期未知'}；本次新增积分未确认",
+            })
+    elif plat == "workbuddy":
+        for row in (agg.wb_raw.get("checkin") or []):
+            if not isinstance(row, dict):
+                continue
+            ok_n = int(row.get("ok") or 0)
+            items.append({
+                "id": abs(hash("wb" + str(row.get("date", "")))) % 100000,
+                "ts": 0, "uid": "", "nickname": "",
+                "source": "auto", "kind": "checkin",
+                "success": ok_n > 0, "code": None,
+                "date": row.get("date", ""), "ok": ok_n,
+                "already": int(row.get("already") or 0),
+                "failed": int(row.get("failed") or 0),
+                "message": f"{row.get('date','')} 成功 {ok_n} · 失败 {row.get('failed',0)}",
+            })
+    else:
+        for row in (agg.trae_raw.get("checkin") or []):
+            if not isinstance(row, dict):
+                continue
+            ok_n = int(row.get("ok") or 0)
+            items.append({
+                "id": abs(hash(row.get("date", ""))) % 100000,
+                "ts": 0, "uid": "", "nickname": "",
+                "source": "auto", "kind": "checkin",
+                "success": ok_n > 0, "code": None,
+                "date": row.get("date", ""), "ok": ok_n,
+                "already": int(row.get("already") or 0),
+                "failed": int(row.get("failed") or 0),
+                "message": f"{row.get('date','')} 成功 {ok_n} · 已签 {row.get('already',0)} · 失败 {row.get('failed',0)}",
+            })
+    return {"total": len(items), "items": items, "local_total": len(items), "auto_total": 0}
+
+
+
+
+# ------------------------------------------------------------------ 安全 / 系统 / 设置
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------ 兜底
+# ------------------------------------------------------------------ 任务运行器
+# WorkBuddy 的「任务运行」是执行上游脚本；qtg 这边由 Qoder/Trae 各自的调度器负责，
+# 因此这些端点如实返回「不可用」而不是假装成功。
+
+
+
+
+
+
+
+
+@router.get("/accounts/daily-plan")
+async def compat_daily_plan(request: Request) -> Dict[str, Any]:
+    """DailyPlan：四个子配置，每个都是 {enabled, hour, last_run}。
+
+    0.1.17: 回显**实际保存的计划**。此前这里恒返回 enabled=False，而 PUT 已经把
+    设置写进 compat-plans.json、调度器也确实在读它——于是「开启成功、刷新又显示
+    未启用」，用户会以为设置没生效而反复操作。结构保持完整，前端直接读
+    dailyPlan.checkin.enabled 不受影响。
+    """
+    plans = _read_plans(_rt(request))
+    daily = plans.get("daily")
+    daily = daily if isinstance(daily, dict) else {}
+
+    def _one(name: str) -> Dict[str, Any]:
+        cur = daily.get(name)
+        cur = cur if isinstance(cur, dict) else {}
+        hour = cur.get("hour")
+        return {
+            "enabled": bool(cur.get("enabled", False)),
+            "hour": hour if isinstance(hour, int) else 21,
+            "last_run": str(cur.get("last_run") or ""),
+        }
+
+    return {name: _one(name) for name in ("checkin", "compensation", "claim", "full")}
+
+
+@router.get("/accounts/refresh-plan")
+async def compat_refresh_plan2(request: Request) -> Dict[str, Any]:
+    return {"enabled": False, "last_run": None, "next_run": None, "items": []}
+
+
+
+
+def _platform_rows(request: Request, agg) -> tuple[str, list]:
+    """按 `X-QTG-Platform` 过滤账号行；header 缺失时返回全部（旧调用方兼容）。
+
+    批量动作（刷新积分 / 刷新令牌 / 签到 / 计划执行）必须走这里：否则在 Qoder
+    平台点「刷新积分」会把 Trae 的账号也刷一遍——这正是「还是两个一起签到」的根因。
+    """
+    plat = platform_of(request)
+    if plat == "qoder":
+        return plat, list(agg.qoder_accounts)
+    if plat == "trae":
+        return plat, list(agg.trae_accounts)
+    if plat == "workbuddy":
+        return plat, list(agg.wb_accounts)
+    return "", all_accounts(agg)
+
+
+def _res_ok(res) -> bool:
+    """Only explicit, consistent terminal confirmation counts as success."""
+    if not isinstance(res, dict):
+        return False
+    markers = [res[name] for name in ('ok', 'success') if name in res]
+    if not markers or any(value is not True for value in markers):
+        return False
+    if 'pending' in res and res['pending'] is not False:
+        return False
+    for name in ('state', 'status'):
+        if name in res and res[name] not in ('completed', 'complete', 'success', 'succeeded', 'ok'):
+            return False
+    return True
+
+
+def _adapter_for(rt, platform: str):
+    """按平台取适配器。返回 None 表示该平台未启用（如 QTG_WB_ENGINE=off）。"""
+    if platform == "qoder":
+        return rt.qoder
+    if platform == "trae":
+        return rt.trae
+    if platform == "workbuddy":
+        return getattr(rt, "wb", None)
+    return None
+
+
+def _split_file(file: str) -> tuple[str, str]:
+    """`platform:uid` 拆成 (platform, uid)。"""
+    platform, _, uid = file.partition(":")
+    return platform or "qoder", uid
+
+
+@router.get('/accounts/export')
+async def compat_accounts_export_entry(request: Request) -> Response:
+    return await compat_accounts_export(request)
+
+
+@router.get("/accounts/{file:path}")
+async def compat_account_detail(request: Request, file: str) -> Dict[str, Any]:
+    rt = _rt(request)
+    agg = await build_aggregate(rt)
+    for a in all_accounts(agg):
+        if f"{a.platform}:{a.uid}" == file:
+            return _map_account(rt, a)
+    return {}
+
+
+
+@router.post("/accounts/{file:path}/checkin")
+async def compat_account_checkin(request: Request, file: str) -> Dict[str, Any]:
+    rt = _rt(request)
+    platform, uid = _split_file(file)
+    if platform == "qoder":
+        dispatch = getattr(rt.qoder, 'checkin_one', None)
+        if not callable(dispatch):
+            raise HTTPException(status_code=409, detail="当前引擎不支持单账号签到；未向整池派发，请使用批量签到")
+        res = await dispatch_checkin(rt, 'qoder', uid=uid)
+        # Scope the provider action itself, not just the displayed result.
+        rows = [r for r in (res.get("results") or []) if isinstance(r, dict) and str(r.get("uid")) == uid]
+        if not rows:
+            return {
+                "code": 0,
+                "ok": False,
+                "message": "上游未返回该账号的签到结果（可能今日已签或 uid 不匹配）",
+                "detail": {},
+            }
+        hit = _batch_results({"results": rows})[0]
+        return {"code": 1 if hit.get("ok") else 0, "ok": bool(hit.get("ok")),
+                "already": hit["already"], "reward_status": hit["reward_status"],
+                "earned_credit": hit["earned_credit"],
+                "message": hit["message"], "detail": hit}
+    if platform == "workbuddy":
+        w = getattr(rt, "wb", None)
+        if w is None:
+            return {"code": 0, "ok": False, "already": False,
+                    "message": "workbuddy 平台未启用（QTG_WB_ENGINE=off）", "detail": {}}
+        rows = _batch_results(await w.checkin())
+        hit = rows[0] if rows else {"ok": False, "message": "上游未返回签到结果"}
+        return {"code": 0, "ok": False, "already": bool(hit.get("already")),
+                "message": hit.get("message") or "", "detail": hit}
+    raise HTTPException(status_code=409, detail="当前引擎仅支持批量签到；未向整池派发，请使用批量签到")
+
+
+
+@router.post("/accounts/{file:path}/credits")
+async def compat_account_credits(request: Request, file: str) -> Dict[str, Any]:
+    return await _account_credits(request,file,force=True)
+
+
+async def _account_credits(request: Request, file: str, *, force: bool) -> Dict[str, Any]:
+    rt = _rt(request)
+    platform, uid = _split_file(file)
+    agg = await build_aggregate(rt, force=force)
+    for a in all_accounts(agg):
+        if a.platform == platform and a.uid == uid:
+            return {"ok": True, "credits": a.credits_remain, "cached": not force, "message": ""}
+    return {"ok": False, "credits": None, "cached": not force, "message": "未找到该账号"}
+
+
+
+@router.post("/accounts/{file:path}/refresh")
+async def compat_account_refresh(request: Request, file: str) -> Dict[str, Any]:
+    rt = _rt(request)
+    platform, uid = _split_file(file)
+    adapter = _adapter_for(rt, platform)
+    if adapter is None:
+        return {"ok": False, "message": f"{platform} 平台未启用", "detail": {}}
+    res = await adapter.refresh_account(uid)
+    # 不能恒回 ok:true —— aiwork 的 `refresh_jwt` 在「JWT 还没到期」时会返回
+    # ok:false + 原因，前端要能把这句原文显示出来（审计点名的「恒回 OK」问题）。
+    ok = _res_ok(res)
+    detail = res if isinstance(res, dict) else {}
+    message = "已刷新" if ok else str(detail.get("error") or "刷新结果未确认，请核对账号状态")
+    return {"ok": ok, "message": message, "detail": detail}
+
+
+
+@router.put("/accounts/{file:path}/disabled")
+async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]:
+    rt = _rt(request)
+    platform, uid = _split_file(file)
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeError):
+        raise HTTPException(status_code=400, detail="请求体必须是包含 disabled 布尔值的 JSON 对象") from None
+    if not isinstance(body, dict) or type(body.get('disabled')) is not bool:
+        raise HTTPException(status_code=400, detail="disabled 必须显式为 true 或 false")
+    disabled = body['disabled']
+    adapter = _adapter_for(rt, platform)
+    if adapter is None:
+        return {"success": False, "disabled": not disabled,
+                "message": f"{platform} 平台未启用（QTG_WB_ENGINE=off）"}
+    res = await adapter.set_account(uid, not disabled)
+    if not _res_ok(res):
+        detail = res if isinstance(res, dict) else {}
+        msg = str(detail.get("error") or detail.get("message")
+                  or "变更结果未确认，请核对账号状态")
+        return {"success": False, "disabled": not disabled, "message": msg}
+    return {"success": True, "disabled": disabled}
+
+
+
+@router.delete("/accounts/{file:path}")
+async def compat_account_delete(request: Request, file: str) -> Dict[str, Any]:
+    return {"success": False, "message": "上游 BFF 未提供删除账号接口；请在 Qoder/Trae 面板的账号页操作"}
+
+
+
+
+
+
+@router.post("/playground/chat")
+async def compat_playground_chat(request: Request):
+    """Use the shared playground's authentication, limits, deadlines and cleanup."""
+    from ... import security
+    from ...routers import playground
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+    user = security.require_session_admin(request, security.require_admin(security.current_user(request)))
+    try:
+        body = playground.ChatIn.model_validate(await request.json())
+    except (ValueError, ValidationError):
+        raise HTTPException(status_code=422, detail='测试台请求格式无效') from None
+    return await playground.chat(body, request, user)
+
+
+
+# ------------------------------------------------------------------ 日志 / 统计动作
+@router.post("/logs/clear")
+async def compat_logs_clear(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    try:
+        n = rt.store.prune(0)
+    except Exception:  # noqa: BLE001
+        return JSONResponse(status_code=503,content={"ok":False,"cleared":None,"detail":"无法核实日志清理结果"})
+    return {"ok": True, "cleared": n, "message": f"已清理 {n} 条请求日志"}
+
+
+@router.post("/stats/repair-usage")
+async def compat_stats_repair_usage(request: Request) -> Dict[str, Any]:
+    """按请求日志修复用量统计。
+
+    qtg 的用量统计是**实时聚合**（每次读取都从 proxy_requests 现算），
+    不存在会漂移的汇总表，因此 repaired 恒为 0，前端会提示「无需修复」。
+    """
+    rt = _rt(request)
+    st = rt.store.stats(3650)
+    return {
+        "repaired": 0,
+        "requests": int(st.get("requests") or 0),
+        "tokens": int(st.get("tokens") or st.get("total_tokens") or 0),
+    }
+
+
+@router.post("/stats/rebuild-usage")
+async def compat_stats_rebuild_usage(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    st = rt.store.stats(3650)
+    n = int(st.get("requests") or 0)
+    return {"rows_before": n, "rows_after": n, "requests_delta": 0, "tokens_delta": 0}
+
+
+@router.post("/stats/repair")
+async def compat_stats_repair_legacy(request: Request) -> Dict[str, Any]:
+    return await compat_stats_repair_usage(request)
+
+
+@router.post("/stats/rebuild")
+async def compat_stats_rebuild_legacy(request: Request) -> Dict[str, Any]:
+    return await compat_stats_rebuild_usage(request)
+
+
+# ------------------------------------------------------------------ 上游重启（明确不支持）
+
+
+
+
+# ------------------------------------------------------------------ 数据面密钥写操作
+async def _body(request: Request) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _key_row(rt: Any, index: Any) -> Optional[Dict[str, Any]]:
+    """按密钥 **id** 取（不再按列表序号）。
+
+    历史坑（2026-10-22 事故）：旧实现是 `keys[index - 1]`，而 `list_keys()` 按
+    `created_at DESC` 排序 —— 删掉一个之后后面的整体前移，连续删两次就会删到
+    没打算删的那一个。现在优先按密钥自身 id 精确匹配；纯数字入参仍按序号兼容
+    旧前端，但只在新列表里存在该项时才生效。
+    """
+    keys = rt.store.list_keys()
+    token = str(index)
+    for k in keys:
+        if str(k.get("id")) == token:
+            return k
+    if token.isdigit():
+        i = int(token)
+        if 1 <= i <= len(keys):
+            return keys[i - 1]
+    return None
+
+
+def _key_out(rt: Any, index: int, k: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": k.get("id") or (index + 1),
+        "seq": index + 1,
+        "name": k.get("name") or "",
+        "prefix": (k.get("masked") or "")[:12],
+        "enabled": bool(k.get("enabled")),
+        # 有效期现在是真的（库里有 expires_at 列，数据面会校验）；老密钥是 None
+        "expires_at": k.get("expires_at") or None,
+        "max_ips": k.get("max_ips") or 0,
+        "ip_allowlist": k.get("ip_allowlist") or [],
+        "models": k.get("models") or [],
+        "realm": "",
+        "quota": None,
+        "used_tokens": 0,
+        "quota_credit": 0,
+        "used_credit": 0,
+        "created_at": k.get("created_at", ""),
+        "daily_limit": int(k.get("daily_limit") or 0),
+        "monthly_limit": int(k.get("monthly_limit") or 0),
+        "max_concurrency": int(k.get("max_concurrency") or 0),
+        "qoder_key_id": k.get("id"),
+        "upstream_id": None,
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------ 账号批量动作（结构对齐前端）
+def _batch_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in (payload.get("results") or []):
+        if not isinstance(r, dict):
+            continue
+        status = str(r.get("status") or "").lower()
+        kind = classify_result(r)
+        already = kind == "already"
+        message = str(r.get("message") or r.get("msg") or "")
+        if kind == "no_reward":
+            message = "本次未新增积分" + (f"：{message}" if message else "（不等同于今日已领取）")
+        elif kind == "rewarded" and not message:
+            message = f"本次新增 {r['earned_credit']} 积分"
+        elif not message:
+            message = "今日已领取（未重复发放）" if already else "签到结果未确认" if kind == "unknown" else "签到处理完成" if r.get("ok") is True else "签到失败"
+        out.append({
+            "nickname": str(r.get("nickname") or r.get("name") or r.get("uid") or ""),
+            "uid": str(r.get("uid") or ""),
+            "ok": kind in ("rewarded", "already", "completed"),
+            "processed": r.get("ok") is True,
+            "message": message,
+            "code": r.get("code"),
+            "status": status,
+            "already": already,
+            "reward_status": kind,
+            "earned_credit": reward_amount(r.get("earned_credit")),
+            "next_available_at": r.get("next_available_at"),
+            "next_available_note": r.get("next_available_note"),
+        })
+    return out
+
+
+@router.post("/accounts/checkin-all")
+async def compat_checkin_all(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    plat = platform_of(request)
+    results: List[Dict[str, Any]] = []
+    if plat in ("", "qoder"):
+        try:
+            results += _batch_results(await dispatch_checkin(rt, 'qoder'))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            results.append({"nickname": "Qoder", "ok": False, "message": str(exc)[:160], "code": None})
+    if plat in ("", "trae"):
+        try:
+            results += _batch_results(await dispatch_checkin(rt, 'trae'))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            results.append({"nickname": "Trae", "ok": False, "message": str(exc)[:160], "code": None})
+    if plat == "workbuddy":
+        w = getattr(rt, "wb", None)
+        if w is None:
+            results.append({"nickname": "WorkBuddy", "ok": False,
+                            "message": "workbuddy 平台未启用（QTG_WB_ENGINE=off）", "code": None})
+        else:
+            try:
+                results += _batch_results(await w.checkin())
+            except Exception as exc:  # noqa: BLE001
+                results.append({"nickname": "WorkBuddy", "ok": False,
+                                "message": str(exc)[:160], "code": None})
+    # 前端契约（lib/api.ts checkinAll）：total 只算「本次真正发起签到」的账号，
+    # 今天已签的进 already、不适用的进 skipped —— 它们既不算成功也不算失败。
+    already_rows = [r for r in results if r.get("already")]
+    skipped_rows = [r for r in results if r.get("reward_status") in ("no_reward", "skipped", "pending")]
+    fresh_rows = [r for r in results if not r.get("already") and r not in skipped_rows]
+    ok = len([r for r in fresh_rows if r["ok"]])
+    failed = len(fresh_rows) - ok
+    if not fresh_rows and already_rows:
+        msg = f"今日已签到（{len(already_rows)} 个账号），无需重复签到"
+        note = next((str(r.get("next_available_note") or "") for r in already_rows
+                     if r.get("next_available_note")), "")
+        if note:
+            msg += f"；下次可签：{note}"
+    elif not fresh_rows and skipped_rows:
+        msg = "本次未确认新增积分；请查看各账号的领取结果"
+    else:
+        msg = f"签到完成：新签成功 {ok} / {len(fresh_rows)}"
+        if already_rows:
+            msg += f"，今日已签 {len(already_rows)}"
+        if failed:
+            msg += f"，失败 {failed}"
+    if skipped_rows:
+        msg += f"；{len(skipped_rows)} 个账号未新增积分或仍待确认"
+    return {"total": len(fresh_rows), "succeeded": ok, "already": len(already_rows),
+            "skipped": len(skipped_rows), "results": results, "message": msg,
+            "no_reward": sum(r.get("reward_status") == "no_reward" for r in results)}
+
+
+@router.post("/accounts/refresh-tokens")
+async def compat_refresh_tokens(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    agg = await build_aggregate(rt)
+    plat, rows = _platform_rows(request, agg)
+    results: List[Dict[str, Any]] = []
+    failed: List[str] = []
+    for a in rows:
+        file = f"{a.platform}:{a.uid}"
+        adapter = rt.trae if a.platform == "trae" else rt.qoder
+        try:
+            result = await adapter.refresh_account(a.uid)
+            ok = _res_ok(result)
+            results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
+                            "ok": ok, "message": "已刷新" if ok else "刷新结果未确认"})
+            if not ok:
+                failed.append(file)
+        except Exception as exc:  # noqa: BLE001
+            results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
+                            "ok": False, "message": str(exc)[:160]})
+            failed.append(file)
+    ok = len([r for r in results if r["ok"]])
+    return {"total": len(results), "succeeded": ok, "failed": failed,
+            "results": results, "reload_triggered": False}
+
+
+@router.post("/accounts/refresh-credits")
+async def compat_refresh_credits(request: Request, force: str = Query(default="true")) -> Dict[str, Any]:
+    rt = _rt(request)
+    from ..service import build_pool_snapshot
+    selected = platform_of(request)
+    agg = await build_pool_snapshot(rt, selected, force=force.lower() == 'true')
+    plat, rows = _platform_rows(request, agg)
+    credits: Dict[str, Optional[float]] = {}
+    failed: List[str] = []
+    for a in rows:
+        if a.credits_remain is None:
+            failed.append(f"{a.platform}:{a.uid}")
+        else:
+            credits[a.uid] = a.credits_remain
+    return {
+        "total": len(rows),
+        "succeeded": len(credits),
+        "credits": credits,
+        "meta": {},
+        "failed": failed,
+    }
+
+
+async def compat_accounts_export(request: Request) -> Response:
+    """导出账号清单（**不含任何凭据**，只给运维对账用）。"""
+    import json as _json
+
+    rt = _rt(request)
+    agg = await build_aggregate(rt)
+    payload = [
+        {"platform": a.platform, "uid": a.uid, "name": a.name, "realm": a.realm,
+         "state": a.state, "credits": a.credits_remain, "expires_iso": a.expires_iso}
+        for a in all_accounts(agg)
+    ]
+    return Response(
+        content=_json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="accounts.json"'},
+    )
+
+
+@router.post("/accounts/upload")
+async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "uploaded": [], "added": [], "overwritten": [],
+        "rejected": [], "failed": [],
+        "message": "账号导入需通过「添加账号」的 OAuth 授权流程；文件导入暂未开放",
+    }
+
+
+# ------------------------------------------------------------------ 计划任务（保存 + 立即执行）
+def _plans_path(rt: Any):
+    from pathlib import Path
+
+    return Path(rt.settings.data_dir) / "compat-plans.json"
+
+
+def _read_plans(rt: Any) -> Dict[str, Any]:
+    import json as _json
+
+    try:
+        data = _json.loads(_plans_path(rt).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_plans(rt: Any, data: Dict[str, Any]) -> None:
+    import json as _json
+    import os
+
+    p = _plans_path(rt)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+@router.put("/accounts/refresh-plan")
+async def compat_refresh_plan_save(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    body = await _body(request)
+    plans = _read_plans(rt)
+    cur = plans.get("refresh") or {}
+    enabled = bool(body.get("enabled", cur.get("enabled", False)))
+    interval = int(body.get("interval_days") or cur.get("interval_days") or 7)
+    hour = int(body["hour"]) if body.get("hour") is not None else int(cur.get("hour") or 3)
+    cur = {"enabled": enabled, "interval_days": interval, "hour": hour,
+           "last_run": cur.get("last_run"), "next_run": cur.get("next_run")}
+    plans["refresh"] = cur
+    _write_plans(rt, plans)
+    return {
+        "enabled": enabled, "interval_days": interval, "hour": hour,
+        "last_run": cur.get("last_run"), "next_run": cur.get("next_run"), "items": [],
+    }
+
+
+@router.post("/accounts/refresh-plan/run")
+async def compat_refresh_plan_run(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    agg = await build_aggregate(rt)
+    plat, rows = _platform_rows(request, agg)
+    checked = renewed = failed_n = 0
+    for a in rows:
+        checked += 1
+        adapter = rt.trae if a.platform == "trae" else rt.qoder
+        try:
+            result = await adapter.refresh_account(a.uid)
+            if _res_ok(result):
+                renewed += 1
+            else:
+                failed_n += 1
+        except Exception:  # noqa: BLE001
+            failed_n += 1
+    now = int(time.time())
+    plans = _read_plans(rt)
+    rp = plans.setdefault("refresh", {})
+    rp["last_run"] = now
+    rp["next_run"] = (now + int(rp.get("interval_days") or 7) * 86400
+                      if rp.get("enabled") else None)
+    _write_plans(rt, plans)
+    return {"checked": checked, "renewed": renewed, "failed": failed_n, "skipped": 0,
+            "last_run": now, "next_run": rp.get("next_run")}
+
+
+# ------------------------------------------------------------------ 任务 / 签到日志
+
+
+
+
+@router.post("/checkin-logs/clear")
+async def compat_checkin_logs_clear(request: Request) -> Dict[str, Any]:
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "签到记录来自上游，本端没有可删除的存储，因此无法清空"},
+    )
+
+
+@router.put("/accounts/daily-plan")
+async def compat_daily_plan_save(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    body = await _body(request)
+    plans = _read_plans(rt)
+    saved: Dict[str, Any] = {}
+    for key in ("checkin", "compensation", "claim", "full"):
+        cur = (plans.get("daily") or {}).get(key) or {}
+        item = body.get(key) if isinstance(body.get(key), dict) else {}
+        saved[key] = {
+            "enabled": bool(item.get("enabled", cur.get("enabled", False))),
+            "hour": int(item.get("hour", cur.get("hour", 21)) or 21),
+            "last_run": str(cur.get("last_run") or ""),
+        }
+    plans["daily"] = saved
+    _write_plans(rt, plans)
+    return saved
+
+
+@router.post("/accounts/daily-plan/run")
+async def compat_daily_plan_run(request: Request) -> Dict[str, Any]:
+    rt = _rt(request)
+    body = await _body(request)
+    task = str(body.get("task") or "checkin")
+    plans = _read_plans(rt)
+    daily = plans.setdefault("daily", {})
+    if task == "checkin":
+        res = await compat_checkin_all(request)
+        from ..checkin_result import summarize_result
+        ok = summarize_result(res)['ok']
+        msg = str(res.get('message') or '签到结果未确认')
+    elif task == "claim":
+        try:
+            result = await dispatch_checkin(rt, 'trae')
+            from ..checkin_result import summarize_result
+            summary = summarize_result(result)
+            ok = summary['ok']
+            msg = '已向上游提交；新增积分以流水为准' if ok else '任务已提交或结果未确认，请核对领取记录，不要重复提交'
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            ok, msg = False, f"领奖失败：{str(exc)[:120]}"
+    else:
+        ok = False
+        msg = ("本部署不执行该动作：它需要向上游发送活跃上报，有风控风险"
+               "（见 HANDOVER 第 5 节 P1）")
+    item = daily.setdefault(task, {"enabled": False, "hour": 21, "last_run": ""})
+    item["last_run"] = time.strftime("%Y-%m-%d-%H")
+    _write_plans(rt, plans)
+    plan: Dict[str, Any] = {}
+    for key in ("checkin", "compensation", "claim", "full"):
+        c = daily.get(key) or {"enabled": False, "hour": 21, "last_run": ""}
+        plan[key] = {"enabled": bool(c.get("enabled")), "hour": int(c.get("hour") or 21),
+                     "last_run": str(c.get("last_run") or "")}
+    return {"ok": ok, "message": msg, "task": task, "plan": plan}
+
+
+
+
+
+# ------------------------------------------------------------------ 兜底
+# 未实现的 GET 以前一律 `return {}`，前端把「没实现」渲染成「暂无数据」——
+# 用户分不清是「真的没有」还是「这个功能没做」（审计点名的首要工程问题）。
+# 现在如实返回 501 + `available:false`，前端的错误态会显示这句话。

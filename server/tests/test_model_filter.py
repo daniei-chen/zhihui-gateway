@@ -74,6 +74,8 @@ class NonChatFilterTest(unittest.TestCase):
     AUTH = {'access_token': 'T', 'realm': 'cn', 'uid': 'u'}
 
     def setUp(self) -> None:
+        from server.tests._db_fixture import isolate_database
+        isolate_database(self)
         p = mock.patch.object(config, 'http_client', _Client)
         p.start()
         self.addCleanup(p.stop)

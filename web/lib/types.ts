@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'viewer';
+export type Role = 'admin' | 'account_admin' | 'viewer';
 
 export interface Me {
   username: string;
@@ -405,6 +405,8 @@ export interface UpstreamEndpoint {
   id: number | null;
   name: string;
   base_url: string;
+  /** 对外接入地址（由请求 Host 推导，不含内网端口）；展示优先用它。 */
+  public_url?: string;
   /**
    * 上游凭据**不明文回传**（与 api_key / upstash.token 同规矩）：接口只给
    * 「有没有配」与脱敏值。编辑时留空即不修改。
@@ -431,6 +433,10 @@ export interface UpstreamEndpoint {
 }
 
 export interface ApiKey {
+  platforms?: Array<'workbuddy' | 'qoder' | 'trae'>;
+  platform_policy_valid?: boolean;
+  request_policy_valid?: boolean;
+  request_policy_errors?: string[];
   id: number;
   name: string;
   prefix: string;
@@ -456,6 +462,12 @@ export interface ApiKey {
    * 按 token 估不出实际花了多少积分（提需求的人遇到的正是这个问题）。
    */
   quota_credit: number;
+  daily_token_quota?: number;
+  daily_credit_quota?: number;
+  daily_used_tokens?: number;
+  daily_used_credit?: number;
+  daily_quota_day?: string;
+  assigned_to?: string;
   used_credit: number;
   /**
    * 绑定的上游接入点（多上游 / 分组隔离）；null = 默认上游。
@@ -615,6 +627,9 @@ export interface CreatedApiToken extends ApiToken {
 }
 
 export interface RequestLog {
+  /** Gateway execution ID; never substitute the caller-supplied request ID. */
+  request_id?: string | null;
+  client_request_id?: string | null;
   id: number;
   ts: number;
   key_id: number | null;
@@ -623,6 +638,12 @@ export interface RequestLog {
   model: string | null;
   mapped_model: string | null;
   status: number;
+  recorded_status?: number | null;
+  http_status?: number | null;
+  terminal_state?: string | null;
+  error_stage?: string | null;
+  compatibility_version?: string | null;
+  compatibility_rules?: string[];
   prompt_tokens: number;
   completion_tokens: number;
   latency_ms: number;
@@ -664,6 +685,8 @@ export interface UsagePoint {
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;
+  /** Explicit provider total, which need not equal its input/output split. */
+  total_tokens?: number;
   /** 当日实际扣费合计 */
   credit: number;
   /**
@@ -681,9 +704,8 @@ export interface UsagePoint {
 /**
  * 某一天**按小时**的用量（`/api/stats/hourly`）。
  *
- * 「今日」趋势图用：范围只有一天时按天聚合只会得到一根柱子（那正是用户反馈的
- * 「今日还是柱状图，不太对劲」）。与 `UsagePoint` **同源同口径** —— 小时表与
- * 按天表由同一处写入累计，所以图与页头卡片永远一致，清日志也不会打架。
+ * 「今日」趋势图用。Qoder 使用引擎日志，WorkBuddy 使用 Manager 台账；
+ * 不同接口快照与失败用量规则可能不同，不承诺与汇总瞬时完全一致。
  */
 export interface UsageHourPoint {
   /** `YYYY-MM-DD` */
@@ -693,6 +715,10 @@ export interface UsageHourPoint {
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;
+  total_tokens?: number;
+  /** Engine-local "now", independent of the browser timezone. */
+  current_hour?: number | null;
+  timezone?: string;
   credit: number;
   /** 该小时的失败请求数（来自请求日志，与 `UsagePoint.failed` 同一口径） */
   failed: number;
@@ -702,11 +728,11 @@ export interface UsageHourPoint {
 export interface CreditsFlowPoint {
   day: string;
   /** 收入：余额增加流水（kind='credit'）当日合计 */
-  income: number;
+  income: number | null;
   /** 支出：调用实际扣费（usage.credit）当日合计 */
-  expense: number;
+  expense: number | null;
   /** income - expense */
-  net: number;
+  net: number | null;
 }
 
 /**
@@ -720,19 +746,32 @@ export interface CreditsFlow {
   days: number;
   from: string;
   to: string;
-  today: {income: number; expense: number; net: number};
-  week: {income: number; expense: number; net: number};
-  total: {income: number; expense: number; net: number};
+  today: {income: number | null; expense: number | null; net: number | null};
+  week: {income: number | null; expense: number | null; net: number | null};
+  total: {income: number | null; expense: number | null; net: number | null};
+  income_status?: 'unavailable';
+  source?: string;
   daily: CreditsFlowPoint[];
 }
 
 export interface UsageBreakdown {
+  key_id?: number;
   name: string;
   requests: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  /** 该维度实际扣费合计 */
-  credit: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  /** Provider total; null means unknown, never an invented output split. */
+  total_tokens?: number | null;
+  /** Recorded charge; null when any included request has no confirmed amount. */
+  credit: number | null;
+  /** Only provider-reported cache tokens; unknown is null, not a zero rate. */
+  cache_hit_tokens?: number | null;
+  cache_miss_tokens?: number | null;
+  cache_hit_rate?: number | null;
+  /** Requests with any reported cache hit / requests with known cache observations. */
+  cache_request_hit_rate?: number | null;
+  cache_hit_requests?: number;
+  cache_observed_requests?: number;
   /**
    * 输出速率（tokens/秒，issue #214）：按「生成耗时 = 总耗时 − 首字耗时」估算。
    * null / 缺省 = 没有可用样本（日志已清或该模型没成功请求），界面显示「—」。
@@ -891,6 +930,7 @@ export interface CreditExpiry {
 export interface CreditsMeta {
   cached: boolean;
   cache_age: number | null;
+  source?: 'cache' | 'registered' | 'engine_snapshot';
   message?: string;
   /** 各套餐到期时间，按到期时刻升序；只含仍有余额的套餐 */
   expiries?: CreditExpiry[];
@@ -908,6 +948,8 @@ export interface CheckinLog {
   success: boolean;
   code: number | null;
   message: string;
+  earned_credit?: number | null;
+  reward_status?: 'rewarded' | 'already' | 'no_reward' | 'completed' | 'skipped' | 'pending' | 'failed' | 'unknown';
   /** true = 来自上游自动签到（采集器落库），false = 本端触发 */
   auto?: boolean;
 }
@@ -990,6 +1032,9 @@ export interface TaskRunStatus {
 /** 签到记录分页返回 */
 export interface CheckinLogPage {
   items: CheckinLog[];
+  evidence_source?: string;
+  history_limit?: number;
+  scheduler?: {state: 'confirmed' | 'uncertain' | 'scheduled' | 'unknown'; day?: string; automation_owner?: 'manager' | 'engine' | 'unverified'};
   /** 当前筛选下的总条数（本端触发 + 上游自动） */
   total: number;
   /** 其中本端触发的条数 */
@@ -1004,7 +1049,29 @@ export interface UpdateLogLine {
   text: string;
 }
 
+export interface ProductRelease {
+  name: string;
+  version: string;
+  repository: string;
+  repository_url: string;
+  branch: string;
+  releases_url: string;
+  source_commit: string | null;
+  manager_baseline: string;
+  release_channel: string;
+  managed: boolean;
+  web_update_enabled: boolean;
+  update_policy: string;
+  provider_endpoints_changed: boolean;
+}
+
 export interface UpdateStatus {
+  record_state?: 'absent' | 'unavailable' | 'identity_mismatch' | 'reported';
+  record_verification?: 'not-verified-by-panel';
+  release_id?: string;
+  legacy_history_available?: boolean;
+  legacy_history_blocked?: boolean;
+  product?: ProductRelease;
   available: boolean;
   /** 是否运行在容器里（决定能力边界，见 can_update_upstream） */
   in_container?: boolean;
@@ -1131,10 +1198,12 @@ export interface UpdatePackageMeta {
 }
 
 export interface Versions {
+  release_id?: string;
+  product?: ProductRelease;
   manager: string;
   upstream_connected: boolean;
   upstream_accounts: number | null;
-  upstream_dir: string;
+  upstream_dir: string | null;
 }
 
 /**
@@ -1201,6 +1270,17 @@ export interface ReloadState {
   last_ok: boolean | null;
   last_message: string;
   restart_count: number;
+  account_reload?: AccountReloadState;
+  account_reload_scopes?: AccountReloadState[];
+}
+
+export interface AccountReloadState {
+  upstream_id: number | null;
+  phase: 'observing' | 'confirmed' | 'needs_attention';
+  reason: string;
+  pending_count: number;
+  observed_at: number;
+  restart_scheduled: false;
 }
 
 export interface Page<T> {

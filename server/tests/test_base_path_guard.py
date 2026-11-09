@@ -61,9 +61,9 @@ class MetadataPathsTest(unittest.TestCase):
     def test_layout_icons_and_manifest_use_with_base_path(self) -> None:
         src = _src('app/layout.tsx')
         block = src[src.index('manifest:'):src.index('};', src.index('manifest:'))]
-        for path in ('/favicon/site.webmanifest', '/favicon/favicon-32x32.png',
-                     '/favicon/favicon-16x16.png', '/favicon/favicon.ico',
-                     '/favicon/apple-touch-icon.png'):
+        for name in ('site.webmanifest', 'favicon-32x32.png', 'favicon-16x16.png',
+                     'favicon.ico', 'favicon.svg', 'apple-touch-icon.png'):
+            path = '/favicon/zhihui-z-20261029/' + name
             with self.subTest(path=path):
                 self.assertIn(f"withBasePath('{path}')", block,
                               f'{path} 没走 withBasePath —— 子路径部署下会请求到域名根')
@@ -75,7 +75,7 @@ class MetadataPathsTest(unittest.TestCase):
         `<前缀>/favicon/` 下（PR 的改动 + 本次补漏合起来才成立）。
         """
         import json
-        data = json.loads(_src('public/favicon/site.webmanifest'))
+        data = json.loads(_src('public/favicon/zhihui-z-20261029/site.webmanifest'))
         for icon in data.get('icons', []):
             with self.subTest(src=icon.get('src')):
                 self.assertFalse(str(icon.get('src', '')).startswith('/'),
@@ -86,7 +86,7 @@ class NavigationPathsTest(unittest.TestCase):
     """站内跳转 / 请求入口必须带前缀（PR 列举的那份清单）。"""
 
     def test_browser_redirects_use_base_path(self) -> None:
-        """整页跳转的目标要么直接带 BASE_PATH，要么来自本文件里带 BASE_PATH 的变量。
+        r"""整页跳转的目标要么直接带 BASE_PATH，要么来自本文件里带 BASE_PATH 的变量。
 
         第二种是常态（`const loginPath = \`${BASE_PATH}/login\`` 之后再赋值），所以
         判据是「赋值语句里出现 BASE_PATH，或它引用的标识符在本文件里被赋予了带

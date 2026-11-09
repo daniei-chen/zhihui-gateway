@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Gift,
   Zap,
@@ -75,6 +75,7 @@ import {AccountCoolingDialog} from '@/components/common/accounts/AccountCoolingD
 import {AccountTaskDialog} from '@/components/common/accounts/AccountTaskDialog';
 import {useAuth} from '@/lib/auth-context';
 import {realmLabel, useRealm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 import {useT} from '@/lib/i18n/provider';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
@@ -114,9 +115,16 @@ const PAGE_SIZE = 20;
 const groupOf = (a: Account) => availabilityGroup(availabilityOf(a));
 
 export default function AccountsPage() {
+  const {loading, me} = useAuth();
+  if (loading || !me) return null;
+  return <FullAccountsPage />;
+}
+
+function FullAccountsPage() {
   const {realm, label: realmName} = useRealm();
+  const {platform, label: platformName} = usePlatform();
   const t = useT();
-  const {isAdmin} = useAuth();
+  const {isAdmin, canAddAccounts} = useAuth();
   const [addOpen, setAddOpen] = useState(false);
   const [proxyRoutes, setProxyRoutes] = useState<string[] | null>(null);
   // 备注编辑（issue #67）：记的是**哪个账号**而不是布尔——弹窗要以该账号当前的
@@ -166,6 +174,10 @@ export default function AccountsPage() {
    * 所以这里如实记下，并在积分列旁给一句说明（原实现是裸 `catch {}` 吞掉）。
    */
   const [creditsFailed, setCreditsFailed] = useState(false);
+  const [creditsBusy, setCreditsBusy] = useState(false);
+  const creditScope = useRef(0);
+  const creditRead = useRef(0);
+  const manualCreditRead = useRef<number | null>(null);
 
   /**
    * 账号池 = 这一页的**主数据**，单独一个 hook。
@@ -179,7 +191,7 @@ export default function AccountsPage() {
    * 留着上一组的账号渲染，分组按钮已经写着新分组了、列表却还是旧分组的人——那正是
    * 这个 hook 要消灭的谎话（同 `tasks` 的 `realm`）。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} =
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} =
     useAsyncAll({pool: () => accountApi.list(groupId)}, [groupId]);
 
   /**
@@ -193,6 +205,8 @@ export default function AccountsPage() {
    * 原实现这里是 `if (upRes.status === 'fulfilled')` —— 没有 else，失败完全无声。
    */
   const poolStatus = useAsyncAll({upstream: () => upstreamApi.status(groupId)}, [groupId]);
+  const reloadPoolStatus = poolStatus.reload;
+  const refreshPoolStatus = poolStatus.refresh;
 
   /**
    * 分组清单**单独一个 hook**：它不随 `groupId` 变化（列的是所有分组）。
@@ -202,11 +216,12 @@ export default function AccountsPage() {
    * 打不开的分组里。同理它也单独承担自己的失败，不把账号列表拖成错误态。
    */
   const groupList = useAsyncAll({groups: () => upstreamsApi.list()}, []);
+  const reloadGroups = groupList.reload;
 
   /** 账号池；`undefined` = 还没取到（首屏加载中，或它自己失败了） */
   const accounts: Account[] | undefined = values.pool?.accounts;
   const upstream: UpstreamStatus | null = poolStatus.values.upstream ?? null;
-  const groups: UpstreamEndpoint[] = useMemo(() => groupList.values.groups?.items || [], [groupList.values.groups?.items]);
+  const groups: UpstreamEndpoint[] = useMemo(() => groupList.values.groups?.items ?? [], [groupList.values.groups]);
   /**
    * 当前分组的元信息：manageable = 该分组配了本地账号目录（可加 / 移 / 删账号）。
    * 与账号池同一次响应，所以直接从它派生，不再单独存一份（少一处会不同步的状态）。
@@ -227,42 +242,65 @@ export default function AccountsPage() {
    * 移分组…），它们要能区分「写失败」与「写成功但列表没刷上」，后者绝不能报成前者。
    */
   const reloadAll = useCallback(async () => {
-    const [a, b, c] = await Promise.all([reload(), poolStatus.reload(), groupList.reload()]);
+    const [a, b, c] = await Promise.all([reload(), reloadPoolStatus(), reloadGroups()]);
     return a && b && c;
-  }, [reload, poolStatus, groupList]);
+  }, [reload, reloadPoolStatus, reloadGroups]);
 
   // 打开页面时自动拉一次实时积分：上游 /status 的 credits 可能滞后数小时，
   // 首次进入应展示真实余额。服务端有 TTL 缓存，重复进入不会频繁请求。
   useEffect(() => {
     let alive = true;
+    creditScope.current += 1;
+    const request = ++creditRead.current;
+    const current = () => alive && request === creditRead.current;
+    const cleanup = () => {
+      alive = false;
+      creditScope.current += 1;
+      creditRead.current += 1;
+    };
     // 换分组就换了一套账号，上一组的实时积分/缓存元信息不再适用，先清掉；
     // 否则同一个 uid 在两组的账目会串味。
     setLiveCredits({});
     setCreditsMeta({});
     setCreditsFailed(false);
+    setCreditsBusy(false);
+    setBusyFile(null);
+    manualCreditRead.current = null;
+    // Refreshing may contact the upstream and is an administrator action.
+    // Read-only viewers retain the account/status snapshot without issuing it.
+    if (!isAdmin) return cleanup;
     (async () => {
       try {
         // force=false：60 秒内重复打开页面直接命中服务端缓存，
         // 不再每次都全量请求腾讯；命中时界面会明确标注「缓存」
-        const r = await accountApi.refreshCredits(false, groupId);
-        if (!alive) return;
-        setLiveCredits(
-          Object.fromEntries(
+        try {
+          const snapshot = await accountApi.cachedCredits(groupId);
+          if (!current()) return;
+          setLiveCredits(Object.fromEntries(Object.entries(snapshot.credits).filter(([uid, value]) =>
+            typeof value === 'number' && snapshot.meta[uid]?.source === 'cache')) as Record<string, number>);
+          setCreditsMeta(snapshot.meta ?? {});
+        } catch {
+          if (!current()) return;
+        }
+        const r = await accountApi.refreshCredits(false, groupId, true);
+        if (!current()) return;
+        setLiveCredits(previous => ({...previous, ...Object.fromEntries(
             Object.entries(r.credits).filter(([, v]) => typeof v === 'number') as [string, number][],
-          ),
-        );
-        setCreditsMeta(r.meta ?? {});
+          )}));
+        setCreditsMeta(previous => Object.fromEntries(Object.entries(r.meta ?? {}).map(([uid, meta]) => [
+          uid, r.credits[uid] == null && previous[uid]
+            ? {...previous[uid], cached: true, message: meta.message} : meta,
+        ])));
+        setCreditsFailed((r.failed?.length ?? 0) > 0);
       } catch {
         // 这次没取到**不是**致命的：上游 /status 自带快照值，界面会照常显示并标注
         // 「上游快照」。但不能像原来那样裸吞——用户会以为快照就是当前余额。
         // 记下来，由积分列旁的一句说明如实交代（见 creditsFailed）。
-        if (alive) setCreditsFailed(true);
+        if (current()) setCreditsFailed(true);
       }
     })();
-    return () => {
-      alive = false;
-    };
-  }, [groupId, t]);
+    return cleanup;
+  }, [groupId, isAdmin]);
 
   // 上游状态（冷却 / 成功计数等）会随时间变化，页面停留时定时刷新，
   // 否则会一直显示打开页面那一刻的旧数据。
@@ -273,33 +311,42 @@ export default function AccountsPage() {
   // 心跳同时刷**上游状态**（poolStatus）：只刷账号池的话，页头那组「可用 / 冷却」
   // 会停在进页面那一刻；账号行内的冷却来自 pool 的合并结果，本来就会刷。
   const heartbeatReload = useCallback(
-    () => { void reload(); void poolStatus.reload(); },
-    [reload, poolStatus.reload]);
+    () => Promise.all([refresh(), refreshPoolStatus()]),
+    [refresh, refreshPoolStatus]);
   useHeartbeat(heartbeatReload, 30000);
 
   /** 刷新所有账号的实时积分（直接向腾讯查询，非上游缓存值） */
-  const [creditsBusy, setCreditsBusy] = useState(false);
   const refreshCredits = useCallback(async () => {
+    if (!isAdmin || manualCreditRead.current !== null) return;
+    const scope = creditScope.current;
+    const request = ++creditRead.current;
+    manualCreditRead.current = request;
+    const current = () => scope === creditScope.current && request === creditRead.current;
     setCreditsBusy(true);
     try {
       const r = await accountApi.refreshCredits(true, groupId);
+      if (!current()) return;
       setLiveCredits(
         Object.fromEntries(
           Object.entries(r.credits).filter(([, v]) => typeof v === 'number') as [string, number][],
         ),
       );
       setCreditsMeta(r.meta ?? {});
+      setCreditsFailed(r.failed.length > 0);
       if (r.failed.length === 0) {
         notify.ok(t('accounts.creditsRefreshed'), t('accounts.creditsRefreshedDetail', {ok: r.succeeded, total: r.total}));
       } else {
         notify.warn(t('accounts.creditsPartial'), t('accounts.creditsPartialDetail', {ok: r.succeeded, total: r.total}));
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setCreditsBusy(false);
+      if (manualCreditRead.current === request) {
+        manualCreditRead.current = null;
+        if (scope === creditScope.current) setCreditsBusy(false);
+      }
     }
-  }, [groupId, t]);
+  }, [groupId, isAdmin, t]);
 
   /** 一键刷新所有账号的 accessToken（真的续期，末尾只重载一次上游） */
   const [refreshTokensBusy, setRefreshTokensBusy] = useState(false);
@@ -319,12 +366,13 @@ export default function AccountsPage() {
         );
       }
       await reloadAll();
+      window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
       notify.err(errText(e));
     } finally {
       setRefreshTokensBusy(false);
     }
-  }, [reloadAll, groupId]);
+  }, [reloadAll, groupId, t]);
 
   /** 批量签到：逐账号记录结果 */
   const checkinAll = useCallback(async () => {
@@ -332,9 +380,7 @@ export default function AccountsPage() {
     try {
       const r = await accountApi.checkinAll(groupId);
       const failed = r.total - r.succeeded;
-      // 两类账号都不计入分母，各自补一句说明，否则用户会以为漏签了：
-      //   skipped — 国际版没有签到体系，点多少次都是「已跳过」
-      //   already — 今天已经签过，本次没再打上游（这正是「不重复签到」的效果）
+      // Completed checks without a reward must not look like fresh credit grants.
       const notes = [
         r.skipped > 0 ? t('accounts.checkinSkippedNote', {skipped: r.skipped}) : '',
         r.already > 0 ? t('accounts.checkinAlreadyNote', {n: r.already}) : '',
@@ -349,6 +395,8 @@ export default function AccountsPage() {
             t('accounts.checkinNothingPending'),
             t('accounts.checkinNothingPendingDetail', {n: r.already}) + note,
           );
+        } else if (r.skipped > 0 && r.message) {
+          notify.info(r.message);
         } else {
           notify.info(t('accounts.noCheckinTargets'), notes.trim() || undefined);
         }
@@ -364,6 +412,7 @@ export default function AccountsPage() {
         );
       }
       await reloadAll();
+      window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
       notify.err(errText(e));
     } finally {
@@ -488,6 +537,8 @@ export default function AccountsPage() {
     okMsg: string,
     preferOkMsg = false,
   ) {
+    const scope = creditScope.current;
+    const current = () => scope === creditScope.current;
     setBusyFile(file);
     try {
       const res = (await fn()) as {
@@ -495,7 +546,9 @@ export default function AccountsPage() {
         ok?: boolean;
         credits?: number | null;
         expiries?: CreditExpiry[];
+        reward_status?: string;
       };
+      if (!current()) return;
       const ok = res.ok !== false;
       // 签到 / 测活会带回**刚问到**的实时积分与到期时间。
       //
@@ -504,6 +557,8 @@ export default function AccountsPage() {
       // 原来写进快照位，等于写了一个**看不见的值**（实时值一存在就被盖住），
       // 而且两个值的语义本来就不同——一个是我刚问到的，一个是上游按小时刷的。
       const uid = accounts?.find((a) => a.file === file)?.uid;
+      // A completed account mutation is newer evidence than an earlier bulk read.
+      if (uid && (typeof res.credits === 'number' || res.expiries)) creditRead.current += 1;
       if (typeof res.credits === 'number' && uid) {
         setLiveCredits((prev) => ({...prev, [uid]: res.credits as number}));
       }
@@ -513,13 +568,16 @@ export default function AccountsPage() {
           [uid]: {...prev[uid], cached: false, cache_age: null, expiries: res.expiries},
         }));
       }
-      (ok ? notify.ok : notify.err)(ok && preferOkMsg ? okMsg : (res.message || okMsg));
+      const unconfirmed = ['no_reward', 'unknown', 'pending', 'skipped'].includes(res.reward_status ?? '');
+      (unconfirmed ? notify.info : ok ? notify.ok : notify.err)(
+        ok && preferOkMsg && !unconfirmed ? okMsg : (res.message || okMsg),
+      );
       await reloadAll();
       window.dispatchEvent(new Event('workbuddy-manager:accounts-changed'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setBusyFile(null);
+      if (current()) setBusyFile(previous => previous === file ? null : previous);
     }
   }
 
@@ -1158,8 +1216,8 @@ export default function AccountsPage() {
         title={t('accounts.title')}
         description={
           realm === 'global'
-            ? t('accounts.descGlobal')
-            : t('accounts.descCn')
+            ? t('accounts.descGlobal', {platform: platformName})
+            : t('accounts.descCn', {platform: platformName})
         }
         actions={
           <>
@@ -1245,7 +1303,7 @@ export default function AccountsPage() {
             {isAdmin && (
               <UploadAccountsButton upstreamId={groupId} groups={groups} onSuccess={reloadAll} />
             )}
-            {isAdmin && (
+            {canAddAccounts && (
               <Button size="sm" className="rounded-full" onClick={() => setAddOpen(true)}>
                 <Plus />
                 {t('accounts.addAccount')}
@@ -1422,9 +1480,12 @@ export default function AccountsPage() {
       <section className="overflow-hidden rounded-[20px] bg-muted">
         {/* 手机端：卡片列表。表格 6 列在窄屏需要横向滚动，读一行要来回拖，
             改为纵向卡片后信息一眼可见 */}
-        <div className="divide-y divide-border/40 md:hidden">
+        {/* 手机端的卡片列表补上列表语义：否则屏幕阅读器只当成一串 div，
+            既不知道"这是一组账号"，也无法播报条目数（与桌面表格等价的读序）。
+            用 role=list/listitem 而不是 role=table——卡片不是二维表格。 */}
+        <div role="list" className="divide-y divide-border/40 md:hidden">
           {paged.rows.map((a) => (
-            <div key={a.file} className="space-y-2.5 px-3.5 py-3">
+            <div key={a.file} role="listitem" className="space-y-2.5 px-3.5 py-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2.5">
                   {renderAvatar(a)}
@@ -1542,7 +1603,7 @@ export default function AccountsPage() {
             description={isAdmin ? t('accounts.emptyDescAdmin') : t('accounts.emptyDescViewer')}
             className="flex flex-col items-center justify-center py-16 text-center"
           >
-            {isAdmin && (
+            {canAddAccounts && (
               <Button className="mt-4 rounded-full" onClick={() => setAddOpen(true)}>
                 <Plus />
                 {t('accounts.addAccount')}
@@ -1602,14 +1663,14 @@ export default function AccountsPage() {
       </section>
       )}
 
-      {/* 签到与任务记录已独立成页（账号一多，堆在本页会越滑越长） */}
-      <div className="flex flex-wrap items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      {/* WorkBuddy growth tasks do not apply to the other engines. */}
+      {platform === 'workbuddy' && <div className="flex flex-wrap items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span>{t('accounts.movedTo')}</span>
         <Link href="/tasks" className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 font-medium text-foreground transition-colors hover:bg-muted/70">
           {t('nav.tasks')}
           <ChevronRight className="h-3 w-3" />
         </Link>
-      </div>
+      </div>}
 
       <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={reloadAll}
                         upstreamId={groupId} />

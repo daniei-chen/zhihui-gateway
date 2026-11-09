@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Retired before any path resolution, credential access, or deployment command.
+# Keep the historical implementation below for review, never for execution.
+printf '%s\n' 'RETIRED: enterprise-support/apply.sh is disabled. Use docs/PRODUCT-RELEASE.md and docs/release-signing.md for the managed release process.' >&2
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 2
+fi
+exit 2
+
 # apply.sh — 一键应用企业账号额度支持补丁
 #
 # 用法：

@@ -108,6 +108,8 @@ class StreamingErrorKeepsHintTest(unittest.TestCase):
         db._conn = None
         db.connect()
         self.addCleanup(lambda: db._conn and db._conn.close())
+        from server import budgetowner
+        self.addCleanup(budgetowner.close)
         security.save_users({
             'secret': 'S',
             'users': [{'username': 'admin', 'role': 'admin', 'pwd_hash': security.make_hash('p')}],
@@ -115,6 +117,7 @@ class StreamingErrorKeepsHintTest(unittest.TestCase):
         })
         from server.main import app
         client = TestClient(app)
+        self.addCleanup(client.close)
         token = keysvc.create_key('t')['key']
 
         upstream = (b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'

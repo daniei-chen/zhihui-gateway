@@ -300,15 +300,17 @@ class RequestLogRetentionTest(unittest.TestCase):
                            completion_tokens=1, latency_ms=1, first_token_ms=None,
                            ua='UA', error=None, stream=1, credit=None, realm='cn')
 
-    def test_old_rows_pruned(self) -> None:
+    def test_old_rows_wait_for_verified_archive(self) -> None:
         now = int(time.time())
         keep = db._REQUEST_LOG_RETAIN_DAYS
         self._add(now - (keep + 10) * 86400)   # 超出保留期
         self._add(now - 5 * 86400)             # 保留期内
-        db._prune_request_logs()
+        from server import archiveworker
+        with mock.patch.object(archiveworker, 'notify') as notify:
+            db._prune_request_logs()
+        notify.assert_called_once()
         rows = db.query('SELECT ts FROM request_logs')
-        self.assertEqual(len(rows), 1, f'清理没生效或删多了：{rows}')
-        self.assertGreater(rows[0]['ts'], now - (keep + 1) * 86400)
+        self.assertEqual(len(rows), 2, '没有归档证明时必须保留过期原始行')
 
     def test_boundary_row_kept(self) -> None:
         """正好在保留期边界的记录不该被删（边界差一天）。"""

@@ -5,8 +5,10 @@ import ipaddress
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from pydantic import field_validator
+from typing import Literal
 
-from .. import config, db, keysvc, security, upstreamsvc
+from .. import config, db, keylimits, keysvc, security, upstreamsvc
 from ..services import keyexport, keyimport, modelcatalog, modelmap
 from ..iputil import client_ip
 
@@ -61,7 +63,14 @@ def _check_name(name: str | None) -> None:
         raise HTTPException(status_code=400, detail='密钥名称不能只有空格')
 
 
-class KeyIn(BaseModel):
+class KeyLimitsModel(BaseModel):
+    @field_validator(*keylimits.LIMITS, mode='before', check_fields=False)
+    @classmethod
+    def validate_limit(cls, value, info):
+        return keylimits.validate(info.field_name, value)
+
+
+class KeyIn(KeyLimitsModel):
     name: str = Field(min_length=1, max_length=64)
     # 绑定的上游（多上游 / 分组隔离）：null / 0 / 省略 = 默认上游。
     # 类型是 int 而不是 str：界面上是下拉选 id，存成整数才能在外键式查询里用。
@@ -74,12 +83,16 @@ class KeyIn(BaseModel):
     # 积分额度（issue #27）：0 = 不限。与 token 额度各自独立，任一超限即拒绝。
     # 用 float：上游 credit 是小数（如 0.05 表示按倍率扣费）。
     quota_credit: float = 0
+    daily_token_quota: int = Field(default=0, ge=0, le=9_000_000_000_000_000)
+    daily_credit_quota: float = Field(default=0, ge=0, le=9_000_000_000_000, allow_inf_nan=False)
+    assigned_to: str = Field(default='', max_length=32)
     # 版本归属：'' = 不限制（存量密钥的形态）。非 cn/global 的值由
     # keysvc._norm_realm 归一化成 ''——不报错，免得旧前端（不带该字段）被拒。
     realm: str = Field(default='', max_length=16)
+    platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
 
 
-class KeyPatch(BaseModel):
+class KeyPatch(KeyLimitsModel):
     name: str | None = None
     # 显式传 null 是**允许**的：把密钥改回默认上游（与 realm 同口径）。
     upstream_id: int | None = None
@@ -90,7 +103,18 @@ class KeyPatch(BaseModel):
     models: list[str] | None = None
     quota: int | None = None
     quota_credit: float | None = None
+    daily_token_quota: int | None = Field(default=None, ge=0, le=9_000_000_000_000_000)
+    daily_credit_quota: float | None = Field(default=None, ge=0, le=9_000_000_000_000, allow_inf_nan=False)
+    assigned_to: str | None = Field(default=None, max_length=32)
     realm: str | None = None
+    platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
+
+    @field_validator('platforms')
+    @classmethod
+    def platforms_cannot_be_null(cls, value):
+        if value is None:
+            raise ValueError('platforms must be an array; an empty array disables all platforms')
+        return value
 
 
 class WhitelistCheckIn(BaseModel):
@@ -142,10 +166,12 @@ def list_keys(user: dict = Depends(security.current_user)) -> list[dict]:
 
 @router.post('')
 def create_key(body: KeyIn, request: Request,
-               user: dict = Depends(security.require_admin)) -> dict:
+               user: dict = Depends(security.require_keys_writer)) -> dict:
     _check_name(body.name)
     _check_ip_allowlist(body.ip_allowlist)
     _check_upstream(body.upstream_id)
+    if body.assigned_to:
+        _check_assignment(body.assigned_to, user)
     created = keysvc.create_key(
         name=body.name,
         expires_at=body.expires_at,
@@ -156,6 +182,10 @@ def create_key(body: KeyIn, request: Request,
         realm=body.realm,
         quota_credit=body.quota_credit,
         upstream_id=body.upstream_id,
+        platforms=body.platforms,
+        daily_token_quota=body.daily_token_quota,
+        daily_credit_quota=body.daily_credit_quota,
+        assigned_to=body.assigned_to,
     )
     # 密钥是拿额度用的凭证，发放必须留痕（含来源 IP）
     upstream_name = '默认上游'
@@ -168,7 +198,7 @@ def create_key(body: KeyIn, request: Request,
 
 
 @router.patch('/{key_id}')
-def update_key(key_id: int, body: KeyPatch, user: dict = Depends(security.require_admin)) -> dict:
+def update_key(key_id: int, body: KeyPatch, user: dict = Depends(security.require_keys_writer)) -> dict:
     # 只校验本次真的提交了的字段（PATCH 是部分更新，`exclude_unset` 语义）
     patch = body.model_dump(exclude_unset=True)
     if 'name' in patch:
@@ -177,6 +207,8 @@ def update_key(key_id: int, body: KeyPatch, user: dict = Depends(security.requir
         _check_ip_allowlist(patch['ip_allowlist'])
     if 'upstream_id' in patch:
         _check_upstream(patch['upstream_id'])
+    if 'assigned_to' in patch:
+        _check_assignment(patch['assigned_to'], user)
     updated = keysvc.update_key(key_id, patch)
     if not updated:
         raise HTTPException(status_code=404, detail='密钥不存在')
@@ -184,15 +216,28 @@ def update_key(key_id: int, body: KeyPatch, user: dict = Depends(security.requir
     return updated
 
 
+def _check_assignment(username, user):
+    if user.get('scope') or user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail='只有超级管理员本人可以分配密钥归属')
+    if not username:
+        return
+    if not any(u.get('username') == username for u in security.load_users().get('users', [])):
+        raise HTTPException(status_code=400, detail='分配的用户不存在')
+
+
 @router.post('/{key_id}/reset-usage')
-def reset_usage(key_id: int, user: dict = Depends(security.require_admin)) -> dict:
+def reset_usage(key_id: int, user: dict = Depends(security.require_keys_writer)) -> dict:
     from .. import budget
     budget.initialize()
     if budget.unresolved(key_id):
         raise HTTPException(status_code=409,detail='该密钥有未结算请求，请先核对用量')
     # 不存在的 id 应报 404，而不是静默成功：否则前端会提示「已重置」，
     # 而实际什么都没发生（密钥可能已被别人删掉，页面上却看着还在）。
-    if not keysvc.reset_usage(key_id):
+    try:
+        changed=keysvc.reset_usage(key_id, actor=user['username'])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not changed:
         raise HTTPException(status_code=404, detail='密钥不存在')
     security.audit(user,'reset_key_usage',str(key_id),'reset token and credit counters')
     return {'ok': True}
@@ -200,7 +245,7 @@ def reset_usage(key_id: int, user: dict = Depends(security.require_admin)) -> di
 
 @router.delete('/{key_id}')
 def delete_key(key_id: int, request: Request,
-               user: dict = Depends(security.require_admin)) -> dict:
+               user: dict = Depends(security.require_keys_writer)) -> dict:
     if not keysvc.delete_key(key_id):
         raise HTTPException(status_code=404, detail='密钥不存在')
     security.audit(user, 'delete_key', str(key_id), f'来源 {client_ip(request)}')

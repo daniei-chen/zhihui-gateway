@@ -73,7 +73,7 @@ export function hourlySeries(points: readonly UsageHourPoint[], nowHour?: number
     return {
       label: `${pad(h)}:00`,
       full: `${p?.day ?? ''} ${pad(h)}:00`,
-      tokens: (p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0),
+      tokens: p?.total_tokens ?? ((p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0)),
       requests: p?.requests ?? 0,
       failed: p?.failed ?? 0,
       isNow: nowHour === h,
@@ -88,22 +88,41 @@ export function hourlySeries(points: readonly UsageHourPoint[], nowHour?: number
  * 已经超出窗口的旧点会被丢掉（后端按 `day >= 起点` 过滤，理论上不会出现，
  * 但定长承诺由这里兜住）。
  */
+/** 数据里最新的那一天（无数据返回 null）——供"还不知道今天"的首帧用。 */
+function latestDayKey(points: readonly UsagePoint[]): string | null {
+  let best: string | null = null;
+  for (const p of points) {
+    const key = String(p.day ?? '');
+    if (key && (best === null || key > best)) best = key;
+  }
+  return best;
+}
+
 export function dailySeries(
   points: readonly UsagePoint[],
   days: number,
-  todayKey: string,
+  /**
+   * 窗口末尾那一天（YYYY-MM-DD，本地日历日）。
+   *
+   * `undefined` 表示**调用方还没有可用的"今天"**（hydration 完成前）。这时不猜时间，
+   * 改用数据里最新的那一天作窗口末尾——这样服务端与客户端首帧渲染出同一张图，
+   * 避免"渲染期取当前时间"造成的 #418（见 app/(main)/stats/page.tsx 的 nowTick）。
+   * 如果连数据都没有，就用固定的空窗口（不会与任何真实日期比较）。
+   */
+  todayKey?: string,
 ): ChartPoint[] {
   const n = Math.max(1, Math.floor(days));
   const byDay = new Map<string, UsagePoint>();
   for (const p of points) byDay.set(String(p.day), p);
-  const end = dayKeyToUtcMidnight(todayKey);
+  const anchor = todayKey || latestDayKey(points) || '1970-01-01';
+  const end = dayKeyToUtcMidnight(anchor);
   return Array.from({length: n}, (_, i) => {
     const key = utcMidnightToDayKey(end - (n - 1 - i) * 86400000);
     const p = byDay.get(key);
     return {
       label: key.slice(5),
       full: key,
-      tokens: (p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0),
+      tokens: p?.total_tokens ?? ((p?.prompt_tokens ?? 0) + (p?.completion_tokens ?? 0)),
       requests: p?.requests ?? 0,
       failed: p?.failed ?? 0,
     };

@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import re
 import secrets
 import sqlite3
 import time
 
-from . import db
+from . import db, keylimits, legacymig
 from .iputil import ip_matches
 
-TOKEN_PREFIX = 'wbk_'
+TOKEN_PREFIX = 'sk-'
+LEGACY_TOKEN_PREFIX = 'wbk_'
+_TOKEN_SHAPE = re.compile(r'sk-[0-9a-f]{32}\Z')
+_PORTAL_TOKEN_SHAPE = re.compile(r'sk-portal-[0-9a-f]{32}\Z')
 
 
 class Rejection(str):
@@ -74,19 +79,8 @@ def _norm_upstream_id(value: object) -> int | None:
 
 
 def _norm_credit_quota(value: object) -> float:
-    """归一化积分额度。0 = 不限（与 token 额度同口径）。
-
-    脏数据一律吃掉成 0 而不是抛错：这个值来自管理端表单，格式问题不该让
-    保存整个失败；而**钳到 0 是安全的**——0 表示「不限」，不会把一把设了
-    负数的密钥悄悄放行成「已超限」（那会让线上调用突然全 429）。
-    """
-    try:
-        v = float(value if value not in (None, '') else 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if v != v or v in (float('inf'), float('-inf')):  # NaN / inf
-        return 0.0
-    return max(0.0, v)
+    """Reject invalid limits rather than widening them to unlimited."""
+    return float(keylimits.validate('quota_credit', value))
 
 
 def _bare_model(model: object) -> str:
@@ -123,33 +117,7 @@ def _norm_cidrs(items: object) -> list[str]:
 
 
 def _json_list(raw: object) -> list[str]:
-    """把库里存的 JSON 数组文本解析成列表；**解析不了按「该列未设置」处理**。
-
-    为什么必须容错：`ip_allowlist` / `models` 是 JSON 文本列，而读取它的
-    `_parse` 被**列表接口**用到——只要**任意一把**密钥的这两列存了非法 JSON
-    （历史版本写入过、手工改过库、写入被截断、JSON 编码变更），整个
-    `GET /api/keys` 就抛 JSONDecodeError → 500，界面上**一把密钥都看不到**。
-
-    而这会伪装成「创建失败」：新建密钥的 POST 本身是成功的（数据已入库），
-    紧接着前端刷新列表才炸——用户看到 500 以为没建成，再点一次就多一把重复的。
-    症状极具误导性（数据明明进去了），所以这里宁可少显示一个字段，
-    也绝不让一列坏数据拖垮整个列表。
-
-    **注意这里的方向**：解析失败按空列表返回，而 `validate` 里是
-    `if allow and ...` / `if key['models'] and ...` —— 空列表意味着**跳过该项
-    检查**（不限制 IP / 不限制模型）。也就是说坏数据会**放宽**该密钥，不是收紧。
-    这是有意的取舍，理由见下：
-
-      * 坏数据只可能来自**已经损坏的库**，而那种库在修复前整个密钥页都打不开，
-        管理员连删掉它的入口都没有——修好列表是当务之急；
-      * 「不限制」不等于「无保护」：密钥本身仍要过哈希校验、启停、有效期、
-        配额与限流；IP 与模型白名单是**附加**收紧项，不是唯一防线；
-      * 反向选择（坏数据一律拒绝）会让那把密钥的所有调用都失败，而管理员
-        看不到任何原因（列表都打不开），排查成本更高。
-
-    所以界面上会把「解析失败」当作空列表展示——管理员看到某把密钥的白名单
-    是空的，若记得自己设过，就知道要重新设置一次。
-    """
+    """Best-effort display only; enforcement uses _stored_request_policy."""
     if isinstance(raw, list):
         return [str(x) for x in raw if x]
     if not isinstance(raw, str) or not raw.strip():
@@ -163,16 +131,55 @@ def _json_list(raw: object) -> list[str]:
     return [str(x) for x in parsed if x]
 
 
-def _parse(row) -> dict:
+def _stored_request_policy(raw: object, *, networks=False) -> tuple[list[str], bool]:
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(parsed, list) or any(not isinstance(x, str) or not x.strip() for x in parsed):
+            return [], False
+        clean = [x.strip() for x in parsed]
+        if networks:
+            for value in clean:
+                ipaddress.ip_network(value, strict=False)
+        return clean, True
+    except (ValueError, TypeError, RecursionError):
+        return [], False
+
+
+def _parse(row, *, daily=None, day=None) -> dict:
+    from . import platformpolicy
+    from . import dailyquota
+    platforms, policy_valid = platformpolicy.stored_policy(row['platforms'])
+    ip_rules, ip_valid = _stored_request_policy(row['ip_allowlist'], networks=True)
+    models, models_valid = _stored_request_policy(row['models'])
+    policy_errors = [name for name, valid in (('ip_allowlist', ip_valid), ('models', models_valid)) if not valid]
+    for name in keylimits.LIMITS:
+        try:
+            keylimits.validate(name, row[name])
+        except ValueError:
+            policy_errors.append(name)
+    day = day or db.day_of()
+    if daily is None:
+        daily = dailyquota.snapshot(row['id'], day)
     return {
+        'source': row['source'],
+        'assigned_to': row['assigned_to'],
+        'daily_token_quota': row['daily_token_quota'],
+        'daily_credit_quota': row['daily_credit_quota'],
+        'daily_used_tokens': daily['tokens'],
+        'daily_used_credit': daily['credit_units'] / 1_000_000,
+        'daily_quota_day': day,
+        'platforms': platforms,
+        'platform_policy_valid': policy_valid,
+        'request_policy_valid': not policy_errors,
+        'request_policy_errors': policy_errors,
         'id': row['id'],
         'name': row['name'],
         'prefix': row['prefix'],
         'enabled': bool(row['enabled']),
         'expires_at': row['expires_at'],
         'max_ips': row['max_ips'],
-        'ip_allowlist': _json_list(row['ip_allowlist']),
-        'models': _json_list(row['models']),
+        'ip_allowlist': ip_rules,
+        'models': models,
         'realm': _norm_realm(row['realm']),
         # 绑定的上游接入点（多上游 / 分组隔离）。None = 默认上游 —— 见 upstreamsvc
         # 的模块注释：默认上游不是数据库里的某一行，所以这里保持 None 而不是补 0。
@@ -218,9 +225,12 @@ def list_keys() -> list[dict]:
         '             WHERE s.key_id = k.id LIMIT 1) AS packet_id '
         'FROM api_keys k ORDER BY k.id DESC'
     )
+    from . import dailyquota
+    day = db.day_of()
+    daily = dailyquota.snapshots(day)
     out = []
     for r in rows:
-        item = _parse(r)
+        item = _parse(r, daily=daily.get(r['id'], {'tokens': 0, 'credit_units': 0}), day=day)
         item['packet_id'] = r['packet_id']      # None = 手工建的
         out.append(item)
     return out
@@ -237,7 +247,12 @@ def create_key(
     quota_credit: float = 0,
     upstream_id: int | None = None,
     *,
+    platforms: list[str] | None = None,
+    daily_token_quota: int = 0,
+    daily_credit_quota: float = 0,
+    assigned_to: str = '',
     _conn: sqlite3.Connection | None = None,
+    _portal: bool = False,
 ) -> dict:
     """创建一个密钥。返回含**明文 token** 的字典（库里只存哈希）。
 
@@ -249,10 +264,22 @@ def create_key(
     之所以做成参数而不是让红包自己写一份 INSERT：SQL 抄第二遍就是第二份事实，
     改一处漏一处——本项目在 count_tokens 的鉴权上正是这么漂移出真漏洞的。
     """
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    from . import platformpolicy
+    policy = platformpolicy.normalize(platforms)
+    quota = keylimits.validate('quota', quota)
+    max_ips = keylimits.validate('max_ips', max_ips)
+    quota_credit = keylimits.validate('quota_credit', quota_credit)
+    daily_token_quota = keylimits.validate('daily_token_quota', daily_token_quota)
+    daily_credit_quota = keylimits.validate('daily_credit_quota', daily_credit_quota)
+    if type(_portal) is not bool or (_portal and _conn is None):
+        raise ValueError('portal credentials require an explicit transaction')
+    # The signed predecessor accepts only sk-<32 hex> / wbk_ / sk-qtg-.
+    # A distinct shape fails closed even if old code ignores source=portal-v1.
+    token = ('sk-portal-' if _portal else TOKEN_PREFIX) + secrets.token_hex(16)
     sql = ('INSERT INTO api_keys(name, key_hash, prefix, enabled, expires_at, max_ips, '
-           'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, '
-           'created_at, upstream_id) VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)')
+           'ip_allowlist, models, realm, quota, used_tokens, quota_credit, used_credit, used_credit_units, '
+           'created_at, upstream_id, platforms, daily_token_quota,daily_credit_quota,assigned_to) '
+           'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, ?, ?, ?, ?, ?, ?)')
     args = (
         name,
         _hash(token),
@@ -266,6 +293,10 @@ def create_key(
         _norm_credit_quota(quota_credit),
         int(time.time()),
         _norm_upstream_id(upstream_id),
+        json.dumps(policy),
+        int(daily_token_quota),
+        _norm_credit_quota(daily_credit_quota),
+        assigned_to,
     )
     if _conn is not None:
         key_id = int(_conn.execute(sql, args).lastrowid or 0)
@@ -279,10 +310,23 @@ def create_key(
 
 
 def update_key(key_id: int, patch: dict) -> dict | None:
+    patch = dict(patch)
+    for name in keylimits.LIMITS:
+        if name in patch:
+            patch[name] = keylimits.validate(name, patch[name])
     row = db.query_one('SELECT * FROM api_keys WHERE id = ?', (key_id,))
     if not row:
         return None
     fields: dict[str, object] = {}
+    if 'daily_token_quota' in patch:
+        fields['daily_token_quota'] = int(patch['daily_token_quota'] or 0)
+    if 'daily_credit_quota' in patch:
+        fields['daily_credit_quota'] = _norm_credit_quota(patch['daily_credit_quota'])
+    if 'assigned_to' in patch:
+        fields['assigned_to'] = str(patch['assigned_to'] or '')
+    if 'platforms' in patch:
+        from . import platformpolicy
+        fields['platforms'] = json.dumps(platformpolicy.normalize(patch['platforms'], default=False))
     if 'name' in patch and patch['name']:
         fields['name'] = str(patch['name'])
     if 'enabled' in patch:
@@ -322,7 +366,7 @@ def delete_key(key_id: int) -> bool:
     return True
 
 
-def reset_usage(key_id: int) -> bool:
+def reset_usage(key_id: int, *, actor: str = 'reset_usage') -> bool:
     """把已用 Token 与已用积分一起归零。返回是否真的命中了密钥。
 
     返回布尔值是为了让路由能对「不存在的 id」报 404 —— 原来静默成功会让
@@ -333,21 +377,96 @@ def reset_usage(key_id: int) -> bool:
     重置过」）。若只想放开其中一项，正确做法是把对应的**额度**调大，而不是
     靠重置。
     """
-    if not db.query_one('SELECT id FROM api_keys WHERE id = ?', (key_id,)):
-        return False
-    db.execute('UPDATE api_keys SET used_tokens = 0, used_credit = 0, used_credit_units = 0 WHERE id = ?', (key_id,))
+    from . import budget, ledgerreplay
+    budget.initialize()
+    with db.transaction() as conn:
+        row=conn.execute('SELECT used_tokens,used_credit_units FROM api_keys WHERE id=?',(key_id,)).fetchone()
+        if row is None:return False
+        if budget.unresolved(key_id) or ledgerreplay.backlog()!=0 or ledgerreplay.admission_block()['blocked']:
+            raise ValueError('存在未决请求或费用回执，先完成核对再重置用量')
+        baseline=conn.execute('SELECT COALESCE(SUM(credit_units),0) FROM usage_events WHERE key_id=?',(key_id,)).fetchone()[0]
+        conn.execute('INSERT INTO usage_reset_events(key_id,event_units_before,previous_units,previous_tokens,ts,actor) VALUES(?,?,?,?,?,?)',
+                     (key_id,baseline,int(row['used_credit_units'] or 0),int(row['used_tokens'] or 0),int(time.time()),str(actor)[:128]))
+        conn.execute('UPDATE api_keys SET used_tokens=0,used_credit=0,used_credit_units=0 WHERE id=?',(key_id,))
     return True
 
 
+def _resolve_legacy_qtg(token: str) -> dict | None:
+    """校验"已迁移的 QTG 旧 key"（K01-S1）。
+
+    判定链（顺序即安全边界）：
+      1. 前缀必须是 `sk-qtg-`（QTG 发 key 的固定前缀）——**不放宽成任意前缀**；
+      2. 用 `prefix = token[:12]` 走 `legacy_qtg_keys` 的索引定位（与 wbk_ 分支
+         同一思路：先定位再比对，避免全表扫描）；哈希用 `secrets.compare_digest`
+         恒时比较，与 wbk_ 分支同口径；
+      3. 迁移台账 enabled=1 且未过期——**只有登记过的旧 key 才可能通过**，
+         随机 `sk-xxx` / 未迁移的 `sk-qtg-` 一律 None；
+      4. 权威行 api_keys（manager_key_id）也必须存在、enabled=1、未过期：
+         管理端停用 / 删除 / 改过期时间立即生效（与 wbk_ 同一份数据源）；
+      5. 返回值 = `_parse(权威行)`，字段与 wbk_ key 完全同构，另加
+         `legacy_platforms`（QTG 平台范围，供 validate 守住平台边界）。
+
+    为什么返回权威行而不是自己拼 dict：`resolve()` 的返回值会被 budget.prepare
+    回查 `api_keys WHERE id=?`（查不到报"密钥已被删除"），还会被 keysvc.touch /
+    db.bump_usage / request_logs.key_id 按 id 记账。若返回迁移表自己的 id，
+    要么与 wbk_ key 的 id 撞车（最坏情况：给别的 key 记账），要么让所有旧 key
+    请求直接失败。因此迁移时同步建权威行，旧 key 在 Manager 里是一等公民。
+    """
+    if not token or not token.startswith(legacymig.QTG_KEY_PREFIX):
+        return None
+    digest = _hash(token)
+    rows = db.query(
+        'SELECT key_hash, manager_key_id, platforms, enabled, expires_at '
+        'FROM legacy_qtg_keys WHERE prefix = ?', (token[:12],))
+    for row in rows:
+        if not secrets.compare_digest(str(row['key_hash']), digest):
+            continue
+        if not row['enabled']:
+            return None
+        expires = int(row['expires_at'] or 0)
+        if expires and expires < time.time():
+            return None
+        canonical = db.query_one('SELECT * FROM api_keys WHERE id = ?',
+                                 (row['manager_key_id'],))
+        if canonical is None:
+            return None
+        key = _parse(canonical)
+        # 双保险：迁移台账是"来源快照"，Manager 权威行才是当前状态。
+        if not key['enabled']:
+            return None
+        if key['expires_at'] and key['expires_at'] < time.time():
+            return None
+        key['legacy_platforms'] = legacymig.split_csv(row['platforms'])
+        return key
+    return None
+
+
 def resolve(token: str) -> dict | None:
-    """按前缀定位后比对哈希，避免全表扫描。"""
-    if not token or not token.startswith(TOKEN_PREFIX):
+    """Resolve exact new-format credentials or explicitly supported legacy keys.
+
+    A prefix never grants access: indexed candidates still require the complete
+    SHA-256 match and retain the same authoritative ID, policy and usage.
+    """
+    if not isinstance(token, str) or not token:
+        return None
+    if token.startswith(legacymig.QTG_KEY_PREFIX):
+        return _resolve_legacy_qtg(token)
+    portal_shape = bool(_PORTAL_TOKEN_SHAPE.fullmatch(token))
+    if not (portal_shape or _TOKEN_SHAPE.fullmatch(token) or token.startswith(LEGACY_TOKEN_PREFIX)):
         return None
     rows = db.query('SELECT * FROM api_keys WHERE prefix = ?', (token[:12],))
     digest = _hash(token)
     for row in rows:
         if secrets.compare_digest(row['key_hash'], digest):
-            return _parse(row)
+            key = _parse(row)
+            if portal_shape and key.get('source') != 'portal-v1':
+                return None
+            if key.get('source') == 'portal-v1':
+                key['credential_hash'] = row['key_hash']
+                from . import portalpolicy
+                if portalpolicy.problem(key, listing=True):
+                    return None
+            return key
     return None
 
 
@@ -360,6 +479,9 @@ def model_allowed(key: dict, model: object) -> bool:
 
     白名单为空 = 不限制，一律放行。
     """
+    from . import portalpolicy
+    if portalpolicy.is_portal(key) and not portalpolicy.model_allowed(model):
+        return False
     allow = key.get('models') or []
     if not allow:
         return True
@@ -372,7 +494,11 @@ def model_allowed(key: dict, model: object) -> bool:
     # 白名单里可能写着带前缀的 `cn:glm-5.2`。若按字面比对，改版后前者会
     # 被后者拒掉（用户看到「模型不在白名单内」却查不出哪里不对）。
     # `global:` 不归一化——它决定路由，两个版本的同名模型是**不同的东西**。
-    return _bare_model(model) in {_bare_model(x) for x in allow}
+    # 例外：密钥**已锁定版本**（realm=cn/global）时，前缀不再承担路由信息
+    # （另一版本根本进不来），两边都按裸名比。否则会出现一种死锁（issue #255）：
+    # 国际版密钥的白名单写裸名，客户端按界面提示加 `global:` 前缀调用反而被拒。
+    norm = _strip_realm_prefix if _norm_realm(key.get('realm')) else _bare_model
+    return norm(model) in {norm(x) for x in allow}
 
 
 def _strip_realm_prefix(name: str) -> str:
@@ -450,7 +576,9 @@ def unknown_whitelist_entries(models: list[str], known_by_realm: dict,
 
 def validate(key: dict, ip: str, model: str | None,
              *, is_model_list: bool = False,
-             mapped_model: str | None = None) -> str | None:
+             mapped_model: str | None = None,
+             platform: str = 'workbuddy',
+             defer_platform: bool = False) -> str | None:
     """返回 None 表示放行，否则返回拒绝原因（`Rejection`，自带状态码）。
 
     is_model_list：请求是 `/v1/models`（模型发现，不带 model）。版本归属在这种
@@ -467,11 +595,24 @@ def validate(key: dict, ip: str, model: str | None,
         `/v1/models` 的裁剪就是这么算的（别名条目以**别名**为 id 下发，见
         `gateway._scope_models`）。改成判映射后的名字，会让「白名单里写别名」
         的密钥反被拒掉，与列表自相矛盾——issue #46 修的正是这处一致性。
+
+    platform：本次请求的**生效平台**（由入口决定：`/qoder/v1` → qoder、
+    `/trae/v1` → trae、其余 → workbuddy，见 `gateway.forced_platform`）。
+    只用于校验 K01-S1 迁移旧 key 的 `legacy_platforms` 平台范围；`wbk_` key
+    没有该字段，行为与从前完全一致。
     """
+    from . import portalpolicy
+    portal_problem = portalpolicy.problem(key, model, mapped_model, platform, listing=is_model_list)
+    if portal_problem:
+        if portalpolicy.is_portal(key) and not is_model_list and not portalpolicy.enabled() and portal_problem.startswith('用户公共池调用尚未启用'):
+            return Rejection(portal_problem, 503, 'service_unavailable', 'portal_pool_disabled')
+        return Rejection(portal_problem, 403, 'permission_error', 'portal_policy_denied')
     if not key['enabled']:
         return Rejection('密钥已停用', 403, 'permission_error', 'key_disabled')
     if key['expires_at'] and key['expires_at'] < time.time():
         return Rejection('密钥已过期', 403, 'permission_error', 'key_expired')
+    if key.get('request_policy_valid') is False:
+        return Rejection('密钥限制策略损坏，请管理员修复', 403, 'permission_error', 'invalid_key_policy')
     if key['quota'] and key['used_tokens'] >= key['quota']:
         # 配额用尽与认证无关，用 429 才对（403 会被客户端读成「密钥无效」：
         # 用户于是去查密钥、而不是去调额度，方向就被带偏了）。
@@ -483,6 +624,30 @@ def validate(key: dict, ip: str, model: str | None,
         return Rejection(
             f'密钥积分额度已用尽（已用 {key["used_credit"]:g} / 上限 {key["quota_credit"]:g}）',
             429, 'insufficient_quota', 'credit_quota_exhausted')
+
+    # 平台范围（K01-S1 迁移的 QTG 旧 key 才带 legacy_platforms；wbk_ key 没有该
+    # 字段 → 整段跳过，行为与从前完全一致）。
+    #
+    # 为什么必须判：QTG 的 platforms 是**数据面真实约束**（proxy.py 会按它拒绝
+    # 平台），而 Manager 没有 per-key 平台字段。若迁移时把它丢掉，旧 key 会从
+    # "只绑 qoder" 被静默放大成"三平台通用"——这正是计划 §6.2.4 禁止的
+    # "不默认全平台"。所以迁移台账保留原值，这里按请求生效平台守住边界。
+    # 状态码用 400：与 realm/模型白名单同属"请求与密钥不匹配"，不是密钥本身坏了。
+    from . import platformpolicy
+    if platform not in platformpolicy.PLATFORMS:
+        return Rejection('未知平台', 400, 'invalid_request_error', 'invalid_platform')
+    if key.get('platform_policy_valid') is False:
+        return Rejection('密钥平台策略损坏，请管理员修复', 403, 'permission_error', 'invalid_key_policy')
+    platforms = key.get('platforms', list(platformpolicy.PLATFORMS))
+    legacy = key.get('legacy_platforms')
+    if legacy is not None:
+        platforms = [p for p in platforms if p in legacy]
+    # Header-only admission cannot infer a model-prefix-selected platform yet.
+    # The full route always revalidates with the actual model and platform.
+    if not defer_platform and platform not in platforms:
+        return Rejection(
+            f'该密钥仅限 {"/".join(platforms)} 平台使用，当前请求是 {platform} 平台',
+            403, 'permission_error', 'platform_not_allowed')
 
     allow = key['ip_allowlist']
     if allow and not any(ip_matches(ip, c) for c in allow):
@@ -546,13 +711,57 @@ def validate(key: dict, ip: str, model: str | None,
     return None
 
 
-def touch(key: dict, ip: str, tokens: int = 0, credit: float | None = None) -> None:
+def claim_ip(key: dict, ip: str) -> Rejection | None:
+    """Atomically bind a limited key's IP before its first upstream dispatch.
+
+    ``validate`` remains a read-only preflight. Recording IPs only at settlement
+    allowed simultaneous requests (and long streams) from arbitrarily many new
+    IPs to pass the same limit. Re-read the current limit inside the write
+    transaction so separate workers cannot both claim its last available slot.
+    No usage is charged here; an admitted IP stays bound even if the upstream
+    later fails. Unlimited keys keep their existing settlement-time recording.
+    """
+    with db.transaction() as conn:
+        row = conn.execute(
+            'SELECT enabled,expires_at,max_ips FROM api_keys WHERE id=?',
+            (key['id'],),
+        ).fetchone()
+        if row is None:
+            return Rejection('API Key 已撤销或已更换', 401,
+                             'authentication_error', 'invalid_api_key')
+        if not row['enabled']:
+            return Rejection('密钥已停用', 403, 'permission_error', 'key_disabled')
+        if row['expires_at'] and row['expires_at'] < time.time():
+            return Rejection('密钥已过期', 403, 'permission_error', 'key_expired')
+        try:
+            limit = keylimits.validate('max_ips', row['max_ips'])
+        except ValueError:
+            return Rejection('密钥限制策略损坏，请管理员修复', 403,
+                             'permission_error', 'invalid_key_policy')
+        if not limit:
+            return None
+        if conn.execute('SELECT 1 FROM api_key_ips WHERE key_id=? AND ip=?',
+                        (key['id'], ip)).fetchone():
+            return None
+        count = conn.execute('SELECT COUNT(*) FROM api_key_ips WHERE key_id=?',
+                             (key['id'],)).fetchone()[0]
+        if count >= limit:
+            return Rejection(f'密钥已绑定 {count} 个 IP，超出上限 {limit}', 400,
+                             'invalid_request_error', 'too_many_ips')
+        conn.execute('INSERT INTO api_key_ips(key_id,ip,first_seen) VALUES(?,?,?)',
+                     (key['id'], ip, int(time.time())))
+    return None
+
+
+def touch(key: dict, ip: str, tokens: int = 0, credit: float | None = None, *, ts=None) -> None:
     """记账：来源 IP、最近使用、已用 token 与已用积分。
 
     credit 为本次调用的**真实扣费**（上游 usage.credit）。None / 0 表示上游
     没返回该字段（本版本之前的上游、或非计费端点）——**不计入而不是按 0 记**，
     与 request_logs.credit、usage_daily.credit 的口径一致。
     """
+    from . import dailyquota
+    dailyquota.charge(key['id'], tokens, credit, ts)
     db.execute(
         'INSERT OR IGNORE INTO api_key_ips(key_id, ip, first_seen) VALUES(?, ?, ?)',
         (key['id'], ip, int(time.time())),

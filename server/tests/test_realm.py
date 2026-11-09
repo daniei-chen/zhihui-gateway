@@ -23,9 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from server import config  # noqa: E402
 from server.services import realm, tencent  # noqa: E402
+from server.tests.authorization_test_support import IsolatedDataTestCase, clear_login_state, owner
 
 
-class RealmDetectTest(unittest.TestCase):
+class RealmDetectTest(IsolatedDataTestCase):
     def test_explicit_field_wins(self) -> None:
         self.assertEqual(realm.resolve_realm('global', 'www.codebuddy.cn'), 'global')
         self.assertEqual(realm.resolve_realm('cn', 'www.workbuddy.ai'), 'cn')
@@ -58,7 +59,7 @@ class RealmDetectTest(unittest.TestCase):
         self.assertTrue(realm.global_enabled())
 
 
-class EndpointTest(unittest.TestCase):
+class EndpointTest(IsolatedDataTestCase):
     def test_chat_base_per_realm(self) -> None:
         self.assertEqual(realm.chat_base('cn'), 'https://copilot.tencent.com')
         self.assertEqual(realm.chat_base('global'), 'https://www.workbuddy.ai')
@@ -174,7 +175,7 @@ class EndpointTest(unittest.TestCase):
             self.assertEqual(realm.chat_base('cn'), 'https://copilot.tencent.com')
 
 
-class CheckinSupportTest(unittest.TestCase):
+class CheckinSupportTest(IsolatedDataTestCase):
     def test_cn_supported_global_not(self) -> None:
         self.assertTrue(realm.supports_checkin('cn'))
         self.assertFalse(realm.supports_checkin('global'))
@@ -195,10 +196,11 @@ class CheckinSupportTest(unittest.TestCase):
         self.assertEqual(called, [], '不应发起任何 HTTP 请求')
 
 
-class StateRealmTest(unittest.TestCase):
+class StateRealmTest(IsolatedDataTestCase):
     """扫码 state 的版本一致性：跨版本轮询必须被拒绝。"""
 
     def setUp(self) -> None:
+        super().setUp()
         tencent._state_cache.clear()
 
     def tearDown(self) -> None:
@@ -273,7 +275,7 @@ class StateRealmTest(unittest.TestCase):
         _ = asyncio  # 保持导入一致性
 
 
-class PollDoesNotDropStateTest(unittest.TestCase):
+class PollDoesNotDropStateTest(IsolatedDataTestCase):
     """issue #26：`poll_login` 拿到 ready 后**不能**自己丢 state。
 
     报障现象：微信扫码确认后，弹窗显示「二维码已失效」。
@@ -289,6 +291,7 @@ class PollDoesNotDropStateTest(unittest.TestCase):
     """
 
     def setUp(self) -> None:
+        super().setUp()
         tencent._state_cache.clear()
 
     def tearDown(self) -> None:
@@ -360,10 +363,16 @@ class PollDoesNotDropStateTest(unittest.TestCase):
         self.assertFalse(tencent.is_pending('old'), '过期时应顺手清掉')
 
 
-class AuthPollSaveFailureTest(unittest.TestCase):
+class AuthPollSaveFailureTest(IsolatedDataTestCase):
     """落盘失败要给出**可执行的**提示，且不能把 state 一起弄丢（issue #26）。"""
 
     def setUp(self) -> None:
+        super().setUp()
+        clear_login_state()
+        self.addCleanup(clear_login_state)
+        from server.routers import accounts
+        revive = mock.patch.object(accounts, '_schedule_revive_after_login', return_value=None)
+        revive.start(); self.addCleanup(revive.stop)
         tencent._state_cache.clear()
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_auth = config.AUTH_DIR
@@ -403,6 +412,10 @@ class AuthPollSaveFailureTest(unittest.TestCase):
                                 json={'username': 'admin', 'password': 'p'}).status_code, 200)
 
         tencent._state_cache['s1'] = (time.time(), 'cn')
+        accounts_mod._bind_login('s1', owner(), 'cn', None)
+        self.addCleanup(accounts_mod._login_scopes.pop, 's1', None)
+        self.addCleanup(accounts_mod._login_bindings.pop, 's1', None)
+        self.addCleanup(accounts_mod._login_locks.pop, 's1', None)
         ready = {
             'status': 'ready', 'uid': 'u1', 'nickname': 'n', 'enterprise_id': '',
             'access_token': 'AT', 'refresh_token': 'RT',
@@ -446,6 +459,10 @@ class AuthPollSaveFailureTest(unittest.TestCase):
         c.post('/api/login', json={'username': 'admin', 'password': 'p'})
 
         tencent._state_cache['s2'] = (time.time(), 'cn')
+        accounts_mod._bind_login('s2', owner(), 'cn', None)
+        self.addCleanup(accounts_mod._login_scopes.pop, 's2', None)
+        self.addCleanup(accounts_mod._login_bindings.pop, 's2', None)
+        self.addCleanup(accounts_mod._login_locks.pop, 's2', None)
         ready = {
             'status': 'ready', 'uid': 'u2', 'nickname': 'n2', 'enterprise_id': '',
             'access_token': 'AT', 'refresh_token': 'RT',
@@ -492,10 +509,11 @@ class AuthPollSaveFailureTest(unittest.TestCase):
         accounts_mod._provisioned_states.clear()
 
 
-class WriteAuthFileTest(unittest.TestCase):
+class WriteAuthFileTest(IsolatedDataTestCase):
     """落盘要带 realm，且用不含逃生门的解析。"""
 
     def setUp(self) -> None:
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self._orig = config.AUTH_DIR
         config.AUTH_DIR = Path(self._tmp.name)
@@ -541,10 +559,11 @@ class WriteAuthFileTest(unittest.TestCase):
         self.assertEqual(d['auth']['realm'], 'global')
 
 
-class GlobalConfigSectionTest(unittest.TestCase):
+class GlobalConfigSectionTest(IsolatedDataTestCase):
     """global 段此前不在写入白名单里，保存会被静默吞掉。"""
 
     def setUp(self) -> None:
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self._path = Path(self._tmp.name) / 'config.json'
         self._path.write_text(json.dumps({'upstream': {}, 'server': {}}), encoding='utf-8')

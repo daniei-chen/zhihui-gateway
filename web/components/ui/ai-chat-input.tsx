@@ -1,7 +1,7 @@
 'use client';
 
 import {useEffect, useRef, useState} from 'react';
-import {AnimatePresence, motion} from 'motion/react';
+import {AnimatePresence, motion, useReducedMotion} from 'motion/react';
 import {Brain, Check, ChevronUp, Send, Sparkles, Square} from 'lucide-react';
 
 import {cn} from '@/lib/utils';
@@ -76,7 +76,7 @@ export function AiChatInput({
   // 占位符跟随语言：默认值必须在组件内生成，否则模块加载时就固定成一种语言
   const hints = placeholders ?? ['chat.ph1', 'chat.ph2', 'chat.ph3', 'chat.ph4', 'chat.ph5'].map((k) => t(k));
   const [phIndex, setPhIndex] = useState(0);
-  const [showPh, setShowPh] = useState(true);
+  const reducedMotion = useReducedMotion();
   const [isActive, setIsActive] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
@@ -87,16 +87,10 @@ export function AiChatInput({
 
   // 失焦且无内容时循环切换占位符
   useEffect(() => {
-    if (expanded) return;
-    const timer = setInterval(() => {
-      setShowPh(false);
-      setTimeout(() => {
-        setPhIndex((p) => (p + 1) % hints.length);
-        setShowPh(true);
-      }, 400);
-    }, 3200);
+    if (expanded || reducedMotion || hints.length < 2) return;
+    const timer = setInterval(() => setPhIndex((p) => (p + 1) % hints.length), 3200);
     return () => clearInterval(timer);
-  }, [expanded, hints.length]);
+  }, [expanded, hints.length, reducedMotion]);
 
   // 点击外部收起下拉（但不收起输入框本身，避免输入到一半被切走）
   useEffect(() => {
@@ -156,6 +150,7 @@ export function AiChatInput({
               onChange={(e) => onChange(e.target.value)}
               onFocus={() => setIsActive(true)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   submit();
@@ -166,16 +161,16 @@ export function AiChatInput({
             />
             <div className="pointer-events-none absolute inset-0 flex items-center py-2.5">
               <AnimatePresence mode="wait">
-                {showPh && !value && (
+                {hints.length > 0 && !value && (
                   <motion.span
                     key={phIndex}
                     className="select-none whitespace-nowrap text-sm text-muted-foreground/70"
-                    initial={{opacity: 0, filter: 'blur(10px)', y: 6}}
+                    initial={reducedMotion ? false : {opacity: 0, filter: 'blur(10px)', y: 6}}
                     animate={{opacity: 1, filter: 'blur(0px)', y: 0}}
                     exit={{opacity: 0, filter: 'blur(10px)', y: -6}}
-                    transition={{duration: 0.28}}
+                    transition={{duration: reducedMotion ? 0 : 0.28}}
                   >
-                    {hints[phIndex]}
+                    {hints[phIndex % hints.length]}
                   </motion.span>
                 )}
               </AnimatePresence>

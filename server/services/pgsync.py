@@ -1,42 +1,11 @@
-"""PostgreSQL 异地备份：把本地 SQLite 全量镜像到 PG，并能反向恢复。
+"""PostgreSQL main-database mirror, with isolated recovery artifacts.
 
-## 定位：为什么不是「把面板搬到 PG 上跑」
-
-面板**仍然读写本地 SQLite**（`data/manager.db`），PG 只做**异地保险库** ——
-一键把当前数据推上去、需要时再拉回来。
-
-这样定的理由是本项目的数据访问层形态：裸 SQL、约 174 条语句、19 张表、零 ORM。
-若让业务查询直接跑在 PG 上，就要处理一整层方言差异（32 处
-`strftime(...,'unixepoch','localtime')` 要换成 `to_char(... AT TIME ZONE ...)`、
-11 处 `ON CONFLICT`、4 处 `INSERT OR IGNORE`、单连接+RLock 要换连接池），
-以及 1893 个测试的双后端策略。而「只搬数据」的形态下，**写 PG 只需要
-CREATE TABLE + 批量 INSERT，读 PG 只需要 SELECT *** —— 业务代码一行不改，
-既有测试不受任何影响。
-
-## 三个关键取舍
-
-1. **表结构不写死，从源库现读**（`PRAGMA table_info`）再生成 PG 的
-   `CREATE TABLE`。手写 19 份 DDL 会在下次加列时静默漂移：PG 侧缺列，直到
-   有人真的恢复一次才炸，而那时源数据可能已经没了。现读的代价是丢掉注释与
-   默认值 —— 对一张「随时可从源库重建」的镜像表，这个代价可以接受。
-
-2. **一致性快照用 `VACUUM INTO`**，而不是逐表 SELECT。导出期间面板照常服务，
-   逐表读会让不同表落在不同的时点上，拿到的是一份**自相矛盾**的快照（例如
-   `request_logs` 已经写进了某次调用、`usage_daily` 还没累加）。`VACUUM INTO`
-   一条语句拿到事务一致的完整副本，之后从副本慢慢搬，源库只被锁住一瞬间。
-
-3. **恢复先写临时库，最后一步才换文件**。把 PG 的行写进当前库所在目录的
-   一份临时副本（由 `VACUUM INTO` 生成），全程**不持有** `db._lock` ——
-   恢复再慢，网关与管理面照常读写。数据写完后，只在「关闭旧连接 → 改名
-   替换 → 重新打开」这一小段持有全局锁（毫秒级）。失败时临时文件直接丢弃，
-   本地库一个字节都不会动；替换阶段失败则由 `db.replace_database` 回滚旧文件。
-   （早期版本在 `BEGIN IMMEDIATE` 里就地覆盖，大库恢复期间所有请求都被挡住。）
-
-## 与「备份」有关的一条安全约定
-
-恢复是**破坏性**的（会用 PG 的内容替换本地数据），所以恢复前一律先把当前
-本地库 `VACUUM INTO` 一份到 `data/pre-restore-<时间>.db` —— 恢复错了还能退回去。
-导出是只读的（只读快照 + 只写 PG），不做额外备份。
+SQLite remains authoritative. Export takes one consistent main-DB snapshot and
+copies it to the explicitly configured PG destination. PG does not contain a
+paired user wallet, credentials, process ownership or a complete recovery set.
+Import therefore writes a new, disabled, startup-blocked artifact; it never
+replaces the online database. Missing tables, column or row receipts fail closed.
+Activating recovery requires the separate paired offline recovery controller.
 """
 from __future__ import annotations
 
@@ -44,6 +13,7 @@ import json
 import logging
 import os
 import sqlite3
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -360,7 +330,12 @@ class _SqliteSource:
 
     def rows(self, table: str, columns: list[str], batch: int = BATCH) -> Iterator[list]:
         collist = ', '.join(f'"{c}"' for c in columns)
-        cur = self._conn.execute(f'SELECT {collist} FROM "{table}"')
+        if table == 'settings' and 'key' not in columns:
+            return
+        predicate = (' WHERE "key" IN (' + ','.join('?' for _ in _SETTING_ALLOWLIST) + ')'
+                     if table == 'settings' else '')
+        cur = self._conn.execute(f'SELECT {collist} FROM "{table}"' + predicate,
+                                 tuple(sorted(_SETTING_ALLOWLIST)) if table == 'settings' else ())
         while True:
             chunk = cur.fetchmany(batch)
             if not chunk:
@@ -404,9 +379,16 @@ class _PgSource:
 
     def rows(self, table: str, columns: list[str], batch: int = BATCH) -> Iterator[list]:
         collist = ', '.join(f'"{c}"' for c in columns)
+        if table == 'settings' and 'key' not in columns:
+            return
         cur = self._conn.cursor()
         try:
-            cur.execute(f'SELECT {collist} FROM "{table}"')
+            predicate = (' WHERE "key" IN (' + ','.join('%s' for _ in _SETTING_ALLOWLIST) + ')'
+                         if table == 'settings' else '')
+            if table == 'settings':
+                cur.execute(f'SELECT {collist} FROM "{table}"' + predicate, tuple(sorted(_SETTING_ALLOWLIST)))
+            else:
+                cur.execute(f'SELECT {collist} FROM "{table}"')
             while True:
                 chunk = cur.fetchmany(batch)
                 if not chunk:
@@ -599,11 +581,11 @@ def _snapshot_path() -> Path:
     return config.DATA_DIR / f'.pgsync-snapshot-{os.getpid()}.db'
 
 
+
 def _restore_staging_path() -> Path:
-    # 必须与正式库同目录：换库用的是 `os.replace`，跨文件系统会直接失败
-    # （EXDEV）。WB_DB 指到别处时 DATA_DIR 不一定在同一个挂载点。
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return config.DB_PATH.parent / f'.pgsync-restore-{os.getpid()}.db'
+    # This is a quarantined artifact, never a live-database replacement.
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return config.DATA_DIR / f'pg-restore-quarantined-{secrets.token_hex(12)}.db'
 
 
 def export_to_pg(cfg: dict, reporter: _Reporter) -> dict:
@@ -717,101 +699,96 @@ def _app_version() -> str:
 
 
 # ── 恢复（PG → SQLite）──────────────────────────────────
+
 def import_from_pg(cfg: dict, reporter: _Reporter) -> dict:
+    """Materialize an untrusted mirror into a NEW, quarantined SQLite artifact.
+
+    A PG mirror contains only the main database, without a paired user wallet,
+    process-liveness proofs or credential closure. It must never replace a live
+    ledger. Existing audit rows/triggers are untouched. Offline activation uses
+    the separate paired recovery controller, not this web endpoint.
+    """
     psycopg = _require_psycopg()
-    dsn = build_dsn(cfg)
-
-    if cfg.get('keep_local_backup', True):
-        backup = _local_backup()
-        if backup:
-            reporter.log(f'恢复前已备份当前数据到 {backup.name}')
-
-    # 同导出：连接阶段也要有超时（见上面的说明）。这里刻意**在取 db._lock 之前**连接，
-    # 所以连不上时面板不会跟着卡住。
-    with psycopg.connect(dsn, connect_timeout=CONNECT_TIMEOUT) as pg:
-        src = _PgSource(pg)
-        available = set(src.tables())
-
-        staging = _restore_staging_path()
+    staging = _restore_staging_path()
+    schema_snapshot = staging.with_suffix('.schema.db')
+    success = False
+    try:
+        with db._lock:
+            db.connect().execute('VACUUM INTO ?', (str(schema_snapshot),))
+        template = sqlite3.connect(f'file:{schema_snapshot.as_posix()}?mode=ro', uri=True)
         try:
-            if staging.exists():
-                staging.unlink()
-            # 快照本身是一条 VACUUM INTO，很快；真正耗时的是从 PG 搬数据，
-            # 那一段只写这份临时副本，不持有 db._lock。
-            with db._lock:
-                db.connect().execute('VACUUM INTO ?', (str(staging),))
-            reporter.log('已生成本地快照，正在写入临时库（在线请求不受影响；'
-                         '恢复期间的新写入会在完成时被镜像覆盖）')
-
-            conn = sqlite3.connect(str(staging))
-            try:
-                local = _local_tables(conn)
-                missing = sorted(local - available)
-                if missing:
-                    # 措辞必须与行为一致：这些表**不会被清空**。恢复的语义虽然有
-                    # 「让本地等于镜像」的一面，但镜像可能来自更早的版本（那时这张
-                    # 表还不存在），清空等于把镜像里根本没有的数据删掉 —— 那是
-                    # 不可恢复的损失。所以保持现状，只提示。
-                    reporter.log(
-                        '镜像里没有这些表，恢复不会改动它们（保持现状）：'
-                        + '、'.join(missing), 'warn')
-                total = len(available & local)
-                reporter.data['tables_total'] = total
-
-                sink = _SqliteSink(conn)
-                # 临时库是私有的：事务失败就整体回滚，然后把文件丢掉即可，
-                # 本地正在服务的库一个字节都不会动。
-                with conn:
-                    for index, table in enumerate(sorted(available & local), start=1):
-                        src_cols = src.columns(table)
-                        names = [c['name'] for c in src_cols]
-                        wanted = sink.accepts(table, names)
-                        if not wanted:
-                            # 两边同名却没有任何公共列 —— 结构已经对不上了。
-                            # 这时**不清空**：清掉等于把一张表的数据凭空删掉，
-                            # 而镜像里那份又灌不进来。
-                            reporter.log(f'跳过 {table}（与镜像没有公共列）', 'warn')
-                            reporter.data['tables_done'] = index
-                            continue
-                        # 先清空再灌入：恢复的语义是「让本地等于镜像」，而不是合并
-                        # —— 合并会把镜像里已经删掉的记录留在本地。
-                        #
-                        # settings 例外：只删白名单 key。整表 DELETE 会把本机的
-                        # GitHub token / 代理密码 / 更新链路一起清掉，而这些 key
-                        # 本来就不在镜像里（导出时已过滤）。
-                        if table == 'settings':
-                            if 'key' not in wanted:
-                                reporter.log(
-                                    '跳过 settings（缺少 key 列，无法按白名单恢复）',
-                                    'warn')
-                                reporter.data['tables_done'] = index
-                                continue
-                            keys = sorted(_SETTING_ALLOWLIST)
-                            placeholders = ', '.join('?' * len(keys))
-                            conn.execute(
-                                f'DELETE FROM "settings" WHERE "key" IN ({placeholders})',
-                                keys)
-                        else:
-                            conn.execute(f'DELETE FROM "{table}"')
-                        for chunk in src.rows(table, wanted, BATCH):
-                            sink.write(table, wanted, chunk)
-                        reporter.data['tables_done'] = index
-                        reporter.step(f'恢复 {table}（{index}/{total}）',
-                                      percent=int(index * 95 / max(1, total)))
-                        reporter.log(f'{table}：已恢复')
-            finally:
-                # 必须先关掉 staging 的句柄：Windows 上文件被打开时无法改名替换。
-                conn.close()
-
-            reporter.step('替换本地数据库…', percent=99)
-            db.replace_database(staging)
-            db.set_setting(LAST_IMPORT_KEY, int(time.time()))
-            return {'tables': total}
+            objects = template.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 "
+                "WHEN 'index' THEN 1 ELSE 2 END,name").fetchall()
+            local = _local_tables(template)
         finally:
+            template.close()
+        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        with psycopg.connect(build_dsn(cfg), connect_timeout=CONNECT_TIMEOUT) as pg:
+            with pg.cursor() as cur:
+                cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+            src = _PgSource(pg)
+            available = set(src.tables())
+            missing = sorted(local - available)
+            if missing:
+                raise ValueError('镜像缺少当前数据表，拒绝生成可误用的部分恢复：' + ','.join(missing))
+            with pg.cursor() as cur:
+                cur.execute(f'SELECT value FROM "{META_TABLE}" WHERE key=%s', ('rows',))
+                row = cur.fetchone()
+            expected = json.loads(row[0]) if row else None
+            if not isinstance(expected, dict):
+                raise ValueError('镜像缺少行数回执')
+            conn = sqlite3.connect(staging)
             try:
-                staging.unlink()
-            except OSError:
-                pass
+                conn.execute('PRAGMA synchronous=FULL')
+                # Tables/indexes are trusted LOCAL schema. Immutable triggers
+                # are installed on the new artifact after initial loading; no
+                # trigger on an existing database is removed or disabled.
+                for kind, name, table, sql in objects:
+                    if kind in ('table', 'index'):
+                        conn.execute(sql)
+                sink = _SqliteSink(conn)
+                reporter.data['tables_total'] = len(local)
+                counts = {}
+                with conn:
+                    for index, table in enumerate(sorted(local), 1):
+                        names = [c['name'] for c in src.columns(table)]
+                        wanted = sink.accepts(table, names)
+                        if wanted != names or not wanted:
+                            raise ValueError('镜像列结构不匹配：' + table)
+                        moved = sum(sink.write(table, wanted, chunk)
+                                    for chunk in src.rows(table, wanted, BATCH))
+                        if type(expected.get(table)) is not int or moved != expected[table]:
+                            raise ValueError('镜像行数回执不匹配：' + table)
+                        counts[table] = moved
+                        reporter.data['tables_done'] = index
+                    for kind, name, table, sql in objects:
+                        if kind == 'trigger':
+                            conn.execute(sql)
+                    if 'api_keys' in local:
+                        conn.execute('UPDATE api_keys SET enabled=0')
+                    conn.execute('CREATE TABLE _wb_restore_quarantine(reason TEXT NOT NULL)')
+                    conn.execute('INSERT INTO _wb_restore_quarantine VALUES(?)',
+                                 ('Main-only PostgreSQL mirror; paired offline activation required',))
+                if conn.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+                    raise ValueError('恢复产物完整性校验失败')
+                if conn.execute('PRAGMA foreign_key_check').fetchone():
+                    raise ValueError('恢复产物外键不完整')
+            finally:
+                conn.close()
+        with staging.open('r+b') as handle:
+            os.fsync(handle.fileno())
+        success = True
+        reporter.log('已生成隔离恢复产物；现网主账、钱包和审计未替换。必须通过配对离线恢复流程激活。', 'warn')
+        return {'tables': len(counts), 'rows': sum(counts.values()),
+                'artifact': staging.name, 'activation_quarantined': True,
+                'live_database_replaced': False, 'complete_restore_verified': False}
+    finally:
+        schema_snapshot.unlink(missing_ok=True)
+        if not success:
+            staging.unlink(missing_ok=True)
 
 
 def _local_tables(conn: sqlite3.Connection) -> set[str]:
@@ -867,7 +844,7 @@ def _run_job(kind: str, cfg: dict) -> None:
             reporter.finish(True, f'导出完成：{len(result["tables"])} 张表、{result["rows"]} 行')
         else:
             result = import_from_pg(cfg, reporter)
-            reporter.finish(True, f'恢复完成：{result["tables"]} 张表')
+            reporter.finish(True, f'隔离恢复产物已生成：{result["tables"]} 张表；未替换现网')
         logger.info('PG %s 完成', label)
     except Exception as exc:  # noqa: BLE001 —— 任务线程的异常只能记在这里
         logger.exception('PG %s 失败', label)

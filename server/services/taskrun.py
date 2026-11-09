@@ -47,6 +47,7 @@ import time
 from pathlib import Path
 
 from .. import config, db
+from .asyncwork import joined_task, joined_thread
 from .errtext import err_text
 from .task_summary import summarize as summarize_tasks
 
@@ -75,6 +76,10 @@ IDLE_TIMEOUT_SECONDS = 300
 # 兜底总上限（秒）：防止「每 4 分钟吐一行」的诡异形态无限跑下去。
 # 30 个账号以内都够用；更大的池子建议分批跑（界面按账号逐个触发）。
 MAX_TOTAL_SECONDS = 4 * 3600
+
+# A descendant may inherit stdout after the direct child is killed. Do not let
+# that unrelated pipe lifetime hold the task's cancellation/reap forever.
+PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 
 # 输出缓冲上限：脚本会为每个动作打一行，全量批量可能几千行。只保留尾部，
 # 避免长时间运行把内存吃满（界面也只需要看最近的）。
@@ -106,7 +111,11 @@ def _host_script() -> Path | None:
     """
     from . import updater  # 复用既有的上游目录推断，避免两处口径不一
     p = updater._upstream_dir() / 'scripts' / 'task_runner.py'
-    return p if p.is_file() else None
+    try:
+        return p if p.is_file() else None
+    except OSError:
+        # An inaccessible host mount must not disable the existing image fallback.
+        return None
 
 
 def _extract_dir() -> Path:
@@ -279,8 +288,17 @@ def available() -> tuple[bool, str]:
     **这是阻塞调用**（可能 fork `docker inspect` / `docker cp`）。在事件循环里
     调用请改用 `available_async()`，否则一次 docker 卡顿会冻住整个服务。
     """
-    script = _script_path()
-    if not script.is_file():
+    try:
+        script = _script_path()
+        script_present = script.is_file()
+        auth_present = config.AUTH_DIR.is_dir() if script_present else False
+    except OSError as exc:
+        return False, (
+            f'无法访问上游任务脚本或账号目录（{type(exc).__name__}）。'
+            '请检查 WB_UPSTREAM_DIR、WB_AUTH_DIR 与提取缓存目录的读取/目录遍历权限；'
+            '权限恢复后可重试，不会因此执行任务。'
+        )
+    if not script_present:
         return False, (
             f'未找到上游任务脚本（{script}）。'
             '该功能调用的是上游 workbuddy2api 自带的 scripts/task_runner.py。\n'
@@ -291,7 +309,7 @@ def available() -> tuple[bool, str]:
             '  · 源码部署：请确认上游目录（WB_UPSTREAM_DIR）已挂载且版本较新，'
             '可到「设置 → 系统更新」更新上游。'
         )
-    if not config.AUTH_DIR.is_dir():
+    if not auth_present:
         return False, (
             f'账号目录不存在（{config.AUTH_DIR}），无法确定对哪些账号执行。'
             '请检查 WB_AUTH_DIR 配置。'
@@ -309,10 +327,10 @@ async def available_async() -> tuple[bool, str]:
 
     与 `tasklog` 读容器日志同一个做法（那里也是 `asyncio.to_thread`）。
     """
-    return await asyncio.to_thread(available)
+    return await joined_thread(available)
 
 
-def status() -> dict:
+def status(*, inspect_runtime: bool = True) -> dict:
     """当前/上次运行状态（供界面轮询）。
 
     同步版本：路由层是 `def`（FastAPI 会丢进线程池），所以这里阻塞是安全的。
@@ -324,7 +342,12 @@ def status() -> dict:
     # 界面默认展示它（用户看不出 `Sequential_Tasks_2: query 1/1 -> 可点亮…` 的
     # 要点），原文仍在「原文」页签里可查。
     snap['tasks'] = summarize_tasks(snap['lines'])
-    snap['available'], snap['unavailable_reason'] = available()
+    if inspect_runtime:
+        snap['available'], snap['unavailable_reason'] = available()
+    else:
+        # A read-only page must not extract scripts or inspect a container.
+        snap['available'] = False
+        snap['unavailable_reason'] = 'Read-only view; task execution requires a super administrator.'
     snaps = db.get_setting('task_claim_schedule') or {}
     snap['schedule'] = snaps if isinstance(snaps, dict) else {}
     return snap
@@ -397,10 +420,51 @@ async def start_async(mode: str, target: str = 'ALL') -> tuple[bool, str]:
     定时领奖循环与启动任务的 async 接口都走这里：把阻塞的准备丢进线程池，
     再回到事件循环线程里调度任务。两半的运行位置不能混（见 `_prepare`）。
     """
-    ok, payload = await asyncio.to_thread(_prepare, mode, target)
+    ok, payload = await joined_thread(_prepare, mode, target)
     if not ok:
         return False, payload  # type: ignore[return-value]
     return _launch(list(payload), mode, target, asyncio.get_running_loop())  # type: ignore[arg-type]
+
+
+async def run_and_wait(mode: str, target: str = 'ALL') -> tuple[bool, str]:
+    """Start one owned run and keep its caller alive until that run is cleaned up.
+
+    Schedulers must retain their execution lease for the child lifetime, not
+    merely until start_async() queues it. Capture the handle without yielding
+    after launch; cancellation must never stop a later run through global stop().
+    The boolean retains start_async's meaning: whether this call started work.
+    """
+    ok, message = await start_async(mode, target)
+    if not ok:
+        return ok, message
+    owned = _task  # start_async's successful return and this read have no await gap.
+    if owned is None:
+        raise RuntimeError('started task has no owned execution handle')
+    try:
+        await asyncio.shield(owned)
+    except asyncio.CancelledError:
+        caller_cancelled = bool(asyncio.current_task().cancelling())
+
+        async def finish_owned() -> None:
+            if not owned.done():
+                owned.cancel()
+            await asyncio.gather(owned, return_exceptions=True)
+            # If cancelled before _run entered its try/finally, it could not
+            # reset admission. A newer run must retain its own state untouched.
+            if _task is owned:
+                _state['running'] = False
+                _state['finished_at'] = int(time.time())
+
+        await joined_task(asyncio.create_task(finish_owned()))
+        if caller_cancelled:
+            raise
+        return False, '任务已停止'
+    return ok, message
+
+
+async def run_owned(mode: str, target: str = 'ALL') -> tuple[bool, str]:
+    ok, message = await run_and_wait(mode, target)
+    return bool(ok and not _state['error'] and _state['exit_code'] == 0), message
 
 
 def start(mode: str, target: str = 'ALL') -> tuple[bool, str]:
@@ -441,55 +505,62 @@ async def _run(argv: list[str], mode: str, target: str) -> None:
     # 上游目录作为 cwd：脚本以 __file__ 自定位，但仍按上游惯例从仓库根运行。
     # 丢进线程池：`_script_path()` 在脚本缺失时会触发 docker 提取（阻塞），
     # 而本函数跑在事件循环里。
-    script_path = await asyncio.to_thread(_script_path)
-    cwd = str(script_path.parent.parent)
-
     proc = None
+    stdout_eof = False
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=cwd, env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
+        script_path = await joined_thread(_script_path)
+        cwd = str(script_path.parent.parent)
+
+        async def spawn_owned() -> None:
+            nonlocal proc
+            proc = await asyncio.create_subprocess_exec(
+                *argv, cwd=cwd, env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+
+        # Cancellation during process creation still acquires its handle so the
+        # finalizer can terminate and reap the child before admitting another run.
+        await joined_task(asyncio.create_task(spawn_owned()))
         # 按**空闲**判定卡死，而不是总时长（理由见 IDLE_TIMEOUT_SECONDS 注释）：
         # 每读到一行就把「最后一次活动」往后推，静默超过阈值才判定卡死。
-        last_seen = time.time()
-        started = time.time()
+        last_seen = time.monotonic()
 
         async def pump_with_deadline() -> None:
-            nonlocal last_seen
+            nonlocal last_seen, stdout_eof
             while True:
+                idle = time.monotonic() - last_seen
+                if idle >= IDLE_TIMEOUT_SECONDS:
+                    raise _Stalled(idle)
                 try:
-                    raw = await asyncio.wait_for(proc.stdout.readline(), timeout=5)
+                    raw = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=min(5, IDLE_TIMEOUT_SECONDS - idle))
                 except asyncio.TimeoutError:
-                    idle = time.time() - last_seen
-                    if idle > IDLE_TIMEOUT_SECONDS:
-                        raise _Stalled(idle)
-                    if time.time() - started > MAX_TOTAL_SECONDS:
-                        raise _Stalled(time.time() - started, total=True)
                     continue
                 if not raw:
+                    stdout_eof = True
                     return
                 line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
                 if line:
                     _append(line)
-                    last_seen = time.time()
+                    last_seen = time.monotonic()
 
         try:
-            await pump_with_deadline()
+            # Bound the entire lifetime, including continuous output and a
+            # process that closes stdout but remains alive. Silence is separate.
+            async with asyncio.timeout(MAX_TOTAL_SECONDS):
+                await pump_with_deadline()
+                _state['exit_code'] = await proc.wait()
+        except asyncio.TimeoutError:
+            _state['timed_out'] = True
+            _append(f'!! 运行超过 {MAX_TOTAL_SECONDS // 3600} 小时上限，已终止')
         except _Stalled as exc:
             _state['timed_out'] = True
-            if getattr(exc, 'total', False):
-                _append(f'!! 运行超过 {MAX_TOTAL_SECONDS // 3600} 小时上限，已终止')
-            else:
-                _append(f'!! 已 {int(exc.args[0])}s 无输出，判定卡死并终止')
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-        code = await proc.wait()
-        _state['exit_code'] = code
+            _append(f'!! 已 {int(exc.args[0])}s 无输出，判定卡死并终止')
+    except asyncio.CancelledError:
+        _state['error'] = '任务已取消'
+        raise
     except FileNotFoundError as exc:
         _state['error'] = f'无法启动脚本：{err_text(exc)}'
         logger.warning('任务脚本启动失败: %s', exc)
@@ -497,14 +568,47 @@ async def _run(argv: list[str], mode: str, target: str) -> None:
         _state['error'] = str(exc)[:300]
         logger.warning('任务执行异常: %s', exc)
     finally:
-        if proc is not None and proc.returncode is None:
+        async def finish_owned() -> None:
+            if proc is not None:
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                # Even an already-exited child can leave a reader open through
+                # a descendant's inherited write handle. Normal EOF needs no drain.
+                if proc.stdout is not None and not stdout_eof:
+                    try:
+                        async with asyncio.timeout(PIPE_DRAIN_TIMEOUT_SECONDS):
+                            while await proc.stdout.read(65536):
+                                await asyncio.sleep(0)
+                    except (asyncio.TimeoutError, OSError, ValueError):
+                        _close_child_stdout(proc)
+                _state['exit_code'] = await proc.wait()
+            _state['finished_at'] = int(time.time())
             try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-        _state['running'] = False
-        _state['finished_at'] = int(time.time())
-        _record_history(mode, target)
+                await joined_thread(_record_history, mode, target)
+            finally:
+                _state['running'] = False
+
+        await joined_task(asyncio.create_task(finish_owned()))
+
+
+def _close_child_stdout(proc) -> None:
+    """Close our own pipe only; StreamReader has no public close operation.
+
+    CPython's selector/proactor subprocess readers both retain their owning
+    transport. Keep this internal access in one place and still await wait()
+    afterwards; closing a pipe never substitutes for reaping the direct child.
+    """
+    transport = getattr(proc.stdout, '_transport', None)
+    if transport is None:
+        process_transport = getattr(proc, '_transport', None)
+        if process_transport is not None:
+            transport = process_transport.get_pipe_transport(1)
+    if transport is None:
+        raise RuntimeError('owned child stdout transport is unavailable')
+    transport.close()
 
 
 class _Stalled(Exception):
@@ -584,17 +688,20 @@ async def stop() -> bool:
     if not _state['running'] or _task is None or _task.done():
         return False
     _append('!! 已手动停止')
-    _task.cancel()
+    owned = _task
+    owned.cancel()
     try:
-        await _task
+        await joined_task(owned)
     except asyncio.CancelledError:
-        pass
+        if asyncio.current_task().cancelling():
+            raise
     except Exception:  # noqa: BLE001
         # 子进程失败已经在 _run 里记进状态；这里只等它收尾。
         pass
     # _run 的 finally 已把 running 置回 False；任务若在启动前就被取消，兜一次底。
-    _state['running'] = False
-    _state['finished_at'] = int(time.time())
+    if _task is owned:
+        _state['running'] = False
+        _state['finished_at'] = int(time.time())
     return True
 
 
@@ -655,7 +762,7 @@ async def _claim_loop() -> None:
     global _last_claim_day
     while True:
         try:
-            cfg = get_schedule()
+            cfg = await joined_thread(get_schedule)
             if cfg['enabled']:
                 now = time.localtime()
                 # 本地时区与用户一致（面板按用户所在时区显示时间）

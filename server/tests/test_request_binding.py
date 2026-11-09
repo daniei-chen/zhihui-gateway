@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -30,6 +31,9 @@ import server.security as sec  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from server.main import app  # noqa: E402
 from server.services import tencent  # noqa: E402
+from server import config, db
+from server.routers import accounts
+from server.tests.authorization_test_support import install_users, owner, web_root
 
 
 class _Spy:
@@ -53,20 +57,42 @@ class _Spy:
 class AuthStartRealmBindingTest(unittest.TestCase):
     """`realm` 必须真的生效——这是「国际版添加账号」能不能用的前提。"""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        app.dependency_overrides[sec.require_admin] = lambda: {'username': 't', 'role': 'admin'}
-        app.dependency_overrides[sec.current_user] = lambda: {'username': 't', 'role': 'admin'}
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        app.dependency_overrides.clear()
-
     def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.original_conn = db._conn
+        db._conn = None
+        self.addCleanup(self.close_db)
+        root = Path(self.tmp.name)
+        for name, value in [('DATA_DIR', root), ('DB_PATH', root / 'binding.db'),
+                            ('USERS_FILE', root / 'users.json')]:
+            patch = mock.patch.object(config, name, value)
+            patch.start(); self.addCleanup(patch.stop)
+        install_users('t')
+        self.user = owner('t')
+        previous_overrides = dict(app.dependency_overrides)
+        self.addCleanup(self.restore_overrides, previous_overrides)
+        app.dependency_overrides[sec.require_admin] = lambda: self.user
+        app.dependency_overrides[sec.current_user] = lambda: self.user
+        poller = mock.patch.object(accounts, '_poll_login_background', new_callable=mock.AsyncMock)
+        poller.start(); self.addCleanup(poller.stop)
+        accounts._login_scopes.clear()
+        accounts._login_bindings.clear()
+        accounts._login_locks.clear()
         self.spy = _Spy()
         self.spy.install()
         self.addCleanup(self.spy.restore)
         self.client = TestClient(app)
+
+    @staticmethod
+    def restore_overrides(previous):
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+
+    def close_db(self):
+        if db._conn is not None:
+            db._conn.close()
+        db._conn = self.original_conn
 
     def _realm_sent(self) -> str:
         self.assertTrue(self.spy.calls, 'start_login 未被调用')
@@ -90,10 +116,11 @@ class AuthStartRealmBindingTest(unittest.TestCase):
         self.client.post('/api/auth/start', params={'realm': 'global'})
         self.assertEqual(self._realm_sent(), 'global')
 
-    def test_body_takes_precedence_over_query(self) -> None:
-        self.client.post('/api/auth/start',
-                         json={'realm': 'cn'}, params={'realm': 'global'})
-        self.assertEqual(self._realm_sent(), 'cn', 'body 应与前端一致并优先')
+    def test_conflicting_body_and_query_are_rejected(self) -> None:
+        response = self.client.post('/api/auth/start',
+                                    json={'realm': 'cn'}, params={'realm': 'global'})
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self.spy.calls, [], '版本冲突不能静默按其中一处发码')
 
     # ── 缺省与异常输入 ──
 
@@ -101,12 +128,12 @@ class AuthStartRealmBindingTest(unittest.TestCase):
         self.client.post('/api/auth/start')
         self.assertEqual(self._realm_sent(), 'cn')
 
-    def test_garbage_falls_back_to_cn(self) -> None:
-        for bad in ('xx', '', '  ', 'CN '):
+    def test_invalid_realm_is_not_silently_routed_to_cn(self) -> None:
+        for bad in ('xx', '', '  '):
             self.spy.calls.clear()
-            self.client.post('/api/auth/start', json={'realm': bad})
-            self.assertIn(self._realm_sent(), ('cn',),
-                          f'{bad!r} 应回落 cn 而不是被当成 global')
+            response = self.client.post('/api/auth/start', json={'realm': bad})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(self.spy.calls, [], '非法版本不能静默走国内授权')
 
     def test_global_is_case_insensitive(self) -> None:
         for val in ('global', 'GLOBAL', 'Global', ' global '):
@@ -122,7 +149,7 @@ class FrontendPostShapeTest(unittest.TestCase):
     「前端到底怎么传」钉住，避免回归测试慢慢与真实调用脱节。
     """
 
-    API_TS = Path(__file__).resolve().parents[2] / 'web' / 'lib' / 'api.ts'
+    API_TS = web_root() / 'lib' / 'api.ts'
 
     def test_post_helper_sends_json_body(self) -> None:
         api = self.API_TS.read_text(encoding='utf-8')
@@ -140,7 +167,11 @@ class FrontendPostShapeTest(unittest.TestCase):
         api = self.API_TS.read_text(encoding='utf-8')
         idx = api.find("'/api/auth/start'")
         self.assertGreater(idx, 0, '找不到 auth/start 的前端调用')
-        snippet = api[max(0, idx - 200):idx + 80]
+        start = api.rfind('post<', 0, idx)
+        end = api.find('\n  poll:', idx)
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, idx, 'auth/start 调用必须在 poll 属性之前完整结束')
+        snippet = api[start:end]
         self.assertIn("post<", snippet, 'auth/start 应通过 post() 调用')
         self.assertRegex(snippet, r'\{\s*realm\s*,\s*region\s*(?:,|\})',
                          'realm 与 region 都应以对象形式作为 body 传入 —— '
@@ -160,7 +191,10 @@ class PostParamLocationAuditTest(unittest.TestCase):
 
     # 允许使用 query 参数的 POST 端点（前端必须相应发 query）
     ALLOWED_QUERY_POSTS = {
-        '/api/accounts/refresh-credits': {'force', 'upstream_id'},
+        # Merged control-plane APIs deliberately expose these optional query filters.
+        '/api/v1/cache/invalidate': {'prefix'},
+        '/__qtg/api/accounts/refresh-credits': {'force'},
+        '/api/accounts/refresh-credits': {'force', 'upstream_id', 'stale_only'},
         '/api/auth/start': {'realm', 'region', 'upstream_id'},
         # 账号分组（多账号池）：下列写端点都接受 `?upstream_id=` 指定作用于哪个
         # 分组（前端 accountApi 统一按 query 拼；缺省不传 = 默认分组）。

@@ -95,17 +95,16 @@ class ClientLaneTest(unittest.TestCase):
         asyncio.run(config.close_clients())
 
     def test_lane_isolates_pool(self) -> None:
-        async def go():  # noqa: ANN202
-            probe1 = config.http_client(1, connect=1, lane='probe')
-            probe2 = config.http_client(1, connect=1, lane='probe')
-            plain = config.http_client(1, connect=1)
-            return probe1, probe2, plain
-
-        probe1, probe2, plain = asyncio.run(go())
-        # 同一 lane 复用同一个客户端（池缓存仍然有效）
-        self.assertIs(probe1._client, probe2._client)
-        # 不同 lane 必须是不同的池，否则「独立车道」只是说法
-        self.assertIsNot(probe1._client, plain._client)
+        import httpx
+        async def go():
+            with mock.patch.object(config, '_build_transport', side_effect=lambda _: httpx.MockTransport(
+                    lambda request: httpx.Response(200, content=b'ok'))) as build:
+                for lane in ('probe', 'probe', ''):
+                    async with config.http_client(1, connect=1, lane=lane, proxy='') as client:
+                        await client.get('https://unit.invalid/')
+                self.assertEqual(build.call_count, 2, 'Same lane reuses a transport; other lane is separate')
+                await config.close_clients()
+        asyncio.run(go())
 
 
 class PoolTimeoutTextTest(unittest.TestCase):

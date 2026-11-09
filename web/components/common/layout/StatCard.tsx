@@ -1,6 +1,6 @@
 'use client';
 
-import {motion} from 'motion/react';
+import {motion, useReducedMotion} from 'motion/react';
 import type {ReactNode} from 'react';
 import type {LucideIcon} from 'lucide-react';
 import {cn} from '@/lib/utils';
@@ -31,8 +31,7 @@ const TONE_ICON: Record<StatTone, string> = {
 };
 
 /**
- * 统计卡片 —— 沿用 LDC StatCard 范式：
- * min-h-[88px] rounded-[20px] bg-muted，无边框、靠底色区分。
+ * 统计卡片保留统一语义色；品牌表面由 brand.css 管理。
  */
 export function StatCard({
   label,
@@ -53,11 +52,13 @@ export function StatCard({
   hintTone?: StatTone;
   delay?: number;
 }) {
+  const reduced = useReducedMotion();
   return (
     <motion.div
-      initial={{opacity: 0, y: 12}}
+      data-slot="stat-card"
+      initial={reduced ? false : {opacity: 0, y: 12}}
       animate={{opacity: 1, y: 0}}
-      transition={{duration: 0.35, delay}}
+      transition={{duration: reduced ? 0 : 0.35, delay: reduced ? 0 : delay}}
       className="min-h-[88px] sm:min-h-[96px] rounded-[20px] bg-muted px-3.5 py-3 sm:px-4"
     >
       <div className="flex items-start justify-between gap-2">

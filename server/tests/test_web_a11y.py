@@ -13,8 +13,9 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+from server.tests.authorization_test_support import web_root
 
-_ROOT = Path(__file__).resolve().parents[2] / 'web'
+_ROOT = web_root()
 _SKIP_DIRS = ('ui', 'animate-ui')
 
 

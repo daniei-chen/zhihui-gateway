@@ -5,9 +5,9 @@ import {KeyRound, Plus, Trash2, Ban, CircleCheck, Pencil, RotateCcw} from 'lucid
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {notify} from '@/lib/toast';
-import {keyApi, upstreamsApi, errText} from '@/lib/api';
+import {keyApi, settingsApi, upstreamsApi, errText} from '@/lib/api';
 import {BASE_PATH} from '@/lib/base-path';
-import type {ApiKey, KeyImportResult, KeyImportStatus, UpstreamEndpoint} from '@/lib/types';
+import type {ApiKey, KeyImportResult, KeyImportStatus, UpstreamEndpoint, UserItem} from '@/lib/types';
 import {fmtDateTime, fmtNumber} from '@/lib/format';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {PageSectionTabs} from '@/components/common/layout/PageSectionTabs';
@@ -18,11 +18,14 @@ import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {useAuth} from '@/lib/auth-context';
 import {useRealm, type Realm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
+import type {Platform} from '@/lib/platform-store';
 import {Button} from '@/components/ui/button';
 import {CopyButton} from '@/components/ui/copy-button';
 import {RichText} from '@/lib/i18n/rich-text';
 import {useT} from '@/lib/i18n/provider';
 import {Badge} from '@/components/ui/badge';
+import {parseKeyLimit} from '@/lib/key-limit-form';
 import {Input} from '@/components/ui/input';
 import {
   Select,
@@ -54,6 +57,7 @@ import {
 } from '@/components/ui/table';
 
 interface FormState {
+  platforms: Platform[];
   name: string;
   /** 新建：0 = 永不过期；编辑：0 = 保持当前有效期不变 */
   expiresDays: string;
@@ -65,6 +69,9 @@ interface FormState {
   quota: string;
   /** 积分额度（issue #27）：0 = 不限。按上游返回的**真实扣费**累计 */
   quotaCredit: string;
+  dailyTokens: string;
+  dailyCredit: string;
+  assignedTo: string;
   /** 版本归属：'cn' | 'global' | ''（不限制，仅存量密钥） */
   realm: Realm | '';
   /** 绑定的上游（账号池分组）：null = 默认上游。见 server/upstreamsvc.py */
@@ -72,6 +79,7 @@ interface FormState {
 }
 
 const emptyForm: FormState = {
+  platforms: ['workbuddy'],
   name: '',
   expiryMode: 'keep',
   expiresDays: '0',
@@ -80,6 +88,9 @@ const emptyForm: FormState = {
   models: '',
   quota: '0',
   quotaCredit: '0',
+  dailyTokens: '0',
+  dailyCredit: '0',
+  assignedTo: '',
   realm: 'cn',
   upstream_id: null,
 };
@@ -97,11 +108,13 @@ function toLines(v: string): string[] {
  */
 const EMPTY_KEYS: ApiKey[] = [];
 const EMPTY_UPSTREAMS: UpstreamEndpoint[] = [];
+const EMPTY_USERS: UserItem[] = [];
 
 export default function KeysPage() {
   const t = useT();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
   const {realm} = useRealm();
+  const {platform} = usePlatform();
   /**
    * 密钥列表 + 上游列表。**两份数据放同一个 hook，不拆。**
    *
@@ -111,13 +124,16 @@ export default function KeysPage() {
    * 那是**静默的错误选择**，比「两块一起挂掉」更糟。所以宁可同生共死：
    * 一份没取到 → 整页错误态 + 重试，而不是渲染一个缺选项的表单。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     keys: () => keyApi.list(),
     upstreams: () => upstreamsApi.list(),
-  }, []);
+    users: () => isAdmin ? settingsApi.users() : Promise.resolve(EMPTY_USERS),
+  }, [isAdmin, me?.username]);
 
   const keys: ApiKey[] = values.keys ?? EMPTY_KEYS;
   const upstreams: UpstreamEndpoint[] = values.upstreams?.items ?? EMPTY_UPSTREAMS;
+  const users: UserItem[] = values.users ?? EMPTY_USERS;
+  const upstreamsReady = values.upstreams !== undefined && !('upstreams' in errors);
   /**
    * 密钥列表**这一份**没取到。
    *
@@ -165,6 +181,43 @@ export default function KeysPage() {
   /** 是否把导入的供应商设为当前。默认关：这等于替用户切换正在用的供应商，
    *  该由他自己点头，不能靠"顺手"发生。 */
   const [importSetCurrent, setImportSetCurrent] = useState(false);
+  const clientGeneration = useRef(0);
+  const pageGeneration = useRef(0);
+  const statusGeneration = useRef(0);
+  const clientMounted = useRef(false);
+  const exportFlight = useRef<symbol | null>(null);
+  // Import and detection can mutate local client state. Keep one operation in
+  // flight even when its display target changes; changing tabs cannot undo it.
+  const clientMutation = useRef<symbol | null>(null);
+  const invalidateClient = useCallback(() => {
+    clientGeneration.current++;
+    statusGeneration.current++;
+    exportFlight.current = null;
+  }, []);
+  const resetClientResults = useCallback(() => {
+    invalidateClient();
+    setExporting(false);
+    setExported(null);
+    setImported(null);
+    setImportStatus(null);
+  }, [invalidateClient]);
+  const closeIssued = useCallback(() => {
+    resetClientResults();
+    setIssued(null);
+    setImportSetCurrent(false);
+  }, [resetClientResults]);
+  const invalidatePage = useCallback(() => {
+    pageGeneration.current++;
+    invalidateClient();
+  }, [invalidateClient]);
+  useEffect(() => {
+    clientMounted.current = true;
+    closeIssued();
+    return () => {
+      clientMounted.current = false;
+      invalidatePage();
+    };
+  }, [isAdmin, me?.username, closeIssued, invalidatePage]);
   /**
    * 模型白名单里**匹配不到已知模型**的名字（issue #46）。
    *
@@ -197,6 +250,7 @@ export default function KeysPage() {
    * 不能因为一次报错就把表单永久锁死。
    */
   const submitting = useRef(false);
+  const [repairConfirmed, setRepairConfirmed] = useState(false);
 
   // 提示出现时确保它在可视区内（见 unknownRef 的说明）
   useEffect(() => {
@@ -208,7 +262,7 @@ export default function KeysPage() {
   // 密钥状态可能被下游调用改变（配额用尽、过期），心跳刷新保持同步。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 60 秒闪一次。
-  useHeartbeat(reload, 60000);
+  useHeartbeat(refresh, 60000);
 
   /** 列表里显示上游名；找不到（刚被删）时退回 #id —— 不显示空白。 */
   function upstreamName(id: number): string {
@@ -217,17 +271,22 @@ export default function KeysPage() {
   }
 
   function openCreate() {
+    if (!isAdmin || !upstreamsReady || submitting.current) return;
+    setRepairConfirmed(false);
     setEditing(null);
     // 新建时默认跟随当前所在版本：在哪个版本的界面里建，就是哪个版本的密钥
-    setForm({...emptyForm, realm});
+    setForm({...emptyForm, realm, platforms: [platform]});
     setUnknownModels(null);
     setFormOpen(true);
   }
 
   function openEdit(k: ApiKey) {
+    if (submitting.current) return;
+    setRepairConfirmed(false);
     setEditing(k);
     setForm({
       name: k.name,
+      platforms: k.platforms ?? ['workbuddy', 'qoder', 'trae'],
       // 默认不改动有效期；要续期/取消过期需显式选择
       expiryMode: 'keep',
       expiresDays: '0',
@@ -236,6 +295,9 @@ export default function KeysPage() {
       models: (k.models || []).join(', '),
       quota: String(k.quota ?? 0),
       quotaCredit: String(k.quota_credit ?? 0),
+      dailyTokens: String(k.daily_token_quota ?? 0),
+      dailyCredit: String(k.daily_credit_quota ?? 0),
+      assignedTo: k.assigned_to ?? '',
       realm: k.realm || '',
       upstream_id: k.upstream_id ?? null,
     });
@@ -246,22 +308,41 @@ export default function KeysPage() {
   async function submit() {
     // 同步锁：必须在任何 await / setState 之前判断并置位。
     // 只看 `busy` 不够——那个状态要等重渲染才生效，连点会漏过去。
-    if (submitting.current) return;
+    if (submitting.current || !isAdmin) return;
+    if (!upstreamsReady) {
+      notify.err(t('keys.upstreamsFailed'));
+      return;
+    }
     if (!form.name.trim()) {
       notify.err(t('keys.nameRequired'));
       return;
     }
+    if (editing?.request_policy_valid === false && !repairConfirmed) {
+      notify.err(t('keys.policyRepairConfirm'));
+      return;
+    }
+    let limits;
+    try {
+      limits = {max_ips: parseKeyLimit(form.maxIps, false, true),
+        quota: parseKeyLimit(form.quota), quota_credit: parseKeyLimit(form.quotaCredit, true),
+        daily_token_quota: parseKeyLimit(form.dailyTokens), daily_credit_quota: parseKeyLimit(form.dailyCredit, true)};
+    } catch {
+      notify.err(t('keys.invalidLimit'));
+      return;
+    }
     submitting.current = true;
+    const generation = pageGeneration.current;
+    const current = () => clientMounted.current && generation === pageGeneration.current;
     setBusy(true);
     try {
       const days = Number(form.expiresDays) || 0;
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
-        max_ips: Number(form.maxIps) || 0,
+        ...limits,
         ip_allowlist: toLines(form.ipAllowlist),
         models: toLines(form.models),
-        quota: Number(form.quota) || 0,
-        quota_credit: Number(form.quotaCredit) || 0,
+        assigned_to: form.assignedTo.trim(),
+        platforms: form.platforms,
         // '' 是有意义的取值（不限制版本），必须照传——后端以它区分
         // 「存量密钥，两版都能调」与「限定了某一版」
         //
@@ -294,11 +375,14 @@ export default function KeysPage() {
 
       if (editing) {
         await keyApi.update(editing.id, payload as Partial<ApiKey>);
+        if (!current()) return;
         notify.ok(t('keys.keyUpdated'));
       } else {
         const created = await keyApi.create(payload as Partial<ApiKey>);
+        if (!current()) return;
         notify.ok(t('keys.keyCreated'));
         if (created.key) {
+          resetClientResults();
           setIssued(created.key);
           // 上一把密钥的「一键导入」结果不能留到这一把：否则用户会以为新密钥
           // 已经写入目标、或对着旧备份路径去核对。
@@ -310,13 +394,13 @@ export default function KeysPage() {
       // 所以这里用 reload() 的返回值判断，而不是 `.catch()` —— reload 内部已经
       // 把异常收进 errors 并返回布尔值，返回的 Promise 永远不 reject，
       // 用 .catch 的话这段提示永远不会出现，用户只会看到「失败了」。
-      if (!(await reload())) {
+      if (!(await reload()) && current()) {
         notify.warn(t('keys.createdButRefreshFailed'), t('keys.createdButRefreshFailedHint'));
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setBusy(false);
+      if (clientMounted.current) setBusy(false);
       submitting.current = false;
     }
   }
@@ -368,20 +452,28 @@ export default function KeysPage() {
 
   const doExport = useCallback(async () => {
     const body = clientBody();
-    if (!body) return;
+    if (!body || !isAdmin || exportFlight.current) return;
+    const request = Symbol('key-export');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && exportFlight.current === request;
+    exportFlight.current = request;
     setExporting(true);
     try {
       const res = await keyApi.exportConfig(body);
+      if (!current()) return;
       // 展示可直接粘贴的片段：cc-switch 用 settings_config，ZCode 用整个片段
       const payload = res.client === 'ccswitch' ? res.settings_config : res.provider;
       setExported(JSON.stringify(payload, null, 2));
       notify.ok(t('keys.exported'));
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setExporting(false);
+      if (current()) {
+        exportFlight.current = null;
+        setExporting(false);
+      }
     }
-  }, [clientBody, t]);
+  }, [clientBody, isAdmin, t]);
 
   /**
    * 把刚创建的密钥**一键写进本机**客户端。
@@ -396,26 +488,37 @@ export default function KeysPage() {
    */
   const doImport = useCallback(async () => {
     const body = clientBody();
-    if (!body) return;
+    if (!body || !isAdmin || clientMutation.current) return;
+    const request = Symbol('key-import');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && clientMutation.current === request;
+    clientMutation.current = request;
+    statusGeneration.current++;
     setImporting(true);
     try {
       const res = await keyApi.importLocal({
         ...body, setCurrent: importSetCurrent, mode: 'auto', closeRunning: true,
       });
+      if (!current()) return;
       setImported(res);
       notify.ok(res.method === 'deeplink' ? t('keys.importHandedOff') : t('keys.importDone'));
       // 写完重新探测：客户端可能被我们关了又起来，状态得跟着变
       try {
-        setImportStatus(await keyApi.importLocalStatus());
+        const read = ++statusGeneration.current;
+        const status = await keyApi.importLocalStatus();
+        if (current() && read === statusGeneration.current) setImportStatus(status);
       } catch {
         /* 探测失败不影响"已经写成功"这个事实，保留旧状态即可 */
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setImporting(false);
+      if (clientMutation.current === request) {
+        clientMutation.current = null;
+        if (clientMounted.current) setImporting(false);
+      }
     }
-  }, [clientBody, importSetCurrent, t]);
+  }, [clientBody, importSetCurrent, isAdmin, t]);
 
   /**
    * 让面板自己去找客户端装在哪。
@@ -425,9 +528,16 @@ export default function KeysPage() {
    * 检测结果会缓存，之后导入 / 关闭 / 重新拉起都用它，所以是"点一次长期有效"。
    */
   const doDetect = useCallback(async () => {
+    if (!issued || !isAdmin || clientMutation.current) return;
+    const request = Symbol('key-detect');
+    const generation = clientGeneration.current;
+    const current = () => clientMounted.current && generation === clientGeneration.current && clientMutation.current === request;
+    clientMutation.current = request;
+    statusGeneration.current++;
     setDetecting(true);
     try {
       const res = await keyApi.importLocalDetect(importClient);
+      if (!current()) return;
       if (!res.found) {
         notify.warn(t('keys.detectMissing'), t('keys.detectMissingHint'));
         return;
@@ -435,26 +545,34 @@ export default function KeysPage() {
       notify.ok(t('keys.detectFound'));
       // 定位结果体现在 status 的 exe 上，重新取一次让界面跟着更新
       try {
-        setImportStatus(await keyApi.importLocalStatus());
+        const read = ++statusGeneration.current;
+        const status = await keyApi.importLocalStatus();
+        if (current() && read === statusGeneration.current) setImportStatus(status);
       } catch {
         /* 同上：探测失败不该把"已找到"这件事说成失败 */
       }
     } catch (e) {
-      notify.err(errText(e));
+      if (current()) notify.err(errText(e));
     } finally {
-      setDetecting(false);
+      if (clientMutation.current === request) {
+        clientMutation.current = null;
+        if (clientMounted.current) setDetecting(false);
+      }
     }
-  }, [importClient, t]);
+  }, [importClient, issued, isAdmin, t]);
 
   // 弹窗打开（拿到明文）时才去探测本机状态：没建密钥的人不需要这次请求。
   useEffect(() => {
     if (!issued) return;
     let alive = true;
+    const generation = clientGeneration.current;
+    const read = ++statusGeneration.current;
+    const current = () => alive && clientMounted.current && generation === clientGeneration.current && read === statusGeneration.current;
     keyApi.importLocalStatus()
-      .then((s) => { if (alive) setImportStatus(s); })
-      .catch(() => { if (alive) setImportStatus(null); });
+      .then((s) => { if (current()) setImportStatus(s); })
+      .catch(() => { if (current()) setImportStatus(null); });
     return () => { alive = false; };
-  }, [issued]);
+  }, [issued, exportTarget]);
 
   /** 当前目标客户端的状态；null = 未探测 / 探测失败 */
   const importClientState = importStatus?.clients.find(
@@ -507,7 +625,7 @@ export default function KeysPage() {
         actions={
           <>
             {isAdmin && (
-              <Button size="sm" className="rounded-full" onClick={openCreate}>
+              <Button size="sm" className="rounded-full" onClick={openCreate} disabled={!upstreamsReady || busy}>
                 <Plus />
                 {t('keys.newKey')}
               </Button>
@@ -597,13 +715,21 @@ export default function KeysPage() {
               // 否则会出现「列表显示正常、调用却被 429」，用户会以为是网关坏了。
               const overQuota =
                 (!!k.quota && k.used_tokens >= k.quota) ||
-                (!!k.quota_credit && k.used_credit >= k.quota_credit);
+                (!!k.quota_credit && k.used_credit >= k.quota_credit) ||
+                (!!k.daily_token_quota && (k.daily_used_tokens ?? 0) >= k.daily_token_quota) ||
+                (!!k.daily_credit_quota && (k.daily_used_credit ?? 0) >= k.daily_credit_quota);
               return (
                 <TableRow key={k.id} className="border-b border-border/40">
                   <TableCell className="pl-4 text-sm font-medium">
                     <div>{k.name}</div>
                     {/* 只标「绑定了上游」的行：默认上游是绝大多数，每行都标等于没标，
                         有值才说明这把钥匙走的是另一个账号池（见 server/upstreamsvc.py） */}
+                    <div className="mt-1 flex flex-wrap gap-1" aria-label={t('keys.platforms')}>
+                      {(k.platforms ?? ['workbuddy', 'qoder', 'trae']).map(p => (
+                        <Badge key={p} variant="outline" className="text-[10px]">{p === 'workbuddy' ? 'WorkBuddy' : p === 'qoder' ? 'Qoder' : 'Trae'}</Badge>
+                      ))}
+                      {k.platform_policy_valid === false ? <span className="text-xs text-destructive">{t('keys.platformPolicyInvalid')}</span> : null}
+                    </div>
                     {k.upstream_id ? (
                       <div className="mt-0.5">
                         <Badge variant="secondary" className="rounded-full text-[10px]">
@@ -611,11 +737,15 @@ export default function KeysPage() {
                         </Badge>
                       </div>
                     ) : null}
+                    {k.assigned_to && <div className="mt-1 text-[11px] text-muted-foreground">{t('keys.assignedTo')}: {k.assigned_to}</div>}
+                    {k.request_policy_valid === false && <div className="mt-1 text-xs text-destructive">{t('keys.requestPolicyInvalid')}</div>}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{k.prefix}…</TableCell>
                   <TableCell>
                     {!k.enabled ? (
                       <Badge variant="secondary" className="rounded-full text-muted-foreground">{t('keys.badgeDisabled')}</Badge>
+                    ) : k.request_policy_valid === false || k.platform_policy_valid === false ? (
+                      <Badge variant="destructive" className="rounded-full">{t('keys.badgePolicyInvalid')}</Badge>
                     ) : expired ? (
                       <Badge variant="destructive" className="rounded-full">{t('keys.badgeExpired')}</Badge>
                     ) : overQuota ? (
@@ -647,10 +777,10 @@ export default function KeysPage() {
                     {k.expires_at ? fmtDateTime(k.expires_at) : t('keys.neverExpires')}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
-                    {k.max_ips ? t('keys.ipLimit', {n: k.max_ips}) : t('keys.ipUnlimited')} /{' '}
+                    {k.request_policy_valid === false ? t('keys.badgePolicyInvalid') : <>{k.max_ips ? t('keys.ipLimit', {n: k.max_ips}) : t('keys.ipUnlimited')} /{' '}
                     {k.models?.length
                       ? t('keys.modelsCount', {count: k.models.length, n: k.models.length})
-                      : t('keys.modelsAll')}
+                      : t('keys.modelsAll')}</>}
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">
                     {(() => {
@@ -672,6 +802,8 @@ export default function KeysPage() {
                           : 'text-muted-foreground';
                       return (
                         <span className="flex flex-col">
+                          {!!k.daily_token_quota && <span className="text-[10px] text-muted-foreground">{t('keys.dailyTokens')}: {fmtNumber(k.daily_used_tokens ?? 0)} / {fmtNumber(k.daily_token_quota)}</span>}
+                          {!!k.daily_credit_quota && <span className="text-[10px] text-muted-foreground">{t('keys.dailyCredit')}: {k.daily_used_credit ?? 0} / {k.daily_credit_quota}</span>}
                           <span className={tone}>
                             {fmtNumber(k.used_tokens)}
                             {k.quota ? ` / ${fmtNumber(k.quota)}` : ''}
@@ -786,10 +918,37 @@ export default function KeysPage() {
           </DialogHeader>
           <DialogBody className="max-h-[min(70vh,560px)]">
             <div className="space-y-4 px-6 pb-2">
+              {editing?.request_policy_valid === false && (
+                <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs">
+                  <p role="alert">{t('keys.policyRepairWarning')}</p>
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" checked={repairConfirmed} onChange={event => setRepairConfirmed(event.currentTarget.checked)} />
+                    <span>{t('keys.policyRepairConfirm')}</span>
+                  </label>
+                </div>
+              )}
               <div className="space-y-1.5">
-                <Label className="text-[11px] text-muted-foreground">{t('keys.name')}</Label>
-                <Input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder={t('keys.namePlaceholder')} />
+                <Label htmlFor="key-name" className="text-[11px] text-muted-foreground">{t('keys.name')}</Label>
+                <Input id="key-name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder={t('keys.namePlaceholder')} />
               </div>
+              <fieldset disabled={busy} aria-describedby="key-platform-help" className="space-y-2">
+                <legend className="text-xs font-medium">{t('keys.platforms')}</legend>
+                <div className="flex flex-wrap gap-4">
+                  {(['workbuddy', 'qoder', 'trae'] as const).map(p => (
+                    <label key={p} className="inline-flex cursor-pointer items-center gap-2 text-sm">
+                      <input type="checkbox" checked={form.platforms.includes(p)}
+                        onChange={event => {
+                          const checked = event.currentTarget.checked;
+                          setForm(previous => ({...previous,
+                            platforms: checked ? Array.from(new Set([...previous.platforms, p])) : previous.platforms.filter(value => value !== p),
+                          }));
+                        }} />
+                      <span>{p === 'workbuddy' ? 'WorkBuddy' : p === 'qoder' ? 'Qoder' : 'Trae'}</span>
+                    </label>
+                  ))}
+                </div>
+                <p id="key-platform-help" className="text-xs text-muted-foreground">{t('keys.platformsHelp')}</p>
+              </fieldset>
               {!editing ? (
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-muted-foreground">{t('keys.expiresInDays')}</Label>
@@ -869,6 +1028,26 @@ export default function KeysPage() {
                   <p className="text-[11px] leading-4 text-muted-foreground">
                     {t('keys.quotaCreditHint')}
                   </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 rounded-2xl border border-border/60 p-4 sm:grid-cols-2">
+                <div className="space-y-1.5"><Label htmlFor="daily-tokens" className="text-[11px] text-muted-foreground">{t('keys.dailyTokens')}</Label>
+                  <Input id="daily-tokens" type="number" min={0} step={1} value={form.dailyTokens} onChange={event => setForm({...form, dailyTokens: event.target.value})} />
+                </div>
+                <div className="space-y-1.5"><Label htmlFor="daily-credit" className="text-[11px] text-muted-foreground">{t('keys.dailyCredit')}</Label>
+                  <Input id="daily-credit" type="number" min={0} step="any" value={form.dailyCredit} onChange={event => setForm({...form, dailyCredit: event.target.value})} />
+                </div>
+                <p className="text-[11px] leading-5 text-muted-foreground sm:col-span-2">{t('keys.dailyHint')}</p>
+                <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="key-assigned-to" className="text-[11px] text-muted-foreground">{t('keys.assignedTo')}</Label>
+                  <Select value={form.assignedTo ? `user:${form.assignedTo}` : 'none'} onValueChange={value => setForm({...form, assignedTo: value === 'none' ? '' : value.slice(5)})} disabled={'users' in errors}>
+                    <SelectTrigger id="key-assigned-to" aria-label={t('keys.assignedTo')} className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t('keys.unassigned')}</SelectItem>
+                      {users.map(user => <SelectItem key={user.username} value={`user:${user.username}`}>{user.username}</SelectItem>)}
+                      {form.assignedTo && !users.some(user => user.username === form.assignedTo) && <SelectItem value={`user:${form.assignedTo}`}>{form.assignedTo}</SelectItem>}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] leading-5 text-muted-foreground">{t('keys.assignmentHint')}</p>
                 </div>
               </div>
               <div className="space-y-1.5">
@@ -959,6 +1138,7 @@ export default function KeysPage() {
                     账号池。默认上游 = 不绑定，也就是升级前的行为。 */}
                 <Select
                   value={form.upstream_id == null ? '__default__' : String(form.upstream_id)}
+                  disabled={!isAdmin || !upstreamsReady}
                   onValueChange={(v) =>
                     setForm({...form, upstream_id: v === '__default__' ? null : Number(v)})
                   }
@@ -1035,7 +1215,7 @@ export default function KeysPage() {
             <Button variant="outline" className="rounded-full" onClick={() => setFormOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button className="rounded-full" onClick={submit} disabled={busy}>
+            <Button className="rounded-full" onClick={submit} disabled={busy || !isAdmin || !upstreamsReady}>
               {editing ? t('common.save') : t('keys.create')}
             </Button>
           </DialogFooter>
@@ -1044,7 +1224,7 @@ export default function KeysPage() {
 
       {/* 一次性展示新密钥 */}
       <Dialog open={!!issued}
-              onOpenChange={(v) => { if (!v) { setIssued(null); setExported(null); setImported(null); } }}>
+              onOpenChange={(v) => { if (!v) closeIssued(); }}>
         {/* 尺寸必须**跟着视口走**：这个弹窗里有密钥、有一整段 JSON、还有导入区，
             内容比一般弹窗高得多。之前只写了个 max-w，高度没上限，于是窗口一矮
             （或系统缩放一大）底部就被 `overflow-hidden` 直接裁掉，连「我已保存」
@@ -1085,11 +1265,10 @@ export default function KeysPage() {
                 <div className="flex items-center gap-2">
                   <Select value={exportTarget}
                           onValueChange={(v) => {
+                            resetClientResults();
                             setExportTarget(v as typeof exportTarget);
                             // 换了目标就清掉旧结果：两个客户端的内容不一样，
                             // 留着上一份会造成"看的是 claude、复制的是 codex"。
-                            setExported(null);
-                            setImported(null);
                           }}>
                     <SelectTrigger className="h-7 w-[168px] rounded-full text-xs" aria-label={t('keys.exportTitle')}>
                       <SelectValue />
@@ -1146,12 +1325,12 @@ export default function KeysPage() {
                       <Button variant="outline" size="sm"
                               className="h-7 rounded-full text-xs"
                               onClick={doDetect}
-                              disabled={detecting || !importReady}>
+                              disabled={detecting || importing || !importReady}>
                         {detecting ? t('common.loading') : t('keys.detectBtn')}
                       </Button>
                     ) : null}
                     <Button size="sm" className="h-7 rounded-full text-xs"
-                            onClick={doImport} disabled={!canImport || importing}>
+                            onClick={doImport} disabled={!canImport || importing || detecting}>
                       {importing ? t('common.loading') : t('keys.importBtn')}
                     </Button>
                   </div>
@@ -1206,7 +1385,7 @@ export default function KeysPage() {
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button className="rounded-full" onClick={() => { setIssued(null); setExported(null); }}>
+            <Button className="rounded-full" onClick={closeIssued}>
               {t('keys.savedIt')}
             </Button>
           </DialogFooter>

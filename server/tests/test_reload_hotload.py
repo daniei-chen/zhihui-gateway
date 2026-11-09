@@ -1,18 +1,4 @@
-"""加账号后的收尾：优先等上游热加载，超时才重启（用户反馈的「20-30 秒」）。
-
-现象：国际版用链接 / GitHub 快速登录，界面提示登录成功之后，后台还要 20-30 秒
-才看到账号。根因不是「导入慢」，而是**等容器重启**：
-
-    落盘成功 → 直接重启上游 → 前端立刻刷新账号列表 → 那一刷里 get_status()
-    请求上游 /status，而上游正在重启 → 面板侧上游调用超时默认 120 秒 → 挂到
-    容器起来才返回。
-
-上游 2026-09-19 起热加载 auths 目录（约 5 秒一轮），新版根本不需要重启。所以
-改为：先等一段时间，账号出现在 /status 里就结束；只有「旧上游不热加载」或
-「上游不可达」才回退重启（那两种情况下重启是唯一出路）。
-
-这里钉住三条：热加载生效**不重启**、超时才重启、以及同时加多个账号**只重启一次**。
-"""
+"""Account additions observe hot-load success; failure never restarts inference."""
 from __future__ import annotations
 
 import asyncio
@@ -77,20 +63,19 @@ class _Case(unittest.TestCase):
         asyncio.run(self._run())
         self.assertEqual(self.restarts, [], '热加载已生效却又重启了上游')
 
-    def test_timeout_falls_back_to_restart(self) -> None:
-        """老上游不热加载（账号一直不出现）→ 回退重启。"""
+    def test_timeout_requires_attention_without_restart(self) -> None:
         self._status_patch([{'connected': True, 'accounts': [{'uid': 'other'}]}])
         asyncio.run(self._run())
-        self.assertEqual(len(self.restarts), 1, '超时后应重启一次')
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(R.state()['account_reload']['reason'], 'account_not_observed')
 
-    def test_unreachable_upstream_falls_back_to_restart(self) -> None:
-        """上游不可达 → 重启（此时它是唯一的出路）。"""
+    def test_unreachable_upstream_requires_attention_without_restart(self) -> None:
         self._status_patch([{'connected': False, 'error': 'connection refused'}])
         asyncio.run(self._run())
-        self.assertEqual(len(self.restarts), 1, '上游不可达时应回退重启')
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(R.state()['account_reload']['reason'], 'upstream_unavailable')
 
-    def test_two_accounts_restart_at_most_once(self) -> None:
-        """同时加两个账号且都不热加载 → **只重启一次**（不是两次）。"""
+    def test_two_accounts_coalesce_observation_without_restarting(self) -> None:
         self._status_patch([{'connected': True, 'accounts': [{'uid': 'other'}]}])
 
         async def _both() -> None:
@@ -100,7 +85,8 @@ class _Case(unittest.TestCase):
                 await asyncio.wait_for(R._reload_worker, timeout=5)
 
         asyncio.run(_both())
-        self.assertEqual(len(self.restarts), 1, f'重启了 {len(self.restarts)} 次')
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(R.state()['account_reload']['pending_count'], 2)
 
     def test_no_event_loop_reports_false(self) -> None:
         """没有事件循环时返回 False，让调用方自己决定（与 request_restart 同口径）。"""

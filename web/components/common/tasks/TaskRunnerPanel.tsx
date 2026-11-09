@@ -1,6 +1,7 @@
 'use client';
 
 import {useState} from 'react';
+import {useAuth} from '@/lib/auth-context';
 import {Play, Square, Eye, Gift, Sparkles, Loader2, TriangleAlert} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
@@ -32,6 +33,7 @@ import {useTaskRun} from '@/lib/use-task-run';
  */
 export function TaskRunnerPanel() {
   const {t} = useI18n();
+  const {isAdmin} = useAuth();
   const [confirmFull, setConfirmFull] = useState(false);
   const {status, busy, run, stop} = useTaskRun({target: 'ALL'});
 
@@ -39,7 +41,7 @@ export function TaskRunnerPanel() {
   const unavailable = status && !status.available;
 
   return (
-    <section className="rounded-2xl border bg-card p-4">
+    <fieldset disabled={!isAdmin} className="min-w-0 rounded-2xl border bg-card p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-muted-foreground" />
@@ -124,7 +126,7 @@ export function TaskRunnerPanel() {
               {t('tasks.runFullConfirmTitle')}
             </DialogTitle>
             <DialogDescription className="pt-2 text-[13px] leading-relaxed">
-              {/* 译文里用 ** 标重点（项目约定），由 RichText 渲染成 <b> —— 
+              {/* 译文里用 ** 标重点（项目约定），由 RichText 渲染成 <b> ——
                   直接输出会把星号原样显示出来。 */}
               <RichText text={t('tasks.runFullConfirmBody')} />
             </DialogDescription>
@@ -145,6 +147,6 @@ export function TaskRunnerPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </fieldset>
   );
 }

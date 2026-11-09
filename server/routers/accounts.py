@@ -13,14 +13,16 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import config, db, security, upstreamsvc
 from ..iputil import client_ip
 from ..services import (
     credits as creditsvc, dailyplan, modelcatalog, reload, renew, tasklog, taskrun,
-    tencent, wb2api,
+    tencent, wb2api, platformauth,
 )
 from ..services.realm import realm_of, supports_checkin
+from ..services.errtext import err_text
 
 logger = logging.getLogger('workbuddy.accounts')
 
@@ -113,7 +115,7 @@ def _uploaded_entries(raw: object) -> list[object]:
 def export_accounts(
     request: Request,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.require_session_admin),
+    user: dict = Depends(security.require_recent_session_admin),
 ) -> StreamingResponse:
     """Export one JSON file per account from the selected group."""
     group = _group(upstream_id)
@@ -168,6 +170,21 @@ def export_accounts(
     )
 
 
+def _persist_uploaded_account(entry, name: str, auth_dir: Path, overwrite: bool) -> dict:
+    """Blocking validation/file IO belongs off the ASGI loop (lease keeper shares it)."""
+    account = _uploaded_account(entry, name)
+    if account['proxy']:
+        try:
+            config.account_proxy({'proxy': account['proxy']})
+        except ValueError as exc:
+            raise _InvalidUploadProxy(str(exc)) from exc
+    filename, existed = tencent.write_auth_file(
+        account, auth_dir, allow_overwrite=overwrite)
+    # Metadata is committed with credentials under write_auth_file's file lock.
+    item = {'file': filename, 'uid': account['uid'], 'updated': existed}
+    return item
+
+
 @router.post('/accounts/upload')
 async def upload_accounts(
     request: Request,
@@ -204,30 +221,15 @@ async def upload_accounts(
             content = await upload.read(_ACCOUNT_UPLOAD_MAX_BYTES + 1)
             if len(content) > _ACCOUNT_UPLOAD_MAX_BYTES:
                 raise ValueError('文件不能超过 2 MB')
-            raw = json.loads(content.decode('utf-8-sig'))
-            for entry in _uploaded_entries(raw):
+            entries = await run_in_threadpool(
+                lambda: _uploaded_entries(json.loads(content.decode('utf-8-sig'))))
+            for entry in entries:
                 try:
-                    account = _uploaded_account(entry, name)
-                    if account['proxy']:
-                        try:
-                            config.account_proxy({'proxy': account['proxy']})
-                        except ValueError as exc:
-                            raise _InvalidUploadProxy(str(exc)) from exc
-                    filename, existed = tencent.write_auth_file(
-                        account, auth_dir, allow_overwrite=overwrite)
-                    # Preserve per-account metadata that write_auth_file intentionally does not
-                    # accept from the login flow.
-                    path = auth_dir / filename
-                    saved = json.loads(path.read_text(encoding='utf-8'))
-                    if account['device_token']:
-                        saved['device_token'] = account['device_token']
-                    if account['proxy']:
-                        saved['proxy'] = account['proxy']
-                    tencent._atomic_write_json(path, saved)
-                    reload.request_reload_or_restart(account['uid'], upstream=_reload_target(group))
-                    item = {'file': filename, 'uid': account['uid'], 'updated': existed}
+                    item = await run_in_threadpool(
+                        _persist_uploaded_account, entry, name, auth_dir, overwrite)
+                    reload.request_reload_or_restart(item['uid'], upstream=_reload_target(group))
                     uploaded.append(item)
-                    (overwritten if existed else added).append(item)
+                    (overwritten if item['updated'] else added).append(item)
                 except tencent.AccountExistsError as exc:
                     rejected.append({'file': name, 'uid': exc.uid, 'message': '账号已存在，未覆盖'})
                 except _InvalidUploadProxy as exc:
@@ -287,10 +289,63 @@ _login_regions: dict[str, str] = {}
 # 成功了就完成，失败则把「去修目录权限」那条可执行提示原样报给前端。
 _login_ready: dict[str, tuple[dict, str, str, float]] = {}      # state → 国际版地区（可能晚于 auth/start 到达）
 _login_owner: dict[str, str] = {}        # state → 发起人，用于收掉同一用户的旧轮询
+_login_scopes: dict[str, tuple[str, str, int | None, float]] = {}
+_login_bindings: dict[str, str] = {}
+_login_group_bindings: dict[str, tuple[str, str, str]] = {}
+_login_locks: dict[str, asyncio.Lock] = {}
+
+
+def _login_group_binding(group: dict) -> tuple[str, str, str]:
+    """Bind a grant to its actual credential directory and upstream instance."""
+    return (str(_require_dir(group).resolve()), str(group.get('base_url') or '').rstrip('/'),
+            str(group.get('container') or ''))
+
+
+def _login_group_id(upstream_id):
+    # Both supported spellings of the default group must refer to one scope.
+    return upstream_id if isinstance(upstream_id, int) and upstream_id != 0 else None
+
+
+def _bind_login(state, user, realm, upstream_id, *, expected_group=None):
+    user = security.authorization_owner(user)
+    upstream_id = _login_group_id(upstream_id)
+    binding = _login_group_binding(_group(upstream_id))
+    if expected_group is not None and binding != expected_group:
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
+    _login_scopes[state] = (user['username'], realm, upstream_id, time.time())
+    _login_bindings[state] = user['_authorization_binding']
+    _login_group_bindings[state] = binding
+    return user
+
+
+def _check_login_scope(state, user, realm, upstream_id):
+    user = security.authorization_owner(user)
+    scope = _login_scopes.get(state)
+    if (scope is None or scope[:3] != (user['username'], realm, _login_group_id(upstream_id))
+            or _login_bindings.get(state) != user['_authorization_binding']
+            or time.time() - scope[3] > _LOGIN_RESULT_TTL):
+        raise HTTPException(status_code=404, detail='授权会话不存在或与当前平台、版本不匹配')
+    if _login_group_binding(_group(scope[2])) != _login_group_bindings.get(state):
+        raise HTTPException(status_code=409, detail='授权目标分组已变更，请重新发起授权')
+    return user
 
 
 def _owner_key(user: dict, upstream_id: int | None) -> str:
     return f"{user.get('username') or ''}|{upstream_id if upstream_id is not None else ''}"
+
+
+def _discard_login(state: str) -> None:
+    """Discard only a quiescent session; never cancel an in-flight provider write."""
+    lock = _login_locks.get(state)
+    if lock is not None and lock.locked():
+        return
+    task = _login_tasks.pop(state, None)
+    if task is not None and not task.done():
+        task.cancel()
+    for mapping in (_login_scopes, _login_bindings, _login_group_bindings, _login_locks, _login_ready,
+                    _login_polls, _login_regions, _login_owner, _provisioned_states):
+        mapping.pop(state, None)
+    tencent.drop_state(state)
 
 
 def _cancel_other_login_polls(state: str, owner: str) -> None:
@@ -308,6 +363,10 @@ def _cancel_other_login_polls(state: str, owner: str) -> None:
         if task.done():
             # 已跑完的别动：它的终态结果前端可能还没来取（结果留 TTL 那么久）
             continue
+        lock = _login_locks.get(st)
+        if lock is not None and lock.locked():
+            # An in-flight provider write cannot safely be cancelled and replayed.
+            continue
         task.cancel()
         _login_tasks.pop(st, None)
         _login_polls.pop(st, None)
@@ -319,16 +378,18 @@ def _cancel_other_login_polls(state: str, owner: str) -> None:
 def _prune_login_polls() -> None:
     # 清掉过期结果（state 是短命的，但别让它无限增长）
     now = time.time()
+    for st in [k for k, v in _login_scopes.items() if now - v[3] > _LOGIN_RESULT_TTL]:
+        _discard_login(st)
+    for st, lock in list(_login_locks.items()):
+        if st not in _login_scopes and not lock.locked():
+            _discard_login(st)
     for st in [k for k, v in _login_polls.items()
                if now - float(v.get('_at') or 0) > _LOGIN_RESULT_TTL]:
-        _login_polls.pop(st, None)
-        _login_tasks.pop(st, None)
-        _login_regions.pop(st, None)
-        _login_owner.pop(st, None)
+        _discard_login(st)
     # 「等重试落盘」的备忘也要按同样的 TTL 清（它没有 _login_polls 条目，
     # 上面那轮扫不到它）
     for st in [k for k, v in _login_ready.items() if now - float(v[3]) > _LOGIN_RESULT_TTL]:
-        _login_ready.pop(st, None)
+        _discard_login(st)
 
 
 def _today_start() -> int:
@@ -487,6 +548,11 @@ async def list_accounts(upstream_id: int | None = Query(None),
     # 逐账号记录（它只打一行汇总），所以首次进入面板时可能显示未签到，
     # 手动点一次拿到 10001 后就归位了 —— 这一点在界面上如实说明。
     done_today = db.checkin_done_since(_today_start())
+    if (config.DATA_DIR / 'user-portal.sqlite3').exists():
+        from .. import portalstore
+        with portalstore.transaction() as conn:
+            for row in conn.execute("SELECT a.provider_uid,c.confirmed_at FROM portal_accounts a JOIN portal_checkins c ON c.account_id=a.id WHERE c.day=? AND c.state IN ('confirmed','confirmed_uncredited')", (portalstore.day(),)):
+                done_today[row['provider_uid']] = row['confirmed_at']
     for a in accounts:
         uid = str(a.get('uid') or '')
         a['note'] = notes.get(uid, '')
@@ -506,15 +572,27 @@ async def list_accounts(upstream_id: int | None = Query(None),
         },
         'auth_dir': str(base_dir or ''),
         'manageable': base_dir is not None,
+        # U22：池健康的**采样时间 / 新鲜度 / 证据来源**。
+        # `pool_available` 只说明"这次采样成没成"；要判断"池现在到底怎么样"，
+        # 必须同时看这里的 freshness —— `stale` 意味着上面的 pool 相关字段来自
+        # 更早的一次采样（或者根本没有），不能当成当前可用性。
+        'pool_health': wb2api.pool_health(status),
     }
 
 
 @router.get('/status')
 async def upstream_status(upstream_id: int | None = Query(None),
                           user: dict = Depends(security.current_user)) -> dict:
+    """上游 /status（含 `health`：采样时间 / 新鲜度 / 证据来源，U22）。
+
+    池数字来自**本次**实时采样；采样失败时 `connected=false` 且旧数字不会被
+    当当前值返回（`health.freshness` 说明是 stale 还是 unknown）。
+    """
     group = _group(upstream_id)
-    return await wb2api.get_status(base_url=group['base_url'],
-                                   api_key=upstreamsvc.forward_api_key(group))
+    status = await wb2api.get_status(base_url=group['base_url'],
+                                     api_key=upstreamsvc.forward_api_key(group))
+    status['health'] = wb2api.pool_health(status)
+    return status
 
 
 def _strip_cn_prefix(m: dict) -> dict:
@@ -582,7 +660,8 @@ async def auth_start(
     ),
     upstream_id: int | None = Query(None),
     body: dict | None = Body(None),
-    user: dict = Depends(security.current_user),
+    user: dict = Depends(security.require_account_adder),
+    request: Request = None,
 ) -> dict:
     """发起扫码登录。realm 决定国内版 / 国际版端点（缺省国内版）。
 
@@ -590,20 +669,27 @@ async def auth_start(
     而早先这里声明的是普通标量参数 —— FastAPI 对标量默认按 **query** 解析，
     body 里的 realm 被静默忽略、恒回落到默认值 'cn'。后果是：切到「国际版」
     点添加账号，拿到的仍是国内版二维码（`copilot.tencent.com`），且**不报错**。
-    现同时接受两处，body 优先（与前端一致），query 保留兼容旧调用方。
+    现同时接受两处；冲突时明确拒绝，query 保留兼容旧调用方。
 
     region 也在这里收：后台轮询（见 `_poll_login_background`）要用它做地区注册，
     而它**不能只靠前端轮询带上来** —— 窗口被遮挡时前端可能一次都不补，那条
     路径正是这个后台轮询存在的原因。用户在弹窗里改地区会重新发码，所以这里
     拿到的就是当前那张码对应的地区。
     """
-    # 分组在这里只做**提前校验**：真正的落盘发生在 auth/poll（那里也要带
-    # 同一个分组）。先拒掉不存在的分组，用户不会扫完码才发现目标分组没了。
-    _group(upstream_id)
-    raw = realm
-    if isinstance(body, dict) and body.get('realm') is not None:
-        raw = str(body.get('realm'))
-    r = 'global' if str(raw or '').strip().lower() == 'global' else 'cn'
+    user = security.authorization_owner(user)
+    platform = platformauth.platform_for(request, body)
+    r = platformauth.realm_from(request, body, realm)
+    if user.get('role') == 'account_admin' and (body or {}).get('proxy'):
+        raise HTTPException(status_code=403, detail='管理员添加账号仅使用默认线路')
+    if platform != 'workbuddy':
+        if request is None:
+            raise HTTPException(status_code=400, detail='授权缺少平台请求上下文')
+        if region:
+            raise HTTPException(status_code=409, detail='当前平台不支持 WorkBuddy 的注册地区选项')
+        return await platformauth.start(request, user, platform, r, upstream_id, body or {})
+    # 发码前就要求可管理目录；缺目录不能在最终写入时回落到默认账号池。
+    # 保存解析后的路径，避免取链期间修改目录/实例或重定向目录符号链接。
+    group_binding = _login_group_binding(_group(upstream_id))
     raw_region = region
     if isinstance(body, dict) and body.get('region') is not None:
         raw_region = str(body.get('region'))
@@ -618,10 +704,17 @@ async def auth_start(
             config.account_proxy({'proxy': proxy_name})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        out = await tencent.start_login(r, proxy_name) if proxy_name else await tencent.start_login(r)
+        with tencent.authorization_scope(lambda: security.authorization_owner(user)):
+            out = await tencent.start_login(r, proxy_name) if proxy_name else await tencent.start_login(r)
+        security.authorization_owner(user)
         # 起后台轮询：前端是否被节流都不影响检测节奏（见文件上方说明）
         st = str(out.get('state') or '')
         if st:
+            try:
+                _bind_login(st, user, r, upstream_id, expected_group=group_binding)
+            except HTTPException:
+                tencent.drop_state(st)
+                raise
             if reg:
                 _login_regions[st] = reg
             if st not in _login_tasks or _login_tasks[st].done():
@@ -631,7 +724,7 @@ async def auth_start(
                 _login_owner[st] = _owner_key(user, upstream_id)
                 _login_tasks[st] = asyncio.create_task(
                     _poll_login_background(st, r, reg, upstream_id, user))
-        return out
+        return {**out, 'platform': 'workbuddy', 'mode': 'poll'}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -642,15 +735,37 @@ async def auth_poll(
     realm: str | None = None,
     region: str | None = None,
     upstream_id: int | None = Query(None),
-    user: dict = Depends(security.current_user),
+    user: dict = Depends(security.require_account_adder),
+    request: Request = None,
 ) -> dict:
     """轮询扫码结果；成功则落盘并触发上游重载。
 
     region：国际版账号的地区代码（如 HK）。国际版新号必须先完成地区注册，
     否则聊天会报 14017；地区由用户在弹窗里选，这里只负责提交，不替他决定。
     """
+    platform = platformauth.platform_for(request)
+    realm = platformauth.realm_from(request, fallback=realm)
+    if platform != 'workbuddy':
+        if request is None:
+            raise HTTPException(status_code=400, detail='授权缺少平台请求上下文')
+        return await platformauth.poll(request, user, platform, realm, state, upstream_id)
     if not state:
         return {'status': 'invalid'}
+    platformauth.check_poll_origin(request)
+    user = _check_login_scope(state, user, realm, upstream_id)
+    lock = _login_locks.setdefault(state, asyncio.Lock())
+    async with lock:
+        user = _check_login_scope(state, user, realm, upstream_id)
+        with tencent.authorization_scope(lambda: _check_login_scope(state, user, realm, upstream_id)):
+            result = await _poll_workbuddy(state, realm, region, upstream_id, user)
+        if result.get('status') == 'success':
+            # Commit the memo while still serialized; concurrent foreground polls
+            # must not repeat a completed provision before the background sees it.
+            _login_polls[state] = {**result, '_at': time.time()}
+        return result
+
+
+async def _poll_workbuddy(state, realm, region, upstream_id, user):
     # 出站网络失败（线路连不上等）→ 502 + 中文原因：与 /auth/start 同一口径。
     # 不转的话前端拿到的是英文 500，用户看不出「是线路的问题、该换线路」。
 
@@ -682,7 +797,7 @@ async def auth_poll(
         # 上次已经拿到授权、只是没落盘：直接重试落盘（不再问腾讯——那边可能已经
         # 不再报 ready，继续问只会让用户一直「等待中」）。
         memo_result, memo_realm, memo_msg = ready[0], ready[1], ready[2]
-        return _save_and_finish(memo_result, memo_realm, memo_msg, state, group=group)
+        return _save_and_finish(memo_result, memo_realm, memo_msg, state, group=group, owner=user)
 
     try:
         result = await tencent.poll_login(state, r)
@@ -691,13 +806,15 @@ async def auth_poll(
         # 不转的话界面上只有一句英文 500，用户看不出「是线路的问题、该换线路」。
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result.get('status') != 'ready':
+        security.authorization_owner(user)
         return result
+    _check_login_scope(state, user, realm, upstream_id)
 
     realm_of_result = result.get('realm') or 'cn'
     if provisioned:
         # 已经供给过：只补落盘（上次就是败在这一步），其余一律不重做
         return _save_and_finish(result, realm_of_result, region_msg='', state=state,
-                                group=group)
+                                group=group, owner=user)
 
     # 探测 dict：billing 域身份头（X-User-Id / X-Domain 等）需要这些字段，
     # 与 _auth_dict 同构；device_token 此刻还没有（落盘时由外部写入）
@@ -719,6 +836,7 @@ async def auth_poll(
             done, why = await tencent.registration_status(auth_probe)
             if not done:
                 region_msg = '尚未完成地区注册，请在弹窗中选择地区后重试（否则聊天会报 14017）'
+        security.authorization_owner(user)
         # 注册完成后再领一次性 trial（失败不阻断，已领过按幂等）
         if region_msg == '' or region_msg.startswith('地区已提交'):
             ok_t, trial_msg = await tencent.claim_trial(auth_probe)
@@ -726,7 +844,9 @@ async def auth_poll(
                 region_msg = f'{region_msg}；{trial_msg}'.strip('；')
 
     # 自动签到（幂等，不阻断落盘）。国际版无签到体系，checkin 会直接跳过
+    security.authorization_owner(user)
     code, message = await tencent.checkin(auth_probe, realm_of_result)
+    security.authorization_owner(user)
     db.add_checkin_log(
         str(result.get('uid', '')), str(result.get('nickname', '')),
         'add', code in (0, 10001), code, message,
@@ -738,9 +858,58 @@ async def auth_poll(
     creditsvc.invalidate(str(result.get('uid', '')))
     # 落盘前记下这份结果：万一落盘失败，重试要能只重做落盘（见 _login_ready 注释）
     _login_ready[state] = (result, realm_of_result, region_msg, time.time())
-    out = _save_and_finish(result, realm_of_result, region_msg, state, group=group)
+    out = _save_and_finish(result, realm_of_result, region_msg, state, group=group, owner=user)
     _login_ready.pop(state, None)
     return out
+
+
+@router.post('/auth/review')
+def auth_review(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    """Read stored authorization evidence only; never consume an upstream grant."""
+    from fastapi.responses import JSONResponse
+
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    if 'upstream_id' in request.query_params:
+        raise HTTPException(status_code=404, detail='当前平台授权不支持 WorkBuddy 账号分组')
+    out = platformauth.review(request, user, platform, realm, body.get('state'),
+                              body.get('upstream_id'))
+    # POST keeps the session capability out of access-log URL queries.
+    return JSONResponse(out, headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'})
+
+
+@router.post('/auth/finish')
+async def auth_finish(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    return await platformauth.finish(request, user, platform, realm,
+                                    body.get('state'), body.get('callback_url'))
+
+
+@router.post('/auth/cancel')
+async def auth_cancel(
+    request: Request, body: dict = Body(...),
+    user: dict = Depends(security.require_account_adder),
+) -> dict:
+    platform = platformauth.platform_for(request, body)
+    realm = platformauth.realm_from(request, body)
+    if platform == 'workbuddy':
+        state = body.get('state')
+        scope = _login_scopes.get(state) if isinstance(state, str) else None
+        _check_login_scope(state if isinstance(state, str) else '', user, realm,
+                           scope[2] if scope is not None else None)
+        lock = _login_locks.get(state)
+        if lock is not None and lock.locked():
+            raise HTTPException(status_code=409, detail='授权正在处理，请等待结果核对后再取消')
+        _discard_login(state)
+        return {'ok': True}
+    return await platformauth.cancel(request, user, platform, realm, body.get('state'))
 
 
 def _mark_provisioned(state: str) -> None:
@@ -776,12 +945,16 @@ async def _poll_login_background(state: str, realm: str, region: str | None,
         except HTTPException as exc:
             # 落盘失败这类：不存终态，让前端走原路径（那里有「重试即重新落盘」的
             # 语义，且要保留 state 不丢）。
-            logger.warning('后台轮询遇到可重试的错误（等前端重试）: %s', exc.detail)
+            logger.warning('后台授权轮询已停止（HTTP %s）', exc.status_code)
             return
-        except Exception as exc:  # noqa: BLE001
-            logger.warning('后台轮询失败（不影响前端轮询）: %s', exc)
+        except Exception:  # noqa: BLE001
+            logger.warning('后台授权轮询失败；未记录上游响应或凭据')
             return
         if resp.get('status') != 'waiting':
+            try:
+                security.authorization_owner(user)
+            except HTTPException:
+                return
             _login_polls[state] = {**resp, '_at': time.time()}
             return
         await asyncio.sleep(_LOGIN_POLL_SECONDS)
@@ -849,18 +1022,32 @@ _REVIVE_POLL_SECONDS = 2.0
 _revive_tasks: set[asyncio.Task] = set()
 
 
-async def _revive_after_login(uid: str, group: dict) -> None:
+async def _revive_after_login(uid: str, group: dict, *, owner: dict | None = None) -> None:
     """登录成功后的后台收尾：等账号入池，若仍被系统禁用就自动解除。
 
     **为什么重新登录应当自动恢复**：登录在语义上就是「刷新账号状态」—— 用户重新
     授权了一次，凭证是全新的，上游那句「需重新登录」的禁用理由已经消失，没有道理
     还让它留在池外。上游自己不做这件事（upsert 只换凭证），所以由面板补上。
     """
+    if owner is None:
+        return
+    try:
+        owner = security.authorization_owner(owner)
+    except HTTPException:
+        return
     base_url = group.get('base_url')
     api_key = upstreamsvc.forward_api_key(group)
     deadline = time.monotonic() + _REVIVE_WAIT_SECONDS
     while time.monotonic() < deadline:
+        try:
+            security.authorization_owner(owner)
+        except HTTPException:
+            return
         still = await wb2api.account_disabled(uid, base_url=base_url, api_key=api_key)
+        try:
+            security.authorization_owner(owner)
+        except HTTPException:
+            return
         if still is None:
             await asyncio.sleep(_REVIVE_POLL_SECONDS)   # 还没被上游收录，再等等
             continue
@@ -873,7 +1060,7 @@ async def _revive_after_login(uid: str, group: dict) -> None:
     logger.info('重新登录后等待账号入池超时，跳过自动解除禁用 uid=%s', uid[:8])
 
 
-def _schedule_revive_after_login(uid: str, group: dict) -> None:
+def _schedule_revive_after_login(uid: str, group: dict, *, owner: dict | None = None) -> None:
     """调度上面那个后台任务。
 
     登录**已经成功**（账号文件确实落盘了），所以这里任何失败都不该反过来影响
@@ -884,11 +1071,11 @@ def _schedule_revive_after_login(uid: str, group: dict) -> None:
     顺着 `_save_and_finish` 冒到 `auth_poll`，把一次**已经成功**的登录变成 500。
     """
     uid = str(uid or '').strip()
-    if not uid:
+    if not uid or owner is None:
         return
     try:
         loop = asyncio.get_running_loop()
-        task = loop.create_task(_revive_after_login(uid, group))
+        task = loop.create_task(_revive_after_login(uid, group, owner=owner))
         # 持有强引用：asyncio 只保留弱引用，没人接住的任务可能在执行途中被 GC 掉，
         # 症状是「有时不生效」且不报错（与 _login_tasks 同一套路）。
         if task is not None:
@@ -900,7 +1087,7 @@ def _schedule_revive_after_login(uid: str, group: dict) -> None:
 
 
 def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
-                     state: str, group: dict | None = None) -> dict:
+                     state: str, group: dict | None = None, *, owner: dict | None = None) -> dict:
     """落盘 + 收尾（重载上游、丢弃 state）。落盘失败时抛出**可执行**的提示。
 
     单独抽出来是因为它有两条进入路径：首次供给后、以及「上次就是败在落盘」
@@ -910,10 +1097,21 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     # 把它包起来是为了给出可执行的提示 —— 失败的一个常见成因是 auths 目录
     # 权限不对（宝塔/1Panel 用 root 装、却以别的 uid 跑），而那个错误的原文
     # 只有一行 PermissionError，用户看不出「该 chown 哪个目录」。
-    group = group or upstreamsvc.default_upstream()
-    auth_dir = _group_dir(group)
+    auth_dir = None
     try:
-        filename, existed = tencent.write_auth_file(result, auth_dir)
+        if owner is None:
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+        with security.authorization_guard(owner):
+            # A foreground/background poll may have awaited a provider while the
+            # group was edited or deleted. Re-read under the DB writer lock so a
+            # concurrent settings mutation cannot redirect the final file write.
+            with db.transaction():
+                scope = _login_scopes.get(state)
+                upstream_id = scope[2] if scope is not None else None
+                _check_login_scope(state, owner, realm_of_result, upstream_id)
+                group = _group(upstream_id)
+                auth_dir = Path(_login_group_bindings[state][0])
+                filename, existed = tencent.write_auth_file(result, auth_dir)
     except ValueError as exc:
         # uid 形态异常（`write_auth_file` 会校验后才拼文件名）。这不是权限问题，
         # 给「去 chown」的提示会把用户引到错方向 —— 如实说明是上游返回的数据异常。
@@ -941,6 +1139,7 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
     # 账号已确实落盘，这时才丢 state（成功路径的收尾）
     tencent.drop_state(state)
     _provisioned_states.pop(state, None)
+    _login_ready.pop(state, None)
 
     # 让上游加载新账号：**先等它的 auths 热加载，超时才重启**（后台执行，
     # 不阻塞本次响应）。此前无脑重启，而重启期间上游 /status 不可用 —— 前端
@@ -950,7 +1149,7 @@ def _save_and_finish(result: dict, realm_of_result: str, region_msg: str,
                                      upstream=_reload_target(group))
     # 重新登录 = 刷新账号状态：若它此前被系统禁用（12153 连败 / 11140 被封），
     # 这时后台自动解除 —— 否则「重新登录」救不回账号，用户报的就是这条。
-    _schedule_revive_after_login(str(result.get('uid') or ''), group)
+    _schedule_revive_after_login(str(result.get('uid') or ''), group, owner=owner)
 
     return {
         'status': 'success',
@@ -1130,11 +1329,48 @@ def credits_snapshot(user: dict = Depends(security.current_user)) -> dict:
     return payload
 
 
+@router.get('/accounts/credits-cached')
+def cached_group_credits(upstream_id: int | None = Query(None),
+                         user: dict = Depends(security.current_user)) -> dict:
+    """Immediate group-scoped balances; never contact a provider on page load."""
+    group = _group(upstream_id)
+    base_dir = _group_dir(group)
+    accounts = wb2api.list_auth_accounts(base_dir) if base_dir else []
+    snapshot = {row['uid']: row for row in creditsvc.snapshot_entries()['accounts']}
+    values, meta = {}, {}
+    now = int(time.time())
+    for account in accounts:
+        uid = str(account.get('uid') or '')
+        try:
+            raw = wb2api.read_account_file(account['file'], base_dir)
+            freshness, hit = creditsvc.background_state(_auth_dict(raw))
+            if freshness != 'fresh':
+                hit = None
+        except (OSError, ValueError, KeyError, TypeError):
+            hit = None
+        if hit is not None:
+            ok, value, message, expiries = hit
+            if not ok:
+                continue
+            values[uid] = value
+            meta[uid] = {'cached': True, 'cache_age': creditsvc.cache_age(uid),
+                         'message': '', 'expiries': expiries, 'source': 'cache'}
+        elif uid in snapshot:
+            row = snapshot[uid]
+            values[uid] = row['credits']
+            meta[uid] = {'cached': True, 'cache_age': max(0, now - row['registered_at'])
+                         if row['registered_at'] is not None else None,
+                         'message': '', 'expiries': [], 'source': 'registered'}
+    return {'total': len(accounts), 'succeeded': len(values), 'credits': values,
+            'meta': meta, 'failed': [], 'snapshot_at': now, 'provider_called': False}
+
+
 @router.post('/accounts/refresh-credits')
 async def refresh_all_credits(
     force: bool = True,
     upstream_id: int | None = Query(None),
     user: dict = Depends(security.current_user),
+    stale_only: bool = False,
 ) -> dict:
     """并发查询所有账号的积分，返回 {uid: credits} 与每条是否来自缓存。
 
@@ -1157,6 +1393,8 @@ async def refresh_all_credits(
     """
     if force and str(user.get('role') or '') != 'admin':
         raise HTTPException(status_code=403, detail='刷新积分需要管理员权限')
+    if stale_only and force:
+        raise HTTPException(status_code=400, detail='按需后台刷新不能强制绕过缓存')
 
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
@@ -1167,6 +1405,7 @@ async def refresh_all_credits(
     # 是同一个池，它排在队尾。限流后批量任务最多占 CREDITS_CONCURRENCY 个连接，
     # 而交互操作（测活/单号刷新）另走独立车道，谁也不会把谁饿死。
     sem = asyncio.Semaphore(config.CREDITS_CONCURRENCY)
+    automatic_remaining = [64]
 
     async def one(
         acc: dict,
@@ -1175,15 +1414,24 @@ async def refresh_all_credits(
             raw = wb2api.read_account_file(acc['file'], base_dir)
         except Exception as exc:  # noqa: BLE001
             return acc['uid'], None, f'读取失败: {exc}', False, None, []
+        auth = _auth_dict(raw)
+        if stale_only:
+            state, hit = creditsvc.background_state(auth)
+            if state == 'fresh':
+                return acc['uid'], hit[1], hit[2], True, creditsvc.cache_age(str(acc['uid'])), hit[3]
+            if state == 'backoff' or automatic_remaining[0] <= 0:
+                return acc['uid'], None, '后台刷新已退避或达到批次上限；保留上次快照，可手动刷新', False, None, []
+            automatic_remaining[0] -= 1
         # 信号量包住**整次取数**而不是只包网络那一段：缓存命中时它几乎瞬时，
         # 冷启动时这才是真正要限流的窗口。
         async with sem:
             ok, value, message, cached, age, expiries = await creditsvc.get_credits(
-                _auth_dict(raw), force=force, nickname=str(acc.get('nickname') or ''),
+                auth, force=force, nickname=str(acc.get('nickname') or ''),
             )
         return acc['uid'], value if ok else None, message, cached, age, expiries
 
-    results = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
+    results = await _gather_rows(accounts, one, lambda acc, exc: (
+        str(acc.get('uid') or ''), None, f'刷新积分异常: {err_text(exc)}', False, None, []))
 
     credits_map: dict[str, int | float | None] = {}
     meta: dict[str, dict] = {}
@@ -1208,9 +1456,47 @@ async def refresh_all_credits(
     }
 
 
+async def _gather_rows(accounts, one, on_error):
+    """批量执行：单个账号失败不得让整批 500。返回与 accounts 等长、同序的行。
+
+    取消与中断原样上抛；HTTPException 视为**该账号**的失败。
+
+    调用方鉴权已在 Depends 阶段完成，能落到这里的 HTTPException 只会来自单个
+    账号（如 portal 会话失效的 401），不能让它把整批打成 500。
+    """
+    raw = await asyncio.gather(*(one(a) for a in accounts), return_exceptions=True) if accounts else []
+    rows = []
+    for acc, item in zip(accounts, raw):
+        if isinstance(item, BaseException):
+            if not isinstance(item, Exception):
+                raise item
+            logger.warning('batch item failed acc=%s exc=%s',
+                           acc.get('file') or acc.get('uid'), type(item).__name__)
+            rows.append(on_error(acc, item))
+        else:
+            rows.append(item)
+    return rows
+
+
 def _checkin_semaphore() -> asyncio.Semaphore:
     """限制签到并发数：太高容易触发腾讯风控，太低又会拖到前端超时。"""
     return asyncio.Semaphore(config.CHECKIN_CONCURRENCY)
+
+
+# 批量签到的退避序列（issue #256）：上游偶发 `10001 签到失败，请稍后重试`，
+# 隔几秒单号重试即可成功。5s + 15s 总等待 20s，仍在面板 60s 超时内。
+_CHECKIN_RETRY_DELAYS = (5.0, 15.0)
+
+
+async def _checkin_with_retry(payload: dict, realm) -> tuple[int, str]:
+    """执行签到；仅对 -3（上游瞬时拒绝）按 5s/15s 退避重试。"""
+    code, message = await tencent.checkin(payload, realm)
+    for delay in _CHECKIN_RETRY_DELAYS:
+        if code != -3:
+            break
+        await asyncio.sleep(delay)
+        code, message = await tencent.checkin(payload, realm)
+    return code, message
 
 
 @router.post('/accounts/checkin-all')
@@ -1264,7 +1550,9 @@ async def checkin_all(upstream_id: int | None = Query(None),
 
         async with sem:
             # 传完整 auth dict：billing 域要带 X-User-Id 等身份头
-            code, message = await tencent.checkin({
+            # 瞬时 10001（上游瞬时限流）在 sem 内退避重试：放掉信号量再睡会让
+            # 其他账号涌入，重新制造并发峰值（issue #256）。
+            code, message = await _checkin_with_retry({
                 'access_token': token,
                 'uid': str((raw.get('account') or {}).get('uid') or uid),
                 'enterprise_id': str((raw.get('account') or {}).get('enterpriseId') or ''),
@@ -1277,7 +1565,17 @@ async def checkin_all(upstream_id: int | None = Query(None),
         db.add_checkin_log(uid, nickname, 'manual-batch', ok, code, message)
         return {'nickname': nickname, 'ok': ok, 'code': code, 'message': message}
 
-    results = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
+    def _failed_row(acc: dict, exc: BaseException) -> dict:
+        msg = '该账号签到待核对，本次未发起或结果未确认'
+        try:
+            db.add_checkin_log(acc.get('uid', ''), acc.get('nickname', ''),
+                               'manual-batch', False, -1, msg)
+        except Exception:
+            logger.warning('checkin failure log skipped acc=%s', acc.get('file'))
+        return {'nickname': acc.get('nickname', ''), 'ok': False, 'code': -1, 'message': msg}
+
+    results = await _gather_rows(accounts, one, _failed_row)
+
     # 两类账号都不进 `total` 分母，各自单独报数：
     #   · skipped：国际版没有签到体系，既不会成功也不是失败。算进 total 会显示成
     #     「5/6 成功」，用户以为漏签了一个号、反复去点——而它永远是「已跳过」。
@@ -1298,109 +1596,28 @@ async def checkin_all(upstream_id: int | None = Query(None),
     }
 
 
+
 @router.get('/checkin-logs')
-def checkin_logs(
-    limit: int = 200,
-    uid: str | None = None,
-    offset: int = 0,
-    days: int | None = None,
-    realm: str | None = None,
-    user: dict = Depends(security.current_user),
-) -> dict:
-    """签到记录（分页）：**本端触发的 + 上游自动签到的**统一视图。
-
-    为什么要合并：签到记录原先只写本端触发的（手动 / 批量 / 添加账号），而上游
-    定时签到的结果由日志采集器写进 task_logs。于是「自动签到」在签到记录里
-    永远看不到——用户反馈的「自动签到不显示」就是这个。
-
-    上游对签到成功是静默的（只打一行 `checkin done: total=.. ok=..` 汇总 + 失败明细），
-    所以自动签到侧提供的是**每轮汇总/异常行**，不是逐账号成功明细；这一点在
-    界面上如实标注，不假装有更细的数据。
-
-    两张表各自条数都不大，按 ts 归并后在 Python 侧分页，避免为跨表分页写
-    UNION + 双重 LIMIT 的复杂 SQL。
-
-    候选量必须覆盖到「当前页的末尾」，不能固定取前 N 条：合并是按时间排序的，
-    若只取各表最近的 500 条，落在 500 名之后的记录会永远翻不到，而 total 又是
-    真实全量——界面会显示「共 810 条」却翻不出后面 300 条。因此按 offset+limit
-    取候选（各表都取这么多，够覆盖最坏情况：全部记录都来自同一张表）。
-    """
-    start = max(0, int(offset))
-    size = min(500, max(1, int(limit)))
-    # 各表都取到 start+size，保证合并后第 start..start+size 条一定在候选里
-    want = start + size
-
-    # 版本筛选是**按行**做的（日志表没有 realm 列），被筛掉的往往是窗口里的大多数
-    # 行——另一个版本的记录。候选量因此要放大到单表上限，与 /task-logs 重算 stats
-    # 时同一做法。不放大会有两个后果：本版的记录被另一版挤出窗口（页面上「本版
-    # 一条都没有」），以及下面按窗口统计的 total 偏小（issue #51 的次要问题）。
-    realm_map = _realm_uid_filter(realm)
-    if realm_map is not None:
-        want = max(want, 2000)
-
-    local = db.list_checkin_logs(limit=want, uid=uid, offset=0, days=days)
-    local_total = db.count_checkin_logs(uid=uid, days=days)
-    local_items = [{**r, 'auto': False} for r in local]
-
-    # 上游自动签到（采集器落库的 kind='checkin'）
-    auto_rows = db.list_task_logs(limit=want, uid=uid, kind='checkin', offset=0, days=days)
-    auto_total = db.count_task_logs(uid=uid, kind='checkin', days=days)
-    auto_items = [
-        {
-            # 与 checkin_logs 的 id 空间不同，加偏移前缀避免前端 key 冲突
-            'id': 10**9 + int(r['id']),
-            'ts': r['ts'],
-            'uid': r['uid'],
-            'nickname': r.get('nickname') or '',
-            'source': 'auto',
-            'kind': 'checkin',
-            # 汇总行不代表单个账号成功，success 仅用于界面着色，不参与判定
-            'success': r.get('level') != 'error',
-            'code': None,
-            'message': r.get('message_cn') or r.get('message') or '',
-            'auto': True,
-        }
-        for r in auto_rows
-    ]
-
-    merged = sorted(local_items + auto_items, key=lambda x: x['ts'], reverse=True)
-
-    # 按版本过滤（realm 为空则不过滤，保持既有调用行为）
-    if realm_map is not None:
-        merged = [it for it in merged if _uid_matches_realm(str(it.get('uid') or ''), realm_map, realm)]
-
-    # total 必须与**列表同一口径**（issue #51 次要问题）：此前它统计在版本过滤之前，
-    # 界面上「共 6 条 · 仅显示最近 2 条」而列表只有 2 条，用户以为记录丢了。
-    # 过滤生效时用过滤后的条数（窗口已放大到单表上限，见上），未过滤时保持原值。
-    total = len(merged) if realm_map is not None else local_total + auto_total
-    unfiltered_total = local_total + auto_total
-
-    # 自动侧的行也要解析昵称（上游只带 uid 前 8 位）；本端的已有昵称
+def checkin_logs(limit: int = 200, uid: str | None = None, offset: int = 0,
+                 days: int | None = None, realm: str | None = None,
+                 user: dict = Depends(security.current_user)) -> dict:
+    from .. import historylogs
+    result = historylogs.checkin_page(mapping=_realm_uid_filter(realm), realm=realm,
+        limit=max(1,min(int(limit),500)),offset=max(0,min(int(offset),10_000_000)),
+        uid=uid,days=days)
     resolve_nick = _nickname_resolver()
-    for it in merged:
-        if not it.get('nickname'):
-            it['nickname'] = resolve_nick(str(it.get('uid') or ''))
-
-    start = max(0, int(offset))
-    end = start + min(500, max(1, int(limit)))
-    return {
-        'items': merged[start:end],
-        'total': total,
-        # 分别给出，便于界面说明「本端 N 条 / 自动 M 条」。
-        #
-        # **这两个数故意不按版本过滤**（与上面的 `total` 不同）：界面用它说明
-        # 「清空会删掉多少条」，而清空是整表操作、不分版本——按版本过滤会让提示
-        # 少说数量。两个口径各有用途，别把它们「统一」掉。
-        'local_total': local_total,
-        'auto_total': auto_total,
-        # 两个版本合计的条数（版本筛选生效时，`total` 只数当前版本）
-        'unfiltered_total': unfiltered_total,
-    }
+    for row in result['items']:
+        if not row.get('nickname'):
+            row['nickname'] = resolve_nick(str(row.get('uid') or ''))
+        if row['auto']:
+            row['message'] = tasklog.translate_message(row.get('message',''))
+    return result
 
 
 @router.post('/checkin-logs/clear')
 def clear_checkin_logs(user: dict = Depends(security.require_session_admin)) -> dict:
     db.clear_checkin_logs()
+    security.audit(user, 'checkin_logs.clear', '', '清空签到日志')
     return {'ok': True}
 
 
@@ -1448,28 +1665,30 @@ def _nickname_resolver() -> object:
     return resolve
 
 
+
 def _realm_uid_filter(realm: str | None) -> dict[str, str] | None:
-    """构造「哪些 uid 属于该版本」的映射；realm 为空返回 None（不过滤）。
-
-    日志表里只有 uid，没有 realm 列（本方案选择不改数据库），所以按
-    账号表把 uid 映射到版本再筛。上游日志里的 uid 是前 8 位，这里同时
-    支持完整 uid 与前缀两种匹配。
-
-    注意：账号已被删除时其历史日志无从判断版本，一律按「不属于任何版本」
-    处理——宁可少显示，也不要把国际版账号的日志挂到国内版视图下。
-    """
+    """Gather every registered pool; missing evidence is an error, not zero."""
     if not realm:
         return None
-    r = 'global' if str(realm).strip().lower() == 'global' else 'cn'
+    if realm not in ('cn','global','unknown'):
+        raise HTTPException(status_code=422,detail='Invalid history realm')
+    directories = [None]
+    for upstream in upstreamsvc.list_upstreams(include_default=False):
+        raw = str(upstream.get('auth_dir') or '').strip()
+        if raw:
+            directories.append(Path(raw))
+    result = {}
     try:
-        accounts = wb2api.list_auth_accounts()
-    except Exception:  # noqa: BLE001
-        return {}
-    return {
-        str(a.get('uid')): str(a.get('realm') or 'cn')
-        for a in accounts
-        if a.get('uid')
-    }
+        for directory in dict.fromkeys(directories):
+            for account in wb2api.list_auth_accounts(directory):
+                uid = str(account.get('uid') or '')
+                value = str(account.get('realm') or 'cn')
+                if not uid:
+                    continue
+                result[uid] = value if uid not in result or result[uid] == value else 'unknown'
+    except (OSError,ValueError,RuntimeError) as exc:
+        raise HTTPException(status_code=503,detail='无法核实全部账号池的历史归属') from exc
+    return result
 
 
 def _uid_matches_realm(uid: str, realm_map: dict[str, str] | None, realm: str) -> bool:
@@ -1497,81 +1716,21 @@ def _uid_matches_realm(uid: str, realm_map: dict[str, str] | None, realm: str) -
     return len(hits) == 1 and hits.pop() == want
 
 
+
 @router.get('/task-logs')
-def task_logs(
-    limit: int = 200,
-    offset: int = 0,
-    uid: str | None = None,
-    kind: str | None = None,
-    days: int | None = None,
-    realm: str | None = None,
-    user: dict = Depends(security.current_user),
-) -> dict:
-    """上游自动任务留痕（猫猫旅行 / 活跃上报 / 自动签到 / 保活）。
-
-    上游把这些结果打在容器日志里，容器重建即丢失；本接口读取的是
-    后台采集器解析后落库的记录，因此能长期保留并统计积分收益。
-
-    分页返回：列表只取当前页，`total` 为**当前筛选下**的总数，
-    概览 `stats` 也按同一时间范围统计，保证数字与列表一致。
-    """
-    limit = max(1, min(int(limit), 500))
-    offset = max(0, min(int(offset), 10_000_000))
-    logs = db.list_task_logs(limit=limit, uid=uid, kind=kind, offset=offset, days=days)
-
-    # 按版本过滤（realm 为空则不过滤）。日志表无 realm 列，按账号表映射 uid
-    realm_map = _realm_uid_filter(realm)
-    if realm_map is not None:
-        logs = [r for r in logs
-                if _uid_matches_realm(str(r.get('uid') or ''), realm_map, realm)]
-
+def task_logs(limit: int = 200, offset: int = 0, uid: str | None = None,
+              kind: str | None = None, days: int | None = None,
+              realm: str | None = None, user: dict = Depends(security.current_user)) -> dict:
+    from .. import historylogs
+    result = historylogs.task_page(mapping=_realm_uid_filter(realm), realm=realm,
+        limit=max(1,min(int(limit),500)),offset=max(0,min(int(offset),10_000_000)),
+        uid=uid,kind=kind,days=days)
     resolve_nick = _nickname_resolver()
-    for row in logs:
-        # 结果文案中文化：数据库留英文原文（排查要看上游原话），
-        # 接口额外给出 message_cn 供界面展示
-        row['message_cn'] = tasklog.translate_message(row.get('message', ''))
+    for row in result['logs']:
+        row['message_cn'] = tasklog.translate_message(row.get('message',''))
         row['nickname'] = resolve_nick(str(row.get('uid') or ''))
-
-    # `total` 是**当前筛选下**的条数（列表分页要用），而 `stats` 是**各类型**的
-    # 汇总（筛选栏要用它显示每个类型的条数与总条数）。
-    #
-    # 两者口径必须分开，不能一起按 kind 过滤 —— 这里踩过坑（issue #35）：
-    # 原先 realm 分支用 `list_task_logs(kind=kind, ...)` 重算 stats，于是
-    # `stats.total` 变成了「当前筛选下」的条数。界面用 `stats.total > 0` 决定
-    # 筛选栏是否渲染，点进一个没有记录的类型时它就变成 0 → **整条筛选栏消失**，
-    # 用户再也切不回「全部」，只能刷新页面。
-    # 也就是说：筛选栏的可见性绝不能依赖筛选结果本身。
-    stats = db.task_log_stats(days=days)
-    total = db.count_task_logs(uid=uid, kind=kind, days=days)
-    if realm_map is not None:
-        # 版本过滤只能按行做（日志表没有 realm 列）。注意这里**不带 kind**：
-        # 要的就是「该版本下所有类型」的分布。
-        all_rows = db.list_task_logs(limit=2000, uid=uid, kind=None, offset=0, days=days)
-        kept = [r for r in all_rows
-                if _uid_matches_realm(str(r.get('uid') or ''), realm_map, realm)]
-        by_kind: dict[str, dict] = {}
-        for r in kept:
-            k = str(r.get('kind') or '')
-            slot = by_kind.setdefault(k, {'count': 0, 'credits': 0})
-            slot['count'] += 1
-            slot['credits'] += int(r.get('credits') or 0)
-        stats = {
-            'by_kind': by_kind,
-            'total': len(kept),
-            'total_credits': sum(v['credits'] for v in by_kind.values()),
-        }
-        # total 同样要按版本口径重算（带 kind），与列表一致
-        scoped = ([r for r in kept if str(r.get('kind') or '') == kind]
-                  if kind else kept)
-        total = len(scoped)
-
-    return {
-        'logs': logs,
-        'total': total,
-        'stats': stats,
-        'kinds': tasklog.KIND_LABELS,
-        'collector': tasklog.state(),
-    }
+    result.update(kinds=tasklog.KIND_LABELS,collector=tasklog.state())
+    return result
 
 
 @router.post('/task-logs/collect')
@@ -1584,6 +1743,7 @@ async def collect_task_logs(user: dict = Depends(security.require_admin)) -> dic
 @router.post('/task-logs/clear')
 def clear_task_logs(user: dict = Depends(security.require_session_admin)) -> dict:
     db.clear_task_logs()
+    security.audit(user, 'task_logs.clear', '', '清空任务日志')
     return {'ok': True}
 
 
@@ -1604,9 +1764,9 @@ _provisioned_states: dict[str, float] = {}
 
 
 @router.get('/task-run')
-def task_run_status(user: dict = Depends(security.require_admin)) -> dict:
+def task_run_status(user: dict = Depends(security.require_panel_reader)) -> dict:
     """当前/上次执行状态与输出尾部（界面轮询）。"""
-    return taskrun.status()
+    return taskrun.status(inspect_runtime=user.get('role') == 'admin')
 
 
 @router.post('/task-run')
@@ -1647,7 +1807,7 @@ async def task_run_stop(user: dict = Depends(security.require_admin)) -> dict:
 
 
 @router.get('/task-claim-schedule')
-def task_claim_schedule_get(user: dict = Depends(security.require_admin)) -> dict:
+def task_claim_schedule_get(user: dict = Depends(security.require_panel_reader)) -> dict:
     """定时领奖配置（仅幂等领奖，不含点亮）。"""
     return taskrun.get_schedule()
 
@@ -1728,7 +1888,8 @@ async def _refresh_one_token(filename: str, base_dir: Path) -> dict:
         return {'ok': False, 'message': '该账号没有 refreshToken —— 只能重新扫码或登录',
                 'nickname': nickname, 'uid': uid, 'expires_at': None}
 
-    ok, message, fields = await tencent.refresh_token({
+    from ..services import credentialrefresh
+    ok, message, fields = await credentialrefresh.refresh(filename, {
         'access_token': auth.get('accessToken', ''),
         'refresh_token': auth.get('refreshToken', ''),
         'uid': uid,
@@ -1739,19 +1900,11 @@ async def _refresh_one_token(filename: str, base_dir: Path) -> dict:
         # v1.0.78 起：刷新要带上该账号的线路（proxy），否则走默认出口，
         # 与账号绑定的线路不一致可能被风控当成异常来源。
         'proxy': str(raw.get('proxy') or ''),
-    })
+    }, base_dir)
     if not ok:
         return {'ok': False, 'message': message, 'nickname': nickname,
                 'uid': uid, 'expires_at': None}
 
-    try:
-        tencent.update_auth_tokens(filename, fields, base_dir)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        # 刷新成功但写不进去：如实说清。**不能报成功**——用户以为续期了，
-        # 而磁盘上还是旧 token，重启后又变回过期状态，比直接失败更难查。
-        return {'ok': False,
-                'message': f'{message}，但写入账号文件失败：{exc}（有效期未保存）',
-                'nickname': nickname, 'uid': uid, 'expires_at': None}
     return {'ok': True, 'message': message, 'nickname': nickname,
             'uid': uid, 'expires_at': fields.get('expires_at')}
 
@@ -1835,7 +1988,10 @@ async def refresh_all_tokens(upstream_id: int | None = Query(None),
             'message': r['message'],
         }
 
-    results = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
+    results = await _gather_rows(accounts, one, lambda acc, exc: {
+        'file': acc.get('file', ''), 'nickname': str(acc.get('nickname') or ''),
+        'uid': str(acc.get('uid') or ''), 'ok': False,
+        'message': f'刷新令牌异常: {err_text(exc)}'})
     succeeded = sum(1 for r in results if r['ok'])
     failed = [f"{r['nickname'] or r['uid'][:12]}: {r['message']}"
               for r in results if not r['ok']]
@@ -1959,7 +2115,9 @@ async def claim_compensation_all(upstream_id: int | None = Query(None),
             status, credit, message = await tencent.claim_compensation(self_auth, realm)
         return {'nickname': nickname, 'status': status, 'credit': credit, 'message': message}
 
-    results = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
+    results = await _gather_rows(accounts, one, lambda acc, exc: {
+        'nickname': str(acc.get('nickname') or ''), 'status': 'failed',
+        'credit': 0, 'message': f'领取异常: {err_text(exc)}'})
     # 分母只算**真的发了请求**的账号：already / skipped 既不是成功也不是失败，
     # 算进 total 会让界面显示成「5/6 成功」，用户以为有个号没领到（与签到同口径）。
     tried = [r for r in results if r['status'] in ('claimed', 'nothing', 'failed')]
@@ -2182,6 +2340,7 @@ async def account_delete(filename: str, upstream_id: int | None = Query(None),
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail='账号文件不存在')
+    security.audit(user, 'account.delete', filename, f'upstream={_reload_target(group)}')
     reload.request_restart(upstream=_reload_target(group))
     return {'success': True}
 
@@ -2256,6 +2415,8 @@ async def account_move(
         uid = str((moved.get('account') or {}).get('uid') or '')
     except Exception:  # noqa: BLE001 —— 读不出 uid 不影响移动，只是少了重载收尾
         uid = ''
+    security.audit(user, 'account.move', src_path.name,
+                   f"{src['name']} -> {dst['name']}; uid={uid or '(unknown)'}")
     reload.request_reload_or_restart(uid, upstream=_reload_target(dst))
     return {
         'ok': True,
@@ -2271,6 +2432,7 @@ async def restart(upstream_id: int | None = Query(None),
                   user: dict = Depends(security.require_session_admin)) -> dict:
     group = _group(upstream_id)
     ok, message = await reload.restart_now(upstream=_reload_target(group))
+    security.audit(user, 'account.restart', str(_reload_target(group)), f'ok={ok}')
     return {'ok': ok, 'message': message}
 
 

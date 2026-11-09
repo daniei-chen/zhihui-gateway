@@ -165,3 +165,115 @@ class SchemaContracts(unittest.TestCase):
             with self.assertRaises(ValueError):validate(value)
     def test_preserve_custom_contract(self):
         validate({'pool':{'max_in_flight':6,'idle_weight_per_hour':0.5,'expiring_soon':'168h'},'session_sticky':{'enabled':True,'ttl':'24h'},'prompt':{'mode':'passthrough'}})
+
+
+class PackageUploadLimitTest(unittest.IsolatedAsyncioTestCase):
+    """N39：升级包路径的实际上限必须与声明长度预检一致。
+
+    修复前：main.py 的预检按 `MAX_PACKAGE_BODY_BYTES`(64 MiB) 放行，
+    `APIBodyGuard` 仍按默认 16 MiB 边读边数 → 17 MiB 的升级包在第二个关口
+    被 413，用户看到"上限 64 MB 却传不上去"。实测对真实 Manager 复现。
+    """
+
+    async def _guard_status(self, guard, path, declared, body=b''):
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        async def receive():
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+
+        scope = {'type': 'http', 'path': path, 'method': 'POST',
+                 'headers': [(b'content-length', str(declared).encode())]}
+        await guard(scope, receive, send)
+        return next(m['status'] for m in sent if m['type'] == 'http.response.start')
+
+    async def test_package_path_gets_wider_limit(self):
+        from server.main import MAX_API_BODY_BYTES, MAX_PACKAGE_BODY_BYTES, PACKAGE_UPLOAD_PATHS
+        # APIBodyGuard 是 ASGI 中间件类：直接实例化后它的 __call__ 是
+        # (scope, receive, send)，不能当成 (app, scope, receive, send) 用。
+        # 这里传 app=None，只测 __call__ 里的上限判定（在转发前就 return）。
+        guard = APIBodyGuard(
+            None, maximum=MAX_API_BODY_BYTES,
+            path_limits={p: MAX_PACKAGE_BODY_BYTES for p in PACKAGE_UPLOAD_PATHS})
+        # 普通路径超 16 MiB → 413
+        normal = await self._guard_status(guard, '/api/settings/upstream',
+                                          MAX_API_BODY_BYTES + 1)
+        self.assertEqual(normal, 413)
+        # 升级包路径 17 MiB（>16, <64）→ 必须在声明关就放行（不是 413）
+        upload = await self._guard_status(guard, PACKAGE_UPLOAD_PATHS[0], 17 * 1024 * 1024)
+        self.assertNotEqual(upload, 413,
+                            '17 MiB 升级包仍被 bodyguard 按 16 MiB 拒掉（N39 未修复）')
+        # 超过 64 MiB → 仍然 413
+        too_big = await self._guard_status(guard, PACKAGE_UPLOAD_PATHS[0],
+                                           MAX_PACKAGE_BODY_BYTES + 1)
+        self.assertEqual(too_big, 413)
+
+    async def test_guard_is_wired_with_path_limits(self):
+        """main.py 必须真的把 path_limits 传进去，不能只改 bodyguard 默认值。"""
+        import inspect
+        from server import main as main_module
+        src = inspect.getsource(main_module)
+        self.assertIn('path_limits=', src,
+                      'main.py 没有给 APIBodyGuard 传 path_limits，N39 会复发')
+
+
+class CallerRequestIdTest(unittest.TestCase):
+    """N40：调用方的 X-Request-ID 必须**被保存**，但不得成为执行 ID。
+
+    历史：修复前 `RequestAudit(uuid.uuid4().hex, ...)` 无条件生成随机 ID，哪怕
+    调用方传了 X-Request-ID 也照样换掉 —— K27/K47 说的"每个 request_id 账本
+    闭环"在跨系统意义上无法成立（外部系统拿自己的 ID 永远查不到本端日志）。
+    当时的修复是把外部值直接当成执行 ID，结果引入 RV01（外部 ID 成为
+    budget_reservations 主键 → 重发即 500、跨 key 共用命名空间、匿名 401 占号）。
+
+    现在的契约是两件事分开：
+      * `client_request_id_from_headers()` 只负责**提取并校验**调用方的关联 ID，
+        不合法返回 None（本类下面这些用例）；
+      * 执行 ID 一律由 `new_request_id()` 生成，两者在中间件里分别落库/回显，
+        端到端行为见 `test_request_identity.py`。
+    """
+
+    def test_caller_id_is_extracted_as_correlation(self):
+        from server.observability import client_request_id_from_headers
+        self.assertEqual(client_request_id_from_headers({b'x-request-id': b'k4792875202'}),
+                         'k4792875202')
+
+    def test_long_caller_id_rejected(self):
+        from server.observability import client_request_id_from_headers
+        self.assertIsNone(client_request_id_from_headers({b'x-request-id': b'A' * 300}),
+                          '超长取值必须丢弃，不能截断后采纳')
+
+    def test_newline_in_caller_id_rejected(self):
+        from server.observability import client_request_id_from_headers
+        self.assertIsNone(client_request_id_from_headers({b'x-request-id': b'abc\r\nX-Injected: 1'}))
+
+    def test_space_and_control_chars_rejected(self):
+        from server.observability import client_request_id_from_headers
+        for bad in (b'abc def', b'abc\x01def', b'', b'\xff\xfe'):
+            with self.subTest(bad=bad):
+                self.assertIsNone(client_request_id_from_headers({b'x-request-id': bad}))
+
+    def test_allowed_charset_passes(self):
+        from server.observability import client_request_id_from_headers
+        for good in ('abc-123', 'a.b:c_d', 'A' * 128, '0' * 1):
+            with self.subTest(good=good):
+                self.assertEqual(
+                    client_request_id_from_headers({b'x-request-id': good.encode()}), good)
+
+    def test_missing_header_has_no_client_id(self):
+        from server.observability import client_request_id_from_headers
+        self.assertIsNone(client_request_id_from_headers({}),
+                          '没给头就是没有关联 ID；不得生成一个冒充调用方的值')
+
+    def test_execution_id_is_generated_not_derived(self):
+        """执行 ID 的生成函数不接受任何外部输入，且是 32 位 uuid hex。"""
+        import inspect
+        import re
+        from server.observability import new_request_id
+        self.assertEqual(list(inspect.signature(new_request_id).parameters), [],
+                         '执行 ID 不得由调用方输入派生')
+        for _ in range(8):
+            got = new_request_id()
+            self.assertTrue(re.fullmatch(r'[0-9a-f]{32}', got), got)

@@ -31,11 +31,18 @@ claim 会被触发两次（幂等，无害）——实际不会发生，因为�
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import datetime as dt
 import logging
+import os
 import time
+from pathlib import Path
 
-from .. import db
+_scheduled_execution = contextvars.ContextVar('scheduled_owned_execution', default=False)
+
+from .. import db, tasklease
 from . import taskrun
+from .asyncwork import joined_task, joined_thread
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +66,94 @@ _DEFAULTS: dict[str, dict] = {
 _TICK_SECONDS = 60
 _loop_task: asyncio.Task | None = None
 
+# K28：发布期间不得自愈 / 不得触发管理端动作。
+#
+# 发布状态机的锁文件（`ops/release-lock/release_lock.py`）在被持有期间存在且可
+# flock 到冲突。这里只做**只读探测**：不获取锁、不写状态，避免干扰发布本身。
+# 默认路径与 `release_lock.paths()` 一致，可用同一环境变量覆盖。
+_RELEASE_LOCK = Path(os.environ.get('ZH_RELEASE_LOCK_FILE', '/run/zhihui-release.lock'))
+
+
+def release_in_progress() -> bool:
+    """发布状态机是否正持有锁。
+
+    用 `flock(LOCK_EX | LOCK_NB)` 探测：拿得到说明没人持有（立刻释放），
+    拿不到说明发布正在进行。文件不存在 / Windows 无 fcntl → 视为"没有发布"
+    （调度器照常跑，不因平台差异静默停摆）。
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return False
+    try:
+        fd = os.open(str(_RELEASE_LOCK), os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        # 打不开（权限/符号链接）时保守地认为"可能在发布"，宁可晚跑一轮
+        return True
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True          # 被别人持有 = 正在发布
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+# K28：唯一执行权的租约 TTL（秒）。
+#
+# 决定的是「持有者进程崩溃后，多久允许别的进程接管」——单次任务执行期间会按
+# TTL/3 续租，所以它不是单次任务的硬上限。默认 300s 与 `tasklease.DEFAULT_TTL`
+# 一致（同一个环境变量 ZH_TASK_LEASE_TTL）。
+LEASE_TTL = int(os.environ.get('ZH_TASK_LEASE_TTL', str(tasklease.DEFAULT_TTL))
+                or tasklease.DEFAULT_TTL)
+
+
+def _publish_block(conn) -> str | None:
+    """claim 事务内的发布互斥守卫（K28：任一为真就不 claim）。
+
+    必须在 claim 的 `BEGIN IMMEDIATE` 事务内调用：
+      · `settings['publish.state']` 未过期（发布方写的第二信号，跨副本可见）；
+      · 内核 flock 正被发布方持有（单机权威，POSIX 才有）。
+    两者分开检查而不是只靠其中一条：只有 flock 时，跨进程但不同库副本的观察
+    看不到；只有 publish.state 时，发布方崩溃留下的残留要等 TTL 过期。
+    """
+    return tasklease.publish_block_reason(conn, release_probe=release_in_progress)
+
+
+def claim_task(task: str) -> tuple[bool, int]:
+    """取得该 task 的唯一执行权，返回 `(claimed, fence)`。"""
+    return tasklease.claim(task, LEASE_TTL, guard=_publish_block,
+                           detail='dailyplan scheduler')
+
+
+async def _lease_heartbeat(task: str, fence: int, ttl: int, *,
+                           on_lost=None, on_renewed=None) -> None:
+    """执行期间续租：任务可能比 TTL 长，不续租就会被另一个进程合法接管。"""
+    interval = max(0.1, ttl / 3.0)
+    while True:
+        await asyncio.sleep(interval)
+        started = time.monotonic()
+        try:
+            held = await joined_thread(tasklease.renew, task, fence, ttl)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 —— 失去续租证据就停止本次动作
+            logger.warning('每日任务续租失败 task=%s: %s', task, exc)
+            if on_lost is not None:
+                on_lost('renewal_failed')
+            return
+        if not held:
+            logger.warning('每日任务租约已被接管，停止续租 task=%s fence=%s', task, fence)
+            if on_lost is not None:
+                on_lost('ownership_rejected')
+            return
+        if on_renewed is not None:
+            on_renewed(started)
+
+
 # 公开别名：路由层要用它校验「立即执行」的 task 参数与本文件保持一致。
 # 让路由自己再写一份清单，加任务时必然漏掉一处，而漏掉的症状是「计划里能开、
 # 手动执行报 400」——两边都不报错的静默不一致。
@@ -80,6 +175,9 @@ def _normalise(raw: object) -> dict:
                 plan[t]['hour'] = h
             if isinstance(v.get('last_run'), str):
                 plan[t]['last_run'] = v['last_run']
+            hours = v.get('hours')
+            if t == 'checkin' and isinstance(hours, list) and hours and all(type(item) is int and 0 <= item <= 23 for item in hours):
+                plan[t]['hours'] = sorted(set(hours))
     return plan
 
 
@@ -105,16 +203,30 @@ def set_plan(body: object) -> dict:
             raise TypeError(f'{t}.enabled 必须是布尔值')
         if isinstance(hour, bool) or not isinstance(hour, int) or not 0 <= hour <= 23:
             raise ValueError(f'{t}.hour 必须是 0-23 的整点')
+        changed_hour = hour != plan[t]['hour']
         plan[t]['enabled'] = enabled
         plan[t]['hour'] = hour
+        if t == 'checkin' and 'hours' in v:
+            hours = v['hours']
+            if not isinstance(hours, list) or not hours or not all(type(item) is int and 0 <= item <= 23 for item in hours):
+                raise ValueError('checkin.hours 必须为非空的 0-23 整点数组')
+            plan[t]['hours'] = sorted(set(hours))
+        elif t == 'checkin' and changed_hour:
+            plan[t].pop('hours', None)
     db.set_setting(_KEY, plan)
     return plan
 
 
 def _stamp(now: int) -> str:
-    """「哪一天的哪个整点」——同一天同一小时只跑一次的去重键。"""
-    lt = time.localtime(now)
-    return f'{lt.tm_year:04d}-{lt.tm_mon:02d}-{lt.tm_mday:02d}-{lt.tm_hour:02d}'
+    """「哪一天的哪个整点」——同一天同一小时只跑一次的去重键。
+
+    用 dt.datetime.fromtimestamp 而不是 time.localtime：后者让本函数依赖模块级
+    `time` 的完整接口，而测试里的 fake clock 只提供 monotonic/time 两个属性，
+    一旦调用方在测试路径上触到 localtime 就会 AttributeError（0.1.14 门禁实际踩到）。
+    datetime 不受那类 fake clock 影响，语义仍是本地时区，与此前等价。
+    """
+    moment = dt.datetime.fromtimestamp(now)
+    return f'{moment.year:04d}-{moment.month:02d}-{moment.day:02d}-{moment.hour:02d}'
 
 
 def is_due(task: str, plan: dict | None = None, now: int | None = None) -> bool:
@@ -130,24 +242,52 @@ def is_due(task: str, plan: dict | None = None, now: int | None = None) -> bool:
     if not cfg['enabled']:
         return False
     now = int(time.time()) if now is None else now
-    if time.localtime(now).tm_hour != cfg['hour']:
+    if time.localtime(now).tm_hour not in cfg.get('hours', [cfg['hour']]):
         return False
     return cfg['last_run'] != _stamp(now)
 
 
 def mark_ran(task: str, now: int | None = None) -> dict:
-    """记下该任务这一小时已经跑过（无论成功失败，避免同一小时反复重试）。"""
+    """记下该任务这一小时已经跑过（无论成功失败，避免同一小时反复重试）。
+
+    这是**手动「立即执行」**的路径（没有租约）。调度路径走
+    `mark_ran_fenced`：那里的写入必须与 fence 校验在同一个事务里。
+    """
     plan = get_plan()
     plan[task]['last_run'] = _stamp(int(time.time()) if now is None else now)
     db.set_setting(_KEY, plan)
     return plan
 
 
-async def run_task(task: str) -> tuple[bool, str]:
+def mark_ran_fenced(task: str, fence: int, now: int | None = None) -> bool:
+    """带 fence 的「本小时已跑」写入；租约失效时**不写**并返回 False。
+
+    为什么不能直接复用 `mark_ran`：旧 owner 在租约被接管后若还能写 last_run，
+    就会把新 owner 刚跑完的结论盖掉（或者反过来让新 owner 误以为还没跑）。
+    fence 校验与写入放在同一个写事务里，避免「校验通过后被接管」的窗口 ——
+    契约要求所有调度状态写入都带 `WHERE fence=?` 语义。
+    """
+    stamp = int(time.time()) if now is None else int(now)
+    with db.transaction() as conn:
+        row = conn.execute(
+            'SELECT owner, lease_until FROM task_leases WHERE task=? AND fence=?',
+            (task, int(fence))).fetchone()
+        if row is None or int(row['lease_until'] or 0) <= int(time.time()):
+            return False
+        if str(row['owner'] or '') != tasklease.identity():
+            return False
+        plan = get_plan()
+        plan[task]['last_run'] = _stamp(stamp)
+        db.set_setting(_KEY, plan)
+        return True
+
+
+async def run_task(task: str, *, wait_for_completion: bool = False) -> tuple[bool, str]:
     """执行一次任务，返回 `(是否触发成功, 说明)`。
 
     `taskrun` 一次只允许一个任务在跑：claim / full 若撞上正在执行的任务会返回
-    False（如实转达，不假装成功）。
+    False（如实转达，不假装成功）。调度器传 wait_for_completion=True，把租约
+    保留到脚本实际结束；手动路由仍立即返回「已开始」。
     """
     if task not in _TASKS:
         raise ValueError(f'未知任务：{task}')
@@ -179,7 +319,152 @@ async def run_task(task: str) -> tuple[bool, str]:
         # 全都「无可领」是正常态（补偿是一次性的），不算失败
         return not out.get('failed'), message
     mode = 'claim' if task == 'claim' else 'full'
+    if wait_for_completion or _scheduled_execution.get():
+        return await taskrun.run_and_wait(mode, 'ALL')
     return await taskrun.start_async(mode, 'ALL')
+
+
+def _record_outcome(task: str, ok: bool, detail: str) -> None:
+    """把每日任务的执行结果落一条审计记录。
+
+    此前失败只写 logger.warning：既进不了审计表，也没有任何告警，等于「无人值守
+    任务静默失效、事后不可追溯」。这里补一条可查记录。**不改变档位消费语义**：
+    已经发起过的任务当天仍不重复执行，避免每分钟重放、重复触达上游。
+    """
+    try:
+        from .. import db
+        db.add_audit_log('scheduler', 'daily_task_ok' if ok else 'daily_task_failed',
+                         task, (detail or '')[:400])
+    except Exception as exc:  # noqa: BLE001 - 记录失败不得影响调度本身
+        logger.warning('每日任务审计记录失败 task=%s: %s', task, exc)
+
+
+async def _run_claimed(task: str, plan: dict) -> bool:
+    """取得租约后执行一次任务；完成 / 异常 / 取消都要释放租约（finally）。
+
+    K28 的唯一执行权全在这里：
+      1. claim 的 `BEGIN IMMEDIATE` 事务内检查发布互斥并抢租约，抢不到就跳过
+         （`logger.debug`，不刷日志风暴 —— 巡检是一分钟一跳）；
+      2. 执行期间后台按 TTL/3 续租，避免长任务被合法接管后双执行；
+      3. `finally` 里先带 fence 写 last_run（租约失效则不写），再释放租约。
+         进程崩溃走不到 finally，但租约会在 TTL 后自然过期，下一轮可被接管。
+    """
+    claimed, fence = False, 0
+    claim_started = 0.0
+    heartbeat = owned = expiry = None
+    closing = dispatched = completed = False
+    lost_reason = ''
+
+    def acquire() -> None:
+        nonlocal claimed, fence, claim_started
+        claim_started = time.monotonic()
+        claimed, fence = claim_task(task)
+
+    def lose(reason: str) -> None:
+        nonlocal lost_reason
+        if closing or lost_reason:
+            return
+        lost_reason = reason
+        if owned is not None and not owned.done():
+            owned.cancel()
+
+    def heartbeat_ended(task) -> None:
+        # Callback-based renewal and the expiry timer must also observe an
+        # unexpected heartbeat exception/return. Never leave owned work running
+        # until the much longer lease TTL when the heartbeat task has died.
+        if not task.cancelled():
+            task.exception()
+        if not closing and not lost_reason:
+            lose('heartbeat_ended')
+
+    def renewed(started: float) -> None:
+        nonlocal expiry
+        if closing or lost_reason:
+            return
+        if expiry is not None:
+            expiry.cancel()
+        # DB lease_until truncates wall time to a whole second. Starting the
+        # monotonic budget before the write and reserving one second is
+        # conservative even while a renewal thread waits on the SQLite lock.
+        remaining = started + LEASE_TTL - 1.0 - time.monotonic()
+        if remaining <= 0:
+            lose('lease_budget_exhausted')
+        else:
+            expiry = asyncio.get_running_loop().call_later(
+                remaining, lose, 'lease_budget_exhausted')
+
+    try:
+        # Capture the result inside the owned thread: cancellation after a late
+        # successful claim must still release that exact fence in finally.
+        await joined_thread(acquire)
+        if not claimed:
+            logger.debug('每日任务未取得执行权，跳过 task=%s', task)
+            return False
+        renewed(claim_started)
+        if lost_reason:
+            logger.warning('每日任务取租约耗尽本地预算，跳过 task=%s', task)
+            return False
+        # 打印**实际命中的档位**，而不是配置里的默认小时：多档位（如 9/21 点）时
+        # 旧写法会把 21 点档也记成「9 点档」，日志因此不能作为排障证据。
+        _slot_hour = _stamp(int(time.time())).rsplit('-', 1)[-1]
+        logger.info('每日任务触发：%s（%s 点档，fence=%s）', task, _slot_hour, fence)
+        token = _scheduled_execution.set(True)
+        try:
+            owned = asyncio.create_task(run_task(task))
+        finally:
+            _scheduled_execution.reset(token)
+        dispatched = True
+        heartbeat = asyncio.create_task(_lease_heartbeat(
+            task, fence, LEASE_TTL, on_lost=lose, on_renewed=renewed))
+        heartbeat.add_done_callback(heartbeat_ended)
+        ok, msg = await asyncio.shield(owned)
+        completed = True
+        logger.info('每日任务 %s：ok=%s %s', task, ok, msg)
+        if not ok:
+            _record_outcome(task, False, str(msg)[:300])
+    except asyncio.CancelledError:
+        if asyncio.current_task().cancelling() or not lost_reason:
+            raise
+        logger.warning('每日任务失去租约，已停止执行 task=%s reason=%s', task, lost_reason)
+    except Exception as exc:  # noqa: BLE001
+        # 单个任务出错不该拖垮整轮巡检（下一个任务照常判）
+        logger.error('每日任务 %s 执行异常：%s', task, exc)
+        _record_outcome(task, False, '执行异常：%s' % type(exc).__name__)
+    finally:
+        if heartbeat is not None and heartbeat.done():
+            heartbeat_ended(heartbeat)
+        closing = True
+        if expiry is not None:
+            expiry.cancel()
+
+        async def finish_claim() -> None:
+            pending = [item for item in (owned, heartbeat) if item is not None]
+            for item in pending:
+                if not item.done():
+                    item.cancel()
+            # _run and joined_thread retain their own child/DB work through
+            # repeated cancellation. Do not release while either is alive.
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            if not claimed:
+                return
+            try:
+                # A failed owned execution may already have remote effects. Mark
+                # the attempted slot under its still-valid fence; do not silently
+                # replay it every minute. Ownership loss never authorizes a mark.
+                if dispatched and not lost_reason and not await joined_thread(mark_ran_fenced, task, fence):
+                    logger.warning('每日任务租约已失效，跳过 last_run 写入 task=%s fence=%s',
+                                   task, fence)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('每日任务 last_run 写入失败 task=%s: %s', task, exc)
+            finally:
+                try:
+                    await joined_thread(tasklease.release, task, fence)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning('每日任务租约释放失败 task=%s: %s', task, exc)
+
+        await joined_task(asyncio.create_task(finish_claim()))
+    return dispatched and not lost_reason
 
 
 async def _loop() -> None:
@@ -187,19 +472,17 @@ async def _loop() -> None:
     await asyncio.sleep(20)
     while True:
         try:
-            plan = get_plan()
-            for task in _TASKS:
-                if not is_due(task, plan):
-                    continue
-                logger.info('每日任务触发：%s（%s 点档）', task, plan[task]['hour'])
-                try:
-                    ok, msg = await run_task(task)
-                    logger.info('每日任务 %s：ok=%s %s', task, ok, msg)
-                except Exception as exc:  # noqa: BLE001
-                    # 单个任务出错不该拖垮整轮巡检（下一个任务照常判）
-                    logger.warning('每日任务 %s 执行异常：%s', task, exc)
-                # 无论成败都记「这一小时跑过」：否则失败会每分钟重试一次，刷屏
-                mark_ran(task)
+            # K28：发布期间不自愈。放在整轮最前面能省掉整轮无效 claim；真正的
+            # 竞态由 `_publish_block` 在 claim 事务内再查一次（那里才与发布方
+            # 的写事务串行化）。
+            if await joined_thread(release_in_progress):
+                logger.info('发布锁被持有，本轮每日任务跳过')
+            else:
+                plan = await joined_thread(get_plan)
+                for task in _TASKS:
+                    if not is_due(task, plan):
+                        continue
+                    await _run_claimed(task, plan)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -223,3 +506,17 @@ def stop_scheduler() -> None:
     global _loop_task
     if _loop_task and not _loop_task.done():
         _loop_task.cancel()
+
+
+async def close_scheduler() -> None:
+    """Stop the captured scheduler and join its leased work before shutdown."""
+    owned = _loop_task
+    if owned is None:
+        return
+    if not owned.done():
+        owned.cancel()
+    try:
+        await joined_task(owned)
+    except asyncio.CancelledError:
+        if asyncio.current_task().cancelling():
+            raise

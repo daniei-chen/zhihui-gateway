@@ -1,28 +1,13 @@
-"""上游重载编排：把「改配置 / 增删账号后需要重启容器」收敛为自动、可观测的动作。
+"""Observe account hot-loading without restarting serving inference.
 
-背景
-----
-workbuddy2api 只在进程启动时读取 config.json 与扫描 auths/ 目录
-（见 cmd/server/main.go：auth.LoadDir + p.SyncToDir + 各 SetXxx 注入），
-之后不再重读，也不处理 SIGHUP。因此任何影响这两者的改动都必须重启容器。
-
-**一处例外**（上游 2026-09-18 起）：auths 目录加了热加载——每 5 秒轮询目录指纹，
-凭证文件增删改会自动重新加载，那时不必重启（见其 internal/pool/watch.go）。
-但 **config.json 仍然只读一次**，所以改配置依旧必须重启；账号相关的改动我们
-照旧触发一次重启，好处是新旧上游都能立即生效（新版不必等那 5 秒轮询）。
-
-为什么可以直接自动重启
---------------------
-- 实测 `docker restart` 到服务可用约 0.45 秒
-- 上游实现了优雅停机：收到 SIGTERM 先 p.Flush() 落盘，再 srv.Shutdown(5s)
-  等在途请求结束，因此不会掐断正在进行的对话
-- 容器 restart 策略为 unless-stopped
-
-多次连续改动会合并为一次重启，避免并发重启互相干扰。
+Legacy configuration/restart entry points remain separate. Adding an account is
+not permission to restart an engine; a failed status read is not proof it needs
+a restart. A short engine shutdown grace period cannot protect long SSE calls.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 
@@ -49,7 +34,11 @@ _lock = asyncio.Lock()
 
 def state() -> dict:
     """当前重载状态，供前端展示。"""
-    return dict(_state)
+    result = dict(_state)
+    if isinstance(result.get('account_reload'), dict):
+        result['account_reload'] = dict(result['account_reload'])
+    result['account_reload_scopes'] = [dict(value) for value in _account_reload_states.values()]
+    return result
 
 
 async def _worker_loop() -> None:
@@ -132,67 +121,75 @@ async def restart_now(upstream: dict | None = None) -> tuple[bool, str]:
     return await wb2api.restart_container(container)
 
 
-# ── 加账号后的收尾：优先热加载，超时才重启 ────────────────────────────
-#
-# 背景（用户反馈）：国际版用链接 / GitHub 快速登录，界面提示登录成功之后，
-# 后台还要 20-30 秒才看到账号。链路是这样：
-#
-#   落盘成功 → 我们**直接重启上游** → 前端收到成功立刻刷新账号列表 → 那一刷
-#   里 `get_status()` 去请求上游 /status，而上游正在重启、连不上 → 面板侧的上游
-#   调用超时是 WB_UPSTREAM_TIMEOUT（默认 120 秒）→ 请求一直挂着，直到容器起来
-#   才返回。用户看到的「20-30 秒」就是**等容器重启**，账号文件其实早就落盘了。
-#
-# 而上游自 2026-09-19 起会热加载 auths 目录（约 5 秒一轮），新版根本不需要重启。
-# 所以这里改成：先给它一点时间，账号出现在 /status 里就结束；只有「上游是旧版本
-# 不热加载」或「上游整个不可达」时才回退到重启（那两个情形下重启是唯一的出路）。
+# Account observation has its own state; it must not overwrite the last explicit
+# restart result or turn a configuration-save notice into a false success.
 HOT_RELOAD_WAIT_SECONDS = 8.0    # 上游热加载周期约 5 秒，留一次往返的余量
 HOT_RELOAD_POLL_SECONDS = 1.0
+MAX_RELOAD_SCOPES = 64
+MAX_PENDING_ACCOUNTS = 256
 _pending_uids: set[str] = set()
 _reload_worker: asyncio.Task | None = None
+_account_reload_states: dict[str, dict] = {}
+
+
+def _record_account_reload(scope, upstream_id, phase, reason, pending):
+    item = {'upstream_id': upstream_id, 'phase': phase, 'reason': reason,
+            'pending_count': len(pending), 'observed_at': time.time(),
+            'restart_scheduled': False}
+    _state['account_reload'] = item
+    _account_reload_states.pop(scope, None)
+    _account_reload_states[scope] = item
+    while len(_account_reload_states) > MAX_RELOAD_SCOPES:
+        _account_reload_states.pop(next(iter(_account_reload_states)))
+
+
+async def _observe_accounts(pending, fetch, wait_seconds, *, scope, upstream_id):
+    saw_upstream = False
+    _record_account_reload(scope, upstream_id, 'observing', '', pending)
+    try:
+        async with asyncio.timeout(wait_seconds):
+            while pending:
+                try:
+                    status = await fetch()
+                except Exception:
+                    status = None
+                if isinstance(status, dict) and status.get('connected') is True:
+                    rows = status.get('accounts')
+                    if isinstance(rows, list) and all(isinstance(a, dict) for a in rows):
+                        saw_upstream = True
+                        seen = {a['uid'] for a in rows if isinstance(a.get('uid'), str) and a['uid']}
+                        pending.difference_update(seen)
+                        if not pending:
+                            _record_account_reload(scope, upstream_id, 'confirmed', '', pending)
+                            return
+                await asyncio.sleep(HOT_RELOAD_POLL_SECONDS)
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        _record_account_reload(scope, upstream_id, 'needs_attention', 'observation_cancelled', pending)
+        pending.clear()
+        raise
+    _record_account_reload(scope, upstream_id, 'needs_attention',
+                           'account_not_observed' if saw_upstream else 'upstream_unavailable', pending)
+    pending.clear()
+    logger.warning('Account hot-load not confirmed; serving engine was not restarted')
 
 
 async def _reload_worker_loop(wait_seconds: float) -> None:
-    deadline = time.monotonic() + wait_seconds
-    saw_upstream = False
-    while _pending_uids and time.monotonic() < deadline:
-        st = await wb2api.get_status()
-        if st.get('connected'):
-            saw_upstream = True
-            seen = {str(a.get('uid') or '') for a in (st.get('accounts') or [])}
-            _pending_uids.difference_update(seen)
-            if not _pending_uids:
-                logger.info('新账号已由上游热加载收录，无需重启')
-                return
-        await asyncio.sleep(HOT_RELOAD_POLL_SECONDS)
-
     if not _pending_uids:
         return
-    # 超时仍未收录：老上游不热加载；或者上游不可达（重启是唯一出路）。
-    # 两种情况都回退到原来的重启，且**只重启一次**（哪怕同时加了多个账号）。
-    logger.info('热加载未在 %.0fs 内生效（上游%s），回退重启',
-                wait_seconds, '可达但未收录' if saw_upstream else '不可达')
-    _pending_uids.clear()
-    ok, message = await wb2api.restart_container()
-    _state['restart_count'] += 1
-    _state['last_at'] = time.time()
-    _state['last_ok'] = ok
-    _state['last_message'] = message
+    await _observe_accounts(_pending_uids, wb2api.get_status, wait_seconds,
+                            scope='default', upstream_id=None)
 
 
 def request_reload_or_restart(uid: str, *, upstream: dict | None = None) -> bool:
-    """新增账号后的收尾：先等热加载，超时才重启（见上面的说明）。
-
-    与 `request_restart` 一样立即返回、后台执行；同时加多个账号只会重启一次
-    （等待期间把后加入的 uid 一并纳入判断）。
-
-    upstream 非空 = 该**分组**：用独立的一套等待（见文件末尾），等待它的
-    /status 收录该 uid；等不到时只有登记了容器名才会重启。
-    返回 False 表示没有运行中的事件循环，调用方自行决定。
-    """
+    """Compatibility name: schedule bounded hot-load observation, never restart."""
     if upstream is not None:
         return _request_group_reload(uid, upstream)
     global _reload_worker
     uid = str(uid or '').strip()
+    if not uid or len(uid) > 256 or len(_pending_uids) >= MAX_PENDING_ACCOUNTS:
+        return False
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -206,55 +203,58 @@ def request_reload_or_restart(uid: str, *, upstream: dict | None = None) -> bool
 
 # ── 分组（多账号池）专用的热加载等待 ──────────────────────────────────
 #
-# 与默认上游那套分开的理由：默认上游的等待状态是全局的（一个 uid 集合 +
-# 一个 worker），多分组并发加号时两个分组的 uid 会混进同一个判断。分组这边
-# 按 base_url 各自记账，互不干扰，也不改变默认路径的既有行为。
+# Route and credential generations must not join a previous group's waiter.
 _group_pending: dict[str, set[str]] = {}
 _group_workers: dict[str, asyncio.Task] = {}
+
+
+def _group_identity(upstream: dict, api_key: str) -> str:
+    values = (str(upstream.get('id') or ''), str(upstream.get('base_url') or '').strip(),
+              api_key)
+    return hashlib.sha256(repr(values).encode()).hexdigest()
 
 
 def _request_group_reload(uid: str, upstream: dict) -> bool:
     base = str(upstream.get('base_url') or '').strip()
     if not base:
         return False
+    api_key = upstreamsvc.forward_api_key(upstream)
+    scope = _group_identity(upstream, api_key)
+    uid = str(uid or '').strip()
+    if (not uid or len(uid) > 256
+            or (scope not in _group_pending and len(_group_pending) >= MAX_RELOAD_SCOPES)
+            or len(_group_pending.get(scope, ())) >= MAX_PENDING_ACCOUNTS):
+        return False
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return False
-    uid = str(uid or '').strip()
-    if uid:
-        _group_pending.setdefault(base, set()).add(uid)
-    task = _group_workers.get(base)
+    _group_pending.setdefault(scope, set()).add(uid)
+    task = _group_workers.get(scope)
     if task is None or task.done():
-        _group_workers[base] = loop.create_task(_group_reload_worker(upstream))
+        task = loop.create_task(_group_reload_worker(dict(upstream), scope=scope, api_key=api_key))
+        _group_workers[scope] = task
+        def forget(completed):
+            if _group_workers.get(scope) is completed:
+                _group_workers.pop(scope, None)
+        task.add_done_callback(forget)
     return True
 
 
-async def _group_reload_worker(upstream: dict) -> None:
+async def _group_reload_worker(upstream: dict, *, scope: str | None = None,
+                               api_key: str | None = None) -> None:
     base = str(upstream.get('base_url') or '').strip()
-    pending = _group_pending.get(base) or set()
+    api_key = upstreamsvc.forward_api_key(upstream) if api_key is None else api_key
+    scope = scope or _group_identity(upstream, api_key)
+    pending = _group_pending.get(scope) or set()
     if not pending:
         return
-    saw_upstream = False
-    deadline = time.monotonic() + HOT_RELOAD_WAIT_SECONDS
-    while pending and time.monotonic() < deadline:
-        st = await wb2api.get_status(base_url=base,
-                                     api_key=upstreamsvc.forward_api_key(upstream))
-        if st.get('connected'):
-            saw_upstream = True
-            seen = {str(a.get('uid') or '') for a in (st.get('accounts') or [])}
-            pending.difference_update(seen)
-            if not pending:
-                _group_pending.pop(base, None)
-                logger.info('分组「%s」已热加载收录新账号', upstream.get('name'))
-                return
-        await asyncio.sleep(HOT_RELOAD_POLL_SECONDS)
-    _group_pending.pop(base, None)
-    container = str(upstream.get('container') or '').strip()
-    if not container:
-        logger.info('分组「%s」热加载未在 %.0fs 内收录（上游%s），未登记容器名，'
-                    '跳过重启', upstream.get('name'), HOT_RELOAD_WAIT_SECONDS,
-                    '可达' if saw_upstream else '不可达')
-        return
-    await _restart_container_bg(container)
+    async def fetch():
+        return await wb2api.get_status(base_url=base, api_key=api_key)
+    try:
+        await _observe_accounts(pending, fetch, HOT_RELOAD_WAIT_SECONDS,
+                                scope=scope, upstream_id=upstream.get('id'))
+    finally:
+        if _group_pending.get(scope) is pending:
+            _group_pending.pop(scope, None)
 

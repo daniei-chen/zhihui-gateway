@@ -1,6 +1,6 @@
 'use client';
 
-import {useState, type ReactNode} from 'react';
+import {useRef, useState, type ReactNode} from 'react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,13 +57,20 @@ export function ConfirmDialog({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirming = useRef(false);
+
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    if (!next) setError(null);
+    onOpenChange?.(next);
+  };
 
   return (
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
-        onOpenChange?.(next);
+        if (!confirming.current) changeOpen(next);
       }}
     >
       <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
@@ -73,23 +80,33 @@ export function ConfirmDialog({
           {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
         </AlertDialogHeader>
         {content && <div className="px-6">{content}</div>}
+        {error && <p role="alert" className="px-6 text-sm text-destructive">{error}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>{t('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction
             disabled={busy || confirmDisabled}
-            className={destructive ? 'bg-destructive text-white hover:bg-destructive/90' : ''}
+            className={destructive
+              ? 'bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60 dark:hover:bg-destructive/50'
+              : ''}
             onClick={async (e) => {
               e.preventDefault();
+              if (confirming.current || confirmDisabled) return;
+              confirming.current = true;
               setBusy(true);
+              setError(null);
               try {
                 await onConfirm();
-                setOpen(false);
+                // The owner uses this callback to erase sensitive controlled
+                // inputs. Programmatic success must follow the same close path.
+                changeOpen(false);
               } catch (err) {
                 // 以前只有 finally：业务失败会变成未处理的 rejection，弹窗不关、
                 // 界面毫无反应 —— 用户以为没点上，反复点。这里当场说清原因并
                 // 保持弹窗打开，让人能改完重试。
                 notify.err(errText(err));
+                setError(errText(err));
               } finally {
+                confirming.current = false;
                 setBusy(false);
               }
             }}

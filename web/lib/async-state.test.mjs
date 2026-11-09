@@ -124,6 +124,9 @@ check('first run', depMode(P(null, '[]'), P('["cn"]', '[]')), 'initial');
 
 // 什么都没变 → null，不该重取
 check('nothing changed', depMode(P('["cn"]', '[]'), P('["cn"]', '[]')), null);
+check('completed paused scope resumes without replacing a form', depMode(P('["cn"]', '[]'), P('["cn"]', '[]'), false), null);
+check('interrupted paused request is silently refreshed', depMode(P('["cn"]', '[]'), P('["cn"]', '[]'), true), 'refresh');
+check('a new context still clears interrupted old values', depMode(P('["cn"]', '[]'), P('["global"]', '[]'), true), 'initial');
 
 // 切版本 = 换了数据上下文 → initial（旧数字属于旧版本，必须清掉）
 check('context changed', depMode(P('["cn"]', '[]'), P('["global"]', '[]')), 'initial');

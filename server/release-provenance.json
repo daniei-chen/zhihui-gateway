@@ -1,0 +1,32 @@
+{
+  "base_commit": "872961ecda9562e48590e88a9e1e6493e2c21d94",
+  "base_release": "v0.0.7+stable.20261106.1",
+  "candidate_only": true,
+  "database_rollback": false,
+  "frontend_input_sha256": "82230e4f30f9e8b64c1960b303d85ac4993ce0c0bc157152d8abd1ec49f91680",
+  "frontend_origin": "reconstructed-source",
+  "frontend_rebuilt": true,
+  "original_frontend_commit_reproduced": false,
+  "production_deployed": false,
+  "release_id": "v0.0.8+stable.20261106.1",
+  "repository": "daniei-chen/zhihui-gateway",
+  "reviewed_patch_files": {
+    ".version": "7b66b7186fd4471d8386f89504ac0cd3fe4a751add5c56fb6de6b21b5d9b2c6f",
+    "CHANGELOG.md": "042bd09dbb0181872aa12605772a9ff8db3eaedb8812026e1b748e9326ccabf0",
+    "README.en.md": "c83bdeba78d55eac1e2b5a61007ab34850f370ffdb77f173030c7efb812256d2",
+    "README.md": "faf4f72743f023e2992e7d6641f2aa085c657eeec5d96b2efb6a077d56fa6ba5",
+    "server/CHANGELOG.md": "042bd09dbb0181872aa12605772a9ff8db3eaedb8812026e1b748e9326ccabf0",
+    "server/product-release.json": "9bd80d7de2429087c66773007a83e102248dc5f6d5da5397148b958a0f987171",
+    "server/tests/test_product_origin.py": "36885fd2527de660b206b5fdebba035c58805254a2dd9020414d813b9a242f80",
+    "server/writer-capabilities.json": "f40cd5af1c17fe7c1a35b9b502cd4bed15de82dbf641e8c3a972e61f92d67b60",
+    "web/lib/product.ts": "13c499a255c0dc72306f212486f43bd6517f6a9a49171dd0886de95222c3a1bd",
+    "web/package-lock.json": "81708a3af12d7ec277e79c64b5dc95fe70db43af8c089e73027bc1a2116aa85d",
+    "web/package.json": "d23999d55b3e7bc96c7ed6c1eaf09d7a16dccec0cdf8597dfa69c43ef44c7487"
+  },
+  "schema": 1,
+  "signed": false,
+  "source_commit": "",
+  "source_input_sha256": "32fb708b7b270e611aaf401c1a8bf7f6fb0e065eaa9963d37805da455f9697ef",
+  "source_kind": "version-alignment-on-accepted-runtime",
+  "version": "0.0.8"
+}

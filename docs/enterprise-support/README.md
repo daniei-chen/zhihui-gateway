@@ -1,5 +1,7 @@
 # 企业账号额度支持补丁包
 
+> **历史补丁资料，已停用。** `apply.sh` 对所有参数和被 source 的调用均返回 2，且在读取凭据、复制文件或操作容器前拒绝执行。下面的手工安装、重建、回滚与升级命令也仅供历史审阅，不适用于当前受控实例。请遵循[当前产品发布合同](../../../docs/PRODUCT-RELEASE.md)与[当前签名要求](../../../docs/release-signing.md)。
+
 让 `ithtelab/workbuddy-manager` + `workbuddy2api` 支持**腾讯 CodeBuddy/WorkBuddy 企业版账号**的额度显示与选号。
 
 > 上游（原版）不支持企业账号额度：企业额度不在个人「资源包」体系内，
@@ -13,41 +15,23 @@
 ```
 enterprise-support/
 ├── README.md                                本文件
-├── apply.sh                                 一键应用脚本
+├── apply.sh                                 已退役的历史脚本（拒绝执行）
 ├── workbuddy2api-enterprise-support.patch   上游 Go 补丁（6 文件 / 307 行）
 ├── manager-tencent.py.patch                 manager 额度查询补丁（103 行）
 ├── manager-wb2api.py.patch                  manager 签到判定补丁（14 行）
-└── verified/                                已验证的成品文件（可直接覆盖）
-    ├── manager-tencent.py
-    ├── manager-wb2api.py
+└── verified/                                历史上游参考文件（不可直接覆盖当前实例）
     └── upstream-enterprise_usage.go
 ```
 
 ---
 
-## 快速应用
+## 历史一键应用入口已停用
 
-```bash
-cd /opt/enterprise-support
-
-# 全部应用（上游 + manager）
-sudo bash apply.sh all
-
-# 只应用其中一个
-sudo bash apply.sh upstream
-sudo bash apply.sh manager
-```
-
-脚本会自动：
-1. 备份现有二进制 / patched 文件
-2. 应用补丁（上游用 `git apply`，manager 用文件覆盖）
-3. 编译 + 测试（上游）
-4. 重建镜像 / 容器
-5. 打印验证结果
+此目录不再提供安装入口。原脚本在重建容器时无法完整保留环境、镜像和挂载属性，不能用于当前实例；公开目录也没有旧脚本所需的两个 manager 成品文件。不要补齐旧文件或绕过拒绝门禁。当前安装与升级须使用上述受管理发布流程，历史主体仅保留作代码审阅。
 
 ---
 
-## 手工应用（脚本失败时）
+## 历史手工应用记录（已停用，不是脚本失败后的替代步骤）
 
 ### 上游 workbuddy2api
 

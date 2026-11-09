@@ -56,18 +56,18 @@
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
   --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
+  --muted-foreground: oklch(0.542 0.016 285.938);
   --accent: oklch(0.967 0.001 286.375);
   --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.55 0.245 27.325);
   --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
+  --input: oklch(0.66 0.006 286.32);
+  --ring: oklch(0.66 0.015 286.067);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.62 0.189 84.429);
+  --chart-5: oklch(0.62 0.188 70.08);
   --sidebar: rgb(249, 250, 251);
   /* bg-gray-50 */
   --sidebar-foreground: oklch(0.141 0.005 285.823);
@@ -98,9 +98,9 @@
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --input: oklch(0.51 0.006 286.033);
   --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-1: oklch(0.58 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
@@ -223,6 +223,31 @@ button {
 @media (prefers-reduced-motion: reduce) {
   [data-wb-toast] [aria-hidden] {
     animation: none !important;
+  }
+}
+
+/* N45：前庭敏感用户要求「减少动态效果」时，全局动画必须一起降级。
+ *
+ * 修复前这里只关了 toast 的进度条一条 —— 实测 `prefers-reduced-motion: reduce`
+ * 下页面仍有 67 个 running 动画（骨架屏脉冲、列表入场、按钮过渡、侧栏展开等），
+ * 等于这个媒体查询形同虚设。
+ *
+ * 做法：把动画/过渡时长压到接近 0（保留 0.01ms 而不是 0，某些浏览器的
+ * transitionend / animationend 在 0 时长下不触发，依赖这些事件收尾的逻辑会卡住）。
+ * `scroll-behavior` 同时改为 auto，避免平滑滚动带来的眩晕。
+ * 不影响静态样式、颜色、布局；也不接管 JS 用 rAF 驱动的动画（那类需各自判断）。
+ */
+@media (prefers-reduced-motion: reduce) {
+  /* 用 html 前缀而不是裸 `*`：Next.js 的 cssnano 会把纯 `*` 规则当成
+   * "全匹配的冗余规则"优化掉（实测构建产物里整块消失）。
+   * `html *` 与 `*` 语义等价（html 是唯一根），但不会被优化器丢弃。 */
+  html *,
+  html *::before,
+  html *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

@@ -4,6 +4,7 @@ import {Globe, House} from 'lucide-react';
 import {motion} from 'motion/react';
 
 import {useRealm, type Realm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 import {useT} from '@/lib/i18n/provider';
 import {RichText} from '@/lib/i18n/rich-text';
 import {cn} from '@/lib/utils';
@@ -18,10 +19,11 @@ import {cn} from '@/lib/utils';
  */
 export function RealmToggle({compact = false}: {compact?: boolean}) {
   const {realm, setRealm} = useRealm();
+  const {platform} = usePlatform();
   const t = useT();
   const options: {id: Realm; label: string; title: string; icon: typeof House}[] = [
-    {id: 'cn', label: t('realm.cn'), title: t('realm.cnTitle'), icon: House},
-    {id: 'global', label: t('realm.global'), title: t('realm.globalTitle'), icon: Globe},
+    {id: 'cn', label: t('realm.cn'), title: platform === 'workbuddy' ? t('realm.cnTitle') : `${platform === 'qoder' ? 'Qoder' : 'Trae'} · ${t('realm.cn')}`, icon: House},
+    {id: 'global', label: t('realm.global'), title: platform === 'workbuddy' ? t('realm.globalTitle') : platform === 'trae' ? t('addAccount.traeGlobalUnsupported') : `Qoder · ${t('realm.global')}`, icon: Globe},
   ];
 
   return (
@@ -65,6 +67,7 @@ export function RealmToggle({compact = false}: {compact?: boolean}) {
 /** 页面内的版本提示条：说明当前版本会影响哪些内容 */
 export function RealmNote({className}: {className?: string}) {
   const {realm} = useRealm();
+  const {platform} = usePlatform();
   const t = useT();
   if (realm === 'cn') return null;
   return (
@@ -76,7 +79,7 @@ export function RealmNote({className}: {className?: string}) {
     >
       <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       {/* 加粗位置由译文自己决定：各语言语序不同，拆成多个 JSX 片段必然错位 */}
-      <RichText text={t('realm.note')} />
+      <RichText text={t(platform === 'workbuddy' ? 'realm.note' : platform === 'trae' ? 'addAccount.traeGlobalUnsupported' : 'realm.qoderNote')} />
     </div>
   );
 }

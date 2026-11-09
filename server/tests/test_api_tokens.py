@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -68,11 +69,13 @@ class ApiTokenTest(unittest.TestCase):
         # 必须每次清干净，否则后面的登录会被自己锁掉（429）。
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self.c.cookies.clear()
 
     def tearDown(self) -> None:
         security._fail.clear()
         security._user_fail.clear()
+        security._token_fail.clear()
         self.c.cookies.clear()
 
     # ── 工具 ─────────────────────────────────────────────
@@ -137,6 +140,18 @@ class ApiTokenTest(unittest.TestCase):
 
         adm = self._mint('adm', 'admin')
         self.assertEqual(self.c.get('/api/me', headers=self._bearer(adm)).json()['role'], 'admin')
+
+    def test_configuration_snapshot_only_allows_admin_and_redacts_secrets(self) -> None:
+        from unittest.mock import patch
+        for scope in ('readonly','keys'):
+            r = self.c.get('/api/system/configuration',headers=self._bearer(self._mint('snapshot-'+scope,scope)))
+            self.assertEqual(r.status_code,403,r.text)
+        headers = self._bearer(self._mint('snapshot-admin','admin'))
+        with patch.dict(os.environ,{'WB2API_KEY':'config-snapshot-secret-sentinel'}):
+            response = self.c.get('/api/system/configuration',headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertNotIn('config-snapshot-secret-sentinel',response.text)
+        self.assertTrue(response.json()['configuration']['settings']['WB2API_KEY']['value']['redacted'])
 
     def test_readonly_cannot_write(self) -> None:
         ro = self._mint('ro2', 'readonly')
@@ -209,7 +224,8 @@ class ApiTokenTest(unittest.TestCase):
         """会话调高危接口不受影响（新约束不能误伤正常人）。"""
         with self._as_session() as c:
             r = c.post('/api/logs/clear')
-        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertIn('归档', r.json()['detail'])
 
     # ── 记账 ─────────────────────────────────────────────
     def test_last_used_is_throttled(self) -> None:
@@ -266,6 +282,11 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
 
     # 服务级 / 不可逆 / 能提权或抹痕迹的动作，只对**会话**开放。
     SESSION_ONLY = {
+        'POST /api/budgets/{request_id}/resolve',
+        'POST /api/auth/start',  # Authorization can persist provider credentials.
+        'POST /api/auth/review',  # Owner-bound evidence; human admin session only.
+        'POST /api/auth/finish',
+        'POST /api/auth/cancel',
         'DELETE /api/accounts/{filename}',
         'DELETE /api/system/update-status',   # 清除更新结果与日志：属于「抹掉痕迹」类
         'DELETE /api/security/rules/{rule_id}',
@@ -281,8 +302,11 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/security/rules',
         'POST /api/sessions/revoke',
         'POST /api/settings/upstream',
+        'POST /api/steward/settings/recipients',
+        'POST /api/steward/settings/recipients/remove',
         # 离线升级包（issue #153）：上传的是**可执行的代码包**，且下一步就是落盘重启
         'POST /api/system/update-package',
+        'POST /api/playground/chat',  # Existing live policy: session-only generation.
         'DELETE /api/system/update-package',
         # 代理线路与全局出口代理（设置 → 代理）：能改「谁的流量从哪个出口出去」，
         # 而且是**凭据载体**（地址里带用户名密码）—— 泄露的 token 不该能读能写。
@@ -301,6 +325,7 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/settings/proxy/probe',
         'POST /api/settings/upstash/reload',   # 评审补：与 /api/restart 同动作
         'POST /api/system/update',
+        'POST /api/system/drain',
         'POST /api/task-logs/clear',
         'POST /api/tokens',
         'POST /api/users',
@@ -323,13 +348,28 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         'POST /api/settings/pg-sync/test',
         'POST /api/settings/pg-sync/export',
         'POST /api/settings/pg-sync/import',
+        # Recipient/threshold changes, external mail and metered model access
+        # require a human super-admin session, never a management API token.
+        'PUT /api/steward/settings',
+        'POST /api/steward/test-mail',
+        'POST /api/steward/chat',
+        # Customer account and wallet effects require a human super-admin.
+        'POST /api/portal-admin/invitations',
+        'DELETE /api/portal-admin/invitations/{identifier}',
+        'POST /api/portal-admin/users',
+        'PATCH /api/portal-admin/users/{user_id}',
+        'POST /api/portal-admin/users/{owner_id}/bonus',
+        'POST /api/portal-admin/accounts/{account_id}/checkin',
+        'POST /api/portal-admin/accounts/{account_id}/reconcile-checkin',
+        'PUT /api/portal-admin/automatic-checkin',
+        'POST /api/portal-admin/checkin-all',
+        'POST /api/portal-admin/wallet-debts/{owner_id}/adjust',
+        'POST /api/portal-admin/wallet-pending/{request_id}/resolve',
     }
     # 写方法但只要求「已登录」——只读令牌也能调。必须逐个有理由。
     ANY_LOGGED_IN = {
-        # Existing local viewer policy: start a login task and use Playground.
-        # Preserve these explicit exceptions while rejecting undeclared writes.
-        'POST /api/auth/start',
-        'POST /api/playground/chat',
+        # These existing read-side refresh exceptions do not import credentials.
+        'POST /api/v1/cache/invalidate',  # No credentials or persistent business data are changed.
         'POST /api/accounts/refresh-credits',   # 刷新积分快照；force=true 内部再查 admin
         'POST /api/keys/check-models',          # 只比对已缓存模型清单，不发网络
     }
@@ -384,11 +424,13 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
         out = set()
         for key, names in self.rows:
             if kind == 'session_only':
-                if 'require_session_admin' in names:
+                if set(names) & {'require_session_admin', 'require_account_adder'}:
                     out.add(key)
             elif kind == 'any_logged_in':
                 if ('current_user' in names and 'require_admin' not in names
-                        and 'require_session_admin' not in names):
+                        and 'require_session_admin' not in names
+                        and 'require_account_adder' not in names
+                        and 'require_keys_writer' not in names):
                     out.add(key)
         return out
 
@@ -429,7 +471,11 @@ class ExportRequiresSessionTest(unittest.TestCase):
                 candidates = [x for x in inner.routes if isinstance(x, APIRoute)]
             else:
                 candidates = [r] if isinstance(r, APIRoute) else []
-            found.extend(x for x in candidates if x.path == '/api/accounts/export')
+            # Only the native WorkBuddy route exports credentials. The merged
+            # Qoder/Trae route exports an explicit metadata projection (covered
+            # separately below), and is authenticated by manager's middleware.
+            found.extend(x for x in candidates if x.path == '/api/accounts/export'
+                         and x.endpoint.__module__ == 'server.routers.accounts')
         return found
 
     def test_export_is_session_only(self) -> None:
@@ -458,6 +504,23 @@ class ExportRequiresSessionTest(unittest.TestCase):
             names = dep_names(route)
             self.assertIn('require_session_admin', names,
                           '导出接口不再要求会话管理员 —— 它会把账号凭据打包给调用方')
+
+    def test_merged_export_never_includes_account_credentials(self) -> None:
+        import asyncio
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from server.qtgcore.routers import compat
+        account = SimpleNamespace(platform='qoder', uid='uid', name='name', realm='cn',
+                                  state='ready', credits_remain=1, expires_iso=None,
+                                  access_token='must-not-export', refresh_token='must-not-export')
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(rt=object())))
+        with patch.object(compat, 'build_aggregate', new=AsyncMock(return_value={})), \
+                patch.object(compat, 'all_accounts', return_value=[account]):
+            response = asyncio.run(compat.compat_accounts_export(request))
+        data = json.loads(response.body)
+        self.assertEqual(set(data[0]), {'platform', 'uid', 'name', 'realm', 'state', 'credits', 'expires_iso'})
+        self.assertNotIn('must-not-export', response.body.decode())
 
 
 if __name__ == '__main__':

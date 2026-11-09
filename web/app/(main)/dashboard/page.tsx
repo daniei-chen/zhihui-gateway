@@ -3,25 +3,29 @@
 import {useEffect, useMemo, useState} from 'react';
 import type {ReactNode} from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {Users, CircleCheck, TriangleAlert, Activity, Server, Coins, ChevronRight} from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+// K37：recharts 不在页面文件里 import —— 它由下面的 dynamic 组件单独拆包，
+// 首屏 HTML/JS 不含图表代码；配合 useAfterFirstPaint 在空闲帧才去请求 chunk。
+const TrendChart = dynamic(
+  () => import('@/components/dashboard/DashboardCharts').then((m) => m.TrendChart),
+  {ssr: false},
+);
+const FlowChart = dynamic(
+  () => import('@/components/dashboard/DashboardCharts').then((m) => m.FlowChart),
+  {ssr: false},
+);
+import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
+import {ChartDataTable} from '@/components/charts/ChartDataTable';
+import {CreditFlowTile} from '@/components/dashboard/CreditFlowTile';
+import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {collectScopedExpiries} from '@/lib/dashboard-credits';
 import {getExpiryDailyGroup, groupExpiriesByDay} from '@/lib/display-prefs';
 import {accountApi, statsApi, upstreamApi, upstreamsApi} from '@/lib/api';
 import {useRealm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 import type {
   CreditsFlow,
   CreditsMeta,
@@ -86,14 +90,14 @@ const EMPTY_FLOW: CreditsFlow = {
   days: 0,
   from: '',
   to: '',
-  today: {income: 0, expense: 0, net: 0},
-  week: {income: 0, expense: 0, net: 0},
-  total: {income: 0, expense: 0, net: 0},
+  today: {income: null, expense: null, net: null},
+  week: {income: null, expense: null, net: null},
+  total: {income: null, expense: null, net: null},
   daily: [],
 };
 
-/** `refreshCredits` 的返回体形状（扇出后要逐项相加，类型从 api 上取） */
-type CreditsResponse = Awaited<ReturnType<typeof accountApi.refreshCredits>>;
+/** Balances are local/engine snapshots; this read never starts billing work. */
+type CreditsResponse = Awaited<ReturnType<typeof accountApi.cachedCredits>>;
 
 /**
  * 取回**全部分组**的账号与池状态。
@@ -162,10 +166,9 @@ async function loadPoolSnapshot(): Promise<GroupSlice[]> {
 }
 
 /**
- * 取回**全部分组**的实时积分。
+ * 取回全部分组已经登记的余额，不让页面加载触发逐账号账单查询。
  *
- * 与 `loadPoolSnapshot` 同因按分组扇出：`refresh-credits` 是**分组接口**，
- * 后端按该分组的账号目录逐个查腾讯，只调一次就只能刷到默认分组。
+ * 按账号分组取本地记录，不能只读取默认组，也不在首屏调用逐账号查询。
  *
  * 积分按 **uid** 归并——uid 是腾讯侧的账号标识，跨分组唯一，不像文件名那样会撞。
  *
@@ -177,7 +180,7 @@ async function loadGroupCredits(): Promise<CreditsResponse> {
   const {items} = await upstreamsApi.list();
   const targets = accountGroups(items ?? []);
   const settled = await Promise.allSettled(
-    targets.map((g) => accountApi.refreshCredits(false, g.id ?? null)),
+    targets.map((g) => accountApi.cachedCredits(g.id ?? null)),
   );
   const ok = settled
     .filter((r): r is PromiseFulfilledResult<CreditsResponse> => r.status === 'fulfilled')
@@ -190,11 +193,13 @@ async function loadGroupCredits(): Promise<CreditsResponse> {
     credits: Object.assign({}, ...ok.map((r) => r.credits)),
     meta: Object.assign({}, ...ok.map((r) => r.meta)),
     failed: ok.flatMap((r) => r.failed ?? []),
+    provider_called: false,
   };
 }
 
 export default function DashboardPage() {
   const {realm, label: realmName} = useRealm();
+  const {label: platformName} = usePlatform();
   const t = useT();
 
   /**
@@ -209,12 +214,12 @@ export default function DashboardPage() {
    *
    * 加载态 / 失败态 / 是否正在刷新也由它给出，本页不再自己维护这几个 useState。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     pool: () => loadPoolSnapshot(),
     summary: () => statsApi.summary(realm),
     daily: () => statsApi.daily(14, realm),
     credits: () => loadGroupCredits(),
-  }, [realm]);
+  }, [realm], [], {progressive: true});
 
   /**
    * 积分收支的时段（当天 / 3 / 7 / 15 / 30 天）。
@@ -238,7 +243,7 @@ export default function DashboardPage() {
     rawFlow && rawFlow.total && Array.isArray(rawFlow.daily) ? rawFlow : EMPTY_FLOW;
   const flowFailed = 'flow' in flowState.errors;
   /** 区间内是否有任何收支——全 0 时画图没意义，给空态 */
-  const hasFlow = flow.total.income > 0 || flow.total.expense > 0;
+  const hasFlow = flow.daily.some(row => (row.income ?? 0) > 0 || (row.expense ?? 0) > 0);
 
   const slices: GroupSlice[] = values.pool ?? EMPTY_SLICES;
   const summary: StatsSummary | null = values.summary ?? null;
@@ -253,6 +258,7 @@ export default function DashboardPage() {
    * 整页错误态不会出现，因为其余三份有值）。
    */
   const poolFailed = 'pool' in errors;
+  const poolPending = values.pool === undefined && !poolFailed;
   /** 有分组没取到：下面的账号与积分**不含**它们，必须说明，否则又是「报 1/N 个池子」 */
   const failedGroups = slices.filter((s) => s.error);
   /** 多于一个分组时才需要标注统计范围与归属——单分组时界面保持原样 */
@@ -272,10 +278,7 @@ export default function DashboardPage() {
   // 账号健康度与用量会持续变化，用心跳刷新避免展示陈旧数据。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——
   // 否则骨架会每 30 秒闪一次，用户以为页面在抽风。
-  useHeartbeat(() => {
-    reload();
-    flowState.reload();
-  }, 30000);
+  useHeartbeat(() => Promise.all([refresh(), flowState.refresh()]), 30000);
 
   /** 有字段没刷新成功。此时至少还有一份数据在，用顶部提示如实说明，不清空内容 */
   const partialFailed = Object.keys(errors).length > 0;
@@ -388,10 +391,20 @@ export default function DashboardPage() {
     [dailyGroup, scopedExpiries, nextExpiry],
   );
 
+  /**
+   * K37：图表在首屏之后才挂载。
+   *
+   * `dynamic({ssr:false})` 只把 recharts 拆成独立 chunk —— 组件一渲染它就会
+   * 去请求那个 chunk，对首屏可见的图来说这仍在 `load` 之前，等于没延后。
+   * 用 useAfterFirstPaint 把「是否渲染」推到空闲帧，才是真正的「首屏后加载」。
+   * 等待期间用同高度占位，避免图表出现时把下方内容顶下去（CLS）。
+   */
+  const chartsReady = useAfterFirstPaint();
+
   const chartData = daily.map((d) => ({
     day: d.day.slice(5),
     requests: d.requests,
-    tokens: d.prompt_tokens + d.completion_tokens,
+    tokens: d.total_tokens ?? (d.prompt_tokens + d.completion_tokens),
     // 失败数与请求数是**两条独立的数据来源**（前者取自请求日志，后者取自用量
     // 汇总），所以曲线不会互相覆盖：某天「requests=0 但 failed=31」是完全
     // 可能的形态（全池中断），图上看得出「那天出过事」而不是「没有请求」。
@@ -413,7 +426,7 @@ export default function DashboardPage() {
    */
   const acctCard = (
     value: ReactNode, hint: string | undefined, tone: StatTone, hintTone?: StatTone,
-  ) => (poolFailed
+  ) => (poolFailed || poolPending
     ? {value: '—' as ReactNode, hint: undefined, tone: 'neutral' as StatTone, hintTone: undefined}
     : {value, hint, tone, hintTone});
 
@@ -425,7 +438,7 @@ export default function DashboardPage() {
   const header = (
     <PageHeader
       title={t('dashboard.title')}
-      description={t('dashboard.description', {realm: realmName})}
+      description={t('dashboard.description', {platform: platformName})}
     />
   );
 
@@ -444,6 +457,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-4 md:gap-6" aria-busy={isRefreshing}>
       {header}
+      <p className="px-1 text-xs text-muted-foreground">{t('dashboard.balanceSnapshotNote')}</p>
 
       {/* 统计范围。**只在多于一个分组时才出现**：单分组时它只是句废话，
           而绝大多数部署就是单分组。有了它，用户才知道上面那些数是全池的，
@@ -546,8 +560,9 @@ export default function DashboardPage() {
         />
         <StatCard
           label={t('dashboard.todayTokens')}
-          value={fmtCompact(summary?.today_tokens)}
+          value={summary ? fmtCompact(summary.today_tokens) : '—'}
           hint={
+            !summary ? undefined :
             // 有失败时**优先说失败**：这个数字是用户排查问题的入口，而
             // 「今天 N 次请求」是背景信息。没失败才显示请求数。
             todayFailed > 0
@@ -583,53 +598,28 @@ export default function DashboardPage() {
           </div>
           <div className="h-[220px] w-full">
             {chartData.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{top: 4, right: 8, bottom: 0, left: 0}}>
-                  <defs>
-                    <linearGradient id="gReq" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" />
-                  <YAxis tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'var(--popover)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 12,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="requests"
-                    name={t('metric.requests')}
-                    stroke="var(--chart-1)"
-                    fill="url(#gReq)"
-                    strokeWidth={2}
-                  />
-                  {/* 失败曲线单独画（虚线、不发散填充）：它来自另一份数据源，
-                      与请求数不是「同一条曲线的两个部分」，不该堆叠。
-                      没有失败时这条线贴着 0，不干扰读数。 */}
-                  <Area
-                    type="monotone"
-                    dataKey="failed"
-                    name={t('dashboard.failedRequests')}
-                    stroke="var(--destructive)"
-                    fill="none"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 3"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : 'daily' in errors ? null : (
+              chartsReady ? (
+                <TrendChart
+                  data={chartData}
+                  requestsLabel={t('metric.requests')}
+                  failedLabel={t('dashboard.failedRequests')}
+                />
+              ) : (
+                <ChartPlaceholder h={220} />
+              )
+            ) : 'daily' in errors ? null : values.daily === undefined ? (
+              <ChartPlaceholder h={220} />
+            ) : (
               // 用量取不到时**不说**「暂无调用数据」：那是在断言「你没有调用过」，
               // 而事实是这份数据没拿到（`daily` 单独失败时整页错误态不会出现）。
               <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('dashboard.noCallData')}</div>
             )}
           </div>
+          {chartData.length > 0 && <ChartDataTable
+            title={t('metric.requests')}
+            columns={[t('a11y.period'), t('metric.requests'), t('dashboard.failedRequests')]}
+            rows={chartData.map((point) => [point.day, point.requests, point.failed])}
+          />}
         </div>
 
         <div className="rounded-[20px] bg-muted p-4">
@@ -652,6 +642,8 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+          ) : poolPending ? (
+            <div className="h-[160px] animate-pulse rounded-2xl bg-background/50" />
           ) : (
             <div className="grid h-[160px] place-items-center text-xs text-muted-foreground">{t('dashboard.noUpstreamStatus')}</div>
           )}
@@ -694,6 +686,11 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
+            {flow.income_status === 'unavailable' && (
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                {t('dashboard.creditsIncomeUnavailable')}
+              </p>
+            )}
             {/* 三个数字都跟着上面的时段走（收入 / 支出 / 净增），不再固定写死
                 「今日」「近 7 天」。 */}
             <div className="grid grid-cols-3 gap-3">
@@ -701,7 +698,7 @@ export default function DashboardPage() {
                 label={t('dashboard.income')}
                 value={flow.total.income}
                 tone="income"
-                title={t('dashboard.creditsIncomeTip')}
+                title={t(flow.income_status === 'unavailable' ? 'dashboard.creditsIncomeUnavailable' : 'dashboard.creditsIncomeTip')}
               />
               <CreditFlowTile
                 label={t('dashboard.expense')}
@@ -713,48 +710,36 @@ export default function DashboardPage() {
                 label={t('dashboard.creditsNet')}
                 value={flow.total.net}
                 tone="net"
-                title={t('dashboard.creditsNetTip')}
+                title={t(flow.income_status === 'unavailable' ? 'dashboard.creditsIncomeUnavailable' : 'dashboard.creditsNetTip')}
               />
             </div>
 
             <div className="mt-4 h-[220px] w-full">
               {hasFlow ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  {/* 左边距不能给负数：轴宽 48 减去它才是刻度的可用宽度，
-                      4 位数的刻度会越出图表左边缘被裁掉（issue #184 的遮挡就是这么来的）。 */}
-                  <LineChart data={flow.daily} margin={{top: 4, right: 4, bottom: 0, left: 0}}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11}
-                           stroke="var(--muted-foreground)" />
-                    {/* 双 Y 轴：收入常是几千、支出常是几十。同一根轴会把支出压成
-                        贴着 0 的直线，等于没画。左轴收入、右轴支出，颜色与曲线对应。 */}
-                    <YAxis yAxisId="inc" tickLine={false} axisLine={false} fontSize={11}
-                           stroke="var(--chart-2)" width={52} />
-                    <YAxis yAxisId="exp" orientation="right" tickLine={false} axisLine={false}
-                           fontSize={11} stroke="var(--destructive)" width={48} />
-                    <Tooltip
-                      contentStyle={{
-                        background: 'var(--popover)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 12,
-                        fontSize: 12,
-                      }}
-                    />
-                    <Legend wrapperStyle={{fontSize: 11}} />
-                    <Line yAxisId="inc" type="monotone" dataKey="income"
-                          name={t('dashboard.income')} stroke="var(--chart-2)"
-                          strokeWidth={2} dot={false} />
-                    <Line yAxisId="exp" type="monotone" dataKey="expense"
-                          name={t('dashboard.expense')} stroke="var(--destructive)"
-                          strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
+                chartsReady ? (
+                  <FlowChart
+                    data={flow.daily}
+                    incomeLabel={t('dashboard.income')}
+                    expenseLabel={t('dashboard.expense')}
+                  />
+                ) : (
+                  <ChartPlaceholder h={220} />
+                )
               ) : (
                 <div className="grid h-full place-items-center text-xs text-muted-foreground">
-                  {t('dashboard.creditsFlowEmpty')}
+                  {t(flow.income_status === 'unavailable'
+                    ? flow.daily.some(row => row.expense === null)
+                      ? 'dashboard.creditsConsumptionUnknown'
+                      : 'dashboard.creditsConsumptionOnly'
+                    : 'dashboard.creditsFlowEmpty')}
                 </div>
               )}
             </div>
+            {hasFlow && <ChartDataTable
+              title={t('dashboard.creditsFlowTitle')}
+              columns={[t('a11y.period'), t('dashboard.income'), t('dashboard.expense')]}
+              rows={flow.daily.map((point) => [point.day, point.income ?? '—', point.expense ?? '—'])}
+            />}
           </>
         )}
       </section>
@@ -859,7 +844,7 @@ export default function DashboardPage() {
               );
             })}
           </div>
-        ) : poolFailed ? null : (
+        ) : poolFailed ? null : poolPending ? <SkeletonBar className="h-32" /> : (
           // 账号那一块没取到时**什么都不说**：「暂无账号」等于告诉用户
           // 「你一个账号都没有」，而事实是没取到（顶部那条说明已经讲了）。
           <EmptyState
@@ -1010,42 +995,5 @@ function DashboardSkeleton() {
         </div>
       </section>
     </>
-  );
-}
-
-/**
- * 积分收支小卡片：收入（正）绿、支出红，悬停给出统计口径。
- *
- * 为什么不用顶部那个 StatCard：本块在 `bg-muted` 的 section 内部，再嵌一层
- * 同色的 bg-muted 会看不出卡片边界；这里用 `bg-background/60` 区分层次。
- */
-function CreditFlowTile({label, value, tone, title}: {
-  label: string;
-  value: number;
-  tone: 'income' | 'expense' | 'net';
-  title: string;
-}) {
-  // 收入绿、支出红；净增按正负取色（正绿负红、零中性）。
-  const color =
-    tone === 'income'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : tone === 'expense'
-        ? 'text-red-600 dark:text-red-400'
-        : value > 0
-          ? 'text-emerald-600 dark:text-emerald-400'
-          : value < 0
-            ? 'text-red-600 dark:text-red-400'
-            : 'text-gray-900 dark:text-gray-100';
-  // 符号把「进 / 出」直接写在数字上：收入 +、支出 −、净增按正负。
-  // 金额一律取绝对值再拼符号，避免出现「−-120」这种双重负号。
-  const sign = tone === 'expense' || (tone === 'net' && value < 0) ? '−' : '+';
-  return (
-    <div className="rounded-2xl bg-background/60 px-3 py-2.5" title={title}>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className={'mt-1 text-lg font-semibold tabular-nums ' + color}>
-        {sign}
-        {fmtNumber(Math.abs(value))}
-      </div>
-    </div>
   );
 }

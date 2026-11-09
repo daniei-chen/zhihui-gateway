@@ -237,11 +237,14 @@ class UpstreamUpdateGuardTest(unittest.TestCase):
             self.assertFalse(updater.read_status()['can_update_upstream'],
                              '宿主但没装 docker 时应不可用')
 
-    def test_frontend_uses_capability_flag(self) -> None:
+    def test_frontend_has_no_docker_update_action(self) -> None:
         src = (_ROOT / 'web' / 'components' / 'common' / 'settings'
                / 'UpdatePanel.tsx').read_text(encoding='utf-8')
-        self.assertIn('can_update_upstream', src,
-                      '更新面板没读能力标志 —— 用户会点到不支持的操作')
+        self.assertIn('trusted-release-policy', src)
+        self.assertNotIn('systemApi.startUpdate', src,
+                         '智汇发布中心不应依据 Docker 能力重新打开旧安装通道')
+        self.assertNotIn('update-target', src)
+        self.assertNotIn('docker compose', src)
 
 
 class ComposeCommandTest(unittest.TestCase):
@@ -337,7 +340,7 @@ class ComposeCommandTest(unittest.TestCase):
              mock.patch.object(m, 'enforce_local_bind', return_value=None):
             rep = _Rep()
             with self.assertRaises(RuntimeError) as ctx:
-                m.update_upstream(rep)
+                m.rebuild_upstream(rep)
             msg = str(ctx.exception)
             self.assertIn('compose', msg)
             self.assertIn('Dockerfile', msg, '应给出可执行的修法')
@@ -492,7 +495,7 @@ class DbOpenFailureMessageTest(unittest.TestCase):
         直接抛 OperationalError 的话，用户看到的还是那句无信息量的原文。
         """
         from server import db
-        with mock.patch.object(db.sqlite3, 'connect',
+        with mock.patch.object(db, '_conn', None), mock.patch.object(db.sqlite3, 'connect',
                                side_effect=sqlite3.OperationalError('unable to open database file')):
             with self.assertRaises(RuntimeError) as ctx:
                 db.connect()

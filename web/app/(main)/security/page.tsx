@@ -1,6 +1,6 @@
 'use client';
 
-import {useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {ShieldCheck, Plus, Trash2, Ban, CircleCheck, Network} from 'lucide-react';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
@@ -111,6 +111,10 @@ const REASON_KEYS: Record<string, string> = {
   too_many_ips: 'security.reasonTooManyIps',
   realm_mismatch: 'security.reasonRealmMismatch',
   model_not_allowed: 'security.reasonModelNotAllowed',
+  platform_not_allowed: 'security.reasonPlatformNotAllowed',
+  invalid_platform: 'security.reasonInvalidPlatform',
+  invalid_key_policy: 'security.reasonInvalidKeyPolicy',
+  portal_policy_denied: 'security.reasonPortalPolicyDenied',
 };
 
 function reasonText(t: (key: string, params?: Record<string, string>) => string, code: string): string {
@@ -127,7 +131,7 @@ const EMPTY_LOGS: IpAccessLog[] = [];
 const EMPTY_AUDIT: AuditLog[] = [];
 
 export default function SecurityPage() {
-  const {isAdmin} = useAuth();
+  const {isAdmin, role, me} = useAuth();
   const t = useT();
 
   /**
@@ -147,12 +151,12 @@ export default function SecurityPage() {
    */
   // 审计日志接口要求管理员：只读账号不请求它，否则每次进页面都会多一条
   // 「部分数据加载失败」——而它本来就不该给 viewer 看。
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     config: () => securityApi.config(),
     rules: () => securityApi.rules(),
     logs: () => securityApi.logs(200),
-    ...(isAdmin ? {audit: () => settingsApi.auditLogs(200)} : {}),
-  }, [isAdmin]);
+    ...(isAdmin || role === 'account_admin' ? {audit: () => settingsApi.auditLogs(200)} : {}),
+  }, [isAdmin, role, me?.username]);
 
   /** null = 这份数据还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const config: SecurityConfig | null = values.config ?? null;
@@ -167,13 +171,29 @@ export default function SecurityPage() {
   const [busy, setBusy] = useState(false);
   /** 保存配置时的乐观值，见 saveConfig 的说明。null = 没有在途改动 */
   const [optimistic, setOptimistic] = useState<SecurityConfig | null>(null);
+  const [configSaving, setConfigSaving] = useState(false);
+  const configFlight = useRef<symbol | null>(null);
+  const configGeneration = useRef(0);
+  const configRef = useRef(config);
+  const [optimisticBase, setOptimisticBase] = useState(config);
+  const invalidateConfig = useCallback(() => {
+    configGeneration.current++;
+    configFlight.current = null;
+  }, []);
+  useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => {
+    setOptimistic(null);
+    setConfigSaving(false);
+    return invalidateConfig;
+  }, [isAdmin, role, me?.username, invalidateConfig]);
   /** 实际显示的那份配置：在途改动优先，否则用取回来的 */
-  const shownConfig = optimistic ?? config;
+  const shownConfig = optimistic && (configSaving || optimisticBase === config) ? optimistic : config;
+  const configWritable = isAdmin && config !== null && !('config' in errors) && !configSaving;
 
   // IP 规则与访问日志会随流量变化，心跳刷新保持同步。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 60 秒闪一次。
-  useHeartbeat(reload, 60000);
+  useHeartbeat(refresh, 60000);
 
   /** 有字段没刷新成功。此时至少还有一份数据在，用常驻提示如实说明，不清空内容 */
   const partialFailed = Object.keys(errors).length > 0;
@@ -201,17 +221,34 @@ export default function SecurityPage() {
    * 失败时撤掉乐观值即可：显示回落到**服务端最后确认过**的那份值。
    */
   async function saveConfig(next: SecurityConfig) {
+    if (!configWritable || configFlight.current) return;
+    const request = Symbol('security-config');
+    const generation = configGeneration.current;
+    const current = () => generation === configGeneration.current && configFlight.current === request;
+    const previous = shownConfig;
+    configFlight.current = request;
+    setOptimisticBase(config);
+    setConfigSaving(true);
     setOptimistic(next);
     try {
-      await securityApi.saveConfig(next);
+      const saved = await securityApi.saveConfig(next);
+      if (!current()) return;
+      setOptimisticBase(configRef.current);
+      setOptimistic(saved);
       notify.ok(t('security.configSaved'));
       // 刷新**成功**才撤乐观值：写入已被服务端接受，若这一次刷新失败还把显示退回
       // 旧值，开关会跳回原态——用户以为没保存上，其实只是列表没刷上（顶部那条
       // 常驻提示已经在说明这件事）。
-      if (await reload()) setOptimistic(null);
+      if (await reload() && current()) setOptimistic(null);
     } catch (e) {
-      setOptimistic(null);
+      if (!current()) return;
+      setOptimistic(previous);
       notify.err(errText(e));
+    } finally {
+      if (current()) {
+        configFlight.current = null;
+        setConfigSaving(false);
+      }
     }
   }
 
@@ -277,6 +314,9 @@ export default function SecurityPage() {
             {t('security.policy')}
           </div>
           <div className="space-y-4">
+            <p className="text-[11px] text-muted-foreground">
+              {t('security.lockoutDesc', {action: t('common.save')})}
+            </p>
             {shownConfig === null ? (
               /* config 单独没取到：如实说「未取到」。**不能**渲染一个处于「关闭」
                  状态的开关——那会把「不知道」说成「关着」，而这一页的开关正是
@@ -292,7 +332,7 @@ export default function SecurityPage() {
                   <Switch
                     aria-label={t('security.enableControl')}
                     checked={shownConfig.enabled}
-                    disabled={!isAdmin}
+                    disabled={!configWritable}
                     onCheckedChange={(v) => saveConfig({...shownConfig, enabled: v})}
                   />
                 </div>
@@ -300,7 +340,7 @@ export default function SecurityPage() {
                   <Label className="text-[11px] text-muted-foreground">{t('security.mode')}</Label>
                   <Select
                     value={shownConfig.mode}
-                    disabled={!isAdmin}
+                    disabled={!configWritable}
                     onValueChange={(v) => saveConfig({...shownConfig, mode: v as SecurityConfig['mode']})}
                   >
                     <SelectTrigger className="bg-background" aria-label={t('security.mode')}><SelectValue /></SelectTrigger>
@@ -398,6 +438,10 @@ export default function SecurityPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              // 纯图标按钮必须有可访问名称（K38）：读屏只念「按钮」时
+                              // 用户不知道删的是哪条规则。
+                              aria-label={t('common.delete')}
+                              title={t('common.delete')}
                               className="h-7 w-7 rounded-md text-red-500 hover:text-red-600"
                             >
                               <Trash2 className="h-3.5 w-3.5" />

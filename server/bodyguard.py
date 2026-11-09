@@ -20,15 +20,28 @@ class APIBodyGuard:
     页面表现为「部分数据加载失败」。名额可通过 WB_API_CONCURRENCY 调整。
     """
 
-    def __init__(self, app, maximum=16 * 1024 * 1024, timeout=20, concurrency=None):
+    def __init__(self, app, maximum=16 * 1024 * 1024, timeout=20, concurrency=None,
+                 path_limits=None,path_timeouts=None):
         self.app, self.maximum, self.timeout = app, maximum, timeout
+        # N39：某些路径有更宽的上限（上传升级包 64 MiB）。此前上限只在这里
+        # 硬编码 16 MiB，而 main.py 的声明长度预检按 64 MiB 放行 → 17 MiB 的
+        # 升级包在声明关通过、到了实际读取关被 413，用户看到的是"上限 64 MiB
+        # 却传不上去"。path_limits 让两个关口用同一份上限。
+        self.path_limits = dict(path_limits or {})
+        self.path_timeouts = dict(path_timeouts or {})
         self.concurrency = max(1, concurrency if concurrency is not None
                                else _env_int('WB_API_CONCURRENCY', 32))
         self.active = 0
 
+    def _limit_for(self, path: str) -> int:
+        return self.path_limits.get(path.rstrip('/'), self.maximum)
+
     async def __call__(self, scope, receive, send):
         if scope.get('type') != 'http' or not scope.get('path', '').startswith('/api/'):
             return await self.app(scope, receive, send)
+        limit = self._limit_for(scope.get('path', ''))
+        timeout=self.path_timeouts.get(scope.get('path','').rstrip('/'),self.timeout)
+        limit_label=f'{limit//1024} KiB' if limit<1024*1024 else f'{limit//1024//1024} MiB'
         async def reject(status, detail):
             await JSONResponse({'detail': detail}, status_code=status)(scope, receive, send)
         lengths = [v for k, v in scope.get('headers', []) if k.lower() == b'content-length']
@@ -38,36 +51,64 @@ class APIBodyGuard:
                 raise ValueError
         except ValueError:
             return await reject(400, 'Content-Length 无效')
-        if declared is not None and declared > self.maximum:
-            return await reject(413, '请求体超过 16 MiB 上限')
+        if declared is not None and declared > limit:
+            return await reject(413, f'请求体超过 {limit_label} 上限')
         method = str(scope.get('method') or 'GET').upper()
-        # 只有「可能带 body」的请求才占并发名额（见类文档）
-        counts = declared is not None or method not in ('GET', 'HEAD', 'OPTIONS')
+        # Header hints reserve early; empty dashboard reads bypass capacity.
+        # An actual body acquires capacity below, regardless of method/header.
+        counts = ((declared is not None and declared > 0)
+                  or method not in ('GET', 'HEAD', 'OPTIONS')
+                  or any(k.lower() == b'transfer-encoding' for k, _ in scope.get('headers', [])))
         if counts and self.active >= self.concurrency:
             return await reject(503, '管理请求容量已满，请稍后重试')
         if counts:
             self.active += 1
         try:
-            chunks, size = [], 0
+            # Large transport frames can be joined once. Bound the fragment
+            # list, then coalesce tiny-frame attacks without per-byte objects.
+            parts, buffer, size, frames = [], None, 0, 0
             try:
-                async with asyncio.timeout(self.timeout):
+                async with asyncio.timeout(timeout):
                     while True:
                         msg = await receive()
                         if msg['type'] == 'http.disconnect':
                             return
                         chunk = msg.get('body', b'')
+                        # A method/header is not proof of an empty body. Acquire
+                        # before retaining even the first actual chunk. Ordinary
+                        # empty GETs still avoid body-capacity contention.
+                        if not counts and (chunk or msg.get('more_body', False)):
+                            if self.active >= self.concurrency:
+                                del msg, chunk
+                                return await reject(503, '请求体读取并发已满，请稍后重试')
+                            self.active += 1
+                            counts = True
                         size += len(chunk)
-                        if size > self.maximum:
-                            return await reject(413, '请求体超过 16 MiB 上限')
-                        chunks.append(chunk)
+                        if size > limit:
+                            return await reject(413, f'请求体超过 {limit_label} 上限')
+                        if chunk:
+                            if buffer is not None:
+                                buffer.extend(chunk)
+                            elif len(parts)<1024:
+                                parts.append(chunk)
+                            else:
+                                buffer=bytearray().join(parts)
+                                parts.clear()
+                                buffer.extend(chunk)
                         if not msg.get('more_body', False):
                             break
+                        frames += 1
+                        if frames % 64 == 0:
+                            # A buffered ASGI receive can complete synchronously;
+                            # give the timeout and other requests a chance to run.
+                            await asyncio.sleep(0)
             except TimeoutError:
                 return await reject(408, '请求体读取超时')
             if declared is not None and declared != size:
                 return await reject(400, 'Content-Length 与实际请求体不一致')
-            body = b''.join(chunks)
-            chunks.clear()
+            body = bytes(buffer) if buffer is not None else b''.join(parts)
+            parts.clear()
+            if buffer is not None:buffer.clear()
             delivered = False
             async def replay():
                 nonlocal delivered, body

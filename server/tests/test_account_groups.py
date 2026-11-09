@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from server import config, db, security, upstreamsvc  # noqa: E402
+from server.tests.authorization_test_support import clear_login_state, owner, web_root
 
 UID_D = 'dddd4444-0000-0000-0000-00000000000d'
 UID_G = 'eeee5555-0000-0000-0000-00000000000e'
@@ -56,6 +57,8 @@ class _GroupCase(unittest.TestCase):
     """临时目录 + 临时库 + 会话管理员 + 两个分组（一个有目录、一个没有）。"""
 
     def setUp(self) -> None:
+        clear_login_state()
+        self.addCleanup(clear_login_state)
         self._tmp = tempfile.TemporaryDirectory()
         self._orig = (config.AUTH_DIR, config.DB_PATH, config.USERS_FILE)
         root = Path(self._tmp.name)
@@ -327,6 +330,12 @@ class AddAccountIntoGroupTest(_GroupCase):
     def test_auth_poll_writes_into_group_dir(self) -> None:
         from server.services import tencent
         import server.routers.accounts as acct_mod
+        revive = mock.patch.object(acct_mod, '_schedule_revive_after_login', return_value=None)
+        revive.start(); self.addCleanup(revive.stop)
+        acct_mod._bind_login('s1', owner(), 'cn', self.g1)
+        self.addCleanup(acct_mod._login_scopes.pop, 's1', None)
+        self.addCleanup(acct_mod._login_bindings.pop, 's1', None)
+        self.addCleanup(acct_mod._login_locks.pop, 's1', None)
         ready = {'status': 'ready', 'uid': UID_G, 'nickname': '新号',
                  'enterprise_id': '', 'access_token': 'AT-new',
                  'refresh_token': 'RT-new', 'expires_at': int(time.time()) + 3600,
@@ -525,7 +534,7 @@ class SharedInstanceHintTest(unittest.TestCase):
     成本高：横幅本身在验收脚本里看得到（dev/verify_account_groups.mjs）。
     """
 
-    PAGE = (Path(__file__).resolve().parents[2] / 'web' / 'app' / '(main)'
+    PAGE = (web_root() / 'app' / '(main)'
             / 'accounts' / 'page.tsx')
 
     def test_page_detects_a_shared_instance(self) -> None:

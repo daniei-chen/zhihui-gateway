@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import io
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -37,7 +38,8 @@ class AccountUploadTest(unittest.TestCase):
         app = FastAPI()
         app.include_router(accounts.router)
         app.dependency_overrides[security.require_session_admin] = lambda: {
-            'username': 'test', 'role': 'admin'}
+            'username': 'test', 'role': 'admin', '_session_auth_at':int(time.time())}
+        self.app=app
         self.client = TestClient(app)
 
     def test_imports_canonical_and_flat_exports(self) -> None:
@@ -244,6 +246,13 @@ class ImportExportAuditTest(AccountUploadTest):
     哪些号；不禁止缓存的话，一个装着全部 token 的压缩包可能躺在中间层或浏览器
     缓存里。这两条是给这个功能上的最小护栏。
     """
+
+    def test_export_requires_recent_human_authentication(self) -> None:
+        self.app.dependency_overrides[security.require_session_admin] = lambda: {
+            'username':'test','role':'admin','_session_auth_at':int(time.time())-901}
+        response=self.client.get('/api/accounts/export')
+        self.assertEqual(response.status_code,403)
+        self.assertIn('重新登录',response.json()['detail'])
 
     def test_export_writes_an_audit_entry(self) -> None:
         (self.auth_dir / 'workbuddy-audit-1.json').write_text(json.dumps({

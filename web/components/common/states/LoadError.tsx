@@ -23,6 +23,7 @@ export function LoadError({
   message,
   hint,
   onRetry,
+  retryLabel,
 }: {
   variant?: 'page' | 'inline';
   /** 失败说明。不给则用通用文案 */
@@ -30,9 +31,15 @@ export function LoadError({
   /** 补充说明，仅 page 形态显示 */
   hint?: string;
   onRetry?: () => void;
+  /**
+   * 重试按钮文案。默认「重试」；旧构建失配时这个动作其实是「刷新页面」，
+   * 文案必须跟着变——不然用户以为是重试同一次请求，结果整页重载丢了输入。
+   */
+  retryLabel?: string;
 }) {
   const t = useT();
   const text = message ?? t('state.loadFailed');
+  const retryText = retryLabel ?? t('state.retry');
 
   if (variant === 'inline') {
     return (
@@ -50,7 +57,7 @@ export function LoadError({
             onClick={onRetry}
           >
             <RefreshCw className="h-3 w-3" />
-            {t('state.retry')}
+            {retryText}
           </Button>
         )}
       </div>
@@ -72,7 +79,7 @@ export function LoadError({
       {onRetry && (
         <Button variant="outline" size="sm" className="rounded-full" onClick={onRetry}>
           <RefreshCw />
-          {t('state.retry')}
+          {retryText}
         </Button>
       )}
     </div>

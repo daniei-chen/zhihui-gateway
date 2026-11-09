@@ -1357,5 +1357,3 @@ docker restart workbuddy2api
 > **开发提示 3**：LDC 原项目是 **Next.js 15 + shadcn/ui**（React 生态）。本方案用「Vue3 CDN + LDC 设计令牌」是为了**免构建、快速出成果**；两者视觉一致，仅交互库不同。
 >
 > **开发提示 4**：鉴权 Cookie 走 HTTPS 时建议加 `secure=True`。若由 1Panel 反代终止 TLS 且未透传协议，可用 `request.headers.get("x-forwarded-proto") == "https"` 判断后再决定是否设置 `secure`。
-
-

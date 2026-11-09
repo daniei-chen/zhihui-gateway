@@ -233,9 +233,13 @@ class EndpointTests(unittest.TestCase):
         if admin:
             app.dependency_overrides[security.require_admin] = lambda: self.ADMIN
             app.dependency_overrides[security.current_user] = lambda: self.ADMIN
-        return TestClient(app)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        return client
 
     def setUp(self):
+        from server.tests._db_fixture import isolate_database
+        isolate_database(self)
         self._added = []
 
     def tearDown(self):

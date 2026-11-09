@@ -1,4 +1,4 @@
-"""请求体上限的回归（跟随上游配置 + 读取时强制截断）。
+"""Manager owns the body limit; legacy configuration can only tighten it.
 
 真实问题：用户通过反代调用时报「请求体过大（上限 8 MiB）」，但上游
 `server.max_body_mb` 是**可配置**的（管理端设置页也能改）。本端当时把它写死
@@ -48,18 +48,7 @@ def _request(body: bytes, headers: dict | None = None) -> Request:
 
 
 class BodyLimitResolution(unittest.TestCase):
-    """上限的取值来源。
-
-    上游 9d1a21b **移除了** `server.max_body_mb`（chat handler 也去掉了预拦截），
-    所以「跟随上游配置」不再是唯一来源：
-
-      · 旧版上游（配置里仍有该键）→ 继续尊重它，升级顺序不受限；
-      · 新版上游（无该键）→ 用**本端自己**的默认值（WB_GATEWAY_MAX_BODY_MB）。
-
-    为什么本端不能也取消上限：上游是 Go，读的是流、能背压；本端要把完整 body
-    读进内存再 json.loads（见 _read_json_body），几个并发大请求就能把内存吃光。
-    保留上限是必要的，只是默认值要够大（32 MB），免得变成比上游更紧的隐性瓶颈。
-    """
+    """Legacy values tighten an independently bounded Manager configuration."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -82,13 +71,16 @@ class BodyLimitResolution(unittest.TestCase):
         return gateway.max_body_bytes() // 1024 // 1024
 
     def test_follows_config(self):
-        """采信上游 config.json 的 server.max_body_mb（本机 2api 写的是 1024MB）。
-
-        上限仍然由**网关**这一跳执行（本端要缓冲完整 body），只是取值跟上上游走；
-        这样用户调大上游上限时，网关不会变成隐性瓶颈。
-        """
+        """A legacy setting never overrides the Manager's own upper bound."""
         for value in (1, 32, 64, 256):
-            self.assertEqual(self._mb({'server': {'max_body_mb': value}}), value)
+            self.assertEqual(self._mb({'server': {'max_body_mb': value}}),
+                             min(value, gateway.DEFAULT_MAX_BODY_MB, gateway.BODY_CEILING_MB))
+
+    def test_legacy_1024_cannot_raise_explicit_manager_limit(self):
+        from unittest.mock import patch
+        with patch.object(gateway, 'DEFAULT_MAX_BODY_MB', 64):
+            self.assertEqual(self._mb({'server': {'max_body_mb': 1024}}), 64)
+            self.assertNotIn('upstream', gateway._BODY_LIMIT_SOURCE['value'])
 
     def test_missing_config_falls_back(self) -> None:
         """读不到配置不能导致拒绝服务，退回本端默认值。"""
@@ -110,7 +102,9 @@ class BodyLimitResolution(unittest.TestCase):
 
     def test_invalid_values_fall_back(self) -> None:
         for bad in ({'server': {}}, {'server': {'max_body_mb': 0}},
-                    {'server': {'max_body_mb': -5}}, {'server': {'max_body_mb': 'x'}}, {}):
+                    {'server': {'max_body_mb': -5}}, {'server': {'max_body_mb': 'x'}},
+                    {'server': {'max_body_mb': True}}, {'server': {'max_body_mb': 1.5}},
+                    {'server': {'max_body_mb': '1'}}, {}):
             self.assertEqual(self._mb(bad), gateway.DEFAULT_MAX_BODY_MB, repr(bad))
 
     def test_result_is_cached_then_refreshes(self):
@@ -124,13 +118,23 @@ class BodyLimitResolution(unittest.TestCase):
     def test_ceiling_caps_absurd_config(self) -> None:
         """配置写错（比如 99999）不能把进程内存一次性交出去——网关硬顶兜底。"""
         orig = gateway.BODY_CEILING_MB
+        orig_default = gateway.DEFAULT_MAX_BODY_MB
         gateway.BODY_CEILING_MB = 128
+        gateway.DEFAULT_MAX_BODY_MB = 256
         try:
             self.assertEqual(self._mb({'server': {'max_body_mb': 99999}}), 128)
-            self.assertEqual(gateway._BODY_LIMIT_SOURCE['value'], 'upstream+ceiling')
+            self.assertIn('ceiling', gateway._BODY_LIMIT_SOURCE['value'])
         finally:
             gateway.BODY_CEILING_MB = orig
+            gateway.DEFAULT_MAX_BODY_MB = orig_default
             _reset_cache()
+
+    def test_clock_rollback_does_not_retain_stale_relaxed_limit(self):
+        from unittest.mock import patch
+        self.assertEqual(self._mb({'server': {'max_body_mb': 32}}), 32)
+        self.cfg.write_text(json.dumps({'server': {'max_body_mb': 1}}), encoding='utf-8')
+        with patch.object(gateway.time, 'time', return_value=gateway._body_limit_cache['at']-1):
+            self.assertEqual(gateway.max_body_bytes(), 1024**2)
 
 
 class BodyLimitEnforcement(unittest.TestCase):
@@ -194,16 +198,14 @@ class BodyLimitEnforcement(unittest.TestCase):
         self.assertEqual(err.status_code, 400)
 
     def test_upstream_key_wins_and_message_points_at_it(self) -> None:
-        """上限来自上游 config.json 时，413 文案必须指上游那个键。
-
-        issue #180 的实际形状：用户的上游是旧版、`server.max_body_mb` 还在，
-        面板优先听它；旧文案却一律写「由环境变量决定」，用户改环境变量毫无效果。
-        """
+        """A strictly tighter legacy setting is identified as the restriction."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = pathlib.Path(tmp) / 'config.json'
             cfg.write_text(json.dumps({'server': {'max_body_mb': 1}}), encoding='utf-8')
             orig = config.UPSTREAM_CONFIG
+            orig_default = gateway.DEFAULT_MAX_BODY_MB
             config.UPSTREAM_CONFIG = cfg
+            gateway.DEFAULT_MAX_BODY_MB = 2
             _reset_cache()
             try:
                 self.assertEqual(gateway.max_body_bytes() // 1024 // 1024, 1)
@@ -214,6 +216,7 @@ class BodyLimitEnforcement(unittest.TestCase):
                 self.assertIn('WB_GATEWAY_MAX_BODY_MB', msg, '也要给出删键后的替代做法')
             finally:
                 config.UPSTREAM_CONFIG = orig
+                gateway.DEFAULT_MAX_BODY_MB = orig_default
                 _reset_cache()
 
     def test_message_says_default_when_nothing_is_configured(self) -> None:

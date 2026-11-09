@@ -70,6 +70,27 @@ console.log('hourlySeries：固定 24 个点');
 }
 
 // ── 天序列（补零） ───────────────────────────────────────────────
+console.log('dailySeries：未知「今天」时用数据里最新一天锚定（hydration 安全）');
+{
+  // 服务端/客户端首帧都还没有"今天"（nowTick=null）。此时不能猜时间：
+  // 必须只由输入数据决定输出，否则 SSG HTML 与客户端首帧不一致（#418）。
+  const pts = [
+    {day: '2026-10-01', requests: 1, prompt_tokens: 1, completion_tokens: 1},
+    {day: '2026-10-03', requests: 2, prompt_tokens: 2, completion_tokens: 2},
+  ];
+  const s = dailySeries(pts, 3, undefined);
+  ok(s.length === 3, '窗口长度仍为 3');
+  ok(s[s.length - 1].full?.startsWith('2026-10-03') || s[2].label.includes('10-03'),
+     '窗口末尾锚到数据最新一天', JSON.stringify(s.map(x => x.label)));
+  ok(s[2].requests === 2, '最新一天的数据落在最后一格', String(s[2].requests));
+  // 无数据时用固定空窗口：不得出现"当前时间"痕迹
+  const empty = dailySeries([], 2, undefined);
+  ok(empty.length === 2, '无数据时长度仍为 2');
+  ok(empty.every(x => x.tokens === 0 && x.requests === 0), '无数据时全为 0');
+  // 同一个输入两次调用结果必须完全一致（幂等 = 可安全用于 SSR）
+  ok(JSON.stringify(dailySeries(pts, 3, undefined)) === JSON.stringify(s),
+     '同输入两次结果一致（无隐藏时间依赖）');
+}
 console.log('dailySeries：窗口内定长、缺的天补零');
 {
   const pts = [

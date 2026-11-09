@@ -275,7 +275,7 @@ class AtomicAuthWriteTest(unittest.TestCase):
         """写完不能留下临时文件（它在 auths 目录里会让人以为是垃圾或半个账号）。"""
         tencent.write_auth_file(self._acct())
         leftovers = [p.name for p in config.AUTH_DIR.iterdir()
-                     if p.name != 'workbuddy-u1.json']
+                     if p.name not in ('workbuddy-u1.json', 'workbuddy-u1.json.refresh.lock')]
         self.assertEqual(leftovers, [], f'留下了多余文件：{leftovers}')
 
     def test_temp_file_is_not_matched_by_upstream_glob(self) -> None:
@@ -341,7 +341,7 @@ class AtomicAuthWriteTest(unittest.TestCase):
         self.assertEqual(json.loads(target.read_text(encoding='utf-8'))['auth']['accessToken'],
                          'GOOD', '写失败把原凭证弄坏了')
         leftovers = [p.name for p in config.AUTH_DIR.iterdir()
-                     if p.name != 'workbuddy-u1.json']
+                     if p.name not in ('workbuddy-u1.json', 'workbuddy-u1.json.refresh.lock')]
         self.assertEqual(leftovers, [], f'失败后留下临时文件：{leftovers}')
 
 
