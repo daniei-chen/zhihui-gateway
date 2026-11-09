@@ -1,306 +1,102 @@
 <div align="center">
 
-# WorkBuddy Manager
+# 智汇网关 · Manager
 
-**腾讯 CodeBuddy 账号池管理控制台 · OpenAI 兼容反代网关**
+**一个工作台，三条清晰的路径。**
 
-面向 [`workbuddy2api`](https://github.com/Sliverkiss/workbuddy2api) 的 Web 管理端：扫码纳管、定时签到与保活、密钥分发、IP 与模型白名单、日志与用量统计；上游源码随发布包分发（MIT），迁移见[部署指南](deploy/README.md#〇上游源码从哪来随发布包分发)。
+![Version](https://img.shields.io/badge/version-0.0.9-blue)
+![Status](https://img.shields.io/badge/release-signed_%26_controlled-6554c0)
+![Stack](https://img.shields.io/badge/FastAPI-Next.js-009688)
 
-![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-22c55e)
+[English](README.en.md) · **简体中文** · [产品概览](../README.md) · [变更日志](CHANGELOG.md)
 
-[![Release](https://img.shields.io/github/v/release/ithtelab/workbuddy-manager?color=22c55e&label=Release)](https://github.com/ithtelab/workbuddy-manager/releases)
-[![Changelog](https://img.shields.io/badge/更新日志-CHANGELOG-blue)](CHANGELOG.md)
-[![Issues](https://img.shields.io/github/issues/ithtelab/workbuddy-manager?color=f59e0b&label=反馈)](https://github.com/ithtelab/workbuddy-manager/issues)
-
-[English](README.en.md) · **简体中文** ｜ 本项目在 [LINUX DO](https://linux.do) 社区发布与交流
-
-<p align="center">
-  <strong>⚠️ 使用边界：</strong>本项目只用于管理<strong>本人及亲属自愿授权</strong>的账号；禁止批量注册、账号交易、代注册、接码、盗号、绕过平台风控，以及任何商业转售或盈利性用途。使用即表示你已阅读并同意<a href="#使用边界与免责声明">完整免责声明</a>。
-</p>
-
-<a href="https://proxylane.dev/?utm_source=workbuddy-manager&utm_medium=partnership&utm_campaign=workbuddy-manager_sponsor_202610&utm_content=github_readme"><img src="docs/images/sponsor-proxylane.png" alt="ProxyLane（赞助位）" width="100%" /></a>
-
-**赞助商**：[ProxyLane](https://proxylane.dev/?utm_source=workbuddy-manager&utm_medium=partnership&utm_campaign=workbuddy-manager_sponsor_202610&utm_content=github_readme) 住宅代理，覆盖 195 个国家，95%+ IP 获 Scamalytics 低风险评级。在 `WB_HTTP_PROXY` 的用户名里写上国家、城市和会话名，每个实例走一个住宅 IP，最长 72 小时不变，换 IP 也留在同一城市。
-
-首次购买使用优惠码 `WORKBUDDY30` 享 7 折。
-
-<img src="docs/images/dashboard.png" alt="WorkBuddy Manager 仪表盘" width="100%" />
-
-**界面预览**
+<img src="docs/images/dashboard.png" alt="隔离合成数据仪表盘" width="100%" />
 
 </div>
 
----
+> **0.0.7 是智汇自己的产品版本，不是继承组件的 v1.x / v2.x。**
+> 仅通过可信发布器安装；实际生效版本以运行身份和发布验收回执为准。Linux 隔离门禁、签名、配对备份、排空及实际业务验收缺一不可，代码回滚不回退业务账本。
 
-## 这是什么
+## 组件与边界
 
-`workbuddy2api` 是一个把腾讯 CodeBuddy 账号池包装成 OpenAI 兼容接口的反代服务（Go 编写）。它的能力很完整，但只有命令行：加账号要跑脚本、看状态要 `curl /status`、发密钥没有界面。
+### 本地待验收候选：单默认密钥与邀请注册
 
-本项目补上这一块 —— 一个可以公网运营的 Web 控制台：
+0.0.9 为 2026-11-06 生产事件后的稳定性补丁；是否切换以受控发布回执为准，不以本文替代上线批准。
 
-| 你原本要做的 | 现在在面板上 |
+- 首页分别提供“用户登录”和“管理员登录”；用户登录页支持邀请码注册。
+- 工作台沿用一个现有默认密钥，不提供创建多个密钥。首次没有密钥时可启用一次；已有密钥的明文不可重读，也不会因此自动轮换。当前密钥标签与统计名称使用所属用户名，历史用量和账本不改写。
+- 旧版已有的额外密钥保留有效，避免中断原客户端；工作台只显示默认项并禁止增发。
+- 注册需要管理员生成的一次性邀请码、服务端签名的浏览器设备登记，以及持久化的 IP、网段、设备和全局限流。邀请码只保存哈希，明文只返回一次；注册不赠送调用额度。
+- 设备登记约束同一浏览器，不能识别不可伪造的物理设备。清除 Cookie 或换浏览器仍受邀请码和限流约束。
+- 公网反代必须覆盖客户端提供的 IP 身份头，并正确设置可信代理范围；配置示例仅供可信发布器审核合并，没有自动修改现网。
+
+Manager 提供账号、模型、密钥、日志与管理界面，WorkBuddy 引擎负责账号池与上游请求。Qoder / Trae 保持既有独立适配与权限边界。
+
+这是带本地适配的维护分支，不是“上游一行未改”的纯面板。源码、许可证、测试和构建身份随候选保留；历史安装指南仅作组件参考，不能代替当前受控发布合同。
+
+## v0.0.9 重点
+
+| 问题 | 本版本处理 |
 |---|---|
-| 服务器上跑 `login.sh` 扫码加号 | 点「添加账号」扫码，自动签到并纳管 |
-| `curl /status` 看哪个号挂了 | 仪表盘实时展示健康度、冷却、有效期 |
-| 手动改 `config.json` 调签到/并发 | 中文可视化设置，开关 + 数字框 |
-| 所有下游共用一个全局 Key | 多密钥分发，各自独立配额、IP 与模型白名单 |
-| 无法知道谁用了多少 | 每次调用的模型、Token、延迟、来源 IP 全量留痕 |
-| 无任何 IP 防护 | 入站白/黑名单 + 每密钥 IP 上限与白名单 |
-
-**与 workbuddy2api 的关系**：本项目是为它做**可视化**的配套项目 —— 让能力强大的
-上游网关变得看得见、管得动。面板不侵入上游：**没有修改它一行代码**，账号轮询、
-并发与熔断仍由它负责。两者配合的方式很自然：
-
-- **上游负责能力，面板负责呈现**：账号调度、令牌刷新、限流熔断由 workbuddy2api
-  完成；面板把这些能力可视化，并补上密钥分发、IP 管控、用量统计这些运营环节
-- **互为参照、一起演进**：上游新增能力时本项目跟随适配，面板侧发现的运营需求也
-  会反哺上游。上游在它的 README 里把本项目列为「社区前端面板」之一，我们希望
-  一起把这个生态做得更好用
-- **上游专注自己的核心**：面板不要求上游为它改代码，让上游能保持精简
-
-欢迎参与共建：面板与上游源码的问题、想法都提到
-[本仓库](https://github.com/ithtelab/workbuddy-manager/issues)
-（上游源码随本项目的发布包分发）。
-
----
-
-## 功能亮点
-
-### 账号管理
-
-- **扫码纳管** —— 微信 / QQ 扫码授权，成功后自动每日签到、写授权文件、重载上游
-- **有效期监控** —— 进度条 + 临期预警；一键续期、连通性探测、手动签到
-- **账号分组** —— 多个账号池分组管理，列表、签到、密钥各自独立
-- **积分与到期** —— 实时余额、按余额分级着色、快过期积分倒计时
-- **任务记录** —— 签到 / 旅行 / 活跃 / 保活的执行结果与积分流水分页可查
-
-### 反代网关（对外 `/v1`）
-
-- **OpenAI 兼容** —— 标准 SDK 直连，流式与非流式都支持
-- **多密钥分发** —— 每把密钥独立设版本、有效期、IP 数、IP / 模型白名单与额度
-- **模型别名映射** —— 把下游在用的名字映到实际模型，迁移无感
-- **模型中心** —— 账号可用模型单列一页：上下文、最大输出、思考档位
-- **全量审计** —— 每次调用记密钥、IP、模型、状态码、首字延迟、扣费与缓存命中
-
-### 可视化设置
-
-- **定时任务** —— 签到 / 旅行 / 活跃 / 保活四类开关与执行时刻
-- **多上游** —— 「设置 → 上游」配多个实例，各带地址与 `api_key`
-- **安全** —— 入站 IP 白 / 黑名单（CIDR）、审计日志、会话与令牌分离
-- **更新与备份** —— 一键更新（核验发布包摘要）、PostgreSQL 异地备份
-- **五语种界面** —— 简体中文 / 繁体 / English / 日本語 / 한국어
-
-完整清单（每条带详解）见 [功能一览（完整版）](docs/features.md)。
-
----
-
-## 界面预览
-
-<img src="docs/images/accounts.png" alt="账号管理" width="100%" />
-
-账号管理：分组切换、状态分档、积分与有效期
-
-<img src="docs/images/keys.png" alt="密钥" width="100%" />
-
-密钥：版本、额度、IP 与模型白名单
-
-<img src="docs/images/stats.png" alt="用量统计" width="100%" />
-
-用量统计：按天 / 按小时、失败与延迟
-
-<img src="docs/images/logs.png" alt="调用日志" width="100%" />
-
-调用日志：每一笔的模型、状态、首字延迟与扣费
-
-其余界面截图见 [界面预览（全部）](docs/screenshots.md)。
-
----
-
-## 快速开始
-
-服务器部署需要 Docker（1 核 1G 起）；Windows 桌面用户可直接用图形安装器。三种方式任选：
-
-**① Windows 安装器（桌面图形化，无需 Docker / 命令行）**
-
-1. 从该版本 [Release](https://github.com/ithtelab/workbuddy-manager/releases) 下载
-   `WorkBuddyManagerSetup.exe`（发版时由 CI 在 Windows runner 上自动构建并附带，同目录还有
-   一个 `.sha256` 可核对）。v1.0.88 的安装器曾因卸载会误删文件被下线（见该版本 Release
-   说明），**v1.0.89 起已修复**：卸载只删程序自己的文件，安装目录也改成「选中目录 +
-   `WorkBuddyManager` 子目录」。
-2. 按向导选择安装目录 → 安装 → 完成时可勾选「立即启动」。
-3. 之后用桌面快捷方式打开控制台：点 **启动项目**，状态变「运行中」并自动打开管理面板；
-   随时可 **重启 / 关闭项目**、修改监听 IP 与端口（保存后重启生效）、点 **打开面板** 回到页面。
-4. 点 X 可选「最小化到托盘」或「退出程序」（可记住选择，托盘图标随时恢复）。
-
-> 默认成功构建的单文件安装包内置全部运行环境（Python 运行时、上游网关、前端页面），
-> 目标机器**无需安装任何依赖**，Windows 10 (1903+) / 11 双击即用。当前安装器没有
-> Authenticode 签名，SmartScreen 可能显示警告；请确认文件来自可信 Release 或自行构建。
-> 安装器自身不会自动升级，升级时重新获取新 exe 并覆盖安装即可；`.env`、账号和 `data`
-> 等个人数据会保留。卸载：**设置 → 应用** 或开始菜单「卸载 WorkBuddy Manager」，
-> 可选保留账号与配置。细节见 [Windows 启动器](windows/README.md#启动器安装版)。
-
-**② Docker（自己起容器）**
-
-```bash
-docker run -d --name workbuddy-manager -p 7864:7864 -v /opt/workbuddy-manager/data:/app/data ghcr.io/ithtelab/workbuddy-manager:latest
-```
-
-**③ 服务器一键脚本（装依赖、拉包、配 systemd）**
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ithtelab/workbuddy-manager/main/deploy/install.sh)
-```
-
-装完浏览器打开 `http://<服务器>:7864`，首次启动的日志里会打印初始管理员密码。
-
-> 上游源码随发布包一起分发，装完即可用。反向代理与 HTTPS、端口收敛、Windows 原生
-> 部署（无需 Docker）、本地开发等细节见 [部署指南](deploy/README.md) 与
-> [开发与架构](docs/development.md)。
-
----
-
-## 使用指南
-
-日常就三步：**纳管账号 → 分发密钥 → 把下游指到 `/v1`**。每步怎么做、下游接入示例
-（OpenAI SDK、cc-switch 等）与常见问题见 [使用指南](docs/usage.md)。
-
----
-
-## 接口说明
-
-| 方法 | 路径 | 鉴权 | 说明 |
-|---|---|---|---|
-| `POST` | `/v1/chat/completions` | 网关密钥 | OpenAI 兼容对话（流式 / 非流式） |
-| `POST` | `/v2/chat/completions` | 网关密钥 | 同上（v2 路径） |
-| `POST` | `/v1/responses` `/responses` | 网关密钥 | OpenAI Responses API 兼容（流式 / 非流式） |
-| `POST` | `/v1/messages` | 网关密钥 | Anthropic Messages API 兼容（Claude Code 等） |
-| `POST` | `/v1/messages/count_tokens` | 网关密钥 | 按字符数粗估输入 token |
-| `GET` | `/v1/models` | 网关密钥 | 模型列表 |
-| `GET` | `/v1/usage` | 网关密钥 | 密钥自查：已用 / 剩余额度、有效期与模型范围（只读面板记录，不产生调用） |
-| `GET` | `/healthz` | 无 | 存活探测（含上游连通性） |
-| `GET` | `/api/me` | 会话 | 当前登录用户 |
-| `POST` | `/api/login` `/api/logout` | 无 | 登录 / 登出 |
-| `GET` | `/api/accounts` | 会话 | 账号列表 |
-| `GET` | `/api/accounts/credits-snapshot` | 会话 / 只读令牌 | 已登记积分的只读快照（给看板 / 对账脚本，不查上游） |
-| `POST` | `/api/auth/start` `/api/auth/poll` | 管理员 | 扫码授权流程 |
-| `POST` | `/api/accounts/{file}/checkin` `/test` `/refresh` | 管理员 | 签到 / 测活 / 刷新 |
-| `DELETE` | `/api/accounts/{file}` | 管理员 | 删除账号 |
-| `GET/POST/PATCH/DELETE` | `/api/keys[/{id}]` | 会话 / 管理员 | 密钥管理（发给下游调模型） |
-| `GET/POST/PATCH/DELETE` | `/api/upstreams[/{id}]` | 会话（管理员） | 多上游接入点（密钥绑定上游 = 账号池分组）；`POST /api/upstreams/{id}/probe` 探测连通性 |
-| `GET/POST/PATCH/DELETE` | `/api/tokens[/{id}]` | 会话（管理员） | 管理面 API Token（给脚本 / CI，见 [docs/api-tokens.md](docs/api-tokens.md)） |
-| `GET` | `/api/logs` `/api/stats/*` | 会话 | 日志与用量 |
-| `GET/POST/DELETE` | `/api/security/*` | 会话 / 管理员 | IP 规则与审计 |
-| `GET/POST` | `/api/settings/*` | 会话 / 管理员 | 上游配置、模型映射 |
-| `GET/POST` | `/api/settings/pg-sync*` | 会话（管理员） | PostgreSQL 异地备份：配置 / 测试连接 / 迁移 / 恢复 |
-
-管理端接口细节可在服务启动后访问 `/docs` 查看（Swagger UI）。
-
----
-
-## 安全说明
-
-- 密钥只在创建时显示一次，库里只存哈希；账号凭据不返回前端
-- 入站 IP 白 / 黑名单（支持 CIDR）、每把密钥的 IP 与模型白名单
-- 敏感操作全部留审计日志（谁、什么时候、做了什么）
-- 发布包校验：一键更新会核对发布页给的 sha256 与文件大小，不符即拒绝安装
-
-完整的威胁模型与加固建议见 [安全说明](docs/security-notes.md) 与
-[安全审计报告](docs/SECURITY-AUDIT.md)。
-
----
-
-## 已知限制
-
-- **账号出口线路**：管理端支持按账号绑定命名 HTTP/HTTPS 代理。聊天和上游后台任务还需 workbuddy2api 配套支持，配置与兼容条件见 [账号出口线路](docs/account-proxy-routes.md)。
-- 请求的**请求体 / 响应体内容不做留存**，仅记录元数据（模型、状态、Token、延迟、来源），以保护隐私。
-- 用量统计按「天 × 密钥 × 模型」聚合；如需小时粒度可扩展 `usage_daily` 表。
-
----
-
-## 更多文档
-
-- [使用指南](docs/usage.md) —— 三部曲怎么点、下游怎么接
-- [功能一览（完整版）](docs/features.md) —— 每条功能的细节
-- [界面预览（全部）](docs/screenshots.md) —— 全部截图
-- [开发与架构](docs/development.md) —— 本地开发、架构、目录结构
-- [安全说明](docs/security-notes.md) —— 威胁模型与加固
-- [部署指南](deploy/README.md) —— 反向代理、HTTPS、Windows 原生、一键更新
-- [账号出口线路](docs/account-proxy-routes.md) —— 每个账号走不同代理出口
-- [API 令牌](docs/api-tokens.md) —— 只读令牌与作用域
-
----
-
-## 更新日志与反馈
-
-- **更新日志**：[CHANGELOG.md](CHANGELOG.md) —— 各版本的新增、修复与变更
-- **下载发布包**：[Releases](https://github.com/ithtelab/workbuddy-manager/releases) —— 每个版本提供可直接部署的
-  `.tar.gz` / `.zip`（含已构建的前端产物），解压后执行 `sudo bash deploy/install.sh` 即可
-- **反馈问题**：[提交 Bug](https://github.com/ithtelab/workbuddy-manager/issues/new?template=bug_report.yml) ·
-  [功能建议](https://github.com/ithtelab/workbuddy-manager/issues/new?template=feature_request.yml)
-
-> 反馈时请附上版本号与错误日志，并**先移除其中的密钥、Token 等敏感信息**。
-> 上游 workbuddy2api 自身的问题也提到[本仓库](https://github.com/ithtelab/workbuddy-manager/issues)
-> ——上游源码随本项目的发布包分发。
-
-### 版本发布流程
-
-维护者打 tag 即可自动构建并发布：
-
-```bash
-git tag v1.0.1 && git push origin v1.0.1
-```
-
-CI 会构建前端、打包产物、从 CHANGELOG 提取对应版本段落作为发布说明，
-并创建 Release 附带压缩包。
-
----
-
-## 相关项目
-
-- [**sanguine886/workbuddy-sdk**](https://github.com/sanguine886/workbuddy-sdk)（Go，MIT）——
-  社区维护的 Go 客户端库，完整覆盖本项目的两个 API 面：管理面 `/api/*`（账号池、密钥、
-  统计、日志、安全、设置、用户、系统更新）与数据面 `/v1/*`（Chat Completions /
-  Responses / Anthropic Messages / Models）。用 Go 写运维工具时可直接 `go get`，
-  不必自己拼 HTTP 与登录态。
-
-> 以上为社区项目，**与本仓库无代码依赖**；使用中遇到问题请到其[仓库](https://github.com/sanguine886/workbuddy-sdk/issues)反馈。
-
----
-
-## 致谢
-
-- [**LINUX DO**](https://linux.do) —— 本项目的发布与交流社区
-- [**linux-do/cdk**](https://github.com/linux-do/cdk)（MIT）—— 界面设计令牌与浮动底栏组件来源，本项目 UI 视觉与其保持一致
-- [**Sliverkiss/workbuddy2api**](https://github.com/Sliverkiss/workbuddy2api) —— 底层账号池与 OpenAI 兼容代理（MIT；源码随本项目的发布包分发，版权归原作者）
-- [**lbjlaq/Antigravity-Manager**](https://github.com/lbjlaq/Antigravity-Manager) —— 管理端功能形态参考
-
----
-
-## 使用边界与免责声明
-
-**本项目的初衷是方便个人管理本人及亲属自愿授权的账号，不是为批量运营或商业牟利设计的。**
-
-允许的用途：
-
-- 管理你本人或亲属明确授权给你的腾讯 CodeBuddy 账号；
-- 在自己的设备或内网中学习、研究和自用。
-
-禁止的用途：
-
-- 批量注册、代注册、接码，以及买卖、出租或交易账号；
-- 盗号、撞库、绕过实名认证、风控、区域限制或其他平台安全机制；
-- 将本项目或其派生服务用于对外收费、转售、引流或其他盈利性用途；
-- 任何违反腾讯服务条款、当地法律法规或侵犯他人权益的用途。
-
-使用者应自行确认账号授权与使用方式合法合规。因滥用、误用或违反上述边界导致的封号、数据丢失、服务中断或法律责任，由使用者自行承担；项目作者与贡献者不对使用者的行为负责，也不提供任何形式的担保。
-
-本项目与腾讯、CodeBuddy 官方无隶属或合作关系；相关商标归其权利人所有。项目按 [MIT](LICENSE) 许可「按现状」提供。
-
----
-
-## License
-
-[MIT](LICENSE)
+| Codex / Claude / DSH 提示词渠道拒绝 | 11 条版本化规则，仅处理 WorkBuddy system/developer；补齐 Claude 字面模板变体 |
+| 11128 重试放大 | 两条候选路径均拒绝后结束，不重发同一路径，不因拒绝封禁账号 |
+| 同账号并发续期 | Go / Python 去重、共享内核锁、身份与代次校验、原子保存 |
+| 小预算默认高推理 | 无显式控制且预算 ≤1024 时不注入默认 thinking/high，不强制关闭原生推理 |
+| 到期日志直接删除 | 后台有界归档、逐行与 SHA 校验后按匹配行删除，保留未决关联行 |
+| 未决被误解为钱包冻结 | 只读核对队列，有界证据；unknown 不等于零用量或钱包冻结 |
+| 模型目录过期与加载竞争 | 并发合并、区域隔离、失效代次与新鲜度元数据 |
+| 首轮就绪采样竞态 | 启动完成前等待一次真实采样，保留失败关闭和排空约束 |
+| 旧升级器品牌与历史混入当前状态 | 独立智汇发布中心、发行源与匹配回执；旧网页安装退役，旧展示文件可显式安全归档 |
+| 重试在两层叠加 | 每个 Manager 执行共享最多 8 次供应商发送授权，跨账号、路径、gzip 与再次 dispatch 共用；缺少有效回执则禁用后续拒绝重试 |
+| 打开账号页全量查积分 | 先读本地快照；自动仅刷新过期项、最多 64 个，失败退避；手动全量刷新保留，未知不当零 |
+| 心跳重复替换全部数据 | 有界结构共享复用未变对象与账号行，不吞掉变化，不跨分组保留上一组数据 |
+| 故障只有模糊 502 | 固定错误族指标与分层诊断；渠道拒绝、裸 11128、鉴权、超时、断流、取消分别表达 |
+| 上游升级与协议能力不透明 | 39 项公开来源的离线漂移检查、能力合同及破坏性变更检查、版本化合成协议夹具与 SSE Fuzz |
+
+保留 `.4` 的取消挂起计费、撤销旧密钥与配对备份修复。路由软下限和大请求分散默认关闭。完整范围及限制见 [0.0.7 说明](docs/releases/v0.0.7.md)。
+
+### 提示词适配不是供应商授权
+
+兼容规则幂等、可关闭，不修改用户、助手、工具消息正文、工具参数或图像，也不全局替换数字 `11128`。真实拒绝仍返回 `channel_check_rejected`；无法保证未来渠道校验永不变化。
+
+Responses 是适配层，不提供持久会话、后台任务或 strict 工具 schema 保证。不支持的语义在消耗供应商配额前明确拒绝。
+
+### 保留账务真实性
+
+供应商用量未知与用户钱包挂起分别表达，不从截断日志重建终身消费，不重写不可变事件。核对页不提供清零按钮；代码回滚不恢复旧业务数据库。
+
+## 接口速览
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/v1/chat/completions` | Chat 兼容调用，使用下游密钥 |
+| POST | `/v1/responses` | 有边界的 Responses 适配 |
+| POST | `/v1/messages` | Messages 适配 |
+| GET | `/v1/models` | 当前授权范围的模型列表 |
+| GET | `/api/budgets/review` | 管理员只读分页核对 |
+| GET | `/api/budgets/review/evidence` | 管理员有界凭证视图 |
+| GET | `/api/logs/retention/status` | 归档最近采样状态 |
+| GET | `/readyz` | 有界缓存的就绪结果，不发推理探测 |
+
+## 文档导航
+
+| 文档 | 内容 |
+|---|---|
+| [升级与回滚合同](docs/V007-OPERATIONS.md) | 默认配置、授权门禁、备份及失败恢复 |
+| [上游借鉴](docs/UPSTREAM-ADOPTION-v007.md) | 固定来源、采用与不采用的行为 |
+| [使用指南](docs/usage.md) | 日常使用与客户端连接 |
+| [功能详解](docs/features.md) | 既有能力与限制 |
+| [截图说明](docs/screenshots.md) | 页面和隔离示例 |
+| [开发与测试](docs/development.md) | 组件开发参考 |
+| [安全配置](docs/security-notes.md) | 管理面和网络边界 |
+| [管理 API Token](docs/api-tokens.md) | 范围、有效期与会话要求 |
+| [账号出口路由](docs/account-proxy-routes.md) | 代理设置与账号范围 |
+| [历史安全审计](docs/SECURITY-AUDIT.md) | 组件审计记录，不代替本版验收 |
+| [组件签名参考](docs/release-signing.md) | 不绕过已安装的受控信任链 |
+| [部署参考](deploy/README.md) | 包括 Windows 原生模板；旧一键发布不适用于当前实例 |
+
+## 发布与取舍
+
+仅准备本地候选与回执，等待用户明确批准。获准后仍须隔离 Linux 全量测试、完整签名、配对备份、受控排空、版本和小流量验收，不强杀在途请求。
+
+不新增售卖、费用运营、高级 Responses 状态、媒体、异地备份或 Rust 重构。弱口令及既有管理员策略按本次范围排除，不表示已经解决。保留各组件已有许可证与来源。

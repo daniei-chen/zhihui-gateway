@@ -237,7 +237,7 @@ RUN set -eux; \
 ARG COMPOSE_VERSION=v2.40.3
 # 可选：GitHub Releases 加速前缀。官方 GitHub 下载在国内会超时/极慢。
 # 用法是「前缀 + 原始 URL」，例如 https://ghfast.top/ （留空 = 直连 GitHub）
-#   https://ghfast.top/https://github.com/... 
+#   https://ghfast.top/https://github.com/...
 ARG COMPOSE_URL_PREFIX=""
 RUN set -eux; \
     case "${TARGETARCH:-$(uname -m)}" in \
@@ -268,7 +268,7 @@ WORKDIR /app
 #
 #   docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_INDEX_URL=""
-COPY server/requirements.txt /app/server/requirements.txt
+COPY server/requirements.txt server/requirements.lock.txt /app/server/
 RUN set -eu; \
     pip_install() { \
         pip install --no-cache-dir --retries 5 --timeout 60 \
