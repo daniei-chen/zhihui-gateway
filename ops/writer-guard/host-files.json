@@ -1,0 +1,74 @@
+{
+  "files": {
+    "coordination.py": {
+      "mode": 420,
+      "sha256": "b8b5121d2d820d37fac069996772f4459469085396470d466aa8136bb723fd33"
+    },
+    "first_install.py": {
+      "mode": 420,
+      "sha256": "57a0ba29e9d255c62604b01c14cdb51b42fae32d1ae96181e25bebed91fde267"
+    },
+    "frontend_adapter.py": {
+      "mode": 420,
+      "sha256": "7d6b60712a0ad4bc675b4f8aea2a71c972a92fa90d7a7b2dc06e981a78fd0ca4"
+    },
+    "frontend_library.py": {
+      "mode": 420,
+      "sha256": "aac69af307f069cfeb618fb9db8c4b6227e13a31cfd5d420dba2aece8a068513"
+    },
+    "host_adapter.py": {
+      "mode": 420,
+      "sha256": "127d4e5797478d2eee26138aa4f38bbaa6cb8291d9ee7a30765c8ee73b2642c0"
+    },
+    "ingress.py": {
+      "mode": 420,
+      "sha256": "0fa3e2bb3b9974e2279d8c6d44825a096a24229bb68b054360b1aaea77fbd9a2"
+    },
+    "launch_guard.py": {
+      "mode": 420,
+      "sha256": "3a9a1836a3a14c44408b59757d7ef5f1e48a8ebec613fbd1da87d3d20ff16c23"
+    },
+    "migration.py": {
+      "mode": 420,
+      "sha256": "083338a79fd221efe6c33d6dc82ff062e7f3eb97d9aecba01c3981eb2a76f200"
+    },
+    "migration_entry.py": {
+      "mode": 420,
+      "sha256": "e6042eb0dd4e40bfd626e7996bf9ce2f83c4eb0f2ed0c4907c030d68b45328cd"
+    },
+    "retire_legacy.py": {
+      "mode": 420,
+      "sha256": "7fa599ea782fdded4f883d74c117164da1e70f40ba972466d8a44da2b427c2ce"
+    },
+    "runtime_identity.py": {
+      "mode": 420,
+      "sha256": "6ce182b7f0ba79d0d862ef838ae259d562ac8d40569e3251ba2b65ba7128d701"
+    },
+    "service_gate.py": {
+      "mode": 420,
+      "sha256": "d5e7637abdf15706154d6c8b81c19535a89912edde25d4e79c66b908792298a4"
+    },
+    "startup.py": {
+      "mode": 420,
+      "sha256": "72748e1ea446aebf2dfb84cd4c2374a450046c003d13db1285977f36d2fa4438"
+    },
+    "state_guard.py": {
+      "mode": 420,
+      "sha256": "b8073c2749713b3bb0403ce730b4ab4d508b40982ab8651acc6808166dfddca3"
+    },
+    "systemd_adapter.py": {
+      "mode": 420,
+      "sha256": "97b4f5cb8db5c2a9134b6451f568648a3a539e189a417418de4ef6a6f6ee8709"
+    },
+    "writer_entry.py": {
+      "mode": 420,
+      "sha256": "43a8a4342e35801fc78108e698d4c21fa7397d502c20fb9118d05a6d89831287"
+    },
+    "writer_inventory.py": {
+      "mode": 420,
+      "sha256": "aadd7c212ef83e61d41594356790b42aa6bff600ecf61175b7a14a09cef79ea2"
+    }
+  },
+  "schema": "zhihui.writer-host-files",
+  "version": 1
+}
