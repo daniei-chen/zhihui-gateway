@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" width="1100" height="620" role="img" aria-labelledby="t d">
+  <title id="t">预算预留与 unknown 状态流转</title>
+  <desc id="d">请求先保守预留额度，转发后按是否拿到上游用量分别落到 settled、released 或 unknown。unknown 永不自动释放，必须人工对账后才有结论。</desc>
+  <defs>
+    <linearGradient id="lbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1020"/>
+      <stop offset="1" stop-color="#0b1526"/>
+    </linearGradient>
+    <marker id="la" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3d5a80"/>
+    </marker>
+    <marker id="law" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f59e0b"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="620" rx="18" fill="url(#lbg)"/>
+  <rect x="0.5" y="0.5" width="1099" height="619" rx="18" fill="none" stroke="#1e2b45"/>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+    <text x="48" y="50" fill="#e8eefb" font-size="18" font-weight="700">账不能靠“大概记一下”</text>
+    <text x="48" y="74" fill="#7f95b4" font-size="12.5">一次请求的额度状态怎么走 —— 重点在右下那条不肯自己消失的分支</text>
+
+    <!-- reserved -->
+    <rect x="48" y="108" width="212" height="76" rx="12" fill="#0d1a2e" stroke="#2b4a72"/>
+    <text x="70" y="136" fill="#cfe0f5" font-size="13" font-weight="700">估算预留</text>
+    <text x="70" y="158" fill="#8ba0bd" font-size="11.5">按上限保守估一份额度</text>
+    <text x="70" y="174" fill="#5d7a99" font-size="11">state = reserved</text>
+
+    <path d="M260 146 L308 146" stroke="#3d5a80" stroke-width="2" marker-end="url(#la)"/>
+
+    <!-- forwarded -->
+    <rect x="316" y="108" width="212" height="76" rx="12" fill="#0d1a2e" stroke="#2b4a72"/>
+    <text x="338" y="136" fill="#cfe0f5" font-size="13" font-weight="700">转发上游</text>
+    <text x="338" y="158" fill="#8ba0bd" font-size="11.5">请求出网关</text>
+    <text x="338" y="174" fill="#5d7a99" font-size="11">state = forwarded</text>
+
+    <!-- split -->
+    <path d="M528 146 L576 146" stroke="#3d5a80" stroke-width="2"/>
+    <path d="M576 146 L576 300" stroke="#3d5a80" stroke-width="2"/>
+    <path d="M576 190 L620 190" stroke="#3d5a80" stroke-width="2" marker-end="url(#la)"/>
+    <path d="M576 300 L620 300" stroke="#3d5a80" stroke-width="2" marker-end="url(#la)"/>
+    <path d="M576 410 L620 410" stroke="#f59e0b" stroke-width="2" marker-end="url(#law)"/>
+    <circle cx="576" cy="146" r="3.5" fill="#3d5a80"/>
+
+    <!-- settled -->
+    <rect x="628" y="152" width="240" height="76" rx="12" fill="#0c1c16" stroke="#1f7a4a"/>
+    <text x="650" y="180" fill="#9ff0bc" font-size="13" font-weight="700">settled　精确入账</text>
+    <text x="650" y="202" fill="#7fae91" font-size="11.5">拿到上游 usage，按实际用量结算</text>
+    <text x="650" y="218" fill="#5d8a70" font-size="11">差额自动修正预留时的保守估计</text>
+
+    <!-- released -->
+    <rect x="628" y="262" width="240" height="76" rx="12" fill="#0d1a2e" stroke="#2b4a72"/>
+    <text x="650" y="290" fill="#cfe0f5" font-size="13" font-weight="700">released　原路退回</text>
+    <text x="650" y="312" fill="#8ba0bd" font-size="11.5">请求没真正发出去</text>
+    <text x="650" y="328" fill="#5d7a99" font-size="11">预留无效，退回额度</text>
+
+    <!-- unknown -->
+    <rect x="628" y="372" width="240" height="76" rx="12" fill="#2a2109" stroke="#f59e0b" stroke-opacity="0.85"/>
+    <text x="650" y="400" fill="#ffd98a" font-size="13" font-weight="700">unknown　拿不准</text>
+    <text x="650" y="422" fill="#c9a961" font-size="11.5">请求出去了，上游没回用量</text>
+    <text x="650" y="438" fill="#a8873f" font-size="11">不能当作 0，也不许当没发生</text>
+
+    <!-- unknown -> reconcile -->
+    <path d="M868 410 L916 410" stroke="#f59e0b" stroke-width="2" marker-end="url(#law)"/>
+    <text x="892" y="400" fill="#a8873f" font-size="10.5" text-anchor="middle">只此一条路</text>
+
+    <rect x="924" y="362" width="128" height="96" rx="12" fill="#0a1526" stroke="#f59e0b" stroke-opacity="0.6"/>
+    <text x="988" y="388" fill="#ffd98a" font-size="12" font-weight="700" text-anchor="middle">人工对账</text>
+    <text x="988" y="408" fill="#a8873f" font-size="10.5" text-anchor="middle">核对后再结算</text>
+    <text x="988" y="426" fill="#a8873f" font-size="10.5" text-anchor="middle">写审计链</text>
+    <text x="988" y="444" fill="#7d6a3a" font-size="10.5" text-anchor="middle">不可自动释放</text>
+
+    <!-- counter-example -->
+    <rect x="48" y="490" width="1004" height="102" rx="12" fill="#0a1526" stroke="#26374f"/>
+    <text x="72" y="518" fill="#8ba0bd" font-size="12.5" font-weight="700">为什么不做「拿不到用量就当 0」</text>
+    <g font-size="11.5" fill="#7d93b0">
+      <text x="72" y="542">因为那时额度已经花出去了 —— 上游可能已经计费，只是没告诉你数字。当成 0 结算，账面就少了一笔支出，</text>
+      <text x="72" y="562">而且这笔缺口不会自己暴露；越积越多，实付与账面对不上，但没人知道差在哪。</text>
+      <text x="72" y="582">所以这里选择「挂住」：unknown 是一条等待结论的记录，不是一个可以四舍五入的零。</text>
+    </g>
+  </g>
+</svg>

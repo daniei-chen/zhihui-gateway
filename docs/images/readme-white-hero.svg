@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="610" viewBox="0 0 1440 610" role="img" aria-label="ZHIHUI Gateway white minimalist introduction"><defs><linearGradient id="wash" x1="0%" y1="0%" x2="100%" y2="100%"><stop stop-color="#FFFFFF"/><stop offset=".72" stop-color="#FCFDFF"/><stop offset="1" stop-color="#F7F9FF"/></linearGradient><linearGradient id="prism" x1="0%" y1="0%" x2="100%" y2="100%"><stop stop-color="#D0F4FF"/><stop offset=".35" stop-color="#7AA6FF"/><stop offset=".7" stop-color="#A98DF5"/><stop offset="1" stop-color="#EAFBFF"/></linearGradient><radialGradient id="halo"><stop stop-color="#D7E7FF" stop-opacity=".86"/><stop offset=".7" stop-color="#EFF2FF" stop-opacity=".3"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient><filter id="shadow" x="-40%" y="-50%" width="180%" height="220%"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#7B8DAF" flood-opacity=".10"/></filter></defs><rect width="1440" height="610" rx="24" fill="url(#wash)"/>
+<circle cx="1073" cy="284" r="299" fill="url(#halo)"/>
+<rect x="65" y="46" width="1310" height="58" rx="29" fill="#FFFFFF" stroke="#EEF0F5"/>
+<circle cx="99" cy="74" r="15" fill="#131820"/><text x="92" y="80" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="800" fill="#FFFFFF" >Z</text>
+<text x="131" y="81" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#131820" >ZHIHUI  /  智汇</text>
+<text x="841" y="81" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="500" fill="#637085" >能力</text><text x="925" y="81" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="500" fill="#637085" >架构</text><text x="1011" y="81" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="500" fill="#637085" >文档</text>
+<rect x="1172" y="55" width="168" height="42" rx="21" fill="#131820" stroke="#131820"/><text x="1211" y="82" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="650" fill="#FFFFFF" >GITHUB   ↗</text>
+<text x="76" y="183" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="700" fill="#527BFA" letter-spacing="2">UNIFIED AI GATEWAY</text>
+<text x="73" y="262" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="60" font-weight="730" fill="#131820" >三平台汇聚，</text>
+<text x="73" y="333" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="60" font-weight="730" fill="#131820" >一站式 AI 网关。</text>
+<text x="78" y="388" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="23" font-weight="460" fill="#57657B" >多源汇入，一核管理。</text>
+<text x="78" y="421" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="23" font-weight="460" fill="#57657B" >让每一次调用，都有迹可循。</text>
+<rect x="77" y="461" width="170" height="51" rx="25" fill="#131820" stroke="#131820"/><text x="111" y="494" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="17" font-weight="650" fill="#FFFFFF" >快速开始   ↗</text>
+<text x="77" y="561" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="700" fill="#8995A9" letter-spacing="1.1">WORKBUDDY   /   QODER   /   TRAE</text>
+<g transform="translate(1072 298)" filter="url(#shadow)">
+<path d="M-108 -94 L106 -94 L-104 92 L109 92" fill="none" stroke="#E6F0FF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M-108 -94 L106 -94 L-104 92 L109 92" fill="none" stroke="url(#prism)" stroke-width="41" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M-105 -110 L105 -110 L-109 76 L102 76" fill="none" stroke="#FFFFFF" stroke-opacity=".80" stroke-width="2.5"/>
+<path d="M-86 -73 L77 -73 M-82 67 L82 67" stroke="#2C69DF" stroke-opacity=".25" stroke-width="2" fill="none"/>
+</g>
+<rect x="835" y="169" width="155" height="43" rx="22" fill="#FFFFFF" stroke="#E3EAF5"/><circle cx="860" cy="191" r="6" fill="#527BFA"/><text x="877" y="197" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#131820" >WorkBuddy</text>
+<rect x="1192" y="179" width="125" height="43" rx="22" fill="#FFFFFF" stroke="#E3EAF5"/><circle cx="1214" cy="201" r="6" fill="#A08BF5"/><text x="1231" y="207" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#131820" >Qoder</text>
+<rect x="1157" y="456" width="115" height="43" rx="22" fill="#FFFFFF" stroke="#E3EAF5"/><circle cx="1181" cy="478" r="6" fill="#68CBE8"/><text x="1198" y="484" font-family="Arial, 'Noto Sans SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#131820" >Trae</text>
+<path d="M985 190 C1022 190 1038 198 1055 217" stroke="#A0B7FF" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1150 213 C1173 208 1182 202 1192 201" stroke="#B2A8EE" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1164 394 C1187 424 1193 445 1192 456" stroke="#9BCBE9" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1" y="1" width="1438" height="608" rx="23" fill="none" stroke="#E9EEF6"/></svg>

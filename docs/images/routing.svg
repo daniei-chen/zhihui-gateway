@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" role="img" aria-labelledby="t d">
+  <title id="t">三平台请求分派</title>
+  <desc id="d">请求先看平台标识与路径白名单：命中则重写到内部 qtg 控制面，未命中留在原生实现；数据面按 /qoder/v1、/trae/v1 前缀锁定对应引擎。</desc>
+  <defs>
+    <linearGradient id="rbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1020"/>
+      <stop offset="1" stop-color="#0b1526"/>
+    </linearGradient>
+    <marker id="rr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3d5a80"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="660" rx="18" fill="url(#rbg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="659" rx="18" fill="none" stroke="#1e2b45"/>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+
+    <text x="48" y="52" fill="#e8eefb" font-size="19" font-weight="700">一次请求怎么走</text>
+    <text x="48" y="76" fill="#7f95b4" font-size="12.5">控制面按「平台标识 + 路径白名单」二分；数据面按 URL 前缀锁定引擎</text>
+
+    <!-- step 1 -->
+    <rect x="48" y="110" width="270" height="72" rx="12" fill="#0d1a2e" stroke="#2b4a72"/>
+    <text x="70" y="138" fill="#cfe0f5" font-size="13" font-weight="700">入口</text>
+    <text x="70" y="160" fill="#8ba0bd" font-size="11.5">GET /api/accounts</text>
+    <text x="70" y="176" fill="#6d87a6" font-size="11">X-QTG-Platform: qoder</text>
+
+    <path d="M318 146 L366 146" stroke="#3d5a80" stroke-width="2" marker-end="url(#rr)"/>
+
+    <!-- step 2: decision -->
+    <g transform="translate(374,104)">
+      <path d="M66 0 L152 44 L66 88 L-20 44 Z" fill="#0e1c30" stroke="#8a6a1f" stroke-opacity="0.85"/>
+      <text x="66" y="34" fill="#ffd98a" font-size="12" font-weight="700" text-anchor="middle">平台 ∈ {qoder, trae}</text>
+      <text x="66" y="52" fill="#ffd98a" font-size="12" font-weight="700" text-anchor="middle">且 路径命中白名单？</text>
+    </g>
+
+    <!-- yes branch -->
+    <path d="M506 148 L560 148" stroke="#22c55e" stroke-opacity="0.7" stroke-width="2" marker-end="url(#rr)"/>
+    <text x="524" y="138" fill="#7de5a4" font-size="11.5" font-weight="700">是</text>
+
+    <rect x="568" y="112" width="300" height="72" rx="12" fill="#0c1c16" stroke="#1f7a4a" stroke-opacity="0.9"/>
+    <text x="590" y="139" fill="#9ff0bc" font-size="13" font-weight="700">重写为 /__qtg + path</text>
+    <text x="590" y="160" fill="#7fae91" font-size="11.5">交给 qtgcore（三平台控制面）</text>
+    <text x="590" y="176" fill="#6d87a6" font-size="11">54 条路由，按平台隔离数据</text>
+
+    <path d="M868 148 L916 148" stroke="#22c55e" stroke-opacity="0.7" stroke-width="2" marker-end="url(#rr)"/>
+    <rect x="924" y="112" width="228" height="72" rx="12" fill="#0d1a2e" stroke="#2b6cf6" stroke-opacity="0.5"/>
+    <text x="944" y="139" fill="#bcd2f7" font-size="12.5" font-weight="700">平台数据</text>
+    <text x="944" y="160" fill="#8fa6c4" font-size="11">只返回该平台的账号 / 统计</text>
+    <text x="944" y="176" fill="#6d87a6" font-size="11">换平台 = 换视角，不是换后端</text>
+
+    <!-- no branch -->
+    <path d="M374 190 L374 244 L560 244" stroke="#3d5a80" stroke-width="2" fill="none" marker-end="url(#rr)"/>
+    <text x="386" y="214" fill="#93a5c2" font-size="11.5" font-weight="700">否</text>
+
+    <rect x="568" y="208" width="300" height="72" rx="12" fill="#101a2c" stroke="#2b4a72"/>
+    <text x="590" y="235" fill="#cfe0f5" font-size="13" font-weight="700">留在原生实现</text>
+    <text x="590" y="256" fill="#8ba0bd" font-size="11.5">登录 · 会话 · 用户 · 令牌 · 系统 · 设置</text>
+    <text x="590" y="272" fill="#6d87a6" font-size="11">重写这些会让 nginx 会话校验拿到 501</text>
+
+    <!-- data plane -->
+    <line x1="48" y1="322" x2="1152" y2="322" stroke="#1e2b45" stroke-dasharray="4 6"/>
+    <text x="48" y="352" fill="#e8eefb" font-size="16" font-weight="700">数据面：按 URL 前缀锁定引擎</text>
+    <text x="48" y="374" fill="#7f95b4" font-size="12">三条路径各自重写为 /v1/* 后复用同一段转发逻辑，互不串号</text>
+
+    <g font-size="12">
+      <rect x="48" y="398" width="340" height="60" rx="11" fill="#0d1a2e" stroke="#2b6cf6" stroke-opacity="0.55"/>
+      <text x="70" y="423" fill="#bcd2f7" font-weight="700">/v1/*　/workbuddy/v1/*</text>
+      <text x="70" y="443" fill="#7f9bc4">→ workbuddy2api :7863</text>
+
+      <rect x="404" y="398" width="340" height="60" rx="11" fill="#0d1a2e" stroke="#8b5cf6" stroke-opacity="0.55"/>
+      <text x="426" y="423" fill="#e2d4fb" font-weight="700">/qoder/v1/*</text>
+      <text x="426" y="443" fill="#9a8cc4">→ qoder2-engine :8799</text>
+
+      <rect x="760" y="398" width="340" height="60" rx="11" fill="#0d1a2e" stroke="#f97316" stroke-opacity="0.55"/>
+      <text x="782" y="423" fill="#fbd9c0" font-weight="700">/trae/v1/*</text>
+      <text x="782" y="443" fill="#b38a6d">→ aiwork-server :8080</text>
+    </g>
+
+    <!-- footer note -->
+    <rect x="48" y="494" width="1052" height="118" rx="12" fill="#0a1526" stroke="#26374f"/>
+    <text x="72" y="522" fill="#8ba0bd" font-size="12.5" font-weight="700">为什么值得这样分</text>
+    <g font-size="11.5" fill="#7d93b0">
+      <text x="72" y="548">· 控制面与数据面同一端口：前端由 FastAPI 直接托管，/api 与 /v1 天然同源，不必配 CORS。</text>
+      <text x="72" y="570">· 平台标识有两个入口（请求头 / ?platform=），解析收敛到一处，两条路径实测返回逐字节相同。</text>
+      <text x="72" y="592">· 白名单外的路径永远走原生实现 —— 平台切换只影响「看哪个平台的数据」，不影响登录与会话。</text>
+    </g>
+  </g>
+</svg>
