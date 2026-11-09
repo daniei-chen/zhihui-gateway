@@ -1,0 +1,23 @@
+# 把历史提交中的占位/临时身份归并到主账号
+# 目的：GitHub Contributors 只按邮箱关联账号，占位邮箱会被误关联到陌生人
+
+# 占位身份（10-22 上游合并时使用 m <m@m>，被 GitHub 误关联到 mmesaros）
+Daniei Chen <daniei-chen@users.noreply.github.com>  m <m@m>
+
+# 自动化与本地身份
+Daniei Chen <daniei-chen@users.noreply.github.com>  agent <agent@local>
+Daniei Chen <daniei-chen@users.noreply.github.com>  zhihui-release <release@local>
+Daniei Chen <daniei-chen@users.noreply.github.com>  prod <p@local>
+Daniei Chen <daniei-chen@users.noreply.github.com>  workbuddy-local <local@kaogong.art>
+Daniei Chen <daniei-chen@users.noreply.github.com>  fix <fix@fix>
+
+# 同一人的多个邮箱
+Daniei Chen <daniei-chen@users.noreply.github.com>  Daniei Chen <2421873411@qq.com>
+Daniei Chen <daniei-chen@users.noreply.github.com>  daniei-chen <328942951+daniei-chen@users.noreply.github.com>
+Daniei Chen <daniei-chen@users.noreply.github.com>  daniei-chen <daniei-chen@users.noreply.github.com>
+
+# 上游合并时的临时身份
+Daniei Chen <daniei-chen@users.noreply.github.com>  merge <merge@local>
+Daniei Chen <daniei-chen@users.noreply.github.com>  up <up@up>
+Daniei Chen <daniei-chen@users.noreply.github.com>  upstream <up@local>
+Daniei Chen <daniei-chen@users.noreply.github.com>  upstream <upstream@local>
