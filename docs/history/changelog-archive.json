@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "purpose": "Historical reference only; not the active product release feed.",
+  "archived_before_product_changelog_reset": "2026-10-29",
+  "files": [
+    {
+      "previous_path": "CHANGELOG.md",
+      "archive_path": "docs/history/CHANGELOG.pre-product-root.md",
+      "sha256": "72c550c1921ccc02ce96a7fa45db64e50eb4f621ef45b2c5f1a13103caeb218b"
+    },
+    {
+      "previous_path": "manager/CHANGELOG.md",
+      "archive_path": "docs/history/CHANGELOG.manager-legacy.md",
+      "sha256": "85575c5fb9f3fbf6decca2a4738f17a595973adef59ee2aa77bf92d4d1157ec9"
+    },
+    {
+      "previous_path": "manager/server/CHANGELOG.md",
+      "archive_path": "docs/history/CHANGELOG.manager-server-legacy.md",
+      "sha256": "77598459ccfb7457098836ca2f98856b01e7d15fe334f8350d350a203baca7e2"
+    }
+  ]
+}

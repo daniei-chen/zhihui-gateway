@@ -1,0 +1,95 @@
+/* Keep the original expansive hero; give each new scene its own chapter. */
+.hero { padding-top:145px; }
+.hero .intro { max-width:680px; }
+.hero .visual-wrap { margin-top:84px; }
+.story-screen { padding:76px 0; scroll-margin-top:82px; overflow:hidden; }
+.task-screen { background:linear-gradient(180deg,#fff,#fafbfe); }
+.task-layout { display:grid; grid-template-columns:minmax(240px,.7fr) minmax(0,1.5fr); align-items:center; gap:34px; min-height:560px; }
+.story-copy h2 { font-size:clamp(30px,3.2vw,44px); font-weight:570; line-height:1.45; letter-spacing:-1.2px; margin:20px 0; color:#24334a; }
+.story-lead { font-size:16px; line-height:1.95; color:#5d6f89; margin:0 0 18px; }
+.story-detail { font-size:13px; line-height:2; color:#7a889d; max-width:380px; margin:0 0 24px; }
+.story-link { display:inline-flex; align-items:center; gap:22px; color:#486cae; font-size:12px; padding:8px 0; }
+.story-link:hover { color:#244c9c; }
+.task-frame-wrap { height:570px; min-width:0; margin:0 -18px; }
+.task-frame-wrap iframe,.ride-art iframe { display:block; width:100%; height:100%; border:0; }
+.scene-controls { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:25px; color:#8792a4; font-size:10px; }
+.scene-controls button { font:inherit; font-size:11px; background:#fff; color:#5673a5; border:1px solid #e0e7f0; padding:8px 12px; border-radius:8px; }
+.scene-controls button:hover { background:#f1f5fc; }
+.ride-screen { background:#edf5ff; padding:80px 0; }
+.ride-layout { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(270px,.8fr); align-items:center; gap:64px; min-height:520px; }
+.ride-art { height:490px; border-radius:24px; overflow:hidden; background:#edf5ff; }
+.ride-screen .overline { color:#7289aa; }
+.ride-screen .story-lead { color:#5c7393; }
+.ride-screen .story-detail { color:#7186a2; }
+.ride-principles { display:flex; flex-wrap:wrap; gap:14px; color:#6b80a0; font-size:11px; margin:24px 0 14px; }
+.ride-principles span + span { padding-left:14px; border-left:1px solid #ccdced; }
+.ride-screen .scene-controls button { background:#f7fbff; }
+.detail-section { padding:82px 0; background:#fafcff; }
+.detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+.detail-card { border:1px solid #e4ebf5; border-radius:20px; overflow:hidden; background:#fff; }
+.detail-copy { padding:28px 30px 24px; }
+.detail-copy h3 { color:#30445f; font-size:22px; font-weight:560; margin:12px 0; }
+.detail-copy p { font-size:13px; line-height:1.9; color:#76879e; max-width:390px; }
+.detail-copy button { border:0; padding:8px 0 0; background:transparent; color:#5378b6; font-size:12px; }
+.detail-copy button span { margin-left:16px; }
+.detail-card picture,.detail-card img { display:block; width:100%; height:auto; }
+.detail-card picture { border-top:1px solid #eef2f7; }
+.detail-note { margin:17px 0 0; text-align:center; color:#8b9ab0; font-size:10px; }
+.platform-choices { gap:8px; }
+.routing-fabric .signal-diagram { height:310px; }
+.signal-platforms { top:0; bottom:0; }
+.routing-fabric .signal-source { padding:10px 11px; }
+.network { min-height:390px; }
+.network-label.account-d { top:calc(13.89% - 24px); right:19px; }
+.network-label.account-a { top:calc(37.5% - 24px); bottom:auto; }
+.network-label.account-c { top:calc(61.11% - 24px); bottom:auto; }
+.network-label.account-b { top:calc(84.72% - 24px); bottom:auto; }
+.source-tags span:nth-child(4) { margin-left:27px; }
+.feature-scene.source-strips { padding-top:18px; }
+.partner-track > :nth-child(n+12) { display:inline; }
+.console-section .ext-header .section-lead { max-width:350px; }
+@media(min-width:1500px) {.task-frame-wrap{height:600px}}
+@media(max-width:1100px) and (min-width:761px) {
+ .task-layout { grid-template-columns:1fr; gap:20px; }
+ .task-layout .story-copy { display:grid; grid-template-columns:1fr 1fr; column-gap:40px; }
+ .task-layout .overline { grid-column:1/-1; }
+ .task-layout h2 { grid-row:2/5; }
+ .task-layout .story-detail { max-width:none; }
+ .task-layout .scene-controls { grid-column:2; margin-top:5px; }
+ .task-frame-wrap { max-width:860px; width:100%; margin:auto; }
+ .ride-layout { gap:30px; }
+ .ride-art { height:430px; }
+}
+@media(max-width:760px) {
+ .hero { padding-top:119px; }
+ .hero .intro { max-width:300px; }
+ .hero .visual-wrap { margin-top:74px; }
+ .story-screen { padding:60px 0; }
+ .task-layout,.ride-layout { grid-template-columns:1fr; gap:24px; min-height:0; }
+ .story-copy h2 { font-size:31px; margin:15px 0; }
+ .story-lead { font-size:14px; margin-bottom:14px; }
+ .story-detail { font-size:12px; max-width:440px; margin-bottom:15px; }
+ .task-frame-wrap { height:490px; margin:0 -10px; }
+ .scene-controls { margin-top:18px; }
+ .ride-art { order:2; height:360px; border-radius:18px; }
+ .ride-layout .story-copy { order:1; }
+ .ride-principles { margin:18px 0 8px; }
+ .detail-section { padding:60px 0; }
+ .detail-grid { grid-template-columns:1fr; gap:22px; }
+ .detail-copy { padding:24px; }
+ .detail-copy h3 { font-size:20px; }
+ .detail-card picture { max-height:380px; overflow:hidden; }
+ .detail-card img { object-fit:cover; object-position:top; }
+ .platform-choices { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .routing-fabric .signal-diagram { height:300px; }
+ .signal-platforms { width:36%; }
+ .network { min-height:350px; }
+ .network-label.account-d,.network-label.account-a,.network-label.account-c,.network-label.account-b { right:10px; }
+ .source-strips { max-width:none; }
+ .source-tags span:nth-child(4) { margin-left:18px; }
+}
+
+/* Three production lanes; the former fourth lane is intentionally absent. */
+.network-label.account-a { top:calc(37.5% - 24px); }
+.network-label.account-c { top:calc(61.11% - 24px); }
+.network-label.account-b { top:calc(84.72% - 24px); }

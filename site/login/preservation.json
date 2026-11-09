@@ -1,0 +1,9 @@
+{
+  "schema": "zhihui-preserved-login/v1",
+  "policy": "preserve-production-layout-and-behavior",
+  "source": "/var/www/zhihui-login/index.html",
+  "source_sha256": "d18c17efce22e61cef894c819ab4c61eb7f9e17e248efe22ccf13b70fe1a7170",
+  "candidate_sha256": "d18c17efce22e61cef894c819ab4c61eb7f9e17e248efe22ccf13b70fe1a7170",
+  "permitted_text_changes": [],
+  "production_deployed": false
+}

@@ -1,0 +1,17 @@
+The Thinker / Le Penseur
+Sculpture: Auguste Rodin
+3D scan: Scan the World (Jonathan Beck)
+Source: https://commons.wikimedia.org/wiki/File:Scan_the_World_-_The_Thinker_(Auguste_Rodin).stl
+Original: https://upload.wikimedia.org/wikipedia/commons/e/e2/Scan_the_World_-_The_Thinker_%28Auguste_Rodin%29.stl
+License: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Local changes: rigid coordinate rotation, translation, uniform scale, smooth
+vertex normals, warm white display material, Draco compression (18-bit positions),
+and standalone rendered poster. No face simplification, limb posing, or independent
+part transforms were applied. Source mesh: 837,482 triangles, 418,714 vertices.
+The adapted model and derivative poster are distributed under CC BY-SA 4.0.
+Attribution does not imply endorsement by the sculptor, scan author, or museum.
+
+The model is a scan, with its original surface character. Topology checks do not
+prove absence of every scan defect or self intersection. See thinker-manifest.json.
