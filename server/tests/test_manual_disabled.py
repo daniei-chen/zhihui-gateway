@@ -66,6 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from server import config  # noqa: E402
 from server.services import wb2api  # noqa: E402
+from server.tests.authorization_test_support import install_users, owner, web_root
 
 ROOT = Path(__file__).resolve().parents[2]
 UID = '9b212d8c-f5f7-4ad6-aa20-1d576508c8c1'
@@ -289,7 +290,7 @@ class FrontendContractTest(unittest.TestCase):
     """前端契约（TS 侧无法在这里跑，故按源码断言关键结构，防回归）。"""
 
     def _read(self, rel: str) -> str:
-        return (ROOT / rel).read_text(encoding='utf-8')
+        return (web_root() / rel.removeprefix('web/')).read_text(encoding='utf-8')
 
     def test_status_module_has_dedicated_tier(self) -> None:
         """`manual_disabled` 必须单独成一档，不能并进 disabledByPanel。
@@ -337,7 +338,7 @@ class FrontendContractTest(unittest.TestCase):
 
     def test_all_locales_define_the_keys(self) -> None:
         """五个语言都要有这两条文案（缺一条会在界面上显示成 key 本身）。"""
-        base = ROOT / 'web/lib/i18n/locales'
+        base = web_root() / 'lib/i18n/locales'
         for f in sorted(base.glob('*.json')):
             data = json.loads(f.read_text(encoding='utf-8'))
             acct = data.get('accounts', {})
@@ -512,7 +513,7 @@ class AdminSectionEditableTest(unittest.TestCase):
         会随这个开关变化，不说清楚会以为是 bug。
         """
         # 设置页的字段定义在外壳里（批次 4 起 Tab 变成子路由，见 layout.tsx 顶部）
-        src = (ROOT / 'web/app/(main)/settings/layout.tsx').read_text(encoding='utf-8')
+        src = (web_root() / 'app/(main)/settings/layout.tsx').read_text(encoding='utf-8')
         self.assertIn('ADMIN_FIELDS', src)
         self.assertIn("id: 'admin'", src)
         seg = src[src.index('const ADMIN_FIELDS'):]
@@ -692,7 +693,20 @@ class ReviveIfDisabledTest(unittest.TestCase):
         self.assertIn('读不到', msg)
 
 
-class ReviveAfterLoginTest(unittest.TestCase):
+class AuthorizationOwnerFixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        for name, value in [('DATA_DIR', root), ('DB_PATH', root / 'fixture.db'),
+                            ('USERS_FILE', root / 'users.json')]:
+            patch = mock.patch.object(config, name, value)
+            patch.start(); self.addCleanup(patch.stop)
+        install_users()
+        self.owner = owner()
+
+
+class ReviveAfterLoginTest(AuthorizationOwnerFixture):
     """重新登录后的自动恢复：等账号入池 → 仍被禁用就解除。"""
 
     def _run(self, states: list):
@@ -713,7 +727,7 @@ class ReviveAfterLoginTest(unittest.TestCase):
         with mock.patch.object(wb2api, 'account_disabled', fake_disabled), \
              mock.patch.object(wb2api, 'revive_account', fake_revive), \
              mock.patch.object(asyncio, 'sleep', no_sleep):
-            asyncio.run(accounts._revive_after_login(UID, {'base_url': 'http://x'}))
+            asyncio.run(accounts._revive_after_login(UID, {'base_url': 'http://x'}, owner=self.owner))
         return revive_calls
 
     def test_waits_for_pool_then_revives(self) -> None:
@@ -727,7 +741,7 @@ class ReviveAfterLoginTest(unittest.TestCase):
 
     def test_empty_uid_is_ignored(self) -> None:
         from server.routers import accounts
-        accounts._schedule_revive_after_login('', {'base_url': 'http://x'})   # 不该抛
+        accounts._schedule_revive_after_login('', {'base_url': 'http://x'}, owner=self.owner)   # 不该抛
 
 
 class EnableRouteRevivesTest(unittest.TestCase):
@@ -843,7 +857,7 @@ class EnableRouteRevivesTest(unittest.TestCase):
         self.assertEqual(calls, [], '读不到状态时不该去 revive')
 
 
-class LoginRevivesTest(unittest.TestCase):
+class LoginRevivesTest(AuthorizationOwnerFixture):
     """登录收尾必须挂上自动恢复 —— 忘了挂是这类修复最典型的失败形态。"""
 
     def test_save_and_finish_schedules_revive(self) -> None:
@@ -866,7 +880,7 @@ class LoginRevivesTest(unittest.TestCase):
 
         async def run():
             with mock.patch.object(asyncio, 'get_running_loop', lambda: _Loop()):
-                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'})
+                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'}, owner=self.owner)
 
         asyncio.run(run())
         self.assertEqual(len(created), 1)
@@ -874,7 +888,7 @@ class LoginRevivesTest(unittest.TestCase):
     def test_schedule_skips_without_loop(self) -> None:
         """没有运行中的循环（测试/脚本直呼）时不能抛 —— 登录已经成功了。"""
         from server.routers import accounts
-        accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'})   # 不该抛
+        accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'}, owner=self.owner)   # 不该抛
 
     def test_scheduled_task_is_held_then_released(self) -> None:
         """排出去的任务要被**强引用**，跑完再摘掉。
@@ -886,12 +900,13 @@ class LoginRevivesTest(unittest.TestCase):
         from server.routers import accounts
         ran: list = []
 
-        async def fake(uid, group):
+        async def fake(uid, group, *, owner=None):
+            self.assertEqual(owner, self.owner)
             ran.append(uid)
 
         async def run():
             with mock.patch.object(accounts, '_revive_after_login', fake):
-                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'})
+                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'}, owner=self.owner)
                 self.assertEqual(len(accounts._revive_tasks), 1,
                                  '调度后没有持有任务引用（可能被 GC 掉）')
                 for _ in range(5):
@@ -916,7 +931,7 @@ class LoginRevivesTest(unittest.TestCase):
 
         async def run():
             with mock.patch.object(asyncio, 'get_running_loop', lambda: _BadLoop()):
-                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'})  # 不该抛
+                accounts._schedule_revive_after_login(UID, {'base_url': 'http://x'}, owner=self.owner)  # 不该抛
 
         asyncio.run(run())
 

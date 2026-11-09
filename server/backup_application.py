@@ -1,7 +1,12 @@
 #!/opt/workbuddy-manager/venv/bin/python
 """Private consistent snapshots with optional authenticated encrypted offsite publication."""
+import sys
+
+# Cron can execute this file without the guarded Manager launcher.
+sys.dont_write_bytecode = True
+
 from pathlib import Path
-import fcntl,hashlib,io,json,os,sqlite3,stat,sys,tarfile,tempfile,time,subprocess
+import fcntl,hashlib,io,json,os,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 BASE=Path('/root/backups/workbuddy-daily')
 MANAGER=Path('/opt/workbuddy-manager')
@@ -14,7 +19,7 @@ def recovery_host_metadata():
     """
     commands={'workbuddy-web.unit.txt':['systemctl','cat','workbuddy-web.service'],
               'workbuddy-web.properties.txt':['systemctl','show','workbuddy-web.service','--property=User,Group,EnvironmentFiles,WorkingDirectory,Restart,TimeoutStopUSec'],
-              'gateway.image.json':['docker','inspect','--format','{{json .Config.Image}}','workbuddy2api']}
+              'gateway.image.json':['docker','inspect','--format','{{json .Config.Image}}','zhihui-workbuddy']}
     out={}
     for name,command in commands.items():
         result=subprocess.run(command,capture_output=True,timeout=15)
@@ -46,6 +51,46 @@ def add_bytes(archive,name,raw,*,uid=0,gid=0):
     info.uid=uid;info.gid=gid
     archive.addfile(info,io.BytesIO(raw))
 
+#: 发布签名算法 → 信任锚文件名。
+#:
+#: 2026-10-26 起 v9 的发布改用 Ed25519（`pkeyutl -rawin`，对消息本身签名）。
+#: 旧的 RSA 路径保留，只为能校验**历史**回退包；反过来不允许——清单声明的算法
+#: 必须与本机信任锚一致，否则就是一次降级尝试（把清单改成 rsa-sha256 就能绕开
+#: 新渠道的门禁）。
+_TRUST_ANCHORS = {'ed25519': 'release-trust-ed25519.pem',
+                  'rsa-sha256': 'release-trust.pem'}
+
+
+def release_algorithm(manifest):
+    """清单声明的签名算法；缺省按历史默认 RSA 处理。"""
+    return str(manifest.get('signature_algorithm') or 'rsa-sha256')
+
+
+def trust_anchor_name(manifest):
+    """该清单应当使用的信任锚文件名；未知算法直接失败。"""
+    algorithm = release_algorithm(manifest)
+    name = _TRUST_ANCHORS.get(algorithm)
+    if name is None:
+        raise RuntimeError('unsupported release signature algorithm: ' + algorithm)
+    return name
+
+
+def signature_verify_command(algorithm, anchor, signature, marker):
+    """按算法给出正确的 openssl 校验命令。
+
+    两种算法的签名语义不同，命令不能混用：
+      * Ed25519 —— `pkeyutl -rawin`（Ed25519 没有预哈希步骤，签的是消息本身）；
+      * RSA —— `dgst -sha256`（签的是消息摘要）。
+    用错命令不会"宽松通过"，只会失败；所以这里只按清单声明的算法分支，
+    **不做"两种都试"的回退**（那等于允许算法降级）。
+    """
+    if algorithm == 'ed25519':
+        return ['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(anchor),
+                '-rawin', '-in', str(marker), '-sigfile', str(signature)]
+    return ['openssl', 'dgst', '-sha256', '-verify', str(anchor),
+            '-signature', str(signature), str(marker)]
+
+
 def managed_sources(root):
     """Include every declared release file, regardless of suffix or folder name."""
     marker=root/'deploy/managed-release.json'
@@ -70,12 +115,15 @@ def managed_sources(root):
     if manifest.get('signature_required'):
         # Detached signatures cannot be inside the manifest they sign. Archive
         # both separately and verify against the installed custodian anchor.
-        for relative in ('deploy/managed-release.sig','release-trust.pem'):
+        # 2026-10-26：锚与校验命令按清单声明的算法选（v9 起是 Ed25519）。
+        anchor_name=trust_anchor_name(manifest)
+        for relative in ('deploy/managed-release.sig',anchor_name):
             source=root/relative
-            if not source.is_file() or source.is_symlink():raise RuntimeError('signed recovery material missing')
+            if not source.is_file() or source.is_symlink():raise RuntimeError('signed recovery material missing: '+relative)
             records.append((relative,source.read_bytes(),stat.S_IMODE(source.stat().st_mode)))
-        subprocess.run(['openssl','dgst','-sha256','-verify',str(root/'release-trust.pem'),
-                        '-signature',str(root/'deploy/managed-release.sig'),str(marker)],
+        subprocess.run(signature_verify_command(
+                           release_algorithm(manifest),root/anchor_name,
+                           root/'deploy/managed-release.sig',marker),
                        capture_output=True,check=True,timeout=10)
     return records
 
@@ -104,20 +152,48 @@ def verify_release_archive(archive):
             raise RuntimeError('managed recovery archive hash mismatch: '+relative)
     signed=False
     if manifest.get('signature_required'):
-        anchor=archive.extractfile('manager/release-trust.pem').read()
-        installed=MANAGER/'release-trust.pem'
+        # 恢复侧同样按清单算法校验（v9 起 Ed25519）；锚必须与本机 custodian 锚一致。
+        anchor_name=trust_anchor_name(manifest)
+        anchor=archive.extractfile('manager/'+anchor_name).read()
+        installed=MANAGER/anchor_name
         if not installed.is_file() or installed.is_symlink() or installed.read_bytes()!=anchor:
             raise RuntimeError('recovery trust anchor does not match installed custodian key')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            for path,name in (('key.pem','manager/release-trust.pem'),('signature','manager/deploy/managed-release.sig'),('manifest','manager/deploy/managed-release.json')):
+            for path,name in (('anchor','manager/'+anchor_name),('signature','manager/deploy/managed-release.sig'),('manifest','manager/deploy/managed-release.json')):
                 (root/path).write_bytes(archive.extractfile(name).read())
-            subprocess.run(['openssl','dgst','-sha256','-verify',str(root/'key.pem'),'-signature',str(root/'signature'),str(root/'manifest')],capture_output=True,check=True,timeout=10)
+            subprocess.run(signature_verify_command(
+                               release_algorithm(manifest),root/'anchor',
+                               root/'signature',root/'manifest'),
+                           capture_output=True,check=True,timeout=10)
         signed=True
     # 本地清单（sign_release.py 生成）用的是 version 字段；旧清单曾叫 release_id。
     # 两者都认，缺失时回落到空串——备份不该因一个展示用字段而整体失败。
     release_id=manifest.get('release_id') or manifest.get('version') or ''
     return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
+
+
+def verify_paired_archive(archive, destination, receipt):
+    from server.portalrecovery import _allowed, restore_quarantine
+    root = Path(destination) / 'pair-verification'
+    root.mkdir(mode=0o700)
+    for member in archive.getmembers():
+        if not member.name.startswith('paired-ledgers/') or member.isdir():
+            continue
+        name = member.name[len('paired-ledgers/'):]
+        if not member.isfile() or name != 'manifest.json' and not _allowed(name):
+            raise RuntimeError('unsafe paired recovery member')
+        path = root / name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open('xb') as output:
+            os.chmod(path, 0o600)
+            with archive.extractfile(member) as source:
+                import shutil
+                shutil.copyfileobj(source, output)
+    restored = restore_quarantine(root, Path(destination) / 'quarantine-verification', receipt['manifest_sha256'])
+    if restored.get('quarantined') is not True:
+        raise RuntimeError('paired recovery was not quarantined')
+    return {'restore_check': 'ok', 'quarantined': True, 'manifest_sha256': receipt['manifest_sha256']}
 
 def main():
     os.umask(0o077)
@@ -132,12 +208,22 @@ def main():
     state_owners={}
     state_directories={}
     with tempfile.TemporaryDirectory(prefix='snapshot-',dir=BASE) as scratch:
+        pair = None
+        if (MANAGER/'data/user-portal.sqlite3').is_file():
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from server.portalrecovery import create_paired_snapshot
+            pair_root = Path(scratch)/'paired-ledgers'
+            pair = create_paired_snapshot(main_db=MANAGER/'data/manager.db', portal_db=MANAGER/'data/user-portal.sqlite3',
+                users=MANAGER/'data/users.json', auths=GATEWAY/'auths', isolated=MANAGER/'data/user-portal-auths',
+                spool=MANAGER/'data/ledger-spool', destination=pair_root)
         database=Path(scratch)/'manager.db'
         source=sqlite3.connect('file:'+str(MANAGER/'data/manager.db')+'?mode=ro',uri=True)
         dest=sqlite3.connect(database); source.backup(dest); source.close()
         if dest.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('database snapshot invalid')
         count=dest.execute('SELECT count(*) FROM request_logs').fetchone()[0]; dest.close()
         with tarfile.open(str(output)+'.tmp','w:gz') as archive:
+            if pair:
+                archive.add(pair_root, arcname='paired-ledgers')
             for path,name in [(GATEWAY/'auths','gateway/auths'),(GATEWAY/'data','gateway/data'),(MANAGER/'data','manager/data')]:
                 state_directories[name]=add_state_directory(archive,name,path)
             archive.add(database,arcname='manager/data/manager.db')
@@ -170,6 +256,8 @@ def main():
         os.replace(str(output)+'.tmp',output); output.chmod(0o600)
         with tarfile.open(output) as archive:
             release_check=verify_release_archive(archive)
+            if pair:
+                pair.update(verify_paired_archive(archive, scratch, pair))
             for name,owners in state_owners.items():
                 member=archive.getmember(name)
                 if (member.uid,member.gid)!=owners or member.mode!=0o600:
@@ -183,7 +271,7 @@ def main():
             if con.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('restore check failed')
             if con.execute('SELECT count(*) FROM request_logs').fetchone()[0]!=count: raise RuntimeError('restore row mismatch')
             con.close()
-        result={'path':str(output),'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
+        result={'path':str(output),'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
         # The local verified recovery remains available if publication fails.
         if Path('/root/backups/workbuddy-recovery/offsite.json').is_file():
             sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -192,7 +280,10 @@ def main():
             except Exception as exc:
                 result['offsite_error']=type(exc).__name__+': '+str(exc)
         status=BASE/'latest.json.tmp'; status.write_text(json.dumps(result,indent=2)); status.chmod(0o600)
-        os.replace(status,BASE/'latest.json'); print(json.dumps(result))
+        os.replace(status,BASE/'latest.json')
+        from backupstatus import publish_verified_status
+        publish_verified_status(result, os.environ.get('WB_BACKUP_STATUS_FILE', '/var/lib/zhihui-gateway/backup-status.json'))
+        print(json.dumps(result))
         if 'offsite_error' in result:raise SystemExit(1)
 
 if __name__=='__main__': main()

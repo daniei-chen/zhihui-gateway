@@ -184,12 +184,14 @@ class MainTerminalStatus(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = pathlib.Path(self._tmp.name)
         self._orig = {
+            'INSTALL_DIR': worker.INSTALL_DIR,
             'DATA_DIR': worker.DATA_DIR,
             'STATUS_FILE': worker.STATUS_FILE,
             'update_upstream': worker.update_upstream,
             'update_manager': worker.update_manager,
         }
         worker.DATA_DIR = self.dir
+        worker.INSTALL_DIR = self.dir  # Functional updater fixtures are unmanaged.
         worker.STATUS_FILE = self.dir / 'update-status.json'
         self._argv = sys.argv
         sys.argv = ['update.py', '--target', 'manager']

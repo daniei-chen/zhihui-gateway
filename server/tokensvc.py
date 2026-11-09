@@ -22,7 +22,15 @@ from . import db
 
 # 与网关密钥 `wbk_` 刻意区分，避免两类凭据在同一处被混用。
 TOKEN_PREFIX = 'wbt_'
-SCOPES = ('readonly', 'admin')
+# 'keys' 是 K01-S2 引入的服务身份：只允许代理密钥管理（创建/更新/删除/重置用量），
+# 不能访问账号、设置、用户、认证等高危端点。它不是 admin 的别名。
+# scope 语义（K26/N32）：
+#   readonly —— 面板里给人用的只读令牌（可读全部只读面，等同 viewer）
+#   admin    —— 面板里给人用的全权令牌
+#   keys     —— 内部服务：**只能**管密钥（K01-S2 的收敛，不能读统计）
+#   read     —— 内部服务：**只能读**既有数据（K26 http 读通道），任何写方法一律拒绝，
+#               且不得读凭据面（/api/tokens）与用户面（/api/users）
+SCOPES = ('readonly', 'admin', 'keys', 'read')
 
 # last_used 写库节流（秒）。管理面在总览页会被 30 秒轮询，逐请求写会把库打热。
 LAST_USED_THROTTLE = 60
@@ -43,8 +51,14 @@ def normalize_scope(value: object) -> str:
 
 
 def scope_to_role(scope: object) -> str:
-    """把 scope 映射为管理端角色（供 `security.current_user` 使用）。"""
-    return 'admin' if normalize_scope(scope) == 'admin' else 'viewer'
+    """把 scope 映射为管理端角色（供 `security.current_user` 使用）。
+
+    'keys' 在 role 体系里等同 **viewer**（只读），不引入第三套角色模型；
+    密钥写权限由 `security.require_keys_writer` 依据 token 的原始 scope 单独放行。
+    这样该令牌不可能因为"新角色"被某个只查 role 的端点意外接受。
+    """
+    v = normalize_scope(scope)
+    return 'admin' if v == 'admin' else 'viewer'
 
 
 def _parse(row) -> dict:

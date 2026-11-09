@@ -29,9 +29,10 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from server.tests.authorization_test_support import web_root
 
 _ROOT = Path(__file__).resolve().parents[2]
-_WEB = _ROOT / 'web'
+_WEB = web_root()
 _MAIN = _WEB / 'app' / '(main)'
 _SCRIPT = _WEB / 'lib' / 'command-palette.test.mjs'
 _PURE = _WEB / 'lib' / 'command-palette.ts'
@@ -48,10 +49,10 @@ _NODE = shutil.which('node')
 # 只跑 .mjs，不碰 .ts —— Node 的 type stripping 从 22.6 起才有
 _MIN_MAJOR = 22
 
-# 面板里的条目数：底栏 8 个目的地 + 被吸收的 3 页 + 设置页 9 个 Tab（含代理）。
+# 原有 20 项之后追加管家和预警；仍逐项核对导航和实际路由。
 # 写死是**有意**的：数量变了说明有人加了页面却没想清楚它该出现在哪，
 # 那一步值得被问一句。三处来源的并集也在同一条断言里交叉核对。
-_EXPECTED_TOTAL = 20
+_EXPECTED_TOTAL = 23
 
 # 必须渲染出来的定位标记。验收脚本按它们断言；少一个就有一条断言恒真。
 _REQUIRED_SLOTS = (
@@ -64,7 +65,8 @@ _REQUIRED_SLOTS = (
 
 _ENTRY_RE = re.compile(
     r"\{href:\s*'([^']+)',\s*labelKey:\s*'([^']+)',\s*groupKey:\s*'([^']+)',\s*"
-    r"keywords:\s*'([^']*)'\}",
+    r"(?:platforms:\s*\[[^\]]*\],\s*)?"
+    r"keywords:\s*'([^']*)'(?:,\s*adminOnly:\s*true)?\}",
     re.S,
 )
 _SECTION_ITEM_RE = re.compile(
@@ -186,8 +188,8 @@ class CommandPaletteInvariantTest(unittest.TestCase):
         self.settings = _settings_entries()
         # 解析失效 → 下面的断言会「一条都没查到」而静默通过。先钉住形状。
         self.assertEqual(
-            len(self.dock), 8,
-            f'从 ManagementBar 里解析出 {len(self.dock)} 个底栏目的地（期望 8）：{self.dock} —— '
+            len(self.dock), 9,
+            f'从 ManagementBar 里解析出 {len(self.dock)} 个底栏目的地（期望 9）：{self.dock} —— '
             '`dockItems` 的写法变了？解析失效会让本类的交叉核对全部空转。',
         )
         self.assertEqual(
@@ -195,8 +197,8 @@ class CommandPaletteInvariantTest(unittest.TestCase):
             f'从 section-nav.ts 里解析出 {len(self.sections)} 项（期望 6）：{self.sections}',
         )
         self.assertEqual(
-            len(self.settings), 9,
-            f'从 settings-tabs.ts 里解析出 {len(self.settings)} 个 Tab（期望 9）：{self.settings}',
+            len(self.settings), 11,
+            f'从 settings-tabs.ts 里解析出 {len(self.settings)} 个 Tab（期望 11）：{self.settings}',
         )
         self.assertGreaterEqual(
             len(self.entries), _EXPECTED_TOTAL,

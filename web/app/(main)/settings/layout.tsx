@@ -1,6 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {ConfigurationEvidence} from '@/components/operations/ConfigurationEvidence';
 import {
   Settings as SettingsIcon,
   RefreshCw,
@@ -21,8 +22,12 @@ import {
   FileText,
   KeyRound,
   Route,
+  Sparkles,
+  Bell,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import {usePathname} from 'next/navigation';
+import {BASE_PATH} from '@/lib/base-path';
 import {notify} from '@/lib/toast';
 import {getExpiryDailyGroup, setExpiryDailyGroup} from '@/lib/display-prefs';
 import {useI18n} from '@/lib/i18n/provider';
@@ -31,7 +36,9 @@ import {RichText} from '@/lib/i18n/rich-text';
 import {settingsApi, upstreamApi, errText} from '@/lib/api';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {UpstreamEndpoints} from '@/components/settings/UpstreamEndpoints';
+import {usePlatform} from '@/lib/platform-context';
 import {scheduleDelayError} from '@/lib/schedule-validation';
+import {isManagedUserPassword} from '@/lib/managed-user-password';
 import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,
@@ -80,6 +87,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+
+const StewardPanel = dynamic(() => import('@/components/common/settings/StewardPanel').then(module => module.StewardPanel));
+const AlertsPanel = dynamic(() => import('@/components/common/settings/AlertsPanel').then(module => module.AlertsPanel));
+const BudgetReviewPanel = dynamic(() => import('@/components/common/settings/BudgetReviewPanel').then(module => module.BudgetReviewPanel));
 
 /* ─────────────────────────────────────────────────────────
  * 可视化配置字段定义
@@ -789,7 +800,7 @@ function pickValues(fields: Field[], source: Record<string, unknown> | undefined
         out[f.key] = Array.isArray(raw) ? hoursToText(raw) : hoursToText(f.def);
         break;
       case 'duration':
-        out[f.key] = durationOk(f, raw) ? String(raw).trim() : f.def;
+        out[f.key] = durationOk(f, raw) ? String(raw ?? '').trim() : f.def;
         break;
       case 'select':
         // 只接受枚举内的取值；配置里是别的值（上游改过枚举）时回退默认
@@ -903,7 +914,9 @@ const TOP_LEVEL_KEYS = new Set(['reasoning_as_content']);
  */
 export default function SettingsLayout({children}: {children: React.ReactNode}) {
   const {t, tp} = useI18n();
-  const {isAdmin} = useAuth();
+  const {isAdmin, me} = useAuth();
+  const {platform} = usePlatform();
+  const isWorkbuddy = platform === 'workbuddy';
   /**
    * 当前 Tab 只由**路径**决定（`/settings/<tab>`）。
    *
@@ -912,6 +925,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * `page.tsx` 把地址换成规范路径，所以这里只是「换地址那一帧」的兜底。
    */
   const tab: SettingsTab = settingsTabFromPath(usePathname()) ?? DEFAULT_SETTINGS_TAB;
+  const independentTab = tab === 'steward' || tab === 'alerts';
 
   /**
    * 二级导航。顺序与图标取自原来的 `TabsList`（一处不差），只是每项从「一个
@@ -932,6 +946,8 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     backup: {icon: <Database className="h-3.5 w-3.5" />},
     changelog: {icon: <FileText className="h-3.5 w-3.5" />},
     about: {icon: <Info className="h-3.5 w-3.5" />},
+    steward: {icon: <Sparkles className="h-3.5 w-3.5" />},
+    alerts: {icon: <Bell className="h-3.5 w-3.5" />},
   };
   const tabItems: SectionTabItem[] = SETTINGS_TABS.map((name) => ({
     href: settingsTabHref(name),
@@ -956,7 +972,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     cfg: () => settingsApi.upstream(),
     modelMap: () => settingsApi.modelMap(),
     users: () => settingsApi.users(),
-  }, []);
+  }, [isAdmin, me?.username], [], {enabled: !independentTab});
 
   /** 配置：null = 还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const cfg: UpstreamConfig | null = values.cfg ?? null;
@@ -971,7 +987,25 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
   const usersFailed = 'users' in errors;
   /** 模型映射的乐观值：保存成功后、刷新落地前先显示新值（见 saveModelMap） */
   const [optimisticMap, setOptimisticMap] = useState<Record<string, string> | null>(null);
-  const modelMap: Record<string, string> = optimisticMap ?? values.modelMap ?? {};
+  const [mapBase, setMapBase] = useState<Record<string, string> | undefined>();
+  const [mapSaving, setMapSaving] = useState(false);
+  const mapFlight = useRef<symbol | null>(null);
+  const mapGeneration = useRef(0);
+  const mapRef = useRef(values.modelMap);
+  const invalidateMap = useCallback(() => {
+    mapGeneration.current++;
+    mapFlight.current = null;
+  }, []);
+  useEffect(() => { mapRef.current = values.modelMap; }, [values.modelMap]);
+  useEffect(() => {
+    setOptimisticMap(null);
+    setMapSaving(false);
+    return invalidateMap;
+  }, [isAdmin, me?.username, independentTab, invalidateMap]);
+  const modelMap = (optimisticMap && (mapSaving || mapBase === values.modelMap)
+    ? optimisticMap : values.modelMap) ?? {};
+  const modelMapReady = values.modelMap !== undefined && !('modelMap' in errors);
+  const modelMapWritable = isAdmin && modelMapReady && !mapSaving;
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   /** 模型列表来源：dynamic = 上游实时拉取，static = 上游内置回退表 */
@@ -1032,7 +1066,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   const [mapAlias, setMapAlias] = useState('');
   const [mapTarget, setMapTarget] = useState('');
-  const [newUser, setNewUser] = useState({username: '', password: '', role: 'viewer'});
+  const [newUser, setNewUser] = useState({username: '', password: '', role: 'account_admin'});
   const [busy, setBusy] = useState(false);
   /** Upstash（Redis 持久化）表单 */
   const [upstashForm, setUpstashForm] = useState({url: '', token: ''});
@@ -1119,8 +1153,8 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   // 配置 / 映射 / 用户由 useAsyncAll 在挂载时自己取（首屏一次），这里只管模型列表。
   useEffect(() => {
-    loadModels();
-  }, [loadModels]);
+    if (!independentTab) void loadModels();
+  }, [loadModels, independentTab]);
 
   const upstreamReady = !!cfg && cfg.available !== false;
   const upstreamError = cfg && cfg.available === false ? cfg.error : undefined;
@@ -1251,14 +1285,35 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 用户会以为没保存上（其实写操作是成功的）。与 `security` 页的 saveConfig 同一套。
    */
   async function saveModelMap(next: Record<string, string>) {
+    // The API replaces the entire map. An unknown/failed read must never become
+    // an empty object used as the base of a destructive replacement.
+    if (!modelMapWritable || mapFlight.current) return false;
+    const request = Symbol('model-map');
+    const generation = mapGeneration.current;
+    const current = () => generation === mapGeneration.current && mapFlight.current === request;
+    const previous = modelMap;
+    mapFlight.current = request;
+    setMapBase(values.modelMap);
+    setMapSaving(true);
     setOptimisticMap(next);
     try {
-      await settingsApi.saveModelMap(next);
+      const saved = await settingsApi.saveModelMap(next);
+      if (!current()) return false;
+      setMapBase(mapRef.current);
+      setOptimisticMap(saved);
       notify.ok(t('settings.modelMapSaved'));
-      if (await reload()) setOptimisticMap(null);
+      if (await reload() && current()) setOptimisticMap(null);
+      return current();
     } catch (e) {
-      setOptimisticMap(null);
+      if (!current()) return false;
+      setOptimisticMap(previous);
       notify.err(errText(e));
+      return false;
+    } finally {
+      if (current()) {
+        mapFlight.current = null;
+        setMapSaving(false);
+      }
     }
   }
 
@@ -1299,6 +1354,17 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 用户看到的是一张「能看不能改」的假配置，会据此以为「我的配置就是这样」，
    * 或者以为「面板坏了」。取不到就说取不到，并给「重试」。
    */
+  if (tab === 'steward' || tab === 'alerts') {
+    return <div className="flex min-w-0 flex-col gap-4 md:gap-6">
+      {header}
+      <div className="min-w-0 max-w-full overflow-x-auto pb-1">
+        <SectionTabs items={tabItems} active={settingsTabHref(tab)} />
+      </div>
+      {tab === 'steward' ? <StewardPanel /> : <AlertsPanel />}
+      {children}
+    </div>;
+  }
+
   if (!cfg) {
     return (
       <div className="flex flex-col gap-4 md:gap-6">
@@ -1331,7 +1397,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               放在 config.json 字段之前：它是「本端接了几个上游」的清单，
               而下面那批字段描述的是**默认上游自身**的配置。 */}
           <UpstreamEndpoints />
-          {upstreamError && (
+          {isWorkbuddy && upstreamError && (
             <div className="flex items-start gap-2.5 rounded-[20px] border border-amber-500/30 bg-amber-500/10 p-4">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
               <div className="space-y-1">
@@ -1346,7 +1412,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
           {/* 账号池概况 */}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <div className="rounded-[20px] bg-muted px-3.5 py-3">
+            <div className={isWorkbuddy ? "rounded-[20px] bg-muted px-3.5 py-3" : "hidden"}>
               <div className="mb-2 text-sm font-medium">{t('settings.serviceInfo')}</div>
               <div className="space-y-1.5 text-xs">
                 {([
@@ -1488,7 +1554,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
           </div>
 
           {/* 可视化设置卡片 */}
-          {GROUPS.map((g) => {
+          {GROUPS.filter(() => isWorkbuddy).map((g) => {
             const dirty = isDirty(g.id);
             return (
               <div key={g.id} className="rounded-[20px] bg-muted px-3.5 py-3">
@@ -1942,6 +2008,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
         {/* ═══ 模型映射 ═══ */}
         <TabsContent value="models" className="mt-4 space-y-4">
+          {!modelMapReady && <LoadError message={t('settings.cfgNotLoaded')} onRetry={reload} />}
           <div className="rounded-[20px] bg-muted p-4">
             <div className="mb-1 text-sm font-medium">{t('settings.mapNewAlias')}</div>
             <div className="mb-3 text-[11px] text-muted-foreground">
@@ -1950,11 +2017,11 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
             <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
               <div className="space-y-1.5">
                 <Label className="text-[11px] text-muted-foreground">{t('settings.mapAlias')}</Label>
-                <Input value={mapAlias} onChange={(e) => setMapAlias(e.target.value)} placeholder="gpt-4o-mini" className="bg-background" disabled={!isAdmin} />
+                <Input value={mapAlias} onChange={(e) => setMapAlias(e.target.value)} placeholder="gpt-4o-mini" className="bg-background" disabled={!modelMapWritable} />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[11px] text-muted-foreground">{t('settings.mapTarget')}</Label>
-                <Select value={mapTarget} onValueChange={setMapTarget} disabled={!isAdmin}>
+                <Select value={mapTarget} onValueChange={setMapTarget} disabled={!modelMapWritable}>
                   <SelectTrigger className="bg-background" aria-label={t('settings.mapTarget')}><SelectValue placeholder={t('chat.selectModel')} /></SelectTrigger>
                   <SelectContent>
                     {models.map((m) => (
@@ -1966,11 +2033,12 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               <div className="sm:col-span-2">
                 <Button
                   className="rounded-full"
-                  disabled={!isAdmin || !mapAlias.trim() || !mapTarget}
-                  onClick={() => {
-                    saveModelMap({...modelMap, [mapAlias.trim()]: mapTarget});
-                    setMapAlias('');
-                    setMapTarget('');
+                  disabled={!modelMapWritable || !mapAlias.trim() || !mapTarget}
+                  onClick={async () => {
+                    if (await saveModelMap({...modelMap, [mapAlias.trim()]: mapTarget})) {
+                      setMapAlias('');
+                      setMapTarget('');
+                    }
                   }}
                 >
                   <Plus />
@@ -2012,6 +2080,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7 rounded-md text-red-500 hover:text-red-600"
+                          disabled={!modelMapWritable}
                           onClick={() => {
                             const next = {...modelMap};
                             delete next[alias];
@@ -2026,7 +2095,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                 ))}
               </TableBody>
             </Table>
-            {!Object.keys(modelMap).length && (
+            {modelMapReady && !Object.keys(modelMap).length && (
               <div className="py-10 text-center text-xs text-muted-foreground">
                 {t('settings.mapEmpty')}
               </div>
@@ -2042,38 +2111,48 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
               <div className="mb-3 text-[11px] text-muted-foreground">
                 {t('settings.usersNewDesc')}
               </div>
-              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
+              <div data-slot="new-user-form" className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-muted-foreground">{t('login.username')}</Label>
-                  <Input value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="bg-background" />
+                  <Label htmlFor="new-user-username" className="text-[11px] text-muted-foreground">{t('login.username')}</Label>
+                  <Input id="new-user-username" autoComplete="off" value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="bg-background" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-muted-foreground">{t('login.password')}</Label>
-                  <Input type="password" value={newUser.password} onChange={(e) => setNewUser({...newUser, password: e.target.value})} className="bg-background" />
+                  <Label htmlFor="new-user-password" className="text-[11px] text-muted-foreground">{t('login.password')}</Label>
+                  <Input id="new-user-password" type="password"
+                    autoComplete="new-password" value={newUser.password}
+                    onChange={(e) => setNewUser({...newUser, password: e.target.value})}
+                    placeholder={t('settings.managedPasswordPlaceholder')}
+                    aria-describedby="new-user-password-hint"
+                    aria-invalid={newUser.password.length > 0 && !isManagedUserPassword(newUser.password)}
+                    className="bg-background" />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-muted-foreground">{t('settings.usersRole')}</Label>
                   <Select value={newUser.role} onValueChange={(v) => setNewUser({...newUser, role: v})}>
-                    <SelectTrigger className="bg-background" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full bg-background" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="admin">{t('settings.roleAdmin')}</SelectItem>
-                      <SelectItem value="viewer">{t('settings.roleViewer')}</SelectItem>
+                      <SelectItem value="account_admin">{t('profile.roleAccountAdmin')}</SelectItem>
+                      <SelectItem value="admin">{t('profile.roleSuperAdmin')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <Button
-                  className="rounded-full"
-                  disabled={busy}
+                  className="h-9 rounded-full"
+                  disabled={busy || !newUser.username.trim() || !isManagedUserPassword(newUser.password)}
                   onClick={async () => {
                     if (!newUser.username.trim() || !newUser.password) {
                       notify.err(t('settings.usersRequired'));
+                      return;
+                    }
+                    if (!isManagedUserPassword(newUser.password)) {
+                      notify.err(t('settings.managedPasswordHint'));
                       return;
                     }
                     setBusy(true);
                     try {
                       await settingsApi.addUser(newUser);
                       notify.ok(t('settings.usersCreated'));
-                      setNewUser({username: '', password: '', role: 'viewer'});
+                      setNewUser({username: '', password: '', role: 'account_admin'});
                       reload();
                     } catch (e) {
                       notify.err(errText(e));
@@ -2086,6 +2165,9 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   {t('keys.create')}
                 </Button>
               </div>
+              <p id="new-user-password-hint" className="mt-2 text-[11px] text-muted-foreground">
+                {t('settings.managedPasswordHint')}
+              </p>
             </div>
           )}
 
@@ -2103,9 +2185,20 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   <TableRow key={u.username} className="border-b border-border/40">
                     <TableCell className="pl-4 text-sm font-medium">{u.username}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary" className="rounded-full">
-                        {u.role === 'admin' ? t('profile.roleAdmin') : t('profile.roleViewer')}
-                      </Badge>
+                      {isAdmin && u.username !== 'admin' ? <Select value={u.role} onValueChange={async role => {
+                        try {
+                          const result = await settingsApi.updateUser(u.username, {role});
+                          if (result.relogin_required) { window.location.href = `${BASE_PATH}/login`; return; }
+                          await reload();
+                        }
+                        catch (error) { notify.err(errText(error)); }
+                      }}>
+                        <SelectTrigger className="h-8 w-40 rounded-full text-xs" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="account_admin">{t('profile.roleAccountAdmin')}</SelectItem>
+                          <SelectItem value="admin">{t('profile.roleSuperAdmin')}</SelectItem>
+                        </SelectContent>
+                      </Select> : <Badge variant="secondary" className="rounded-full">{u.role === 'admin' ? t('profile.roleSuperAdmin') : t('profile.roleAccountAdmin')}</Badge>}
                     </TableCell>
                     {isAdmin && (
                       <TableCell className="pr-4 text-right">
@@ -2136,7 +2229,15 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                               }
                             }}
                             trigger={
-                              <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-red-500 hover:text-red-600">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                // 纯图标按钮必须有可访问名称（K38）：这行删的是「某个用户」，
+                                // 读屏只念「按钮」等于让键盘/读屏用户盲删。
+                                aria-label={t('common.delete')}
+                                title={t('common.delete')}
+                                className="h-7 w-7 rounded-md text-red-500 hover:text-red-600"
+                              >
                                 <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             }
@@ -2177,6 +2278,8 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
         {/* ═══ 系统更新 ═══ */}
         <TabsContent value="system" className="mt-4 space-y-4">
+          <ConfigurationEvidence />
+          {isAdmin && <BudgetReviewPanel />}
           <UpdatePanel />
         </TabsContent>
 
@@ -2195,7 +2298,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
           <div className="rounded-[20px] bg-muted p-5 text-xs leading-6 text-muted-foreground">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
               <SettingsIcon className="h-4 w-4" />
-              WorkBuddy Manager
+              {t('product.name')}
             </div>
             <p>
               {t('settings.aboutDesc')}

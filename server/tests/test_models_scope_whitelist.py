@@ -165,6 +165,10 @@ class ListMatchesCallAdmissionTest(unittest.TestCase):
 class ShapeSafetyTest(unittest.TestCase):
     """认不出的结构一律原样透传——不因为我们认不出就去改动上游响应。"""
 
+    def setUp(self):
+        from server.tests._db_fixture import isolate_database
+        isolate_database(self)
+
     def test_non_dict_payload_untouched(self) -> None:
         for payload in ([], 'x', None, 5):
             self.assertEqual(G._scope_models(payload, _key(models=['glm-5.2'])), payload)

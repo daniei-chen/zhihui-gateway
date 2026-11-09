@@ -8,11 +8,8 @@
  * 用这里的 t() —— 它读模块级的“当前语言”，由 I18nProvider 在渲染期同步。
  */
 import {DEFAULT_LOCALE, type Locale} from './config';
+import {dictRegistry, pickDict, type DictLike} from './dicts';
 import zhCN from './locales/zh-CN.json';
-import zhTW from './locales/zh-TW.json';
-import en from './locales/en.json';
-import ja from './locales/ja.json';
-import ko from './locales/ko.json';
 
 /**
  * 短语表（gettext 风格）：键是**中文源文**，值是译文。
@@ -40,13 +37,24 @@ export interface Dict {
   [key: string]: MessageValue | Dict;
 }
 
-const DICTS: Record<Locale, Dict> = {
-  'zh-CN': zhCN as Dict,
-  'zh-TW': zhTW as Dict,
-  en: en as Dict,
-  ja: ja as Dict,
-  ko: ko as Dict,
-};
+/**
+ * 字典注册表（K37）：**源语言静态加载**，其余语言由 `lib/i18n/load.ts` 按需
+ * 动态 import。原来五种语言全部静态 import ≈ 670 KB，随每个首屏一起下载解析，
+ * 而一次会话只会用到一种。
+ *
+ * 注册发生在模块初始化：`translate` 直接读同一个注册表，不区分「静态/动态」。
+ */
+dictRegistry.register(DEFAULT_LOCALE, zhCN as DictLike);
+
+/** 源语言字典：缺键时的回退；永远在（静态 import） */
+function defaultDict(): Dict {
+  return (dictRegistry.get(DEFAULT_LOCALE) as Dict | undefined) ?? {};
+}
+
+/** 当前语言的字典；未加载时返回源语言（调用方据此显示源语言而不是留空） */
+function dictFor(locale: Locale): Dict | undefined {
+  return pickDict(dictRegistry, locale, DEFAULT_LOCALE) as Dict | undefined;
+}
 
 export type TParams = Record<string, string | number>;
 
@@ -100,7 +108,8 @@ function interpolate(text: string, params?: TParams): string {
  * 漏翻时界面显示的是键名（如 accounts.title），一眼能看出问题所在。
  */
 export function translate(locale: Locale, key: string, params?: TParams): string {
-  const raw = lookup(DICTS[locale], key) ?? lookup(DICTS[DEFAULT_LOCALE], key);
+  const primary = dictRegistry.get(locale) as Dict | undefined;
+  const raw = (primary ? lookup(primary, key) : undefined) ?? lookup(defaultDict(), key);
   if (raw === undefined) return key;
   const text = typeof raw === 'string' ? raw : pluralOf(raw, locale, numParam(params));
   return interpolate(text, params);
@@ -123,8 +132,8 @@ export function t(key: string, params?: TParams): string {
 
 /** 查短语表；当前语言没有该条时原样返回中文源文（不显示键、也不留空）。 */
 export function translatePhrase(locale: Locale, source: string): string {
-  const table = (DICTS[locale] as {phrases?: PhraseTable}).phrases;
-  return table?.[source] ?? source;
+  const dict = dictFor(locale) as (Dict & {phrases?: PhraseTable}) | undefined;
+  return dict?.phrases?.[source] ?? source;
 }
 
 /** 组件侧：把中文源文翻译成当前语言。 */

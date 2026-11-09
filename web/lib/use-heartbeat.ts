@@ -11,18 +11,25 @@ import {useEffect, useRef} from 'react';
  *    与其让它零星触发，不如明确跳过）；
  *  - 重新切回该标签页时立即刷新一次，避免看到切走之前的旧数据。
  */
-export function useHeartbeat(fn: () => void, ms: number) {
+export function useHeartbeat(fn: () => unknown | Promise<unknown>, ms: number) {
   // 用 ref 保存最新的回调，这样 fn 每次渲染变化都不会重建定时器
   const ref = useRef(fn);
   ref.current = fn;
 
   useEffect(() => {
+    let busy = false;
+    let alive = true;
     const tick = () => {
-      if (!document.hidden) ref.current();
+      if (!alive || document.hidden || busy) return;
+      busy = true;
+      void Promise.resolve().then(() => { if (alive) return ref.current(); }).catch(() => {
+        // Data hooks own visible error state; the timer must remain recoverable.
+      }).finally(() => { busy = false; });
     };
     const timer = window.setInterval(tick, ms);
     document.addEventListener('visibilitychange', tick);
     return () => {
+      alive = false;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };

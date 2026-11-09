@@ -10,8 +10,9 @@ import {RichText} from '@/lib/i18n/rich-text';
 import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 import type {Changelog, ChangelogItem} from '@/lib/types';
+import {PRODUCT_REPOSITORY_URL} from '@/lib/product';
 
-const REPO_URL = 'https://github.com/ithtelab/workbuddy-manager/releases';
+const REPO_URL = `${PRODUCT_REPOSITORY_URL}/releases`;
 
 /** 分类配色，让「安全」「修复」这类一眼可辨 */
 const SECTION_STYLE: Record<string, string> = {
@@ -211,9 +212,13 @@ export function ChangelogPanel() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
+  /** 重试计数：改变它即重新触发下面的 effect（失败态不能只能靠整页刷新） */
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let alive = true;
+    setLoading(true);
+    setError('');
     systemApi
       .changelog()
       .then((d) => {
@@ -227,7 +232,7 @@ export function ChangelogPanel() {
     return () => {
       alive = false;
     };
-  }, [t]);
+  }, [t, attempt]);
 
   if (loading) {
     return (
@@ -248,6 +253,15 @@ export function ChangelogPanel() {
           <div className="text-muted-foreground">
             <RichText text={t('changelog.unavailableHint')} />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 h-7 rounded-full text-[11px]"
+            onClick={() => setAttempt((n) => n + 1)}
+          >
+            <Loader2 className="h-3 w-3" />
+            {t('changelog.retry')}
+          </Button>
         </div>
       </div>
     );

@@ -9,14 +9,15 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from .. import config, security, upstreamsvc
+from .. import config, security, upstreamsvc, observability, deadline
 from ..iputil import client_ip
 from . import gateway
 
@@ -53,7 +54,8 @@ def _qualified_model(model: str, realm: str) -> str:
 
 
 @router.post('/chat')
-async def chat(body: ChatIn, request: Request, user: dict = Depends(security.current_user)):
+async def chat(body: ChatIn, request: Request,
+               user: dict = Depends(security.require_session_admin)):
     """转发一次对话到上游。
 
     管理员限定：测试台会**真实消耗积分**，而默认部署里存在一个弱口令的 guest
@@ -61,7 +63,17 @@ async def chat(body: ChatIn, request: Request, user: dict = Depends(security.cur
     """
     # 测试台没有下游密钥（管理员会话直连），固定走默认上游 —— 与从前一致。
     # 走 upstreamsvc 而不是直接读 config：默认上游的取值只有一处事实来源。
-    upstream = upstreamsvc.default_upstream()
+    # 三平台（2026-10-23）：面板切到 qoder / trae 时必须跟着走对应上游。
+    # 原来这里无条件用 default_upstream()（workbuddy），于是「在 qoder 测试台选
+    # Auto / Qwen3.8-Flash」会把 qoder 的模型名打到 workbuddy 上游，上游回
+    # 11102 model not available，还会在账号页留下「模型受限」的假台账。
+    _plat = (request.headers.get('x-qtg-platform') or '').strip().lower()
+    _tw = gateway._threeway_upstream(_plat) if _plat in gateway._THREEWAY_SPEC else None
+    if _plat in gateway._THREEWAY_SPEC and _tw is None:
+        raise HTTPException(status_code=503, detail=f'{_plat} 上游不可用')
+    if _plat and _plat not in ('workbuddy', *gateway._THREEWAY_SPEC):
+        raise HTTPException(status_code=400, detail='不支持的平台')
+    upstream = _tw or upstreamsvc.default_upstream()
     ip = client_ip(request)
     started = time.time()
     realm = 'global' if str(body.realm).strip().lower() == 'global' else 'cn'
@@ -81,15 +93,23 @@ async def chat(body: ChatIn, request: Request, user: dict = Depends(security.cur
         # 让上游在末帧返回 usage（含 credit），界面据此显示本次消耗
         payload['stream_options'] = {'include_usage': True}
 
-    headers = gateway._upstream_headers(upstream)
+    gateway._stamp_route(upstream, model_sent, model_sent)
+    headers = await gateway._upstream_headers_async(upstream)
     url = f'{upstream["base_url"]}/v1/chat/completions'
 
-    client = config.http_client(config.UPSTREAM_TIMEOUT, connect=5)
+    budgets = deadline.request_budgets(config.UPSTREAM_TIMEOUT)
+    request_deadline = deadline.Deadline(budgets)
+    timeouts = deadline.transport_timeouts(budgets)
+    client = config.http_client(timeouts['timeout'], connect=timeouts['connect'], bounded_response=True)
+    resp = None
     try:
         req = client.build_request('POST', url, json=payload, headers=headers)
-        resp = await client.send(req, stream=True)
+        resp = await deadline.await_headers(client.send(req, stream=True), request_deadline)
+    except asyncio.CancelledError:
+        await observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets))
+        raise
     except Exception as exc:  # noqa: BLE001
-        await client.aclose()
+        await observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets))
         gateway._record(
             None, ip, model_sent, '', 502, 0, 0,
             int((time.time() - started) * 1000),
@@ -99,10 +119,19 @@ async def chat(body: ChatIn, request: Request, user: dict = Depends(security.cur
 
     if not body.stream:
         try:
-            raw = await resp.aread()
+            raw = await deadline.await_total(resp.aread(), request_deadline)
+        except asyncio.CancelledError:
+            gateway._record(None, ip, model_sent, '', 499, 0, 0,
+                int((time.time() - started) * 1000), request.headers.get('user-agent'),
+                'client cancelled while reading response', False)
+            raise
+        except Exception as exc:
+            gateway._record(None, ip, model_sent, '', 502, 0, 0,
+                int((time.time() - started) * 1000), request.headers.get('user-agent'),
+                str(exc), False)
+            raise HTTPException(status_code=502, detail=f'上游不可用：{exc}') from exc
         finally:
-            await resp.aclose()
-            await client.aclose()
+            await observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets))
         # 非流式同样要记账（否则测试台的这部分开销查不到）
         usage: dict = {}
         try:
@@ -114,14 +143,13 @@ async def chat(body: ChatIn, request: Request, user: dict = Depends(security.cur
         # 整份 usage 交过去（而不是只取 credit）：扣费与提示词缓存三段都在这一份里
         gateway._record(
             None, ip, model_sent, '', resp.status_code,
-            int(usage.get('prompt_tokens') or 0),
-            int(usage.get('completion_tokens') or 0),
+            observability.usage_int(usage.get('prompt_tokens')),
+            observability.usage_int(usage.get('completion_tokens')),
             int((time.time() - started) * 1000),
             request.headers.get('user-agent'), None, False,
             usage=usage,
         )
-        return StreamingResponse(iter([raw]), media_type='application/json',
-                                 status_code=resp.status_code)
+        return Response(raw, media_type='application/json', status_code=resp.status_code)
 
     async def gen():
         """转发 SSE，并在收尾时记录日志与用量。
@@ -131,38 +159,52 @@ async def chat(body: ChatIn, request: Request, user: dict = Depends(security.cur
         key_id 传 None（测试台没有对外密钥），日志页会显示成「—」，
         因此仍可区分「测试台调用」与「某个密钥的调用」。
         """
-        usage: dict = {}
-        pending = ''
+        audit = observability.StreamAudit()
+        error_bytes = bytearray()
+        cancelled = False
         error_text: str | None = None
         first_token_ms: int | None = None
         try:
-            async for chunk in resp.aiter_bytes():
+            async for chunk in deadline.iterate_with_budgets(resp.aiter_bytes(), request_deadline):
                 if resp.status_code >= 400:
-                    pending += chunk.decode('utf-8', errors='ignore')
-                    if len(pending) > 4000:
-                        error_text = pending[:500]
+                    error_bytes.extend(chunk[:max(0, 2000 - len(error_bytes))])
+                    error_text = error_bytes.decode('utf-8', 'replace')[:500]
+                    audit.error_stage = 'upstream'
                     yield chunk
                     continue
-                pending += chunk.decode('utf-8', errors='ignore')
-                pending, saw_content = gateway._scan_sse(pending, usage)
-                if saw_content and first_token_ms is None:
+                audit.feed(chunk)
+                if audit.saw_useful and first_token_ms is None:
                     first_token_ms = int((time.time() - started) * 1000)
                 yield chunk
+            if resp.status_code < 400:
+                audit.finish()
+                error_text = audit.error or (None if audit.completed else '上游流提前结束')
+                if error_text:
+                    yield observability.sse_error(error_text)
+        except (asyncio.CancelledError, GeneratorExit):
+            cancelled = True
+            raise
+        except Exception as exc:
+            error_text = f'上游流传输或协议异常：{type(exc).__name__}'
+            audit.error_stage = 'stream_read'
+            yield observability.sse_error(error_text)
         finally:
-            await resp.aclose()
-            await client.aclose()
+            observability.set_stream_state(audit, error_text, cancelled)
+            await observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets))
+            usage = audit.usage
             gateway._record(
                 None, ip, model_sent, '', resp.status_code,
-                int(usage.get('prompt_tokens') or 0),
-                int(usage.get('completion_tokens') or 0),
+                observability.usage_int(usage.get('prompt_tokens')),
+                observability.usage_int(usage.get('completion_tokens')),
                 int((time.time() - started) * 1000),
                 request.headers.get('user-agent'), error_text, True,
                 usage=usage,
                 first_token=first_token_ms,
             )
 
-    return StreamingResponse(gen(), status_code=resp.status_code,
-                             media_type=resp.headers.get('content-type', 'text/event-stream'))
+    return observability.ManagedStreamingResponse(gen(), status_code=resp.status_code,
+        cleanup=lambda: observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets)),
+        media_type=resp.headers.get('content-type', 'text/event-stream'))
 
 
 @router.get('/models')

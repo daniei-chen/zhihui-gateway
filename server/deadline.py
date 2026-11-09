@@ -1,0 +1,531 @@
+"""K21 · 请求级时间预算、重试边界与取消传递（Manager → 上游这一跳）。
+
+## 审计时的基线（后续实现已经改变行为）
+
+* `config.py`：`UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 300)`；生产实际
+  环境值 600（审计包 §5 勘误：不是 300，也不成立「Go 450s 一定先断」）。
+* `gateway.py::_chat`：非流式与流式都调
+  `config.http_client(config.UPSTREAM_TIMEOUT, connect=5, …)`
+  → **连接**有 5s 预算；**读**预算 = UPSTREAM_TIMEOUT（httpx 的 read timeout 是
+  「每次 read 的间隔」，流式下等价于**流中空闲**预算）。
+* 缺的三项：
+  1. **首包**没有单独口径 —— 只有 read 超时兜底，慢首包与慢流中段无法区分；
+  2. **总时长**没有上界 —— 只要上游持续吐字节，流可以一直续命；
+  3. **重试策略不存在**：全仓没有对上游的自动重试（`grep retry` 只命中错误文案
+     与 `Retry-After`）。这既是好事（不会重放已开始的生成），也是风险：将来谁
+     加一次「顺手重试」都没有拦截点。本模块把「哪些阶段可以重试」写成策略 + 测试。
+* 取消链是有的：`observability.close_stream` 用
+  `anyio.move_on_after(5, shield=True)` 做有界关闭；`gateway._record` 在
+  `client_cancelled` 时把状态写成 499，`budget.settle/finish` 把未决预留置
+  `unknown` 而不是释放。取消预算字段已显式化，但关闭窗口的统一接入仍待验证。
+
+## 五类预算
+
+| 预算 | 默认 | 覆盖什么 | 失败后终态 |
+|---|---|---|---|
+| 连接 | 5s | TCP/TLS 建立 | `transport_error`（可重试，见下） |
+| 首包 | 60s | 请求发出 → 第一个字节 | `transport_error` |
+| 流中空闲 | 600s | 两个数据块之间的间隔 | `transport_error` |
+| 总时长 | 600s | 请求开始 → 结束（含生成） | `transport_error` |
+| 客户端取消 | 5s | 收到取消后关闭上游的有界窗口 | `client_cancelled`（499） |
+
+这些预算会改变超时行为：首包默认 60s 会比原生产 600s 更早终止慢首包；
+总时长上限也会终止持续输出超过总预算的流。上线前须结合实际延迟分布显式配置，
+不能把它们描述成“线上行为不变”。当前已覆盖响应头等待、流迭代与非流式总时长；
+各兼容协议及取消关闭预算仍需逐链验收。
+
+## 重试边界（为什么只有两个阶段可以重试）
+
+* `connect` / `send_request`：只有异常类型证明尚未发送到上游时才允许重试
+  （ConnectError、ConnectTimeout、PoolTimeout）。不能仅按所处阶段判断安全；
+  写入失败、连接重置和响应协议错误可能发生在上游已经接收请求之后，不自动重放。
+* `first_byte`：等待首包期间上游可能已经开始生成 —— 重试等于第二次扣费，**禁止**。
+* `streaming`：已开始生成，任何重放都会重复输出/重复计费，**禁止**。
+
+## U13（2026-10-28）：三条协议共用同一套预算对象
+
+改动前三条路径的覆盖程度并不一致（这就是 U13 的缺口）：
+
+| 预算 | OpenAI chat（`gateway._chat`） | Anthropic messages | Responses |
+|---|---|---|---|
+| 连接 | 5s（`connect=budgets.connect_s`） | 5s（硬编码 `connect=5`） | 5s（硬编码） |
+| 首包 | `first_byte_s` | **无**（只有 httpx read timeout） | **无** |
+| 流中空闲 | `stream_idle_s` | httpx read timeout | httpx read timeout |
+| 总时长 | `total_s` | **无上界** | **无上界** |
+| 客户端取消 | `CancelledError` 上抛 + `close_stream` 有界关闭 | 同（窗口硬编码 5s） | 同 |
+
+缺口集中在两个兼容层：它们只建了 `http_client(UPSTREAM_TIMEOUT, connect=5)`，
+于是「只要上游持续吐字节，流就能一直续命」，慢首包与慢流中段也无法区分。
+现在两个兼容层都从本模块取预算（`request_budgets` / `open_request` /
+`transport_timeouts` / `classify_budget_exceeded` / `close_timeout`），与
+`_chat` 用**同一个** `Budgets` 与 `Deadline` 对象类型、同一套归因函数。
+
+**错误码语义不变**：超时仍按各协议原有的形态返回（chat 502 +
+`X-Upstream-Blip`、messages 502 `api_error`、responses 502 `api_error`；
+已开流的走各自流中错误帧），不新增 504，也不改变任何既有 code 的取值。
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import math
+import random
+import time
+from dataclasses import dataclass, replace
+from typing import Any, AsyncIterator, Callable
+
+# 阶段
+PHASE_CONNECT = 'connect'
+PHASE_SEND = 'send_request'
+PHASE_FIRST_BYTE = 'first_byte'
+PHASE_STREAMING = 'streaming'
+PHASE_DONE = 'done'
+PHASES = (PHASE_CONNECT, PHASE_SEND, PHASE_FIRST_BYTE, PHASE_STREAMING, PHASE_DONE)
+
+#: 唯一允许自动重试的阶段：**生成尚未开始**
+SAFE_RETRY_PHASES = frozenset({PHASE_CONNECT})
+#: 明确禁止重试的阶段（写出来是为了可测试、可引用）
+NEVER_RETRY_PHASES = frozenset({PHASE_SEND, PHASE_FIRST_BYTE, PHASE_STREAMING, PHASE_DONE})
+
+#: 可重试的错误类名（按类名判断，避免把 httpx 变成硬依赖；也覆盖 stdlib 情形）
+RETRYABLE_ERROR_NAMES = frozenset({
+    'ConnectError', 'ConnectTimeout', 'PoolTimeout',
+})
+
+
+class BudgetExceeded(Exception):
+    """某一类时间预算用尽。`kind` 是 connect/first_byte/stream_idle/total。"""
+
+    def __init__(self, kind: str, detail: str = ''):
+        super().__init__(f'时间预算用尽：{kind}' + (f'（{detail}）' if detail else ''))
+        self.kind = kind
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class Budgets:
+    """五类预算的显式取值（秒）。"""
+
+    connect_s: float = 5.0
+    first_byte_s: float = 60.0
+    stream_idle_s: float = 600.0
+    total_s: float = 600.0
+    client_cancel_s: float = 5.0
+
+    def __post_init__(self) -> None:
+        for name in ('connect_s', 'first_byte_s', 'stream_idle_s', 'total_s',
+                     'client_cancel_s'):
+            value = getattr(self, name)
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError(f'{name} 必须是正数：{value!r}')
+
+    def normalized(self) -> 'Budgets':
+        """把互相矛盾的环境配置**夹到自洽区间**，而不是让请求随机超时。
+
+        `total_s` 是所有预算的上界：它小于首包/空闲预算时，实际生效的是 total
+        （否则会先被 total 打断，配置含义就反了）。这里显式夹紧并保留可观测性
+        （调用方可用 `normalized() != budgets` 判断是否发生了夹取）。
+        """
+        total = self.total_s
+        idle = min(self.stream_idle_s, total)
+        first = min(self.first_byte_s, total)
+        return replace(self, total_s=total, stream_idle_s=idle, first_byte_s=first,
+                       connect_s=min(self.connect_s, total))
+
+    @classmethod
+    def from_config(cls, upstream_timeout: float | None = None) -> 'Budgets':
+        """从环境变量构造（缺省值保持与现状一致）。
+
+        * `WB_CONNECT_TIMEOUT_S`      默认 5（与现有 `connect=5` 一致）
+        * `WB_FIRST_BYTE_TIMEOUT_S`   默认 = 读超时（旧版 first_byte 只记指标、无硬预算；60s cap 会造成慢上游 502，2026-10-26 回归修复）
+        * `WB_STREAM_IDLE_TIMEOUT_S`  默认读超时（httpx read timeout 语义）
+        * `WB_TOTAL_TIMEOUT_S`        默认读超时
+        * `WB_CLIENT_CANCEL_S`        默认 5（与 close_stream 的 shield 一致）
+        """
+        def _num(name: str, default: float) -> float:
+            raw = os.environ.get(name, '').strip()
+            if not raw:
+                return default
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise ValueError(f'{name} must be a positive finite number') from exc
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'{name} must be a positive finite number')
+            return value
+
+        base = float(upstream_timeout or _num('WB_UPSTREAM_TIMEOUT', 300.0))
+        return cls(
+            connect_s=_num('WB_CONNECT_TIMEOUT_S', 5.0),
+            first_byte_s=_num('WB_FIRST_BYTE_TIMEOUT_S', base),
+            stream_idle_s=_num('WB_STREAM_IDLE_TIMEOUT_S', base),
+            total_s=_num('WB_TOTAL_TIMEOUT_S', base),
+            client_cancel_s=_num('WB_CLIENT_CANCEL_S', 5.0),
+        ).normalized()
+
+
+# ── U13：三条协议共用的预算入口与归因 ────────────────────────────────────
+#
+# 三个入口一律走下面这几个函数，不再各自 `http_client(UPSTREAM_TIMEOUT,
+# connect=5)` 或各自拼 `Budgets`。这样「哪条协议有哪几类预算」不再取决于
+# 谁写了哪个 router，而是由本模块一处决定（对照表见模块 docstring）。
+
+
+def request_budgets(upstream_timeout: float | None = None) -> Budgets:
+    """一次请求要用的预算对象（三条协议同一来源）。"""
+    return Budgets.from_config(upstream_timeout)
+
+
+def open_request(upstream_timeout: float | None = None, *,
+                 clock: Callable[[], float] = time.monotonic) -> 'Deadline':
+    """开一条请求时间轴；`clock` 可注入，便于测试不睡真实时间。"""
+    return Deadline(request_budgets(upstream_timeout), clock=clock)
+
+
+def transport_timeouts(budgets: Budgets) -> dict:
+    """httpx 客户端参数。
+
+    httpx 的 `Timeout(t, connect=c)` 里 `t` 是**单次操作**的超时，不是请求总时长；
+    总时长由上层 `await_total` / `iterate_with_budgets` 施加。两者不冲突：
+    前者是传输层的安全带（一次 read 卡住多久算死），后者是请求级上界
+    （整条请求最多活多久）。缺了后者，上游慢速吐字节就能无限续命。
+    """
+    b = budgets.normalized()
+    return {'timeout': b.total_s, 'connect': b.connect_s}
+
+
+@dataclass(frozen=True)
+class BudgetFailure:
+    """一类预算用尽后的**归类结果**：三条协议共用同一套归因。"""
+
+    kind: str
+    terminal_state: str
+    error_stage: str
+    message: str
+
+
+#: 预算种类 → (终态, 阶段)。
+#:
+#: `error_stage` 一律落在 `stream_read`（与改动前 `gateway._chat` 的既有取值
+#: 完全一致）—— 超时是**传输层事实**，不是协议错误，更不是上游业务拒绝。
+#: 具体是哪一类预算，由 `kind` 与 message 表达；`observability.set_stream_state`
+#: 据此把终态归成 `transport_error`。
+_BUDGET_STAGE = {
+    'connect': ('transport_error', 'stream_read'),
+    'send_request': ('transport_error', 'stream_read'),
+    'first_byte': ('transport_error', 'stream_read'),
+    'stream_idle': ('transport_error', 'stream_read'),
+    'total': ('transport_error', 'stream_read'),
+}
+
+
+def classify_budget_exceeded(exc: 'BudgetExceeded') -> BudgetFailure:
+    """把 `BudgetExceeded` 归一成 (kind, 终态, 阶段, 对外文案)。
+
+    对外文案**不含上游地址/拓扑**，只说明是哪一类预算——与既有
+    「上游响应超出时间预算：kind」的措辞一致，避免新增可被探测的信息。
+    """
+    kind = getattr(exc, 'kind', 'total')
+    terminal, stage = _BUDGET_STAGE.get(kind, ('transport_error', 'stream_read'))
+    detail = getattr(exc, 'detail', '') or ''
+    message = f'上游响应超出时间预算：{kind}'
+    if detail:
+        message = message + f'（{detail}）'
+    return BudgetFailure(kind=kind, terminal_state=terminal,
+                         error_stage=stage, message=message)
+
+
+def close_timeout(budgets: Budgets) -> float:
+    """收到客户端取消后关闭上下游的有界窗口（= `client_cancel_s`）。
+
+    改动前 `observability.close_stream` 里硬编码 5s；现在三条协议都把预算对象
+    里的同一个值传进去，取消关闭窗口与其余预算来自同一份配置。
+    """
+    return budgets.normalized().client_cancel_s
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """有界、只在安全阶段重试。默认 `max_attempts=1` = 不改变现有行为。"""
+
+    max_attempts: int = 1
+    backoff_s: float = 0.2
+    max_backoff_s: float = 2.0
+    jitter_s: float = 0.1
+
+    def __post_init__(self) -> None:
+        if isinstance(self.max_attempts, bool) or self.max_attempts < 1:
+            raise ValueError('max_attempts 必须 >= 1')
+
+    @classmethod
+    def from_config(cls) -> 'RetryPolicy':
+        raw = os.environ.get('WB_SAFE_RETRY_MAX', '').strip()
+        try:
+            max_attempts = int(raw) if raw else 1
+        except ValueError:
+            max_attempts = 1
+        return cls(max_attempts=max(1, min(3, max_attempts)))
+
+    def delay(self, attempt: int, *, rand: Callable[[], float] = random.random) -> float:
+        """指数退避 + 抖动；上限由 `max_backoff_s` 控制（避免放大上游故障）。"""
+        base = self.backoff_s * (2 ** max(0, attempt - 1))
+        jitter = self.jitter_s * rand()
+        return min(self.max_backoff_s, base) + jitter
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    retry: bool
+    reason: str
+    next_attempt: int
+    delay_s: float = 0.0
+
+
+def _looks_retryable(error: BaseException | None) -> bool:
+    if error is None:
+        return True
+    names = {cls.__name__ for cls in type(error).__mro__}
+    return bool(names & RETRYABLE_ERROR_NAMES)
+
+
+def failure_phase(error: BaseException) -> str:
+    """Only a failed connection/pool acquisition proves no request was sent.
+
+    ReadError, WriteError and protocol/connection resets are ambiguous: the
+    upstream may already have accepted and billed the generation.
+    """
+    names = {cls.__name__ for cls in type(error).__mro__}
+    return PHASE_CONNECT if names & RETRYABLE_ERROR_NAMES else PHASE_FIRST_BYTE
+
+
+def decide_retry(policy: RetryPolicy, *, phase: str, attempt: int,
+                 generated_started: bool, error: BaseException | None = None,
+                 retryable: bool | None = None) -> RetryDecision:
+    """唯一的重试判定入口。
+
+    拒绝顺序有意如此（先硬约束、后策略）：
+    1. 生成已开始 → 永不重试；
+    2. 阶段不在安全集合 → 永不重试；
+    3. 次数用尽 → 不重试；
+    4. 错误不可重试 → 不重试；
+    5. 否则重试（带退避）。
+    """
+    if phase not in PHASES:
+        return RetryDecision(False, f'未知阶段 {phase!r}', attempt)
+    if generated_started:
+        return RetryDecision(False, '生成已开始：禁止透明重放（会重复输出/重复计费）',
+                             attempt)
+    if phase in NEVER_RETRY_PHASES:
+        return RetryDecision(False, f'阶段 {phase} 不在安全重试集合内', attempt)
+    if phase not in SAFE_RETRY_PHASES:
+        return RetryDecision(False, f'阶段 {phase} 不是安全重试阶段', attempt)
+    if attempt >= policy.max_attempts:
+        return RetryDecision(False, f'已达最大尝试次数 {policy.max_attempts}', attempt)
+    if retryable is None:
+        retryable = _looks_retryable(error)
+    if not retryable:
+        name = type(error).__name__ if error is not None else 'unknown'
+        return RetryDecision(False, f'错误类型不可重试：{name}', attempt)
+    return RetryDecision(True, f'{phase} 阶段可重试', attempt + 1,
+                         policy.delay(attempt))
+
+
+class Deadline:
+    """一次请求的时间轴；被 `iterate_with_budgets()` 消费。"""
+
+    def __init__(self, budgets: Budgets, *, clock: Callable[[], float] = time.monotonic):
+        self.budgets = budgets.normalized()
+        self._clock = clock
+        self.started = clock()
+        self.first_byte_at: float | None = None
+        self.phase = PHASE_CONNECT
+
+    # ── 时间读数 ──────────────────────────────────────────────────────
+    def elapsed(self) -> float:
+        return max(0.0, self._clock() - self.started)
+
+    def mark_first_byte(self) -> None:
+        if self.first_byte_at is None:
+            self.first_byte_at = self._clock()
+
+    @property
+    def first_byte_seen(self) -> bool:
+        return self.first_byte_at is not None
+
+    def remaining_total(self) -> float:
+        return max(0.0, self.budgets.total_s - self.elapsed())
+
+    def first_byte_remaining(self) -> float:
+        if self.first_byte_seen or self.first_byte_at is not None:
+            return self.remaining_total()
+        # 首包预算从请求开始算（连接阶段也算在内，避免「连接慢 + 首包慢」叠加）
+        return max(0.0, self.budgets.first_byte_s - self.elapsed())
+
+    def next_timeout(self) -> tuple[float, str]:
+        """下一段等待的超时与**触发时会归因到哪一类预算**。"""
+        if not self.first_byte_seen:
+            candidates = ((self.first_byte_remaining(), 'first_byte'),
+                          (self.remaining_total(), 'total'))
+        else:
+            candidates = ((self.budgets.stream_idle_s, 'stream_idle'),
+                          (self.remaining_total(), 'total'))
+        timeout, kind = min(candidates, key=lambda item: item[0])
+        return timeout, kind
+
+    def check_total(self) -> None:
+        if self.elapsed() > self.budgets.total_s:
+            raise BudgetExceeded('total', f'已 {self.elapsed():.1f}s')
+
+
+async def await_headers(awaitable, deadline: Deadline):
+    """Include response-header wait in the first-byte and total budgets."""
+    timeout, kind = deadline.next_timeout()
+    try:
+        return await asyncio.wait_for(awaitable, timeout)
+    except asyncio.TimeoutError as exc:
+        raise BudgetExceeded(kind, f'waiting for response headers exceeded {timeout:.3f}s') from exc
+
+
+async def await_total(awaitable, deadline: Deadline):
+    try:
+        return await asyncio.wait_for(awaitable, deadline.remaining_total())
+    except asyncio.TimeoutError as exc:
+        raise BudgetExceeded('total', 'request exceeded its total deadline') from exc
+
+
+async def decoded_bytes(response, maximum=None):
+    """Decode with a hard expansion limit, including gzip/deflate responses."""
+    import zlib
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    limit=maximum_bytes() if maximum is None else maximum
+    encoding=(getattr(response,'headers',{}) or {}).get('content-encoding','identity').strip().lower()
+    consumed=getattr(response,'is_stream_consumed',False)
+    if consumed:
+        async def buffered():
+            for offset in range(0,len(response.content),16384):
+                yield response.content[offset:offset+16384]
+        iterator=buffered();encoding='identity'
+    elif callable(getattr(response,'aiter_raw',None)):
+        iterator=response.aiter_raw(chunk_size=None)
+    else:
+        iterator=response.aiter_bytes()  # decoded embedded transport
+        encoding='identity'
+    if encoding not in ('','identity','gzip','deflate'):
+        raise ValueError('Unsupported upstream content encoding')
+    decoder=zlib.decompressobj(16+zlib.MAX_WBITS if encoding=='gzip' else zlib.MAX_WBITS) if encoding in ('gzip','deflate') else None
+    encoded=decoded=0
+    async for raw in iterator:
+        encoded+=len(raw)
+        if encoded>limit+65536:
+            raise OutputLimitExceeded('Upstream encoded response exceeds the configured byte limit')
+        chunk=decoder.decompress(raw,limit-decoded+1) if decoder else raw
+        decoded+=len(chunk)
+        if decoded>limit:
+            raise OutputLimitExceeded('Upstream response exceeds the configured byte limit')
+        if decoder and (decoder.unconsumed_tail or decoder.unused_data):
+            raise OutputLimitExceeded('Upstream compressed response exceeds the supported limit')
+        if chunk:yield chunk
+    if decoder and not decoder.eof:
+        raise ValueError('Truncated compressed upstream response')
+
+
+async def buffered_post(client, url, *, content, headers, deadline):
+    """Bound decoded bytes and first-byte time before buffering a response."""
+    import httpx
+    from . import observability
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    started = time.monotonic()
+    request_headers=dict(headers)
+    request_headers['Accept-Encoding']='gzip, deflate, identity'
+    request=client.build_request('POST',url,content=content,headers=request_headers)
+    response=await await_headers(client.send(request,stream=True),deadline)
+    # A buffered request's first-byte SLO ends at response headers. Reading a
+    # complete generated body then uses idle/total time, not first-byte again.
+    deadline.mark_first_byte()
+    # 0.1.20: 非流式请求也要把首字节耗时落到观测状态。此前这里只标记 deadline
+    # 内部字段，observability 的 first_byte_ms 恒为 NULL —— 排障时只能拿到流式样本，
+    # 非流式慢请求没有任何 TTFB 证据。只在尚未记录时写，不覆盖更早的标记。
+    _state = observability.current.get()
+    if _state is not None and getattr(_state, 'first_byte_ms', None) is None:
+        _state.first_byte_ms = int((time.monotonic() - started) * 1000)
+    maximum=65536 if response.status_code>=400 else maximum_bytes()
+    data=bytearray()
+    try:
+        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
+            data.extend(chunk)
+        clean_headers={k:v for k,v in response.headers.items() if k.lower() not in
+                       ('content-encoding','content-length','transfer-encoding')}
+        return httpx.Response(response.status_code,headers=clean_headers,content=bytes(data),request=request)
+    except OutputLimitExceeded:
+        if response.status_code < 400:
+            raise
+        # The HTTP status is known even when the error payload is too large to
+        # trust/parse. Do not turn a provider's explicit 4xx into a retryable 502.
+        return httpx.Response(response.status_code,request=request,json={'error':{
+            'type':'upstream_invalid_body','code':'upstream_error_body_too_large',
+            'message':'Upstream error body exceeded the supported size limit',
+            'upstream_http_status':response.status_code,'retry_policy':{'retry':False}}})
+    finally:
+        await observability.close_stream(response,None,timeout=deadline.budgets.client_cancel_s)
+
+
+class ErrorBodyTooLarge(ValueError):
+    pass
+
+
+async def read_error_body(response, deadline: Deadline, maximum: int = 65536, *, preserve_status=False) -> bytes:
+    """An error response is not exempt from the request's time/space budget."""
+    from .outputlimits import OutputLimitExceeded
+    result = bytearray()
+    try:
+        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
+            result.extend(chunk)
+    except OutputLimitExceeded as exc:
+        status=getattr(response,'status_code',0)
+        if preserve_status and 400<=status<=599:
+            import json
+            return json.dumps({'error':{'type':'upstream_invalid_body',
+                'code':'upstream_error_body_too_large','retry_policy':{'retry':False},
+                'message':'Upstream error body exceeded the supported size limit',
+                'upstream_http_status':status}}).encode()
+        raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB') from exc
+    return bytes(result)
+
+
+async def iterate_with_budgets(iterator: AsyncIterator[bytes], deadline: Deadline, *,
+                               on_first_chunk: Callable[[], None] | None = None,
+                               timeout_override: float | None = None,
+                               maximum: int | None = None) -> AsyncIterator[bytes]:
+    """在五类预算下迭代上游字节流。
+
+    * 每块之前用 `asyncio.wait_for` 施加「首包 / 流中空闲 / 总时长」三者中最紧的
+      那个；超时抛 `BudgetExceeded(kind=…)`，由调用方映射成终态；
+    * 迭代结束（StopAsyncIteration）正常返回；
+    * 不吞取消：`asyncio.CancelledError` 原样向上抛，保证客户端取消能一路传回
+      上游（外层 `observability.close_stream` 负责有界关闭）。
+    """
+    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    limit=maximum_bytes() if maximum is None else maximum
+    used=0
+    while True:
+        deadline.check_total()
+        if timeout_override is not None:
+            timeout, kind = timeout_override, 'stream_idle'
+        else:
+            timeout, kind = deadline.next_timeout()
+        try:
+            chunk = await asyncio.wait_for(iterator.__anext__(), timeout)
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError as exc:
+            raise BudgetExceeded(kind, f'等待 {timeout:.1f}s 超时') from exc
+        used+=len(chunk)
+        if used>limit:
+            raise OutputLimitExceeded('Upstream output exceeds the configured byte limit')
+        if not deadline.first_byte_seen:
+            deadline.mark_first_byte()
+            deadline.phase = PHASE_STREAMING
+            if on_first_chunk is not None:
+                on_first_chunk()
+        yield chunk

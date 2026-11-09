@@ -5,9 +5,9 @@
 而账号/状态/模型这些接口每次都要问上游几次。
 
 这里钉住四件事：
-  1. 同一个循环 + 同一组超时/代理 → **同一个客户端对象**（复用的全部意义）；
+  1. 同一个循环 + 同一组超时/代理 → **同一传输连接池**（每次调用的状态独立）；
   2. 不同超时组合 → 各自一个（不能把 5 秒超时和 30 秒超时混成一个）；
-  3. `async with` 退出时**不关闭**（否则等于每次还是新建）；
+  3. `async with` 退出只关闭调用状态，**不关闭可复用传输**；
   4. 跨事件循环不复用（httpx 的连接池绑在创建它的循环上；同步路由里
      `asyncio.run` 另起循环那条路——见 modelcatalog.fetch_ids_blocking——
      拿到旧循环的客户端就会炸）。
@@ -28,147 +28,130 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from server import config  # noqa: E402
 
 
-class HttpClientReuseTest(unittest.TestCase):
-    def setUp(self) -> None:
-        config._CLIENTS.clear()
-        self.addCleanup(config._CLIENTS.clear)
+class TrackedTransport(__import__('httpx').MockTransport):
+    def __init__(self):
+        import httpx
+        super().__init__(lambda request: httpx.Response(200, content=b'ok'))
+        self.closes = 0
+        self.owner = asyncio.get_running_loop()
 
-    def test_same_config_borrows_the_same_client(self) -> None:
-        async def scenario():
-            async with config.http_client(10, connect=3) as first:
-                pass
-            async with config.http_client(10, connect=3) as second:
-                pass
-            return first, second
+    async def aclose(self):
+        assert asyncio.get_running_loop() is self.owner
+        self.closes += 1
 
-        first, second = asyncio.run(scenario())
-        self.assertIs(first, second,
-                      '两次取到的不是同一个客户端 —— 等于每次还是新建（issue #144）')
 
-    def test_borrowed_client_stays_open(self) -> None:
-        async def scenario():
-            async with config.http_client(10, connect=3) as client:
-                pass
-            return client
+class HttpClientReuseTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await config.close_clients()
+        self.proxy_patch = mock.patch.object(config, 'effective_http_proxy', return_value='')
+        self.proxy_patch.start()
+        self.addCleanup(self.proxy_patch.stop)
 
-        client = asyncio.run(scenario())
-        self.assertFalse(client.is_closed,
-                         '借用期间被关掉了：连接池每次都得重建，复用的意义就没了')
+    async def asyncTearDown(self):
+        await config.close_clients()
 
-    def test_different_timeouts_get_different_clients(self) -> None:
-        async def scenario():
+    async def fetch(self, **kwargs):
+        async with config.http_client(10, connect=3, **kwargs) as client:
+            response = await client.get('https://unit.invalid/')
+            self.assertEqual(response.content, b'ok')
+        return client
+
+    async def test_same_config_reuses_transport_with_distinct_clients(self):
+        transport = TrackedTransport()
+        with mock.patch.object(config, '_build_transport', return_value=transport) as build:
+            first, second = await self.fetch(), await self.fetch()
+        self.assertIsNot(first, second, 'Cookie/headers must belong to each lease')
+        self.assertEqual(build.call_count, 1, 'TLS transport construction must be reused')
+        self.assertEqual(transport.closes, 0)
+
+    async def test_lease_exit_closes_only_the_lease(self):
+        transport = TrackedTransport()
+        with mock.patch.object(config, '_build_transport', return_value=transport):
+            client = await self.fetch()
+        self.assertTrue(client.is_closed)
+        self.assertEqual(transport.closes, 0, 'An idle cached transport remains reusable')
+
+    async def test_different_timeouts_get_separate_transports(self):
+        with mock.patch.object(config, '_build_transport', side_effect=lambda _: TrackedTransport()) as build:
             async with config.http_client(10, connect=3) as slow:
-                pass
+                await slow.get('https://unit.invalid/')
             async with config.http_client(5, connect=2) as quick:
-                pass
-            return slow, quick
-
-        slow, quick = asyncio.run(scenario())
-        self.assertIsNot(slow, quick,
-                         '不同超时配置共用一个客户端会把二者的超时混在一起')
+                await quick.get('https://unit.invalid/')
+        self.assertEqual(build.call_count, 2)
         self.assertEqual(slow.timeout.connect, 3)
         self.assertEqual(quick.timeout.connect, 2)
 
-    def test_different_proxy_gets_its_own_client(self) -> None:
-        async def scenario():
-            async with config.http_client(10, connect=3, proxy='') as direct:
-                pass
-            async with config.http_client(10, connect=3, proxy='http://127.0.0.1:7890') as via:
-                pass
-            return direct, via
+    async def test_different_proxy_gets_separate_transport(self):
+        with mock.patch.object(config, '_build_transport', side_effect=lambda _: TrackedTransport()) as build:
+            await self.fetch(proxy='')
+            await self.fetch(proxy='http://127.0.0.1:7890')
+        self.assertEqual(build.call_count, 2)
 
-        direct, via = asyncio.run(scenario())
-        self.assertIsNot(direct, via, '走代理由的账号不能复用直连的客户端')
-
-    def test_never_shares_across_event_loops(self) -> None:
-        """跨循环复用会炸（连接池绑在旧循环上）—— 必须各建一个。"""
-        async def one():
-            async with config.http_client(10, connect=3) as client:
-                return client
-
-        first = asyncio.run(one())
-        second = asyncio.run(one())
-        self.assertIsNot(first, second,
-                         '第二个事件循环拿到了前一个循环的客户端 —— 这正是同步路由'
-                         '另起循环时最危险的那种复用')
-        self.assertFalse(second.is_closed, '第二个循环里的客户端必须能用')
-
-    def test_no_new_client_construction_on_second_borrow(self) -> None:
-        """计数式断言：第二次借用时**没有**再构造 httpx.AsyncClient。"""
-        import httpx
-
-        real_init = httpx.AsyncClient.__init__
-        built: list[int] = []
-
-        def counting_init(self, *a, **kw):  # noqa: ANN001
-            built.append(1)
-            return real_init(self, *a, **kw)
-
-        async def scenario():
+    async def test_no_repeated_transport_construction_on_second_borrow(self):
+        transport = TrackedTransport()
+        with mock.patch.object(config, '_build_transport', return_value=transport) as build:
             for _ in range(3):
-                async with config.http_client(30, connect=3) as client:
-                    pass
-            return client
+                await self.fetch()
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(transport.closes, 0)
 
-        with mock.patch.object(httpx.AsyncClient, '__init__', counting_init):
-            client = asyncio.run(scenario())
-        self.assertEqual(len(built), 1,
-                         f'三次借用构造了 {len(built)} 个客户端，应当只建一次')
-        asyncio.run(_aclose(client))
+    async def test_close_clients_closes_idle_transports_and_clears_cache(self):
+        transport = TrackedTransport()
+        with mock.patch.object(config, '_build_transport', return_value=transport):
+            await self.fetch()
+        await config.close_clients()
+        self.assertEqual(transport.closes, 1)
+        self.assertEqual(config._CLIENTS, {})
 
-    def test_close_clients_closes_and_clears(self) -> None:
+    async def test_repeated_lease_close_does_not_close_another_lease(self):
+        transport = TrackedTransport()
+        with mock.patch.object(config, '_build_transport', return_value=transport):
+            first = config.http_client(10, connect=3)
+            second = config.http_client(10, connect=3)
+            try:
+                await first.get('https://unit.invalid/')
+                await first.aclose()
+                await first.aclose()
+                self.assertFalse(second.is_closed)
+                self.assertEqual((await second.get('https://unit.invalid/')).content, b'ok')
+            finally:
+                await first.aclose()
+                await second.aclose()
+        self.assertEqual(transport.closes, 0)
+
+    async def test_client_surface_without_context_manager(self):
+        client = config.http_client(10, connect=3)
+        try:
+            self.assertTrue(hasattr(client, 'post') and hasattr(client, 'stream'))
+            self.assertEqual(client.timeout.connect, 3)
+            self.assertIn('user-agent', client.headers)
+        finally:
+            await client.aclose()
+
+
+class LoopOwnershipTest(unittest.TestCase):
+    def test_loop_exit_cleans_transports_without_cross_loop_reuse(self):
+        built = []
+        def factory(_):
+            transport = TrackedTransport()
+            built.append(transport)
+            return transport
         async def scenario():
-            async with config.http_client(10, connect=3) as client:
-                pass
-            await config.close_clients()
-            return client
+            async with config.http_client(1, proxy='') as client:
+                await client.get('https://unit.invalid/')
+        with mock.patch.object(config, '_build_transport', side_effect=factory):
+            asyncio.run(scenario())
+            asyncio.run(scenario())
+        self.assertEqual(len(built), 2)
+        self.assertIsNot(built[0].owner, built[1].owner)
+        self.assertEqual([value.closes for value in built], [1, 1])
+        self.assertEqual(config._CLIENTS, {})
 
-        client = asyncio.run(scenario())
-        self.assertTrue(client.is_closed, 'close_clients 之后仍开着')
-        self.assertEqual(config._CLIENTS, {}, '池没清空')
-
-    def test_outside_event_loop_is_not_cached(self) -> None:
-        """同步上下文（没有正在跑的循环）不缓存：不留绑定不明的客户端。"""
-        direct = config.http_client(10, connect=3)
-        self.assertTrue(hasattr(direct, 'aclose'),
-                        '同步上下文应直接返回可用的客户端（而不是借用包装）')
-        self.assertEqual(config._CLIENTS, {}, '同步上下文不该往池里塞东西')
-        asyncio.run(_aclose(direct))
-
-
-    def test_closing_a_borrowed_client_does_not_kill_the_shared_one(self) -> None:
-        """自己 `client = http_client(...)` 再 `aclose()` 的写法不能真的关掉共享客户端。
-
-        网关 / Anthropic 兼容 / 测试台 / Responses 四处就是这种写法。共享之后，
-        那里的 aclose 一旦真关，会把别人正在用的连接池一起关掉 —— 并发下就是
-        「偶发请求失败」。借来的客户端只支持「归还」。
-        """
-
-        async def scenario():
-            async with config.http_client(10, connect=3) as first:
-                pass
-            borrowed = config.http_client(10, connect=3)   # 不用 async with 的写法
-            await borrowed.aclose()                        # 旧写法里的 finally 分支
-            async with config.http_client(10, connect=3) as again:
-                pass
-            return first, again
-
-        first, again = asyncio.run(scenario())
-        self.assertFalse(first.is_closed, '借来的客户端被 aclose 真关掉了')
-        self.assertIs(first, again, '关过一次之后没从池里复用 —— 退化成每次新建')
-
-    def test_borrowed_wrapper_forwards_client_calls(self) -> None:
-        """包装要能当客户端用（post/stream/headers…），否则不用 async with 的写法会崩。"""
-        async def scenario():
-            borrowed = config.http_client(10, connect=3)
-            return borrowed, borrowed.timeout, borrowed.headers
-
-        borrowed, timeout, headers = asyncio.run(scenario())
-        self.assertTrue(hasattr(borrowed, 'post') and hasattr(borrowed, 'stream'),
-                        '属性转发没生效，`client.post(...)` 会 AttributeError')
-        self.assertEqual(timeout.connect, 3)
-        self.assertIn('user-agent', {k.lower() for k in headers})
-        asyncio.run(config.close_clients())
+    def test_outside_event_loop_is_not_cached(self):
+        direct = config.http_client(10, connect=3, proxy='')
+        self.assertTrue(hasattr(direct, 'aclose'))
+        self.assertEqual(config._CLIENTS, {})
+        asyncio.run(direct.aclose())
 
 
 async def _aclose(client) -> None:  # noqa: ANN001
@@ -202,21 +185,16 @@ class ProxySchemeSupportTest(unittest.TestCase):
 
     def test_all_three_schemes_are_accepted(self) -> None:
         async def scenario():
-            out = {}
+            transports = []
             for scheme in ('http://user:pass@127.0.0.1:7890',
                            'https://user:pass@127.0.0.1:7890',
                            'socks5://user:pass@127.0.0.1:1080'):
-                async with config.http_client(10, connect=3, proxy=scheme) as client:
-                    out[scheme.split('://', 1)[0]] = client
-            return out
-
-        clients = asyncio.run(scenario())
-        self.assertEqual(sorted(clients), ['http', 'https', 'socks5'])
-        for scheme, client in clients.items():
-            with self.subTest(scheme=scheme):
-                self.assertFalse(client.is_closed)
-        # 三种协议各自一个客户端：连接池不能混用不同代理
-        self.assertEqual(len({id(c) for c in clients.values()}), 3)
+                transport = config._build_transport(scheme)
+                transports.append(transport)
+                await transport.aclose()
+            return transports
+        transports = asyncio.run(scenario())
+        self.assertEqual(len({id(value) for value in transports}), 3)
 
 
 class InternalHostBypassTest(unittest.TestCase):

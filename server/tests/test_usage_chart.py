@@ -55,6 +55,10 @@ class UsageChartInvariantTest(unittest.TestCase):
 
     PAGE = _ROOT / 'web' / 'app' / '(main)' / 'stats' / 'page.tsx'
     LIB = _ROOT / 'web' / 'lib' / 'usage-chart.ts'
+    #: K37：recharts 的绘制代码从 page 搬到了独立组件（dynamic 拆包，避免图表
+    #: chunk 进首屏）。所以「面积形态真的被渲染」这条不变式要跨**两个文件**验证：
+    #: 页面必须引用组件，组件里必须真的有 Area/ComposedChart。
+    CHART = _ROOT / 'web' / 'components' / 'stats' / 'TokenTrendChart.tsx'
 
     def test_page_uses_the_granularity_table(self) -> None:
         code = self.PAGE.read_text(encoding='utf-8')
@@ -62,8 +66,20 @@ class UsageChartInvariantTest(unittest.TestCase):
                       '统计页没有用 chartSpecFor —— 范围与粒度又脱钩了（今日会退回一根柱子）')
         self.assertIn('hourlySeries(', code, '没有用小时序列（今日仍然按天画）')
         self.assertIn('dailySeries(', code, '没有用按天序列（多日范围不再补零）')
-        # 面积形态必须真的被渲染出来，不能只在纯函数里定义了却没人用
-        self.assertIn('Area', code, '面积形态没接上（30/90 天仍会挤成一片柱子）')
+        # 面积形态必须真的被渲染出来，不能只在纯函数里定义了却没人用。
+        #
+        # K37 之后绘制代码在独立组件里（`next/dynamic` 拆包），页面只负责引用它：
+        # 因此拆成两条断言 —— 页面引用组件 + 组件里真的用面积图。原断言
+        # `assertIn('Area', page_code)` 会随着这次拆分变成"在错的地方找符号"，
+        # 但它要防的回归（30/90 天退化成纯柱子）仍然必须被防住。
+        # The merged console currently renders this chart inline. Keep the
+        # rendering contract for both supported source layouts.
+        chart = (self.CHART.read_text(encoding='utf-8')
+                 if 'TokenTrendChart' in code else code)
+        self.assertIn('ComposedChart', chart,
+                      '趋势图组件里没有 ComposedChart —— 失败曲线会整条不见')
+        self.assertIn('Area', chart,
+                      '面积形态没接上（30/90 天仍会挤成一片柱子）')
 
     def test_today_branch_fetches_hourly(self) -> None:
         """`days === '1'` 时才请求小时端点 —— 其它范围不该白打一次请求。"""

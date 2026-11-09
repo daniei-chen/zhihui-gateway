@@ -1,0 +1,1042 @@
+{
+  "schema": "zhihui-config/v1",
+  "service": "manager",
+  "prefixes": [
+    "WB_",
+    "WB2API_"
+  ],
+  "settings": {
+    "WB_MAX_OUTPUT_BYTES": {"type":"integer","sensitive":false,"default":4194304,"minimum":65536,"maximum":16777216,"unit":"decoded bytes per request","consumers":["server/outputlimits.py","server/deadline.py"],"description":"Bound successful response bodies, stream output and retained translator state; errors are additionally capped at 64 KiB."},
+    "WB_AUTH_SHARED_GID": {"type":"string","sensitive":false,"default":"","consumers":["server/services/tencent.py"],"description":"Optional shared credential-reader group ID; both Manager and engine must belong to this group and credential directories must permit group traversal."},
+    "WB_SHARED_ADMISSION": {"type": "boolean", "sensitive": false, "default": false, "consumers": ["server/config.py"], "description": "Opt-in same-host cross-generation resource coordination; does not authorize parallel writers or background jobs."},
+    "WB_ARCHIVE_ENABLED": {"type": "boolean", "sensitive": false, "default": true, "consumers": ["server/archiveworker.py"], "description": "Archive and verify eligible derived logs before exact-row pruning; disabled never permits direct deletion."},
+    "WB_ARCHIVE_INTERVAL_SEC": {"type": "integer", "sensitive": false, "default": 300, "minimum": 60, "maximum": 86400, "consumers": ["server/archiveworker.py"], "unit": "seconds"},
+    "WB_ARCHIVE_BATCH_ROWS": {"type": "integer", "sensitive": false, "default": 200, "minimum": 1, "maximum": 1000, "consumers": ["server/archiveworker.py"], "unit": "rows per dataset per cycle"},
+    "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/observability.py:RequestAuditMiddleware"
+      ],
+      "default": 67108864,
+      "minimum": 1,
+      "unit": "bytes"
+    },
+    "WB_GATEWAY_MAX_RESPONSE_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:75",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 64,
+      "minimum": 1,
+      "maximum": 512,
+      "unit": "MiB"
+    },
+    "WB_GATEWAY_MIN_BODY_RESERVATION_BYTES": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/observability.py:RequestAuditMiddleware"
+      ],
+      "default": 65536,
+      "minimum": 1,
+      "unit": "bytes"
+    },
+    "WB2API_BASE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:53"
+      ],
+      "default": "http://127.0.0.1:7863",
+      "format": "http_url"
+    },
+    "WB2API_CONTAINER": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:55"
+      ],
+      "default": "zhihui-workbuddy"
+    },
+    "WB2API_KEY": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:54"
+      ],
+      "default": ""
+    },
+    "WB2API_LOG_FILE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:68",
+        "manager/server/config.py:69"
+      ],
+      "default_expression": "str(UPSTREAM_DIR / 'data' / 'server.err.log')"
+    },
+    "WB2API_MODE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:56",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "docker",
+      "choices": [
+        "docker",
+        "native"
+      ]
+    },
+    "WB2API_START_SCRIPT": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:62",
+        "manager/server/config.py:63"
+      ],
+      "default_expression": "str(UPSTREAM_DIR / 'start-workbuddy2api.cmd')"
+    },
+    "WB2API_STOP_SCRIPT": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:65",
+        "manager/server/config.py:66"
+      ],
+      "default_expression": "str(UPSTREAM_DIR / 'stop-workbuddy2api.cmd')"
+    },
+    "WB_ADMIN_PASSWORD": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/security.py:206"
+      ]
+    },
+    "WB_PORTAL_PUBLIC_POOL_ENABLED": {
+      "type": "string",
+      "sensitive": false,
+      "default": "0",
+      "choices": ["0", "1"],
+      "description": "Opt-in customer DeepSeek public-pool candidate; disabled by default",
+      "consumers": ["manager/server/portalpolicy.py"]
+    },
+    "WB_PORTAL_AUTO_CLOSE_CLIENT_CANCEL": {
+      "type": "string",
+      "sensitive": false,
+      "default": "1",
+      "choices": ["0", "1"],
+      "description": "Automatically close a proved client-cancelled portal hold under the platform-absorbs policy",
+      "consumers": ["manager/server/portalwallet.py"]
+    },
+    "WB_PORTAL_CLIENT_CANCEL_GRACE_SEC": {
+      "type": "string",
+      "sensitive": false,
+      "default": "60",
+      "description": "Grace period before auto-closing a proved client-cancelled portal hold",
+      "consumers": ["manager/server/portalwallet.py"]
+    },
+    "WB_PORTAL_AUTO_CLOSE_REJECTED": {
+      "type": "string",
+      "sensitive": false,
+      "default": "1",
+      "choices": ["0", "1"],
+      "description": "Automatically release portal wallet holds for requests the gateway rejected before any supplier usage",
+      "consumers": ["manager/server/portalwallet.py"]
+    },
+    "WB_BACKGROUND_JOBS": {
+      "type": "boolean",
+      "sensitive": false,
+      "default": true,
+      "description": "Run background schedulers/collectors (primary instance only; zero-downtime helper sets 0)",
+      "consumers": [
+        "manager/server/config.py",
+        "manager/server/main.py",
+        "manager/server/operational.py"
+      ]
+    },
+    "WB_ALLOW_UNVERIFIED_PACKAGE": {
+      "type": "boolean",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:80",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "boolean_dialect": "manager",
+      "default": false
+    },
+    "WB_API_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/bodyguard.py:32"
+      ],
+      "default": 32,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_APP_VERSION": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/migrations.py:96"
+      ]
+    },
+    "WB_AUDIT_ALL_ACCESS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:162",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "0",
+      "choices": [
+        "0",
+        "1"
+      ]
+    },
+    "WB_AUTH_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:59"
+      ],
+      "default": "/opt/workbuddy2api/auths"
+    },
+    "WB_AUTH_LOG_PER_MIN": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:376"
+      ],
+      "default": 5,
+      "unit": "per_minute",
+      "minimum": 0
+    },
+    "WB_BACKUP_STATUS_FILE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:74"
+      ],
+      "default": "/var/lib/zhihui-gateway/backup-status.json"
+    },
+    "WB_BASE_PATH": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:110"
+      ],
+      "default": ""
+    },
+    "WB_CCSWITCH_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:138"
+      ]
+    },
+    "WB_CCSWITCH_EXE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:94"
+      ]
+    },
+    "WB_CHECKIN_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:118"
+      ],
+      "default": 5,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_CLIENT_CANCEL_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:142"
+      ],
+      "default": 5.0,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_CLIENT_PATHS_FILE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:99"
+      ]
+    },
+    "WB_CLIENT_SCAN_ROOTS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:97"
+      ]
+    },
+    "WB_CONNECT_TIMEOUT_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:138"
+      ],
+      "default": 5.0,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_CORS_ORIGINS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:198"
+      ],
+      "default": ""
+    },
+    "WB_CREDITS_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:128"
+      ],
+      "default": 8,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_DATA_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:73",
+        "manager/server/services/updater.py:614"
+      ],
+      "default_expression": "str(ROOT / 'data')"
+    },
+    "WB_DB": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:75"
+      ],
+      "default_expression": "str(DATA_DIR / 'manager.db')"
+    },
+    "WB_DEFAULT_ACCOUNT_PROXY": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:169"
+      ],
+      "default": "",
+      "format": "proxy_url"
+    },
+    "WB_DRAIN_TIMEOUT_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:50"
+      ],
+      "default": 25,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_ENABLE_DOCS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:153",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "0",
+      "choices": [
+        "0",
+        "1"
+      ]
+    },
+    "WB_FIRST_BYTE_TIMEOUT_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:139"
+      ],
+      "default_expression": "base",
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_GATEWAY_LARGE_MAX_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 2,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_GATEWAY_QUEUE_WAIT_MS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["manager/server/observability.py", "manager/server/fairadmission.py"],
+      "default": 1000,
+      "minimum": 0,
+      "maximum": 5000,
+      "unit": "milliseconds"
+    },
+    "WB_GATEWAY_BODY_READ_TIMEOUT_S": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:75",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 180,
+      "minimum": 1,
+      "maximum": 600,
+      "unit": "seconds"
+    },
+    "WB_GATEWAY_BODY_IDLE_TIMEOUT_S": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:76",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 60,
+      "minimum": 1,
+      "maximum": 120,
+      "unit": "seconds"
+    },
+    "WB_GATEWAY_MAX_BODY_CEILING_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:148"
+      ],
+      "default": 1024,
+      "unit": "MiB",
+      "exclusive_minimum": 0
+    },
+    "WB_GATEWAY_MAX_BODY_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:146",
+        "manager/server/routers/gateway.py:171"
+      ],
+      "default": 64,
+      "unit": "MiB",
+      "exclusive_minimum": 0
+    },
+    "WB_GATEWAY_MAX_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 8,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_GATEWAY_RATE_PER_MIN": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:322",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 120,
+      "unit": "per_minute",
+      "minimum": 1
+    },
+    "WB_GITHUB_MIRROR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/settings.py:158",
+        "manager/server/services/updater.py:609",
+        "manager/server/services/updater.py:791"
+      ]
+    },
+    "WB_GITHUB_TOKEN": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/routers/settings.py:128",
+        "manager/server/services/updater.py:722",
+        "manager/server/services/updater.py:604"
+      ]
+    },
+    "WB_GRACEFUL_SHUTDOWN_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/serve.py:30",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "unit": "seconds",
+      "default": 650,
+      "exclusive_minimum": 0
+    },
+    "WB_HTTP_MAX_POOLS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:535"
+      ],
+      "default": 24,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_HTTP_POOL_CONNECTIONS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:538"
+      ],
+      "default": 8,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_HTTP_POOL_KEEPALIVE": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:539"
+      ],
+      "default": 4,
+      "unit": "count",
+      "minimum": 0
+    },
+    "WB_HTTP_PROXY": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:166",
+        "manager/server/services/updater.py:597"
+      ],
+      "default": "",
+      "format": "proxy_url"
+    },
+    "WB_INSTALL_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:611"
+      ]
+    },
+    "WB_LEDGER_BACKPRESSURE": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:backpressure_limit",
+        "server/budget.py:prepare"
+      ],
+      "default": 500,
+      "minimum": 1,
+      "unit": "receipts"
+    },
+    "WB_LEDGER_RECOVER_STREAK": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/operational.py:replay_ledger_receipts"
+      ],
+      "default": 3,
+      "minimum": 1,
+      "unit": "consecutive_passes"
+    },
+    "WB_LEDGER_REPLAY_BATCH": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:replay_batch"
+      ],
+      "default": 50,
+      "minimum": 1,
+      "unit": "receipts_per_pass"
+    },
+    "WB_LEDGER_REPLAY_INTERVAL_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/operational.py:monitor"
+      ],
+      "default": 30,
+      "minimum": 1,
+      "unit": "seconds"
+    },
+    "WB_LEDGER_SPOOL_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "server/ledgerreplay.py:spool_dir"
+      ]
+    },
+    "WB_KEY_BUDGET_PENDING": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (prepare)"
+      ],
+      "default": 4,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_KEY_BUDGET_PENDING_QUOTA": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (prepare)"
+      ],
+      "default": 1,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_BUDGET_REVIEW_DEADLINE_DAYS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/budget.py (review_deadline_days)"
+      ],
+      "default": 7,
+      "minimum": 1,
+      "unit": "days"
+    },
+    "WB_BUDGET_RECONCILE_INTERVAL_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/operational.py (monitor)"
+      ],
+      "default": 900,
+      "minimum": 1,
+      "unit": "seconds"
+    },
+    "WB_BUDGET_RECONCILE_MIN_AGE_SEC": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/operational.py (reconcile_zero_reservation_unknowns)"
+      ],
+      "default": 7200,
+      "minimum": 1,
+      "unit": "seconds"
+    },
+    "WB_KEY_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 4,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_KEY_CONCURRENCY_QUOTA": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/observability.py (admit_key)"
+      ],
+      "default": 1,
+      "minimum": 0,
+      "unit": "concurrent_or_pending"
+    },
+    "WB_LOG_LEVEL": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "server/main.py:_configure_app_logging"
+      ],
+      "default": "INFO"
+    },
+    "WB_LOCAL_IMPORT": {
+      "type": "boolean",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:180"
+      ],
+      "boolean_dialect": "manager",
+      "default": false
+    },
+    "WB_MANAGER_HOST": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:45",
+        "manager/server/serve.py:38"
+      ],
+      "default": "0.0.0.0"
+    },
+    "WB_MANAGER_PORT": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:44",
+        "manager/server/services/updater.py:613",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 7864,
+      "unit": "count",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "WB_MANAGER_REPO": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:711"
+      ],
+      "default": "daniei-chen/zhihui-gateway"
+    },
+    "WB_METRICS_TOKEN": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:81"
+      ],
+      "default": ""
+    },
+    "WB_METRICS_TOKEN_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:80"
+      ],
+      "default": ""
+    },
+    "WB_NOTIFY_CONFIG": {
+      "type": "absolute_path",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/notify.py:57",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "/opt/notify/config.json"
+    },
+    "WB_PROXY_PROBE_URL": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:168"
+      ],
+      "default": "https://ipinfo.io/json",
+      "format": "http_url"
+    },
+    "WB_QTG_ADAPTER_BASE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:98"
+      ],
+      "default": "",
+      "format": "http_url"
+    },
+    "WB_QTG_ADAPTER_TIMEOUT_S": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:101"
+      ],
+      "default": 3,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_QTG_IDENTITY_SECRET_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:84"
+      ],
+      "default": ""
+    },
+    "WB_QTG_INTERNAL_TOKEN_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "manager/server/config.py:99"
+      ],
+      "default": "/opt/workbuddy-manager/engine/secrets/internal_service_token"
+    },
+    "WB_REFRESH_CONCURRENCY": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:121"
+      ],
+      "default": 3,
+      "unit": "count",
+      "exclusive_minimum": 0
+    },
+    "WB_RUN_MODE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:149",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "choices": [
+        "auto",
+        "docker",
+        "container",
+        "systemd",
+        "host",
+        "native"
+      ],
+      "default": "auto"
+    },
+    "WB_SAFE_RETRY_MAX": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:161",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 1,
+      "minimum": 1,
+      "maximum": 3
+    },
+    "WB_SECURE_COOKIE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:195",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "auto",
+      "choices": [
+        "auto",
+        "true",
+        "false",
+        "0",
+        "1"
+      ]
+    },
+    "WB_SERVICE_NAME": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:616"
+      ],
+      "default": "workbuddy-web"
+    },
+    "WB_SESSION_DAYS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:186",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 1,
+      "unit": "days",
+      "minimum": 1,
+      "normalize_minimum": 1
+    },
+    "WB_SESSION_IDLE_HOURS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:193"
+      ],
+      "default": 12,
+      "unit": "hours",
+      "minimum": 0
+    },
+    "WB_STATIC_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:77"
+      ],
+      "default_expression": "str(ROOT / 'web' / 'out')"
+    },
+    "WB_STREAM_IDLE_TIMEOUT_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:140"
+      ],
+      "default_expression": "base",
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_SSE_HEARTBEAT_SECONDS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": ["manager/server/sseheartbeat.py"],
+      "default": 15,
+      "minimum": 0,
+      "maximum": 60,
+      "unit": "seconds",
+      "description": "0 disables; otherwise values from 1 through 60 seconds are accepted."
+    },
+    "WB_TENCENT_TIMEOUT": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:115"
+      ],
+      "default": 15,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_TOTAL_TIMEOUT_S": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/deadline.py:141"
+      ],
+      "default_expression": "base",
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_TRUSTED_PROXY_CIDRS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:147",
+        "manager/server/config.py:148"
+      ],
+      "default": "127.0.0.0/8,::1/128",
+      "format": "ip_network_list"
+    },
+    "WB_TRUSTED_PROXY_HOPS": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:132",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": 1,
+      "unit": "count",
+      "minimum": 1
+    },
+    "WB_TRUST_PROXY": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:129",
+        "manual-reviewed-runtime-constraint:0"
+      ],
+      "default": "1",
+      "choices": [
+        "0",
+        "1"
+      ]
+    },
+    "WB_UPDATE_PACKAGE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:626"
+      ]
+    },
+    "WB_UPDATE_PACKAGE_SHA256": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:627",
+        "manager/server/services/updater.py:629"
+      ]
+    },
+    "WB_UPDATE_PROXY": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/proxies.py:249",
+        "manager/server/services/updater.py:599"
+      ],
+      "format": "proxy_url"
+    },
+    "WB_UPDATE_STATUS": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/updater.py:615"
+      ]
+    },
+    "WB_UPSTREAM_CONFIG": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:60"
+      ],
+      "default": "/opt/workbuddy2api/config.json"
+    },
+    "WB_UPSTREAM_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:61",
+        "manager/server/services/updater.py:612"
+      ],
+      "default_expression": "str(UPSTREAM_CONFIG.parent)"
+    },
+    "WB_UPSTREAM_TIMEOUT": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:114",
+        "manager/server/deadline.py:136"
+      ],
+      "default": 300,
+      "unit": "seconds",
+      "exclusive_minimum": 0
+    },
+    "WB_USERS_FILE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/config.py:76"
+      ],
+      "default_expression": "str(DATA_DIR / 'users.json')"
+    },
+    "WB_ZCODE_DIR": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:144"
+      ]
+    },
+    "WB_ZCODE_EXE": {
+      "type": "string",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/services/keyimport.py:94"
+      ]
+    },
+    "WB_STEWARD_SMTP_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "default": "",
+      "consumers": [
+        "manager/server/config.py:steward"
+      ],
+      "description": "Operator-owned 0600 credential file; never exposed through the panel."
+    },
+    "WB_STEWARD_KEY_FILE": {
+      "type": "string",
+      "sensitive": true,
+      "default": "",
+      "consumers": [
+        "manager/server/config.py:steward"
+      ],
+      "description": "Operator-owned 0600 credential file; never exposed through the panel."
+    },
+    "WB_GATEWAY_MAX_FORWARD_BODY_MB": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "manager/server/routers/gateway.py:max_forward_body_bytes"
+      ],
+      "default": 64,
+      "minimum": 1,
+      "maximum": 512,
+      "unit": "MiB"
+    }
+  }
+}

@@ -95,8 +95,32 @@ export interface DepPrints {
  * 两者同时变化时按「上下文变了」处理：先清空、再立刻把旧数据合并回来毫无意义，
  * 而且会白发一次请求（切版本时页码归 1 就会同时命中这两条）。
  */
-export function depMode(prev: DepPrints, next: DepPrints): FetchMode | null {
+export function depMode(prev: DepPrints, next: DepPrints, interrupted = false): FetchMode | null {
   if (prev.context !== next.context) return 'initial';
-  if (prev.query !== next.query) return 'refresh';
+  if (prev.query !== next.query || interrupted) return 'refresh';
   return null;
+}
+
+export function shareJson<T>(previous: unknown, next: T): T {
+  let remaining = 100000;
+  const visit = (before: unknown, after: unknown, depth: number): unknown => {
+    if (Object.is(before, after)) return before;
+    if (--remaining < 0 || depth > 32 || before === null || after === null
+        || typeof before !== 'object' || typeof after !== 'object') return after;
+    if (Array.isArray(before) && Array.isArray(after)) {
+      if (after.length > remaining) return after;
+      if (before.length !== after.length) return after;
+      const values = after.map((value, index) => visit(before[index], value, depth + 1));
+      return values.every((value, index) => Object.is(value, before[index])) ? before : values;
+    }
+    if (Object.getPrototypeOf(before) !== Object.prototype || Object.getPrototypeOf(after) !== Object.prototype) return after;
+    const oldObject = before as Record<string, unknown>;
+    const newObject = after as Record<string, unknown>;
+    const keys = Object.keys(newObject);
+    if (keys.length > remaining) return after;
+    if (keys.length !== Object.keys(oldObject).length || keys.some(key => !Object.hasOwn(oldObject, key))) return after;
+    const entries = keys.map(key => [key, visit(oldObject[key], newObject[key], depth + 1)] as const);
+    return entries.every(([key, value]) => Object.is(oldObject[key], value)) ? before : Object.fromEntries(entries);
+  };
+  return visit(previous, next, 0) as T;
 }

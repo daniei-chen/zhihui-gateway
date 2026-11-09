@@ -11,6 +11,8 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
+import {useRouter} from 'next/navigation';
+import {usePlatform} from '@/lib/platform-context';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {notify} from '@/lib/toast';
@@ -155,6 +157,13 @@ const EMPTY_LINES: string[] = [];
 const EMPTY_KINDS: Record<string, string> = {};
 
 export default function TasksPage() {
+  // WorkBuddy 专属页（签到 / 猫猫旅行 / 开学季 / 夜猫）：另外两个平台没有这套体系，
+  // 直接访问时回首页，而不是让人看一屏空数据。
+  const {platform} = usePlatform();
+  const router = useRouter();
+  useEffect(() => {
+    if (platform !== 'workbuddy') router.replace('/dashboard');
+  }, [platform, router]);
   const {isAdmin} = useAuth();
   const {realm, label: realmName} = useRealm();
   const {t} = useI18n();
@@ -203,7 +212,7 @@ export default function TasksPage() {
    * 一次 load 拉三份，同样是全拉）。想省这一次请求就得再拆一个 hook，代价是整页
    * 的加载 / 失败判据要手工合并——收益不值这个复杂度。
    */
-  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload} = useAsyncAll({
+  const {values, errors, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} = useAsyncAll({
     checkin: () => accountApi.checkinLogs(CHECKIN_LIMIT, 0, undefined, Number(checkinDays), realm),
     tasks: () =>
       accountApi.taskLogs(
@@ -259,8 +268,8 @@ export default function TasksPage() {
   // 两块列表都会随任务执行而变化，停留期间心跳刷新，避免一直看旧记录。
   // 走 reload（刷新模式）：只把新数据换上去，**不**重走首屏流程——否则骨架会每
   // 30 秒闪一次。
-  useHeartbeat(reload, 30000);
-  useHeartbeat(upstream.reload, 30000);
+  useHeartbeat(refresh, 30000);
+  useHeartbeat(upstream.refresh, 30000);
 
   /** 立即采集一次上游任务日志 */
   const collectTasks = useCallback(async () => {
@@ -333,11 +342,11 @@ export default function TasksPage() {
   );
   // 成长任务一键执行（issue #19）。仅管理员：这些操作会对账号发起真实写请求，
   // 后端也以 require_admin 兜底。国际版无成长中心体系，故不显示。
-  const runner = isAdmin && (realm ?? 'cn') === 'cn' ? <TaskRunnerPanel /> : null;
+  const runner = (realm ?? 'cn') === 'cn' ? <TaskRunnerPanel /> : null;
 
   // 计划任务（令牌刷新计划 + 每日任务）：到点自动跑的东西放「任务」这一页才对 ——
   // 它跟「这个账号是谁」无关，只跟「什么时候做什么」有关（用户反馈：原先挂在账号页）
-  const planCard = isAdmin ? <RefreshPlanCard /> : null;
+  const planCard = <RefreshPlanCard />;
 
   /**
    * 首屏守卫：一份数据都没到（还在加载，或两份全失败）时**不渲染内容区**。

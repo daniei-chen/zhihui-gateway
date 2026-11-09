@@ -28,6 +28,8 @@ class DiscoveryHTTPTest(unittest.TestCase):
 
     def tearDown(self):
         self.client.close()
+        from server import budgetowner
+        budgetowner.close()
         if db._conn is not None:
             db._conn.close()
         db._conn = None

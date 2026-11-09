@@ -26,6 +26,8 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WEB = _ROOT / 'web'
+if not (_WEB / 'app').is_dir():
+    _WEB = _ROOT.parent / 'src' / 'three-platform' / 'web'
 _PURE = _WEB / 'lib' / 'reload-state.ts'
 _SCRIPT = _WEB / 'lib' / 'reload-state.test.mjs'
 _NOTICE = _WEB / 'components' / 'common' / 'settings' / 'UpstreamReloadNotice.tsx'

@@ -7,19 +7,31 @@ from pathlib import Path
 from unittest import mock
 from server import budget,config,db,observability,pooledhttp,budgetowner
 
-def _reserve_from_process(database,request_id,gate,results,key_id):
-    gate.wait()
-    if db._conn:
-        try:db._conn.close()
-        except Exception:pass
-    db._conn=None;config.DB_PATH=Path(database);db.connect()
-    state=observability.RequestAudit(request_id,'/v1/chat/completions','POST','openai',time.monotonic())
-    token=observability.current.set(state)
+def _reserve_from_process(database,request_id,gate,ready,results,key_id):
+    token = None
     try:
+        if db._conn:
+            db._conn.close()
+        db._conn=None;config.DB_PATH=Path(database);db.connect()
+        state=observability.RequestAudit(request_id,'/v1/chat/completions','POST','openai',time.monotonic())
+        token=observability.current.set(state)
+        ready.set()
+        if not gate.wait(90):
+            raise RuntimeError('Parent did not open the competition barrier')
         budget.prepare(dict(db.query_one('SELECT * FROM api_keys WHERE id=?',(key_id,))),{'messages':[]})
         results.put('reserved')
     except budget.BudgetRejected:results.put('rejected')
-    finally:observability.current.reset(token)
+    except BaseException as error:
+        results.put(('worker_error', type(error).__name__, str(error)))
+        raise
+    finally:
+        ready.set()  # Report initialization errors through results instead of hanging.
+        if token is not None:
+            observability.current.reset(token)
+        budgetowner.close()
+        if db._conn:
+            db._conn.close()
+        db._conn = None
 
 class ManagedReleaseGuardTests(unittest.TestCase):
     def test_managed_marker_blocks_all_web_update_targets(self):
@@ -100,55 +112,37 @@ class DurableBudgetTests(unittest.TestCase):
     def test_two_processes_cannot_reserve_the_same_key(self):
         context=multiprocessing.get_context('spawn')
         gate=context.Event();results=context.Queue()
-        workers=[context.Process(target=_reserve_from_process,args=(str(config.DB_PATH),f'parallel-{i}',gate,results,1)) for i in range(2)]
-        for worker in workers:worker.start()
-        gate.set()
-        outcomes=[results.get(timeout=8),results.get(timeout=8)]
-        for worker in workers:
-            worker.join(8)
-            if worker.is_alive():worker.terminate();worker.join();self.fail('reservation worker hung')
-            self.assertEqual(worker.exitcode,0)
-        self.assertEqual(sorted(outcomes),['rejected','reserved'])
-        self.assertEqual(len(budget.unresolved()),1)
-
-class PoolIsolationTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncTearDown(self):await pooledhttp.close()
-    async def test_same_identity_reuses_transport_with_isolated_cookies(self):
-        a=pooledhttp.client(10,None,'tenant-a');b=pooledhttp.client(10,None,'tenant-a')
-        self.assertIs(a.entry,b.entry)
-        a.cookies.set('fixture','secret')
-        self.assertNotIn('fixture',b.cookies)
-        await a.aclose();await a.aclose();await b.aclose()
-        self.assertEqual(a.entry.references,0)
-    async def test_identity_and_proxy_separate(self):
-        clients=[pooledhttp.client(10,None,'a'),pooledhttp.client(10,None,'b'),pooledhttp.client(10,'http://127.0.0.1:9','a')]
-        self.assertEqual(len({id(c.entry) for c in clients}),3)
-        for c in clients:await c.aclose()
-    async def test_context_manager_releases_lease(self):
-        async with pooledhttp.client(10,None,'a') as client:entry=client.entry
-        self.assertEqual(entry.references,0)
-    async def test_cancelled_request_releases_transport_lease(self):
-        accepted=asyncio.Event()
-        client=pooledhttp.client(30,None,'cancel-fixture')
-        entry=client.entry
-        async def hold(request):
-            accepted.set()
-            await asyncio.Event().wait()
-        entry.transport.handle_async_request=hold
-        task=asyncio.create_task(client.get('https://example.invalid/'))
-        await asyncio.wait_for(accepted.wait(),2)
-        task.cancel()
-        with self.assertRaises(asyncio.CancelledError):await task
-        await client.aclose()
-        self.assertEqual(entry.references,0)
-    async def test_idle_pool_eviction_remains_bounded(self):
-        previous=pooledhttp.MAX_POOLS;pooledhttp.MAX_POOLS=2
+        ready = [context.Event(), context.Event()]
+        workers=[context.Process(target=_reserve_from_process,args=(str(config.DB_PATH),f'parallel-{i}',gate,ready[i],results,1)) for i in range(2)]
+        started = time.monotonic()
         try:
-            first=pooledhttp.client(10,None,'bound-a')
-            second=pooledhttp.client(10,None,'bound-b')
-            await second.aclose()
-            third=pooledhttp.client(10,None,'bound-c')
-            self.assertLessEqual(len(pooledhttp.entries),2)
-            self.assertIn(first.entry,pooledhttp.entries.values())
-            await first.aclose();await third.aclose()
-        finally:pooledhttp.MAX_POOLS=previous
+            for worker in workers:worker.start()
+            for signal_ready in ready:
+                self.assertTrue(signal_ready.wait(60), 'Worker startup failed before the SQL race')
+            startup_s = time.monotonic() - started
+            gate.set()
+            # The critical operation still has the original eight-second bound.
+            outcomes=[results.get(timeout=8),results.get(timeout=8)]
+            for worker in workers:
+                worker.join(8)
+                self.assertFalse(worker.is_alive(), 'reservation worker hung')
+                self.assertEqual(worker.exitcode,0, outcomes)
+            self.assertCountEqual(outcomes,['rejected','reserved'])
+            self.assertEqual(len(budget.unresolved()),1)
+            print({'spawn_startup_s':round(startup_s,3),'race_outcomes':outcomes})
+        finally:
+            gate.set()
+            for worker in workers:
+                if worker.pid is None:
+                    continue
+                worker.join(8)
+                if worker.is_alive():
+                    worker.terminate();worker.join(8)
+                if worker.is_alive():
+                    worker.kill();worker.join(8)
+                self.assertFalse(worker.is_alive(), 'Fixture must reap its own workers')
+                worker.close()
+            results.close();results.join_thread()
+
+
+# HTTP transport lifetime/cookie/capacity contracts live in test_actual_http_pool.py.

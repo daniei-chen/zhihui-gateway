@@ -71,6 +71,8 @@ class CreditsSnapshotEndpointTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
+        self._original = config.DB_PATH, config.USERS_FILE, config.AUTH_DIR, db._conn
+        self.addCleanup(self._cleanup)
         config.DB_PATH = Path(self._tmp.name) / 'm.db'
         config.USERS_FILE = Path(self._tmp.name) / 'users.json'
         config.AUTH_DIR = Path(self._tmp.name) / 'auths'
@@ -79,18 +81,18 @@ class CreditsSnapshotEndpointTest(unittest.TestCase):
         security.save_users({'secret': 'S', 'users': [
             {'username': 'admin', 'role': 'admin',
              'pwd_hash': security.make_hash('p')}], 'api_keys': []})
-        self.addCleanup(self._cleanup)
 
     def _cleanup(self) -> None:
         if db._conn is not None:
             db._conn.close()
-        db._conn = None
+        config.DB_PATH, config.USERS_FILE, config.AUTH_DIR, db._conn = self._original
         self._tmp.cleanup()
 
     def _client(self):
         from fastapi.testclient import TestClient
         from server.main import app
         c = TestClient(app)
+        self.addCleanup(c.close)
         assert c.post('/api/login', json={'username': 'admin', 'password': 'p'}).status_code == 200
         return c
 

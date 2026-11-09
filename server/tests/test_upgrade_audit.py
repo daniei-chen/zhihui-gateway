@@ -151,7 +151,7 @@ class MiddlewareTest(unittest.TestCase):
             async def send(message): sent.append(message)
             wrapper=obs.RequestAuditMiddleware(app); wrapper.active=wrapper.maximum
             from server import db
-            with mock.patch.object(db,'execute'):
+            with mock.patch.object(db,'execute'), mock.patch('server.routers.gateway.preauthorize_body', return_value=None):
                 await wrapper({'type':'http','path':'/v1/messages','method':'POST'},receive,send)
             self.assertEqual(sent[0]['status'],503)
             self.assertEqual(wrapper.active,wrapper.maximum)

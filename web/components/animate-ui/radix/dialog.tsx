@@ -31,21 +31,16 @@ const useDialog = (): DialogContextType => {
 
 type DialogProps = React.ComponentProps<typeof DialogPrimitive.Root>;
 
-function Dialog({children, ...props}: DialogProps) {
-  const [isOpen, setIsOpen] = React.useState(
-      props?.open ?? props?.defaultOpen ?? false,
-  );
-
-  React.useEffect(() => {
-    if (props?.open !== undefined) setIsOpen(props.open);
-  }, [props?.open]);
+function Dialog({children, open, defaultOpen, onOpenChange, ...props}: DialogProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const isOpen = open ?? uncontrolledOpen;
 
   const handleOpenChange = React.useCallback(
-      (open: boolean) => {
-        setIsOpen(open);
-        props.onOpenChange?.(open);
+      (nextOpen: boolean) => {
+        if (open === undefined) setUncontrolledOpen(nextOpen);
+        onOpenChange?.(nextOpen);
       },
-      [props],
+      [open, onOpenChange],
   );
 
   return (
@@ -53,6 +48,8 @@ function Dialog({children, ...props}: DialogProps) {
       <DialogPrimitive.Root
         data-slot="dialog"
         {...props}
+        open={open}
+        defaultOpen={defaultOpen}
         onOpenChange={handleOpenChange}
       >
         {children}
@@ -109,6 +106,12 @@ function DialogContent({
   from = 'top',
   transition = {type: 'spring', stiffness: 200, damping: 30},
   showCloseButton = true,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
+  onEscapeKeyDown,
+  onPointerDownOutside,
+  onFocusOutside,
+  onInteractOutside,
   ...props
 }: DialogContentProps) {
   const {isOpen} = useDialog();
@@ -131,7 +134,13 @@ function DialogContent({
               transition={{duration: 0}}
             />
           </DialogOverlay>
-          <DialogPrimitive.Content asChild forceMount {...props}>
+          <DialogPrimitive.Content asChild forceMount {...props}
+            onOpenAutoFocus={onOpenAutoFocus}
+            onCloseAutoFocus={onCloseAutoFocus}
+            onEscapeKeyDown={onEscapeKeyDown}
+            onPointerDownOutside={onPointerDownOutside}
+            onFocusOutside={onFocusOutside}
+            onInteractOutside={onInteractOutside}>
             <motion.div
               key="dialog-content"
               data-slot="dialog-content"

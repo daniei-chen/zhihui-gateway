@@ -9,6 +9,7 @@ import {useT} from '@/lib/i18n/provider';
 import {
   reloadPhase,
   reloadPollDelay,
+  accountReloadNotices,
   type ReloadPhase,
   type ReloadStateLike,
 } from '@/lib/reload-state';
@@ -33,6 +34,7 @@ import {
 export function UpstreamReloadNotice() {
   const t = useT();
   const [state, setState] = useState<ReloadStateLike | null>(null);
+  const [baselineAt, setBaselineAt] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
   /** 进入页面后第一次读到的 `last_at`。用来判断「期间有没有真的重载过」 */
   const baseline = useRef<number | null>(null);
@@ -58,10 +60,16 @@ export function UpstreamReloadNotice() {
       }
       if (!alive) return;
       if (next) {
-        if (baseline.current === null) baseline.current = next.last_at;
+        if (baseline.current === null) {
+          baseline.current = next.last_at;
+          setBaselineAt(next.last_at);
+        }
         setState(next);
+      } else {
+        setState(null);
       }
-      const phase = next ? reloadPhase(next, baseline.current ?? next.last_at) : 'idle';
+      const phase = next && accountReloadNotices(next).some(item => item.phase === 'observing')
+        ? 'applying' : next ? reloadPhase(next, baseline.current ?? next.last_at) : 'idle';
       timer = setTimeout(tick, reloadPollDelay(phase));
     };
 
@@ -73,14 +81,26 @@ export function UpstreamReloadNotice() {
   }, []);
 
   const phase: ReloadPhase = state
-    ? reloadPhase(state, baseline.current ?? state.last_at)
+    ? reloadPhase(state, baselineAt ?? state.last_at)
     : 'idle';
-  if (phase === 'idle') return null;
-  if (phase === 'failed' && dismissed) return null;
+  const observations = accountReloadNotices(state);
+  const accountNotices = observations.length ? (
+      <div className="space-y-2" data-slot="account-reload-notices">
+        {observations.map((item, index) => (
+          <div key={`${item.upstream_id ?? 'default'}-${index}`} role={item.phase === 'observing' ? 'status' : 'alert'}
+            className="rounded-[16px] border border-amber-200/70 bg-amber-50/40 px-3.5 py-2 text-xs">
+            <div className="font-medium">{t(item.phase === 'observing' ? 'settings.accountReloadObserving' : 'settings.accountReloadAttention')}</div>
+            <p className="mt-1 text-muted-foreground">{t('settings.accountReloadNoRestart')}</p>
+          </div>
+        ))}
+      </div>
+    ) : null;
+  if (phase === 'idle') return accountNotices;
+  if (phase === 'failed' && dismissed) return accountNotices;
 
   if (phase === 'applying') {
     return (
-      <div
+      <>{accountNotices}<div
         data-slot="reload-notice"
         data-phase="applying"
         role="status"
@@ -89,13 +109,13 @@ export function UpstreamReloadNotice() {
         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-600 dark:text-sky-400" />
         <span className="font-medium">{t('settings.applyRunning')}</span>
         <span className="text-muted-foreground">{t('settings.applyRunningHint')}</span>
-      </div>
+      </div></>
     );
   }
 
   if (phase === 'ok') {
     return (
-      <div
+      <>{accountNotices}<div
         data-slot="reload-notice"
         data-phase="ok"
         role="status"
@@ -103,7 +123,7 @@ export function UpstreamReloadNotice() {
       >
         <CircleCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
         <span className="font-medium">{t('settings.applyOk')}</span>
-      </div>
+      </div></>
     );
   }
 
@@ -111,7 +131,7 @@ export function UpstreamReloadNotice() {
   // 措辞上不说「保存失败」：配置**已经写进去了**，失败的是让它生效的那一步，
   // 两者的处理方式完全不同。
   return (
-    <div
+    <>{accountNotices}<div
       data-slot="reload-notice"
       data-phase="failed"
       role="alert"
@@ -134,6 +154,6 @@ export function UpstreamReloadNotice() {
       >
         <X className="h-3 w-3" />
       </Button>
-    </div>
+    </div></>
   );
 }

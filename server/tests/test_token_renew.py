@@ -269,7 +269,8 @@ class UpdateAuthTokensTest(unittest.TestCase):
 
     def test_write_is_atomic_and_leaves_no_temp(self) -> None:
         tencent.update_auth_tokens(self.name, {'access_token': 'new-at'})
-        leftovers = [p.name for p in self.dir.iterdir() if p.name != self.name]
+        leftovers = [p.name for p in self.dir.iterdir()
+                     if p.name not in (self.name, self.name + '.refresh.lock')]
         self.assertEqual(leftovers, [], f'留下了临时文件：{leftovers}')
 
 

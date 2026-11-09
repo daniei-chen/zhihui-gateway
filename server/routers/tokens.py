@@ -32,7 +32,7 @@ class TokenPatch(BaseModel):
 
 
 @router.get('')
-def list_tokens(user: dict = Depends(security.require_session_admin)) -> list[dict]:
+def list_tokens(user: dict = Depends(security.require_session_reader)) -> list[dict]:
     """列出全部令牌（**不含明文**，含前缀、scope 与最近使用）。"""
     return tokensvc.list_tokens()
 

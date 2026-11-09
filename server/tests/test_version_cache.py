@@ -187,13 +187,15 @@ class SigReadyAwarenessTest(unittest.TestCase):
             updater.check_updates()
         self.assertEqual(calls, [], '已就绪且没过期时不该重查')
 
-    def test_ui_says_it_and_holds_the_button(self) -> None:
-        """界面级守卫：提示要出现，按钮要拦住（否则提示只是装饰）。"""
+    def test_ui_reports_pending_assets_without_any_install_action(self) -> None:
+        """未齐备的制品必须提示，智汇发布页不提供任何直接安装通道。"""
         src = (_ROOT / 'web' / 'components' / 'common' / 'settings'
                / 'UpdatePanel.tsx').read_text(encoding='utf-8')
-        self.assertIn("t('updatePanel.assetsPending')", src, '缺少「产物未就位」的提示')
-        self.assertRegex(src, r'disabled=\{[^}]*check\.manager\.assets_ready === false',
-                         '产物未就位时更新按钮仍然可点 —— 用户点下去必然 404')
+        self.assertIn("t('releaseCenter.assetsPending')", src)
+        self.assertIn('latest.assets_ready === false', src)
+        self.assertNotIn('systemApi.startUpdate', src)
+        self.assertNotIn('systemApi.uploadPackage', src)
+        self.assertNotIn('offline-update-package', src)
 
 
 class DeployDiffMessageTest(unittest.TestCase):

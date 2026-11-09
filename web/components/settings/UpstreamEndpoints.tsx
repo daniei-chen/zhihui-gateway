@@ -134,7 +134,7 @@ export function UpstreamEndpoints() {
                   </span>
                 </div>
                 <div className="truncate font-mono text-[11px] text-muted-foreground">
-                  {item.base_url}
+                  {item.public_url || item.base_url}
                 </div>
                 {item.auth_dir ? (
                   <div

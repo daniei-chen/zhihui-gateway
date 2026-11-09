@@ -2,7 +2,7 @@
 
 import {Languages} from 'lucide-react';
 
-import {LOCALE_LABELS, type Locale} from '@/lib/i18n/config';
+import {isLocale, LOCALE_LABELS} from '@/lib/i18n/config';
 import {useI18n} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 import {
@@ -23,22 +23,27 @@ export function LanguageToggle({className}: {className?: string}) {
   const {locale, setLocale, t, locales} = useI18n();
 
   return (
-    <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
+    <Select value={locale} onValueChange={(value) => {
+      if (isLocale(value)) setLocale(value);
+    }}>
       <SelectTrigger
+        data-slot="language-toggle"
+        data-locale={locale}
         aria-label={t('language.switch')}
         title={t('language.switch')}
+        size="sm"
         className={cn(
-          'h-6 w-auto gap-1.5 rounded-full border-border/60 bg-muted/60 px-2.5 text-[11px] font-medium',
+          'max-w-full gap-1.5 rounded-full bg-muted/60 px-3 text-xs font-medium data-[size=sm]:h-10 sm:data-[size=sm]:h-8',
           className,
         )}
       >
-        <Languages className="h-3 w-3 shrink-0 opacity-70" />
-        <SelectValue />
+        <Languages aria-hidden="true" className="size-3.5 shrink-0 opacity-70" />
+        <SelectValue><span lang={locale}>{LOCALE_LABELS[locale]}</span></SelectValue>
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent align="end" className="rounded-2xl border-border/60 p-1 shadow-lg">
         {locales.map((id) => (
-          <SelectItem key={id} value={id} className="text-xs">
-            {LOCALE_LABELS[id]}
+          <SelectItem key={id} value={id} className="min-h-10 rounded-lg text-xs sm:min-h-8">
+            <span lang={id}>{LOCALE_LABELS[id]}</span>
           </SelectItem>
         ))}
       </SelectContent>

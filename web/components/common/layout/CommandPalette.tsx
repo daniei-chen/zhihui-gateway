@@ -10,7 +10,9 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@/components/animate-ui/radix/dialog';
-import {matchCommands, navCommands, type PaletteItem} from '@/lib/command-palette';
+import {matchCommands, navCommands, navSeedsFor, type PaletteItem} from '@/lib/command-palette';
+import {usePlatform} from '@/lib/platform-context';
+import {useAuth} from '@/lib/auth-context';
 import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 
@@ -63,7 +65,9 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const items = useMemo(() => navCommands(t), [t]);
+  const {platform} = usePlatform();
+  const {isAdmin} = useAuth();
+  const items = useMemo(() => navCommands(t, navSeedsFor(platform, undefined, isAdmin)), [t, platform, isAdmin]);
   const results = useMemo(() => matchCommands(items, query), [items, query]);
 
   useEffect(() => {

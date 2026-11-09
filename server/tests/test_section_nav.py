@@ -259,19 +259,16 @@ class SectionNavInvariantTest(unittest.TestCase):
             + '\n  '.join(h for h in absorbed if h in hrefs),
         )
 
-    def test_dock_has_exactly_eight_destinations(self) -> None:
-        """底栏**目的地**正好 8 项（动作项没有 href，不计入）。
-
-        写死数量是**有意**的：这一批的验收标准就是「11 → 8」。少一项说明有人
-        顺手删了个入口；多一项说明有人又加了一级入口——两者都该被问一句
-        「它是不是该并进哪一节」。
-        """
+    def test_dock_keeps_eight_original_destinations_and_admin_members(self) -> None:
+        """Keep the eight existing routes plus the explicitly admin-only portal."""
         hrefs = _dock_hrefs()
         self.assertEqual(
-            len(hrefs), 8,
-            f'底栏有 {len(hrefs)} 个目的地，应当是 8 个：{hrefs}',
+            len(hrefs), 9,
+            f'底栏有 {len(hrefs)} 个目的地，应当是 9 个：{hrefs}',
         )
-        expected = sorted([items[0][1] for items in self.nav.values()] + _OTHER_DESTINATIONS)
+        expected = sorted([items[0][1] for items in self.nav.values()] + _OTHER_DESTINATIONS + ['/members'])
+        self.assertIn("...(isAdmin ? [{title: t('nav.members')", _code(_BAR))
+        self.assertTrue((_MAIN / 'members/page.tsx').is_file())
         self.assertEqual(
             sorted(hrefs), expected,
             '底栏的目的地与预期不符。预期的另外 5 项（'

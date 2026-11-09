@@ -19,7 +19,8 @@ import {Badge} from '@/components/ui/badge';
 import {Skeleton} from '@/components/ui/skeleton';
 import {AiChatInput, type ChatModelOption} from '@/components/ui/ai-chat-input';
 import {CopyButton} from '@/components/ui/copy-button';
-import {playgroundApi, errText} from '@/lib/api';
+import {playgroundApi, errText, channelRejectionText} from '@/lib/api';
+import {streamChat} from '@/lib/chat-stream';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {withBasePath} from '@/lib/base-path';
 import {notify} from '@/lib/toast';
@@ -28,6 +29,7 @@ import {fmtCredit} from '@/lib/format';
 import {cn} from '@/lib/utils';
 import {useAuth} from '@/lib/auth-context';
 import {useRealm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 
 /**
  * 模型列表的占位。
@@ -47,12 +49,15 @@ interface Msg {
   /** 是否由流式拼出来的（用于显示光标/反馈按钮） */
   done?: boolean;
   error?: boolean;
+  /** 上游没发 [DONE] 就断流：内容保留，但要明确告诉用户「可能不完整」 */
+  truncated?: boolean;
 }
 
 export default function PlaygroundPage() {
   const t = useT();
   const {isAdmin} = useAuth();
   const {realm, label: realmName} = useRealm();
+  const {platform} = usePlatform();
   /**
    * 模型列表。走统一的取数状态：首屏还没拿到之前显示骨架，而不是先写一句
    * 「暂无可用模型」——那句话在数据还在路上时是错的，用户会以为这个版本没模型。
@@ -81,6 +86,20 @@ export default function PlaygroundPage() {
   const [sessionCredit, setSessionCredit] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * 「一次只能有一发在飞」的**同步**判据。
+   *
+   * `streaming` 是 state，双击的第二次点击可能发生在重渲染之前（同一个 tick），
+   * 于是两次点击都能通过 `if (streaming) return` —— 后果是同一句话发两次请求、
+   * 上游扣两次费。ref 的写入是同步的，用它当门闩。
+   */
+  const inFlightRef = useRef(false);
+  /**
+   * 请求代次。取消/切版本/重新发送后，旧请求的回调仍可能在队列里到达；
+   * 只认「当前代次」的回调，避免旧流把新对话写乱（原来的代码会写到最后一条
+   * 消息上，清空对话后甚至会写到 -1 下标）。
+   */
+  const seqRef = useRef(0);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const pinToBottom = useRef(true);
 
@@ -92,11 +111,32 @@ export default function PlaygroundPage() {
     setEffort('');
   }, [models]);
 
-  // 切换版本 = 换了一套账号池与模型，旧对话留着会造成误解（模型不同、额度不同）
+  // 切换版本 = 换了一套账号池与模型，旧对话留着会造成误解（模型不同、额度不同）。
+  // 同时**必须取消在途流**：不取消的话上游会继续生成、照样计费，而页面上已经看不到
+  // 那条回答了；旧回调还会写进刚被清空的列表（原来会写到 index -1）。
   useEffect(() => {
+    // 先失效旧代次，再取消传输；取消的 Promise 仍可能携带 usage 完成。
+    seqRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    inFlightRef.current = false;
+    setStreaming(false);
     setMsgs([]);
     setSessionCredit(0);
   }, [realm]);
+
+  /**
+   * 离页取消：切路由、切平台（`PlatformScope` 按 key 重挂载整棵子树）、关标签页
+   * 都会走到这里。`fetch` 的 signal 一 abort，`streamChat` 会把 reader cancel 掉，
+   * 不留半开连接继续消费上游额度。
+   */
+  useEffect(
+    () => () => {
+      seqRef.current += 1;
+      abortRef.current?.abort();
+    },
+    [],
+  );
 
   // 自动滚到底部，但用户主动向上翻看时不要抢滚动位置
   useEffect(() => {
@@ -113,7 +153,10 @@ export default function PlaygroundPage() {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || streaming) return;
+    // 双保险：state 判据 + 同步 ref 门闩（双击的第二次点击可能在重渲染之前到达，
+    // 那时 `streaming` 还是 false —— 会发两次请求、扣两次费）。
+    if (!text || streaming || inFlightRef.current) return;
+    inFlightRef.current = true;
     setInput('');
     pinToBottom.current = true;
 
@@ -123,116 +166,79 @@ export default function PlaygroundPage() {
 
     const ac = new AbortController();
     abortRef.current = ac;
+    /** 请求代次：取消/切版本之后，旧流的回调一律丢弃 */
+    const seq = seqRef.current + 1;
+    seqRef.current = seq;
+    const isCurrent = () => seqRef.current === seq;
+    /** 只改最后一条（助手）气泡；列表被清空后不再写入（原实现会写到 -1 下标） */
+    const patchLast = (patch: Partial<Msg>) => {
+      if (!isCurrent()) return;
+      setMsgs((cur) => {
+        if (cur.length === 0) return cur;
+        const copy = [...cur];
+        copy[copy.length - 1] = {...copy[copy.length - 1], ...patch};
+        return copy;
+      });
+    };
+
     try {
-      // 流式对话必须用原生 fetch（axios 拿不到 ReadableStream），
-      // 因此这里不走 axios 的 baseURL，要自己补 basePath。
-      const res = await fetch(withBasePath('/api/playground/chat'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {'Content-Type': 'application/json'},
+      // 一次请求的完整生命周期（fetch / reader / 取消 / 终态判定 / 释放）都在
+      // `streamChat` 里，组件只负责画。协议与生命周期边界见 lib/sse.ts 与
+      // lib/chat-stream.ts 的 K31 测试（分片、CRLF、多行 data、错误帧、半截关闭、
+      // reader 取消、一次请求）。
+      const result = await streamChat({
+        url: withBasePath('/api/playground/chat'),
+        // 平台头必须带上：模型清单走 axios（拦截器会自动加），而这里是裸 fetch，
+        // 不加就会把「在 Qoder 平台选的模型」发到 WorkBuddy 的账号池，
+        // 上游只认自己的 id，于是 11102 model ... service info not found。
+        headers: {'X-QTG-Platform': platform},
         signal: ac.signal,
-        body: JSON.stringify({
+        body: {
           model,
           realm,
           reasoning_effort: effort,
           stream: true,
           messages: nextMsgs.map((m) => ({role: m.role, content: m.content})),
-        }),
+        },
+        onDelta: (_delta, full) => patchLast({content: full, done: false}),
       });
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const j = await res.json();
-          detail = j.detail || j.error?.message || detail;
-        } catch {
-          /* 响应不是 JSON，保留状态码 */
-        }
-        setMsgs((cur) => {
-          const copy = [...cur];
-          copy[copy.length - 1] = {role: 'assistant', content: detail, error: true, done: true};
-          return copy;
-        });
-        return;
+
+      if (!isCurrent()) return;
+      // 实测消耗：当前会话取消时也可能已经收到 usage，按上游报的数计入；没报就是 null，
+      // 不填 0 假冒。同一发只计一次（result 只有一个 usage）。
+      if (typeof result.usage.credit === 'number') {
+        setSessionCredit((v) => v + (result.usage.credit as number));
       }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error(t('playground.unreadable'));
-      const decoder = new TextDecoder();
-      let buf = '';
-      let answer = '';
-      let credit: number | null = null;
-      let tokens = 0;
-
-      // 边读边解析 SSE，逐段追加到气泡上（真实流式体验）
-      for (;;) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, {stream: true});
-        let idx: number;
-        while ((idx = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, idx).trim();
-          buf = buf.slice(idx + 1);
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
-          try {
-            const obj = JSON.parse(payload);
-            const delta = obj?.choices?.[0]?.delta?.content;
-            if (typeof delta === 'string' && delta) {
-              answer += delta;
-              setMsgs((cur) => {
-                const copy = [...cur];
-                copy[copy.length - 1] = {...copy[copy.length - 1], content: answer, done: false};
-                return copy;
-              });
-            }
-            if (obj?.usage) {
-              if (typeof obj.usage.credit === 'number') credit = obj.usage.credit;
-              tokens = (obj.usage.prompt_tokens || 0) + (obj.usage.completion_tokens || 0);
-            }
-          } catch {
-            /* 单个分片解析失败不影响后续 */
-          }
-        }
-      }
-
-      setMsgs((cur) => {
-        const copy = [...cur];
-        copy[copy.length - 1] = {
-          role: 'assistant',
-          content: answer || t('playground.emptyAnswer'),
-          credit,
-          tokens,
-          done: true,
-        };
-        return copy;
-      });
-      if (typeof credit === 'number') setSessionCredit((v) => v + credit!);
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        setMsgs((cur) => {
-          const copy = [...cur];
-          const last = copy[copy.length - 1];
-          copy[copy.length - 1] = {...last, done: true, content: last.content || t('playground.stopped')};
-          return copy;
-        });
+      if (result.aborted) {
+        // 用户点停止 / 切平台离页：保留已收到的内容，不标成错误
+        patchLast({done: true, content: result.answer || t('playground.stopped')});
+      } else if (result.error) {
+        patchLast({done: true, error: true, content: result.channelRejection
+          ? channelRejectionText(result.channelRejection) : result.error});
       } else {
-        setMsgs((cur) => {
-          const copy = [...cur];
-          copy[copy.length - 1] = {
-            role: 'assistant',
-            content: errText(e),
-            error: true,
-            done: true,
-          };
-          return copy;
+        patchLast({
+          done: true,
+          content: result.answer || t('playground.emptyAnswer'),
+          credit: result.usage.credit,
+          tokens: result.usage.tokens,
+          // 没收到 [DONE] 就结束：内容是真实的，但可能不完整，必须说明
+          truncated: result.truncated || undefined,
         });
       }
+    } catch (e) {
+      // `streamChat` 自己把网络/HTTP/解析错误放进了 result，走到这里说明是没预料到
+      // 的编程错误——仍要给用户一句话，而不是让气泡一直转圈。
+      patchLast({done: true, error: true, content: errText(e)});
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      // 只有「还是当前这一发」才清状态：期间若已有新请求（切版本后重发），
+      // 旧请求的收尾不能把新请求的 streaming 关掉。
+      if (isCurrent()) {
+        setStreaming(false);
+        abortRef.current = null;
+        inFlightRef.current = false;
+      }
     }
-  }, [input, msgs, model, effort, realm, streaming, t]);
+  }, [input, msgs, model, effort, realm, streaming, platform, t]);
 
   const stop = () => abortRef.current?.abort();
 
@@ -316,7 +322,7 @@ export default function PlaygroundPage() {
         <LoadError message={t('state.partialFailed')} onRetry={reloadModels} />
       )}
 
-      {!isAdmin ? (
+      {!isAdmin && (
         <div className="flex items-start gap-2.5 rounded-[20px] border border-amber-500/30 bg-amber-500/10 p-4 text-xs">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <div className="space-y-1">
@@ -326,7 +332,8 @@ export default function PlaygroundPage() {
             </div>
           </div>
         </div>
-      ) : (
+      )}
+      {(
         <>
           {/* 对话区。不加卡片底色：消息直接落在页面背景上更清爽，
               也让输入框成为视觉焦点（原先整块 bg-muted 显得很重）。 */}
@@ -409,6 +416,14 @@ export default function PlaygroundPage() {
                                 {m.tokens} tokens
                               </span>
                             )}
+                          </div>
+                        )}
+
+                        {/* 协议没有正常终止（没收到 [DONE]）：内容是真的，但不完整，
+                            必须显式说明，不能让它看起来像一次正常完成。 */}
+                        {m.role === 'assistant' && m.done && !m.error && m.truncated && (
+                          <div className="mt-1 px-1 text-[11px] text-amber-600 dark:text-amber-400">
+                            {t('playground.truncated')}
                           </div>
                         )}
                       </div>

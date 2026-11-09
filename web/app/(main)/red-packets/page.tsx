@@ -1,11 +1,14 @@
 'use client';
 
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
+import {useRouter} from 'next/navigation';
+import {usePlatform} from '@/lib/platform-context';
 import {Gift, Plus, Copy, Check, Download, Undo2, Link2} from 'lucide-react';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {notify} from '@/lib/toast';
 import {redPacketApi, errText} from '@/lib/api';
+import {BASE_PATH} from '@/lib/base-path';
 import type {
   CreatedRedPacket, RedPacket, RedPacketDetail, RedPacketKind, RedPacketMode,
 } from '@/lib/types';
@@ -47,6 +50,13 @@ function fmtAmount(v: number, kind: RedPacketKind): string {
 }
 
 export default function RedPacketsPage() {
+  // WorkBuddy 专属页（红包来自腾讯侧营销体系）：另外两个平台没有，
+  // 直接访问时回首页。
+  const {platform} = usePlatform();
+  const router = useRouter();
+  useEffect(() => {
+    if (platform !== 'workbuddy') router.replace('/dashboard');
+  }, [platform, router]);
   const t = useT();
   const {isAdmin} = useAuth();
 
@@ -58,7 +68,7 @@ export default function RedPacketsPage() {
    * 渲染出「暂无红包」——而事实是**没取到**。用户据此会以为红包发完了/被清了。
    * 失败只弹一个几秒后消失的 toast，切回来时页面上看不出任何异常。
    */
-  const {values, isInitialLoading, isInitialFailed, isRefreshing, reload} =
+  const {values, isInitialLoading, isInitialFailed, isRefreshing, reload, refresh} =
     useAsyncAll({list: () => redPacketApi.list()}, []);
 
   /** 红包列表；`undefined` = 还没取到（首屏加载中，或它自己失败了） */
@@ -79,7 +89,7 @@ export default function RedPacketsPage() {
   /** 模型白名单（逗号或换行分隔）。**token 红包必填、积分红包不显示**。 */
   const [models, setModels] = useState('');
 
-  useHeartbeat(reload, 30000);
+  useHeartbeat(refresh, 30000);
 
   async function submit() {
     const amount = Number(total);
@@ -151,7 +161,7 @@ export default function RedPacketsPage() {
    * code（不可能），而 query 不需要任何路由支持 —— `/claim/` 是普通静态页。
    */
   function claimUrl(code: string): string {
-    return `${window.location.origin}/claim/?code=${encodeURIComponent(code)}`;
+    return `${window.location.origin}${BASE_PATH}/claim/?code=${encodeURIComponent(code)}`;
   }
 
   async function copyLink(code: string) {

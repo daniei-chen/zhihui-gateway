@@ -23,8 +23,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-_ROOT = Path(__file__).resolve().parents[2]
+
+def _resolve_root() -> tuple[Path, bool]:
+    """返回 (根, 是否含前端资产)。
+
+    这份守护测试在两棵形态不同的树上都会跑：
+
+      * `src/three-platform/server/tests/` → parents[2] = `src/three-platform`，**有** web/；
+      * `manager/server/tests/`（部署副本原样）→ parents[2] = `manager`，**没有** web/。
+
+    后者是正常的（部署树只含 server/，前端资产由 `--target manager-assets` 补齐）。
+    旧写法硬取 `parents[2] / 'web'`，于是在部署树上抛 FileNotFoundError —— 看起来像
+    「守卫坏了」，实际是「这个 target 没有前端」。基线一直用 manager-assets，
+    就把这个窟窿盖住了：按部署树跑 CI 的人会看到 3 个 error。
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / 'web' / 'lib' / 'i18n' / 'locales').is_dir():
+            return parent, True
+    return here.parents[2], False
+
+
+_ROOT, _HAS_WEB = _resolve_root()
 _LOCALES_DIR = _ROOT / 'web' / 'lib' / 'i18n' / 'locales'
+if not _HAS_WEB:
+    raise unittest.SkipTest(
+        '本 target 不含前端资产（部署树 manager/ 只有 server/）；'
+        '前端 i18n 守卫请用 --target manager-assets')
 
 # 源语言：其它语言以它的键集为基准
 _SOURCE = 'zh-CN'
@@ -204,6 +229,37 @@ class WebLocaleTest(unittest.TestCase):
             text = self.flat[locale].get('logs.accountPending')
             self.assertIsInstance(text, str, f'{locale} 缺少 logs.accountPending')
             self.assertNotIn('非流式', str(text), f'{locale} 又把它说成非流式请求了')
+
+    def test_lockout_copy_states_the_real_consequence(self) -> None:
+        """PB0108 的入站中断确认文案必须说准**真实后果**（业务中断 + 可自助恢复）。
+
+        第一版 5 个语言包都写的是「你将被挡在面板之外，只能登录服务器修改数据库才能
+        恢复」。这句话是错的：`ip_rules` 只被 `gateway.py` / `anthropic.py` 的 `/v1`
+        入站闸门消费，`/api/*` 控制面没有这层检查（`grep -rn ip_rules` 可复核），
+        管理员照样能登录本页改回来。
+
+        写成那段话的危害是双向的：按它去做的人会去服务器翻数据库，而正确操作只是点
+        两下；同时它**漏掉了真正的后果**——推理业务中断。这类「说错方向」的文案不会
+        被任何结构校验抓到（键集、占位符、空译文全都正常），只能靠断言语义。
+
+        逆向断言（禁止旧说法）对**所有**语言生效；正向断言（必须说全两件事）只钉
+        源语言——译文的措辞无法自动判定，硬套会逼译者写机翻腔。
+        """
+        stale_any = ('挡在面板之外', '改数据库才能恢复', '挡在门外',
+                     'locked out of this panel', 'editing the database')
+        for locale in _LOCALES:
+            text = self.flat[locale].get('security.lockoutDesc')
+            self.assertIsInstance(text, str, f'{locale} 缺少 security.lockoutDesc')
+            body = str(text)
+            self.assertIn('{action}', body,
+                          f'{locale}.security.lockoutDesc 丢了 {{action}} 占位符')
+            for stale in stale_any:
+                self.assertNotIn(stale, body,
+                                 f'{locale}.security.lockoutDesc 又回到错误说法：{stale}')
+        source = str(self.flat[_SOURCE]['security.lockoutDesc'])
+        self.assertIn('推理 API', source, '必须说清被切断的是推理入站')
+        self.assertIn('业务会中断', source, '真正的后果是业务中断，不能轻描淡写')
+        self.assertIn('控制台', source, '必须说明控制台不受影响，否则会把人指向改数据库')
 
     def test_no_duplicate_keys(self) -> None:
         """同一个段里**不能出现重复键**——JSON 会静默取最后一条，界面于是显示错的那句。

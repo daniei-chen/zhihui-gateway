@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -114,12 +116,14 @@ class RefreshOneTokenTest(unittest.TestCase):
         async def fake_refresh(auth):
             return refresh_result
 
-        with mock.patch.object(accounts, '_load', lambda filename, base_dir=None: raw), \
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(accounts, '_load', lambda filename, base_dir=None: raw), \
              mock.patch.object(accounts.tencent, 'refresh_token', fake_refresh), \
              mock.patch.object(accounts.tencent, 'update_auth_tokens',
                                side_effect=write_side_effect) as write:
-            # base_dir 只被两个已 mock 的调用用到，占位即可，不碰真实文件系统
-            out = asyncio.run(accounts._refresh_one_token('x.json', Path('.')))
+            filename = 'workbuddy-synthetic.json'
+            (Path(directory) / filename).write_text(json.dumps(raw), encoding='utf-8')
+            out = asyncio.run(accounts._refresh_one_token(filename, Path(directory)))
         return out, write
 
     def test_missing_refresh_token_says_rescan(self) -> None:

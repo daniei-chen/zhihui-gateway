@@ -8,18 +8,24 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import contextvars
 import json
+import logging
 import os
 import re
 import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Callable
 
 import httpx
+from ..modelcontext import optional_fields as context_fields
+from fastapi import HTTPException
 
 from .. import config
+from .credentialrefresh import generation as _credential_generation
 from .realm import (
     CN,
     GLOBAL,
@@ -39,6 +45,28 @@ from .realm import (
 
 from .errtext import err_text
 from .filelock import file_lock
+
+_authorization_check: contextvars.ContextVar[Callable[[], object] | None] = contextvars.ContextVar(
+    'tencent_authorization_check', default=None)
+
+
+@contextmanager
+def authorization_scope(check: Callable[[], object]):
+    """Fence each human-authorized HTTP step without changing scheduled clients."""
+    if not callable(check):
+        raise TypeError('authorization check must be callable')
+    token = _authorization_check.set(check)
+    try:
+        yield
+    finally:
+        _authorization_check.reset(token)
+
+
+def _check_authorization():
+    check = _authorization_check.get()
+    if check is not None:
+        check()
+
 
 class AccountExistsError(ValueError):
     """Raised when an import attempts to replace an existing account without consent."""
@@ -177,12 +205,15 @@ async def start_login(realm: Realm = CN, proxy_name: str = '') -> dict:
     """
     try:
         async with _account_http_client({'proxy': proxy_name}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{chat_base(realm)}/v2/plugin/auth/state',
                 params={'platform': 'CLI'},
                 json={},
                 headers=_hdr(realm),
             )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(_login_net_hint(proxy_name, exc)) from exc
     code, data = _envelope(resp)
@@ -232,6 +263,7 @@ async def poll_login(state: str, realm: Realm | None = None) -> dict:
     # 前端轮询此前会拿到英文 500，用户看不出是线路的问题。
     try:
         async with _account_http_client({'proxy': proxy_name}) as client:
+            _check_authorization()
             resp = await client.get(
                 f'{chat_base(realm)}/v2/plugin/auth/token',
                 params={'state': state},
@@ -246,11 +278,14 @@ async def poll_login(state: str, realm: Realm | None = None) -> dict:
             expires_in = int(data.get('expiresIn', 3600) or 3600)
             domain = data.get('domain', '')
 
+            _check_authorization()
             acct_resp = await client.get(
                 f'{chat_base(realm)}/v2/plugin/login/account',
                 params={'state': state},
                 headers=_hdr(realm, access_token),
             )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(_login_net_hint(proxy_name, exc)) from exc
     _, acct = _envelope(acct_resp)
@@ -285,6 +320,21 @@ async def poll_login(state: str, realm: Realm | None = None) -> dict:
     }
 
 
+def _ensure_auth_directory(base: Path) -> None:
+    """Set sharing permissions only for a directory created by this writer."""
+    try:
+        base.mkdir(parents=True,mode=0o750)
+    except FileExistsError:
+        if not base.is_dir():raise ValueError('credential directory is not a directory')
+        return
+    shared_gid=os.environ.get('WB_AUTH_SHARED_GID','').strip()
+    if shared_gid:
+        if not shared_gid.isdecimal() or int(shared_gid)>2**31-1 or not hasattr(os,'chown'):
+            raise ValueError('WB_AUTH_SHARED_GID requires a valid POSIX shared group')
+        os.chown(base,-1,int(shared_gid))
+    os.chmod(base,0o750)
+
+
 def _atomic_write_json(target: Path, payload: dict) -> None:
     """把 payload 以**原子替换**方式写到 target（临时文件 + os.replace）。
 
@@ -308,13 +358,9 @@ def _atomic_write_json(target: Path, payload: dict) -> None:
     失败并触发清理，把对方刚写好的内容一并删掉。实测 4 个并发线程全部报错、
     且原账号文件消失。唯一名让每次写各自独立。
 
-    权限**必须显式放宽**：mkstemp 在 Linux 上固定创建 0600，而这里写入的文件是
-    给**上游**读的 —— 宿主部署下本面板以 root 写、上游容器以 uid 10001 读，
-    0600 会让上游读不到该账号（表现为账号加进去了但池里没有）。原来的
-    `write_text` 走 umask（典型 0644），这里要保持同样的可读性。
-
-    为什么不照抄上游 SaveAtomic 的 0o600：上游是「同一个进程既写又读」，
-    0600 自洽；我们是跨 uid 写读，前提不同。
+    新文件使用 0640，更新保留原 owner/group 并收紧权限，绝不向其他用户公开。
+    跨 UID 部署须配置专用共享组 WB_AUTH_SHARED_GID、双方组成员和目录遍历权限；
+    同 UID 部署不需要额外组。修改现有目录权限属于单独的受控部署步骤。
     """
     original = target.stat() if target.exists() else None
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp',
@@ -324,9 +370,18 @@ def _atomic_write_json(target: Path, payload: dict) -> None:
             fh.write(json.dumps(payload, ensure_ascii=False, indent=1))
             fh.flush()
             os.fsync(fh.fileno())
-        if original is not None and hasattr(os, 'chown'):
-            os.chown(tmp_name, original.st_uid, original.st_gid)
-        os.chmod(tmp_name, (original.st_mode & 0o777) if original is not None else 0o644)
+        # Shared readers use a dedicated group, never world-readable credentials.
+        shared_gid = os.environ.get('WB_AUTH_SHARED_GID', '').strip()
+        if shared_gid and (not shared_gid.isdecimal() or int(shared_gid) > 2**31-1):
+            raise ValueError('WB_AUTH_SHARED_GID must be a nonnegative group ID')
+        if shared_gid and not hasattr(os,'chown'):
+            raise ValueError('WB_AUTH_SHARED_GID requires POSIX ownership support; Windows deployments must use OS ACLs')
+        if hasattr(os, 'chown'):
+            gid = int(shared_gid) if shared_gid else (original.st_gid if original else target.parent.stat().st_gid)
+            os.chown(tmp_name, original.st_uid if original else -1, gid)
+        mode = (0o600 | (original.st_mode & 0o040)) if original else 0o640
+        if shared_gid: mode = 0o640
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, target)
     except Exception:
         # 失败时清掉临时文件，避免在 auths 目录里留垃圾（它不会被加载，但会让人困惑）
@@ -355,7 +410,7 @@ def update_auth_tokens(filename: str, fields: dict,
     """
     target = _safe_auth_path(filename, auth_dir)
     # 读—改—写必须串行（见 filelock.py）：否则续期与其它写者会互相覆盖。
-    with file_lock(target):
+    with file_lock(target, writing=True):
         try:
             raw = json.loads(target.read_text(encoding='utf-8'))
         except FileNotFoundError:
@@ -369,6 +424,12 @@ def update_auth_tokens(filename: str, fields: dict,
         if not isinstance(auth, dict):
             auth = {}
             raw['auth'] = auth
+        expected = fields.get('_refresh_expected')
+        if expected is not None and expected != _credential_generation(auth):
+            raise ValueError('credential generation changed; stale update refused')
+        if ('_refresh_expected_uid' in fields
+                and str((raw.get('account') or raw).get('uid') or '') != fields['_refresh_expected_uid']):
+            raise ValueError('credential identity changed; stale update refused')
         if 'access_token' in fields:
             auth['accessToken'] = fields['access_token']
         if 'refresh_token' in fields:
@@ -423,19 +484,20 @@ def write_auth_file(account: dict, auth_dir: Path | None = None,
     if not re.fullmatch(r'[0-9A-Za-z_-]{1,80}', uid):
         raise ValueError(f'账号 uid 形态异常，已拒绝写入（{uid[:40]!r}）')
     base = auth_dir or config.AUTH_DIR
-    base.mkdir(parents=True, exist_ok=True)
+    _ensure_auth_directory(base)
     target = base / f'workbuddy-{uid}.json'
     disabled_target = base / f'{target.name}.disabled'
     if not target.exists() and disabled_target.exists():
         target = disabled_target
-    existed = target.exists()
-    if existed and not allow_overwrite:
-        raise AccountExistsError(uid)
     domain = account.get('domain', '')
     resolved = resolve_realm(account.get('realm'), domain)
 
     # 读旧值 → 合并 → 原子写，整体串行：重登/导入不能把别人刚写的字段盖掉。
-    with file_lock(target):
+    with file_lock(target, writing=True):
+        # No-overwrite must be decided while holding the write lock.
+        existed = target.exists()
+        if existed and not allow_overwrite:
+            raise AccountExistsError(uid)
         # 保留旧的 device_token（若有）。读失败不影响主流程。
         old_device_token = ''
         old_proxy = ''
@@ -464,8 +526,9 @@ def write_auth_file(account: dict, auth_dir: Path | None = None,
                 'realm': resolved,
             },
         }
-        if old_device_token:
-            payload['device_token'] = old_device_token
+        device_token = str(account.get('device_token') or old_device_token or '')
+        if device_token:
+            payload['device_token'] = device_token
 
         # 空串同样回退到旧值（`or old_proxy`，而不是只对「键缺失」生效的默认值）：
         # 登录流（account 里通常没有这个键）与**导入流**（`_uploaded_account` 恒带上
@@ -586,6 +649,28 @@ async def refresh_token(auth: dict) -> tuple[bool, str, dict]:
     return True, '刷新成功（上游未返回有效期，沿用原值）', out
 
 
+# 10001 的两层语义（issue #256）：上游既用它表示「今天已签到」（幂等成功），
+# 也用它表示「签到失败，请稍后重试」（瞬时限流）。只按业务码判断会把失败记成
+# 成功，所以这里再看 msg 文案区分。
+_ALREADY_CHECKIN_MARKERS = ('已签到', '已经签到', 'already checked in',
+                            'already signed in', 'already checkin')
+
+
+def is_already_checkin_message(code: int, message: str = '') -> bool:
+    """(code, message) 是否表示「今天已签到」；空 msg 保持旧行为。"""
+    if code != 10001:
+        return False
+    msg = (message or '').strip().lower()
+    if not msg:
+        return True
+    return any(m in msg for m in _ALREADY_CHECKIN_MARKERS)
+
+
+logger = logging.getLogger(__name__)
+
+portal_checkin_active = contextvars.ContextVar('portal_checkin_active', default=False)
+
+
 async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str]:
     """每日签到。10001 = 今日已签到，属正常幂等。
 
@@ -596,10 +681,30 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
     access_token 可传字符串（只有 Authorization）或完整 auth dict
     （额外带上 X-User-Id 等身份头——上游 billing 域一直这么做，见 BillingHeaders）。
     """
+    if isinstance(access_token, dict) and not portal_checkin_active.get():
+        from .. import portalstore, portalservice
+        # Every Manager caller, including the original total workbench, shares
+        # the same claim when handling a customer-owned UID.
+        if (config.DATA_DIR / 'user-portal.sqlite3').exists():
+            try:
+                with portalstore.transaction() as conn:
+                    account = conn.execute("SELECT id FROM portal_accounts WHERE provider_uid=? AND platform='workbuddy' AND realm='cn'", (str(access_token.get('uid') or ''),)).fetchone()
+                if account:
+                    result = await portalservice.checkin(account['id'], 'manager-shared')
+                    signed = result['state'] in ('confirmed', 'confirmed_uncredited')
+                    return (10001 if result.get('already') else 0, result['message']) if signed else (-1, result['message'])
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # 共享 claim 失败（用户停用/初始积分待核实/跨日 unknown/库异常）：
+                # 绝不能记成成功，按 -1（失败·待核对）返回，明细只进日志。
+                logger.warning('portal shared checkin pending reason=%s', type(exc).__name__)
+                return -1, '该账号签到待核对，本次未发起；请联系管理员核对后重试'
     if not supports_checkin(realm):
         return -2, '国际版无签到体系，已跳过'
     try:
         async with _account_http_client(access_token if isinstance(access_token, dict) else {}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}{billing_paths(realm, "daily-checkin")[0]}',
                 json={},
@@ -609,8 +714,21 @@ async def checkin(access_token: str | dict, realm: Realm = CN) -> tuple[int, str
         if code == 0:
             return 0, '签到成功'
         if code == 10001:
-            return 10001, '今日已签到'
+            msg = ''
+            try:
+                env = resp.json()
+                if isinstance(env, dict):
+                    msg = str(env.get('msg') or '')
+            except Exception:  # noqa: BLE001
+                msg = ''
+            if is_already_checkin_message(code, msg):
+                return 10001, '今日已签到'
+            # 同一 10001 的瞬时拒绝语义：用 -3 与「已签到」区分，
+            # 调用方才不会把失败记成成功（issue #256）。
+            return -3, msg or '签到失败，请稍后重试'
         return code, f'签到返回 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return -1, f'签到异常: {err_text(exc)}'
 
@@ -778,7 +896,7 @@ async def fetch_credits(auth: dict) -> tuple[bool, int | float | None, str, list
 
         total = 0.0
         expiries: list[dict] = []
-        for item in accounts:
+        for item in _resource_package_rows(accounts):
             if not isinstance(item, dict):
                 continue
             # 逐个套餐钳负值**再**累加，与上游同序（其 `if r < 0 { r = 0 }` 在
@@ -1008,7 +1126,9 @@ def _parse_model_payload(data: object, realm: Realm) -> tuple[dict[str, dict], l
         info[mid] = {
             'id': mid,
             'name': str(m.get('name') or '').strip(),
-            'context_length': _as_int(m.get('maxInputTokens')),
+            'context_length': _as_int(m.get('maxInputTokens')) or _as_int(m.get('maxAllowedSize')),
+            'context_length_source': 'provider',
+            **context_fields(_as_int(m.get('maxInputTokens')) or _as_int(m.get('maxAllowedSize')), m.get('contextWindow')),
             'max_output_tokens': _as_int(m.get('maxOutputTokens')),
             'disabled': bool(m.get('disabled')),
             'efforts': [str(x) for x in efforts if x] if isinstance(efforts, list) else [],
@@ -1106,6 +1226,26 @@ def _extract_resource_accounts(data: object) -> list | None:
     return None
 
 
+def _resource_package_rows(accounts: list) -> list[dict]:
+    """Drop only identified subtotal views when coded package details exist."""
+    rows = [item for item in accounts if isinstance(item, dict)]
+
+    def coded(item):
+        code = item.get('PackageCode', item.get('packageCode'))
+        return not isinstance(code, bool) and isinstance(code, (str, int, float)) and str(code).strip() != ''
+
+    if not any(coded(item) for item in rows):
+        return rows
+    summaries = {'平台奖励积分', '套餐基础积分', '套餐赠送积分', '购买积分'}
+    fields = ('PackageName', 'packageName', 'Name', 'name', 'ProductCode', 'description')
+
+    def summary(item):
+        name = next((item[field] for field in fields if field in item), None)
+        return isinstance(name, str) and name in summaries
+
+    return [item for item in rows if coded(item) or not summary(item)]
+
+
 def _num(item: dict, key: str) -> float:
     """取数值字段，非数值（含 null / 布尔 / 字符串）一律按 0。"""
     v = item.get(key)
@@ -1166,13 +1306,93 @@ def _package_expiry(item: dict) -> int | None:
     return int(naive.replace(tzinfo=_PACKAGE_END_TZ).timestamp())
 
 
+async def _probe_response(resp) -> tuple[bool, int | str, str, bool]:
+    """Require bounded OpenAI stream evidence; comments/HTTP 200 prove nothing."""
+    from ..observability import StreamAudit
+
+    # This one-token diagnostic requests identity encoding. Reject an unexpected
+    # compressed body before HTTPX can expand it outside the small probe budget.
+    encoding = resp.headers.get('content-encoding', '').strip().lower()
+    if encoding not in ('', 'identity'):
+        raise ValueError('上游探测响应未遵循 identity 压缩协商')
+    maximum = 256 * 1024
+    audit = StreamAudit(64 * 1024)
+    captured = bytearray()
+
+    def rejection(obj):
+        if not isinstance(obj, dict):
+            return None
+        if obj.get('error') is None and obj.get('code') in (None, 0, '0'):
+            return None
+        raw = json.dumps(obj, ensure_ascii=False)
+        code, message = _parse_error_body(raw, resp.status_code)
+        return False, code, message, _is_channel_check(code, raw)
+
+    def evidence(events):
+        # A coalesced network chunk may contain content followed by a rejection.
+        # Inspect every parsed error before declaring the probe healthy.
+        for obj in events:
+            failed = rejection(obj)
+            if failed is not None:
+                return failed
+        if audit.error:
+            return False, audit.error_code or 'probe.protocol', audit.error, False
+        for obj in events:
+            choices = obj.get('choices')
+            if not isinstance(choices, list):
+                continue
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get('delta', choice.get('message'))
+                if not isinstance(delta, dict):
+                    continue
+                if any(delta.get(key) is not None and not isinstance(delta[key], str)
+                       for key in ('content', 'reasoning_content', 'reasoning')):
+                    continue
+                if (any(isinstance(delta.get(key), str) and delta[key]
+                        for key in ('content', 'reasoning_content', 'reasoning'))
+                        or choice.get('finish_reason') in ('stop', 'length')):
+                    return True, 0, '', False
+        if audit.done_seen or audit.finish_seen:
+            return False, 'probe.protocol', '上游未返回有效的推理响应', False
+        return None
+
+    async for chunk in resp.aiter_bytes():
+        if len(captured) + len(chunk) > maximum:
+            raise ValueError('上游探测响应超过 256 KiB 上限')
+        captured.extend(chunk)
+        if resp.status_code < 400:
+            result = evidence(audit.feed(chunk))
+            if result is not None:
+                return result
+
+    raw = captured.decode('utf-8', errors='replace')
+    if resp.status_code >= 400:
+        code, message = _parse_error_body(raw, resp.status_code)
+        return False, code, message, _is_channel_check(code, raw)
+    result = evidence(audit.finish())
+    if result is not None:
+        return result
+    # Some provider failures use JSON despite HTTP 200. Preserve their business
+    # code, but never treat a non-SSE JSON success object as a streaming response.
+    try:
+        failed = rejection(json.loads(raw))
+        if failed is not None:
+            return failed
+    except ValueError:
+        pass
+    return False, 'probe.protocol', '上游未返回有效的推理响应', False
+
+
 async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
     """以最小**流式**对话请求探测账号可用性。
 
     必须用流式：上游强制要求 stream=true，非流式会返回
     code=11101「Non-stream chat request is currently not supported」
     （见 workbuddy2api payload.go 中强制 obj["stream"]=true 的处理）。
-    因此这里发起流式请求，读到首个数据块即判定可用，随即断开。
+    因此这里发起流式请求，读到有效正文或成功结束事件才判定可用，随即断开。
+    心跳、角色声明、[DONE] 和 HTTP 200 本身都不能证明账号可用。
 
     请求头复刻上游 ChatHeaders：缺失字段用 X-No-* 约定。
     国内版带 X-Enterprise-Id / X-Domain（有值则带、否则 X-No-*）；
@@ -1196,6 +1416,7 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
     # chat 是流式路径：Accept 覆盖为流式形态（对齐上游 D6 —— 非流式默认收紧为
     # application/json，只有 chat 才声明 text/event-stream）
     headers['Accept'] = 'application/json, text/event-stream'
+    headers['Accept-Encoding'] = 'identity'
     headers['X-User-Id' if uid else 'X-No-User-Id'] = uid or '1'
     if realm == GLOBAL:
         # 镜像上游：国际版声明「个人账号无企业 ID」并断言国际域
@@ -1243,7 +1464,7 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
         'stream': True,
     }
 
-    started = _time.time()
+    started = _time.monotonic()
     # 路径候选：/v2 优先、/console 兜底（见 realm.chat_paths 的注释）。这里逐个尝试，
     # 触发回落的条件是**渠道校验**或 404/405：2026-10-17 上游给 /v2 加了渠道强校验，
     # 被校验到的请求回「没通过渠道校验」，而官方客户端走的 /console 正常放行 ——
@@ -1252,15 +1473,18 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
         paths = chat_paths(realm)
         # lane='probe'：测活是**用户正在等**的那一次请求，给它独立连接池，
         # 不被并发的批量任务（刷积分/签到）挤到 pool 超时（issue #161）。
-        async with _account_http_client(auth, lane='probe') as client:
-            for idx, path in enumerate(paths):
-                async with client.stream(
-                    'POST', f'{base}{path}', json=payload, headers=headers,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        raw = (await resp.aread()).decode('utf-8', errors='replace')
-                        code, msg = _parse_error_body(raw, resp.status_code)
-                        channel_check = _is_channel_check(code, raw)
+        # HTTP read timeouts reset after every heartbeat. Bound the entire probe,
+        # including any alternate path, so a silent model cannot hold it forever.
+        async with asyncio.timeout(config.TENCENT_TIMEOUT):
+            async with _account_http_client(auth, lane='probe') as client:
+                for idx, path in enumerate(paths):
+                    async with client.stream(
+                        'POST', f'{base}{path}', json=payload, headers=headers,
+                    ) as resp:
+                        ok, code, msg, channel_check = await _probe_response(resp)
+                        if ok:
+                            elapsed = int((_time.monotonic() - started) * 1000)
+                            return True, f'连通正常（{model}，{elapsed}ms）'
                         if channel_check and idx < len(paths) - 1:
                             continue  # 换下一条路径再试，别当成账号问题
                         if channel_check:
@@ -1269,13 +1493,9 @@ async def probe_account(auth: dict, model: str = 'glm-5.2') -> tuple[bool, str]:
                                            '/'.join(paths) + '）—— 账号本身没问题；'
                                            '请先升级到最新版本，仍不行就把这句反馈给维护者')
                         return False, _explain_code(code, msg)
-                    # 读到首个非空数据块即可确认账号可用，无需等流结束
-                    async for chunk in resp.aiter_bytes():
-                        if chunk:
-                            elapsed = int((_time.time() - started) * 1000)
-                            return True, f'连通正常（{model}，{elapsed}ms）'
-                    return False, '上游未返回任何数据'
         return False, '所有候选路径均不可用'
+    except TimeoutError:
+        return False, '探测超时：未在限定时间内收到有效推理响应'
     except Exception as exc:  # noqa: BLE001
         return False, f'请求异常: {err_text(exc)}'
 
@@ -1300,7 +1520,12 @@ def _parse_error_body(raw: str, status: int) -> tuple[int | str, str]:
     try:
         env = json.loads(raw)
         if isinstance(env, dict):
-            return env.get('code', status), str(env.get('msg') or env.get('message') or '')
+            payload = env.get('error') if isinstance(env.get('error'), dict) else env
+            code = payload.get('code', env.get('code', status))
+            if isinstance(code, bool) or not isinstance(code, (int, str)):
+                code = status
+            message = payload.get('msg') or payload.get('message') or env.get('error') or ''
+            return str(code)[:64] if isinstance(code, str) else code, str(message)[:500]
     except Exception:  # noqa: BLE001
         pass
     return status, raw.strip()[:200]
@@ -1382,6 +1607,7 @@ async def registration_status(auth: dict) -> tuple[bool, str]:
         # 上游参照实现（scripts/global_region.py activate_region）明确带 X-User-Id，
         # 这里走 billing 域头（含身份头），保持一致
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.get(url, params={'userId': uid}, headers=_billing_hdr(realm, auth))
         code, data = _envelope(resp)
         if code == 200 or code == 0:
@@ -1393,6 +1619,8 @@ async def registration_status(auth: dict) -> tuple[bool, str]:
         if 'region required' in text.lower():
             return False, '尚未完成地区注册'
         return False, f'注册状态未知 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'查询注册状态异常: {err_text(exc)}'
 
@@ -1434,6 +1662,7 @@ async def submit_region(auth: dict, region_code: str) -> tuple[bool, str]:
     body = {'attributes': attrs}
     try:
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}/console/login/account',
                 json=body,
@@ -1443,6 +1672,8 @@ async def submit_region(auth: dict, region_code: str) -> tuple[bool, str]:
         if code == 0 or code == 200:
             return True, f'地区已提交（{code_upper}）'
         return False, f'提交地区失败 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'提交地区异常: {err_text(exc)}'
 
@@ -1457,6 +1688,7 @@ async def _region_fields(ios2: str, auth: dict | None = None) -> tuple[str, str,
     fallback = (ios2, ios2, ios2)
     try:
         async with _account_http_client(auth or {}) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(GLOBAL)}/billing/area/get-country-code',
                 json={'filterForbidden': 1},
@@ -1478,6 +1710,8 @@ async def _region_fields(ios2: str, auth: dict | None = None) -> tuple[str, str,
                     str(item.get('EnName') or ios2),
                     str(item.get('Code') or ios2),
                 )
+    except HTTPException:
+        raise
     except Exception:  # noqa: BLE001
         pass
     return fallback
@@ -1496,6 +1730,7 @@ async def claim_trial(auth: dict) -> tuple[bool, str]:
         return False, '缺少 accessToken'
     try:
         async with _account_http_client(auth) as client:
+            _check_authorization()
             resp = await client.post(
                 f'{billing_base(realm)}/billing/ide/trial',
                 json={},
@@ -1507,5 +1742,7 @@ async def claim_trial(auth: dict) -> tuple[bool, str]:
         if code == 14051 or '14051' in str(data or ''):
             return True, 'trial 此前已领取（幂等）'
         return False, f'领取 trial 失败 code={code}'
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return False, f'领取 trial 异常: {err_text(exc)}'

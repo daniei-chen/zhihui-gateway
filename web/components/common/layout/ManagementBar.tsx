@@ -85,14 +85,9 @@ type StoredDockPosition = DockPosition & {
 
 type DockPositions = Partial<Record<DockViewport, StoredDockPosition>>;
 
-const SystemTheme = {
-  LIGHT: 'light',
-  DARK: 'dark',
-} as const;
-
 export function ManagementBar() {
   const themeUtils = useThemeUtils();
-  const {me, isAdmin, logout} = useAuth();
+  const {me, isAdmin, canAddAccounts, logout} = useAuth();
   const t = useT();
   const [mounted, setMounted] = useState(false);
   const [dockViewport, setDockViewport] = useState<DockViewport>('desktop');
@@ -124,6 +119,7 @@ export function ManagementBar() {
   const dockPressTimerRef = useRef<number | null>(null);
   const pressStartRef = useRef({x: 0, y: 0});
   const pressCleanupRef = useRef<(() => void) | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const isDraggingRef = useRef(false);
   const dragMovedRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
@@ -153,7 +149,9 @@ export function ManagementBar() {
       },
     };
 
-    window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(nextPositions));
+    try { window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(nextPositions)); } catch {
+      // The current position still works when persistent storage is denied.
+    }
   }, [readDockPositions]);
 
   const getDockRect = useCallback(() => {
@@ -254,7 +252,7 @@ export function ManagementBar() {
     dockModeRef.current = mode;
     setDockMode(mode);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DOCK_MODE_STORAGE_KEY, mode);
+      try { window.localStorage.setItem(DOCK_MODE_STORAGE_KEY, mode); } catch {}
     }
     syncDockPosition();
   }, [syncDockPosition]);
@@ -262,7 +260,8 @@ export function ManagementBar() {
   useEffect(() => {
     setMounted(true);
     if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(DOCK_MODE_STORAGE_KEY) === 'pinned' ? 'pinned' : 'floating';
+    let stored: DockMode = 'floating';
+    try { if (window.localStorage.getItem(DOCK_MODE_STORAGE_KEY) === 'pinned') stored = 'pinned'; } catch {}
     dockModeRef.current = stored;
     setDockMode(stored);
   }, []);
@@ -305,9 +304,13 @@ export function ManagementBar() {
   // 每个浏览器会话检测一次新版本，有更新则弹出提醒（避免打扰不重复提示）
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return;
-    const KEY = 'workbuddy-manager:update-notified';
-    if (window.sessionStorage.getItem(KEY) === '1') return;
-    window.sessionStorage.setItem(KEY, '1');
+    const KEY = 'zhihui-gateway:release-notified';
+    try {
+      if (window.sessionStorage.getItem(KEY) === '1') return;
+      window.sessionStorage.setItem(KEY, '1');
+    } catch {
+      // Version notification is optional; a blocked store must not crash the shell.
+    }
 
     (async () => {
       try {
@@ -315,7 +318,6 @@ export function ManagementBar() {
         if (!c.has_any) return;
         const parts: string[] = [];
         if (c.manager.has_update) parts.push(t('update.managerVersion', {v: c.manager.latest}));
-        if (c.upstream.has_update) parts.push(t('update.upstreamVersion', {v: c.upstream.latest}));
         notify.warn(t('update.newVersion'), t('update.notice', {targets: parts.join(' · ')}));
       } catch {
         /* 检测失败静默：不打扰用户（如服务器访问 GitHub 受限） */
@@ -326,7 +328,8 @@ export function ManagementBar() {
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return;
 
-    const dismissed = window.localStorage.getItem(DOCK_TIP_STORAGE_KEY) === 'true';
+    let dismissed = false;
+    try { dismissed = window.localStorage.getItem(DOCK_TIP_STORAGE_KEY) === 'true'; } catch {}
     if (!dismissed) {
       setShowDockTip(true);
     }
@@ -368,15 +371,15 @@ export function ManagementBar() {
     };
   }, []);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
   };
 
   const handleDismissDockTip = useCallback(() => {
     setShowDockTip(false);
     setDockTipStep(0);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DOCK_TIP_STORAGE_KEY, 'true');
+      try { window.localStorage.setItem(DOCK_TIP_STORAGE_KEY, 'true'); } catch {}
     }
   }, []);
 
@@ -442,6 +445,7 @@ export function ManagementBar() {
     isDraggingRef.current = true;
     dragMovedRef.current = false;
     const pressStart = pressStartRef.current;
+    let lastPosition = dockPosition;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const dx = moveEvent.clientX - pressStart.x;
@@ -455,12 +459,13 @@ export function ManagementBar() {
         x: moveEvent.clientX - dragOffsetRef.current.x,
         y: moveEvent.clientY - dragOffsetRef.current.y,
       });
-
+      lastPosition = nextPosition;
       setDockPosition(nextPosition);
     };
 
     const handlePointerUp = (upEvent: PointerEvent) => {
-      const nextPosition = clampDockPosition({
+      // Native drag/touch cancellation can report (0, 0); retain the last real point.
+      const nextPosition = upEvent.type === 'pointercancel' ? lastPosition : clampDockPosition({
         x: upEvent.clientX - dragOffsetRef.current.x,
         y: upEvent.clientY - dragOffsetRef.current.y,
       });
@@ -475,11 +480,17 @@ export function ManagementBar() {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
+      dragCleanupRef.current = null;
     };
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
+    dragCleanupRef.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
   }, [clampDockPosition, dockPosition, getViewport, writeDockPosition]);
 
   const handleDockPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -493,6 +504,7 @@ export function ManagementBar() {
     clearDockPressTimer();
     // 上一轮按下如果还在等长按，先撤掉它的 window 监听。
     pressCleanupRef.current?.();
+    dragCleanupRef.current?.();
     pressCleanupRef.current = null;
 
     function cleanupPressListeners() {
@@ -530,6 +542,7 @@ export function ManagementBar() {
     // 卸载时别把等待中的长按 timer 留到下一次挂载后再触发。
     clearDockPressTimer();
     pressCleanupRef.current?.();
+    dragCleanupRef.current?.();
   }, [clearDockPressTimer]);
 
   const handleDockPointerEnd = useCallback(() => {
@@ -617,6 +630,8 @@ export function ManagementBar() {
       href: '/settings',
       groupKey: 'governance',
     },
+    ...(isAdmin ? [{title: t('nav.members'), icon: <Users {...IconOptions} />,
+      href: '/members', groupKey: 'governance'}] : []),
     {
       title: t('nav.quickAdd'),
       icon: <PlusCircle {...IconOptions} />,
@@ -626,8 +641,22 @@ export function ManagementBar() {
         <div
           data-slot="dock-quick-add"
           data-dock-no-drag="true"
+          // 底栏的自定义项不是 <button>（要参与拖拽与动画），因此必须自己补
+          // 角色、可访问名称与键盘操作（K38）：否则 Tab 永远到不了、读屏只会
+          // 念「分组」，而它其实是「快速添加账号」的入口。
+          role="button"
+          tabIndex={canAddAccounts ? 0 : -1}
+          aria-label={t('nav.quickAdd')}
+          aria-disabled={!canAddAccounts}
           onClick={() => {
-            if (isAdmin) setAddOpen(true);
+            if (canAddAccounts) setAddOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (!canAddAccounts) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setAddOpen(true);
+            }
           }}
           className="w-full h-full flex items-center justify-center cursor-pointer rounded transition-colors"
         >
@@ -646,6 +675,16 @@ export function ManagementBar() {
               <div
                 data-slot="dock-profile-trigger"
                 data-dock-no-drag="true"
+                // 同上：div 触发器要自己补 role/名称/键盘打开（K38）。
+                role="button"
+                tabIndex={0}
+                aria-label={t('nav.profile')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setProfileOpen(true);
+                  }
+                }}
                 className="w-full h-full flex items-center justify-center cursor-pointer rounded transition-colors"
               >
                 <User className="h-4 w-4" />
@@ -682,11 +721,11 @@ export function ManagementBar() {
                                 {me.username}
                               </div>
                               <div className="truncate text-xs text-muted-foreground">
-                                WorkBuddy Manager
+                                {t('brand.name')}
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                 <Badge variant="secondary" className="h-5 rounded-full px-2 text-[10px]">
-                                  {me.role === 'admin' ? t('profile.roleAdmin') : t('profile.roleViewer')}
+                                  {me.role === 'admin' ? t('profile.roleSuperAdmin') : t('profile.roleAccountAdmin')}
                                 </Badge>
                               </div>
                             </div>
@@ -714,7 +753,7 @@ export function ManagementBar() {
                             cookie 立即失效**，而不只是清掉本机这一个。用于怀疑会话被人
                             拿到（在别人电脑上登过、旧设备没退、备份里有 cookie）——
                             不必改密码（那会连带影响下游配置）。 */}
-                        <div className="mt-2 flex justify-end">
+                        {isAdmin && <div className="mt-2 flex justify-end">
                           <ConfirmDialog
                             title={t('profile.revokeTitle')}
                             description={t('profile.revokeDesc')}
@@ -726,7 +765,7 @@ export function ManagementBar() {
                                 notify.ok(t('profile.revoked'));
                                 // 服务端已失效所有会话（含本机），必须回登录页
                                 setProfileOpen(false);
-                                logout();
+                                await logout();
                               } catch (e) {
                                 notify.err(errText(e));
                               }
@@ -743,7 +782,7 @@ export function ManagementBar() {
                               </Button>
                             }
                           />
-                        </div>
+                        </div>}
 
                         <Separator />
 
@@ -776,13 +815,15 @@ export function ManagementBar() {
                             <div className="flex flex-wrap items-center gap-2">
                               <button
                                 type="button"
+                                data-slot="theme-toggle"
+                                aria-label={themeUtils.getAction()}
                                 onClick={themeUtils.toggle}
                                 className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-2 transition-colors hover:bg-muted/80"
                               >
                                 <div className="flex items-center gap-2">
                                   {themeUtils.getIcon('size-3.5 text-foreground/60')}
                                   <span className="text-xs font-medium text-foreground">
-                                    {themeUtils.getSystemTheme() === SystemTheme.LIGHT ? t('theme.light') : t('theme.dark')}
+                                    {themeUtils.getAction()}
                                   </span>
                                 </div>
                               </button>
@@ -833,14 +874,14 @@ export function ManagementBar() {
                         </div>
                       </Link>
                       <Link
-                        href="https://github.com/Sliverkiss/workbuddy2api"
+                        href="https://github.com/daniei-chen/zhihui-gateway"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-2 transition-colors hover:bg-muted/80"
                       >
                         <div className="flex items-center gap-2">
                           <FolderGit2 className="size-3.5 text-foreground/60" />
-                          <span className="text-xs font-medium text-foreground">workbuddy2api</span>
+                          <span className="text-xs font-medium text-foreground">{t('product.repository')}</span>
                         </div>
                       </Link>
                       <Link
@@ -898,10 +939,13 @@ export function ManagementBar() {
       <div
         ref={dockRef}
         data-slot="dock-root"
+        role="navigation"
+        aria-label={t('nav.groupOverview')}
         className="fixed z-40 select-none touch-none"
         onPointerDown={handleDockPointerDown}
         onPointerUp={handleDockPointerEnd}
         onPointerCancel={handleDockPointerEnd}
+        onDragStart={(event) => { if (isDraggingRef.current) event.preventDefault(); }}
         onClickCapture={handleDockClickCapture}
         style={
           dockPosition ?
@@ -941,12 +985,17 @@ export function ManagementBar() {
                 <div className="flex items-center gap-0.5">
                   {/* 明确的关闭入口。原实现只能靠「把几条都点完」关掉，
                       于是这条气泡会在页面上一直挂着 —— 它挂在底栏正上方，
-                      而底栏能被拖到页面中部，正好压住正文。 */}
+                      而底栏能被拖到页面中部，正好压住正文。
+
+                      N45：热区必须 ≥ 24×24（WCAG 2.2 AA 目标尺寸）。原来是
+                      h-5(20px)+px-1，实测 38×20，低于阈值。这里用 min-h-6/min-w-6
+                      把**热区**抬到 24px；文字仍是 10/11px、外观不变 ——
+                      不靠放大字号凑尺寸，视觉密度保持原样。 */}
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-5 rounded-full px-1 text-[10px] text-muted-foreground md:h-6 md:px-1.5 md:text-[11px]"
+                    className="min-h-6 min-w-6 rounded-full px-1 text-[10px] text-muted-foreground md:px-1.5 md:text-[11px]"
                     onClick={handleDismissDockTip}
                   >
                     {t('dock.tipDismiss')}
@@ -957,7 +1006,7 @@ export function ManagementBar() {
                     size="sm"
                     aria-label={t('dock.tipNext')}
                     title={t('dock.tipNext')}
-                    className="h-5 rounded-full px-1 text-[10px] text-muted-foreground md:h-6 md:px-1.5 md:text-[11px]"
+                    className="min-h-6 min-w-6 rounded-full px-1 text-[10px] text-muted-foreground md:px-1.5 md:text-[11px]"
                     onClick={handleNextDockTip}
                   >
                     <ChevronRight className="size-3 md:size-3.5" />

@@ -87,21 +87,22 @@ def _auto_row(uid: str, ts: int, message: str) -> dict:
 class CheckinLogsRealmViewTest(unittest.TestCase):
     """接口层：汇总行可见，且 total 与列表同一口径。"""
 
+    def setUp(self):
+        from ._db_fixture import isolate_database
+        isolate_database(self)
+
     def _call(self, *, realm: str | None, local: list[dict], auto: list[dict]) -> dict:
-        def list_checkin_logs(limit=200, uid=None, offset=0, days=None):
-            return list(local)
-
-        def list_task_logs(limit=200, uid=None, kind=None, offset=0, days=None):
-            return list(auto)
-
-        with mock.patch.object(db, 'list_checkin_logs', list_checkin_logs), \
-             mock.patch.object(db, 'count_checkin_logs', lambda uid=None, days=None: len(local)), \
-             mock.patch.object(db, 'list_task_logs', list_task_logs), \
-             mock.patch.object(db, 'count_task_logs',
-                               lambda uid=None, kind=None, days=None: len(auto)), \
-             mock.patch.object(accounts, '_realm_uid_filter', lambda r: (REALM_MAP if r else None)), \
-             mock.patch.object(accounts, '_nickname_resolver', lambda: (lambda uid: '')):
-            return accounts.checkin_logs(limit=20, realm=realm, user={'role': 'admin'})
+        # Exercise the current SQL reader, not retired list_* fetch seams.
+        conn=db.connect()
+        with conn:
+            conn.execute('DELETE FROM checkin_logs');conn.execute('DELETE FROM task_logs')
+            conn.executemany('INSERT INTO checkin_logs(ts,uid,nickname,source,kind,success,code,message) VALUES(?,?,?,?,?,?,?,?)',
+                [(r['ts'],r['uid'],r['nickname'],r['source'],r['kind'],r['success'],r['code'],r['message']) for r in local])
+            conn.executemany('INSERT INTO task_logs(ts,uid,kind,level,credits,message,dedup_key) VALUES(?,?,?,?,?,?,?)',
+                [(r['ts'],r['uid'],r['kind'],r['level'],r['credits'],r['message'],'synthetic-realm-'+str(i)) for i,r in enumerate(auto)])
+        with mock.patch.object(accounts,'_realm_uid_filter',lambda r:REALM_MAP if r else None), \
+             mock.patch.object(accounts,'_nickname_resolver',lambda:lambda uid:''):
+            return accounts.checkin_logs(limit=20,realm=realm,user={'role':'admin'})
 
     def test_summary_row_visible_in_both_realm_views(self) -> None:
         """报告者的场景：轮次汇总行（uid 为空）在两个版本视图下都要出现。"""
@@ -144,32 +145,13 @@ class CheckinLogsRealmViewTest(unittest.TestCase):
         self.assertEqual(res['local_total'], 1)
         self.assertEqual(res['auto_total'], 1)
 
-    def test_realm_window_is_widened(self) -> None:
-        """版本视图要把候选窗口放大到单表上限。
-
-        否则另一版本的记录会把本版的挤出窗口——表现为「本版一条都没有」，
-        而实际只是没被取出来。
-        """
-        seen: list[int] = []
-
-        def list_checkin_logs(limit=200, uid=None, offset=0, days=None):
-            seen.append(limit)
-            return []
-
-        with mock.patch.object(db, 'list_checkin_logs', list_checkin_logs), \
-             mock.patch.object(db, 'count_checkin_logs', lambda uid=None, days=None: 0), \
-             mock.patch.object(db, 'list_task_logs', lambda **k: []), \
-             mock.patch.object(db, 'count_task_logs', lambda **k: 0), \
-             mock.patch.object(accounts, '_realm_uid_filter', lambda r: (REALM_MAP if r else None)), \
-             mock.patch.object(accounts, '_nickname_resolver', lambda: (lambda uid: '')):
-            accounts.checkin_logs(limit=20, realm='cn', user={'role': 'admin'})
-            cn_window = seen[-1]
-            seen.clear()
-            accounts.checkin_logs(limit=20, realm=None, user={'role': 'admin'})
-            plain_window = seen[-1]
-        self.assertGreater(cn_window, plain_window,
-                           '版本视图没放大候选窗口，本版记录可能被另一版挤掉')
-        self.assertEqual(plain_window, 20, '不带版本筛选时的窗口不该变')
+    def test_realm_filter_precedes_limit_even_after_thousands_of_other_rows(self):
+        local=[_checkin_row(GL_UID,1000+i) for i in range(2300)]+[_checkin_row(CN_UID,100)]
+        auto=[_auto_row('',99,'synthetic summary')]
+        result=self._call(realm='cn',local=local,auto=auto)
+        self.assertEqual(result['total'],2)
+        self.assertEqual({r['uid'] for r in result['items']},{'',CN_UID})
+        self.assertEqual(result['unfiltered_total'],2302)
 
 
 if __name__ == '__main__':

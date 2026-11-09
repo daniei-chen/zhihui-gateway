@@ -225,13 +225,15 @@ class WorkerMirrorRequestTest(unittest.TestCase):
 
     def test_download_falls_back_when_the_mirror_returns_an_error_page(self) -> None:
         """镜像返回一个很小的错误页：要当成失败并回退，而不是把错误页当发布包。"""
-        with _Server(fail=True) as mirror:
+        with _Server(fail=True) as mirror, _Server(fail=True) as origin:
             mod = _load_worker(WB_GITHUB_MIRROR=mirror.url)
             dest = self.dir / 'pkg.tar.gz'
             rep = _Rep()
-            with self.assertRaises(Exception):
-                mod.download('https://github.com/a/b/releases/download/v1/x.tar.gz',
-                             dest, rep, )
+            # Both failure legs use real local HTTP. External availability must
+            # never decide whether the fallback contract passes.
+            with mock.patch.object(mod, 'mirror_url', return_value=mirror.url + 'archive'), \
+                    self.assertRaises(Exception):
+                mod.download(origin.url + 'archive.tar.gz', dest, rep)
         self.assertIn('回退直连', rep.text())
 
     def test_redirect_fallback_stays_direct(self) -> None:
@@ -302,11 +304,14 @@ class MirrorEndpointTest(unittest.TestCase):
     """面板接口：读写、规范化、来源回显。"""
 
     def setUp(self) -> None:
+        from server.tests._db_fixture import isolate_database
+        isolate_database(self)
         from fastapi.testclient import TestClient
 
         from server.main import app
         self.app = app
         self.client = TestClient(app)
+        self.addCleanup(self.client.close)
         self._store: dict = {}
         app.dependency_overrides[security.current_user] = lambda: {'username': 'admin', 'role': 'admin'}
         app.dependency_overrides[security.require_admin] = lambda: {'username': 'admin', 'role': 'admin'}
@@ -357,7 +362,9 @@ class MirrorEndpointTest(unittest.TestCase):
             seen.update(kwargs.get('env') or {})
             return _FakeProc()
 
-        with mock.patch.object(updater, '_updater_script', return_value=script), \
+        from server import config
+        with mock.patch.object(config, 'ROOT', script.parent), \
+                mock.patch.object(updater, '_updater_script', return_value=script), \
                 mock.patch.object(updater, '_lock_active', return_value=False), \
                 mock.patch.object(updater.subprocess, 'Popen', fake_popen), \
                 mock.patch.object(updater, '_write_initial_status'), \

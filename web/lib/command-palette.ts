@@ -70,6 +70,9 @@ export type NavSeed = {
   /** 归属提示的 i18n 键 */
   groupKey: string;
   keywords: string;
+  /** 限定所在平台（缺省 = 三平台通用）；写了就是白名单 */
+  platforms?: readonly string[];
+  adminOnly?: boolean;
 };
 
 /**
@@ -84,11 +87,11 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
   {href: '/accounts', labelKey: 'nav.accounts', groupKey: 'nav.groupOps',
    keywords: 'accounts account pool 账号 号池'},
   // 被吸收进「账号」的那一页，紧跟它所属的一节
-  {href: '/tasks', labelKey: 'nav.tasks', groupKey: 'nav.accounts',
+  {href: '/tasks', labelKey: 'nav.tasks', groupKey: 'nav.accounts', platforms: ['workbuddy'],
    keywords: 'tasks task checkin 任务 签到 记录'},
   {href: '/keys', labelKey: 'nav.keys', groupKey: 'nav.groupOps',
    keywords: 'keys key api 密钥'},
-  {href: '/red-packets', labelKey: 'nav.redPackets', groupKey: 'nav.keys',
+  {href: '/red-packets', labelKey: 'nav.redPackets', groupKey: 'nav.keys', platforms: ['workbuddy'],
    keywords: 'red packets redpackets quota 红包 额度'},
   {href: '/models', labelKey: 'nav.models', groupKey: 'nav.groupOps',
    keywords: 'models model price 模型 价格'},
@@ -102,6 +105,8 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
    keywords: 'security ip allow deny 安全 白名单'},
   {href: '/settings', labelKey: 'nav.settings', groupKey: 'nav.groupGovernance',
    keywords: 'settings config 设置 配置'},
+  {href: '/members', labelKey: 'nav.members', groupKey: 'nav.groupGovernance',
+   keywords: 'members users credits 用户 工作台 积分', adminOnly: true},
   {href: '/settings/upstream', labelKey: 'settings.tabUpstream', groupKey: 'nav.settings',
    keywords: 'upstream upstash 上游 配置'},
   {href: '/settings/proxy', labelKey: 'settings.tabProxy', groupKey: 'nav.settings',
@@ -120,6 +125,10 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
    keywords: 'changelog release notes 更新日志 版本'},
   {href: '/settings/about', labelKey: 'settings.tabAbout', groupKey: 'nav.settings',
    keywords: 'about version 关于 版本'},
+  {href: '/settings/steward', labelKey: 'settings.tabSteward', groupKey: 'nav.settings',
+   keywords: 'steward deepseek assistant 管家 智汇 诊断'},
+  {href: '/settings/alerts', labelKey: 'settings.tabAlerts', groupKey: 'nav.settings',
+   keywords: 'alerts warning email smtp 预警 通知 邮箱'},
 ];
 
 /**
@@ -139,6 +148,17 @@ export function navCommands(
     group: t(seed.groupKey),
     keywords: `${seed.href} ${seed.keywords}`,
   }));
+}
+
+/**
+ * 该平台可用的导航种子。
+ *
+ * `platforms` 缺省 = 三平台通用；写了就是**白名单**。「任务记录」只有 WorkBuddy
+ * 有签到 / 猫猫旅行 / 开学季 / 夜猫这些上游任务，Qoder 与 Trae 点进去只会是空的，
+ * 所以那几条不该出现在它们的命令面板里。
+ */
+export function navSeedsFor(platform: string, seeds: readonly NavSeed[] = NAV_COMMANDS, isAdmin = false): NavSeed[] {
+  return seeds.filter((s) => (!s.platforms || s.platforms.includes(platform)) && (!s.adminOnly || isAdmin));
 }
 
 /** 去掉分隔符并小写：`Red-Packets` / `red packets` / `redpackets` 视为同一个词。 */

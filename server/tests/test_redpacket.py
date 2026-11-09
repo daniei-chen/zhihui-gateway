@@ -331,7 +331,7 @@ class ValidateTest(unittest.TestCase):
         self.assertNotIn('key', detail)
         for it in detail['items']:
             self.assertNotIn('key', it)
-            self.assertTrue(it['prefix'].startswith('wbk_'), '前缀要能对上密钥列表')
+            self.assertTrue(it['prefix'].startswith('sk-'), '前缀要能对上密钥列表')
 
     def test_revoke_blanks_plaintext_of_unclaimed_shares(self) -> None:
         """收回时未领份额的明文 key 要从库里抹掉（评审补）。
@@ -454,7 +454,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(len(body['keys']), 3)
-        self.assertTrue(all(k['key'].startswith('wbk_') for k in body['keys']))
+        self.assertTrue(all(k['key'].startswith('sk-') for k in body['keys']))
 
         # 详情不该再给明文。
         # 注意别用 `assertNotIn('key', ...)` —— 响应里有 `key_id` 字段，
@@ -525,7 +525,7 @@ class RouteTest(unittest.TestCase):
 
         r = self.c.post(f"/api/claim/{made['code']}")
         self.assertEqual(r.status_code, 200, f'抽奖不该要登录: {r.text}')
-        self.assertTrue(r.json()['key'].startswith('wbk_'))
+        self.assertTrue(r.json()['key'].startswith('sk-'))
 
         # 第二次：同一 IP 已经领过 → 409（可区分「你已经领过」与「来晚了」）
         r2 = self.c.post(f"/api/claim/{made['code']}")
@@ -598,7 +598,7 @@ class ClaimTest(unittest.TestCase):
         from server import redpacket
         p = self._make()
         got = redpacket.draw(p['code'], '1.2.3.4')
-        self.assertTrue(got['key'].startswith('wbk_'), '必须返回明文密钥')
+        self.assertTrue(got['key'].startswith('sk-'), '必须返回明文密钥')
         self.assertGreater(got['amount'], 0)
         self.assertEqual(got['quota_kind'], KIND_CREDIT)
 

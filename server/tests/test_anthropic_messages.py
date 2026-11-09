@@ -287,13 +287,11 @@ class ResponseTranslationTest(unittest.TestCase):
         self.assertEqual(out['stop_reason'], 'tool_use')
 
     def test_malformed_arguments_do_not_crash(self) -> None:
-        """上游给出非法 JSON 时不能让整次调用失败——包一层 _raw 保留原文。"""
-        out = to_anthropic_response({
-            'choices': [{'message': {'tool_calls': [
-                {'id': 'c', 'function': {'name': 'f', 'arguments': '{"broken'}},
-            ]}, 'finish_reason': 'tool_calls'}],
-        }, 'm')
-        self.assertEqual(out['content'][0]['input'], {'_raw': '{"broken'})
+        """Malformed supplier arguments must not become executable placeholder input."""
+        with self.assertRaises(ValueError):
+            to_anthropic_response({'choices':[{'message':{'tool_calls':[
+                {'id':'c','function':{'name':'f','arguments':'{"broken'}}]},
+                'finish_reason':'tool_calls'}]},'m')
 
     def test_finish_reason_mapping(self) -> None:
         for oai, anth in (('stop', 'end_turn'), ('length', 'max_tokens'), ('tool_calls', 'tool_use')):
@@ -361,22 +359,28 @@ class StreamTranslatorTest(unittest.TestCase):
     def test_tool_call_uses_input_json_delta(self) -> None:
         """工具参数必须原样分片透传（我们无从判断 JSON 何时拼完整）。"""
         t = _StreamTranslator('m')
-        events = _parse(t.feed({'choices': [{'delta': {'tool_calls': [
+        opening = _parse(t.feed({'choices': [{'delta': {'tool_calls': [
             {'index': 0, 'id': 'call_1', 'function': {'name': 'f', 'arguments': '{"a'}},
         ]}}]}))
+        self.assertNotIn('content_block_start', [event[0] for event in opening])
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'function': {'arguments': '":1}'}},
+        ]}}]})
+        events = _parse(t.finish('tool_calls'))
         start = next(e for e in events if e[0] == 'content_block_start')
         self.assertEqual(start[1]['content_block']['type'], 'tool_use')
         self.assertEqual(start[1]['content_block']['name'], 'f')
         delta = next(e for e in events if e[0] == 'content_block_delta')
-        self.assertEqual(delta[1]['delta'], {'type': 'input_json_delta', 'partial_json': '{"a'})
+        self.assertEqual(delta[1]['delta'], {'type': 'input_json_delta', 'partial_json': '{"a":1}'})
 
     def test_text_to_tool_switches_blocks(self) -> None:
         """文本块与工具块不能并存：切到工具前必须先关掉文本块，索引也不能串。"""
         t = _StreamTranslator('m')
         t.feed({'choices': [{'delta': {'content': '先说话'}}]})
-        events = _parse(t.feed({'choices': [{'delta': {'tool_calls': [
+        t.feed({'choices': [{'delta': {'tool_calls': [
             {'index': 0, 'id': 'c', 'function': {'name': 'f', 'arguments': '{}'}},
-        ]}}]}))
+        ]}}]})
+        events = _parse(t.finish('tool_calls'))
         names = [e[0] for e in events]
         self.assertIn('content_block_stop', names)
         # 文本块 index=0，工具块应是新的 index=1
@@ -402,6 +406,24 @@ class StreamTranslatorTest(unittest.TestCase):
         events = _parse(t.finish(None, force=True))
         msg_delta = next(e for e in events if e[0] == 'message_delta')
         self.assertEqual(msg_delta[1]['delta']['stop_reason'], 'tool_use')
+
+
+    def test_duplicate_tool_metadata_is_not_concatenated(self) -> None:
+        """上游重复完整 id/name 时不能拼成 call_1call_1 / BashBash。"""
+        t = _StreamTranslator('m')
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'id': 'call_1', 'function': {'name': 'Bash'}},
+        ]}}]})
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'id': 'call_1', 'function': {'name': 'Bash'}},
+        ]}}]})
+        t.feed({'choices': [{'delta': {'tool_calls': [
+            {'index': 0, 'function': {'arguments': '{"cmd":"ls"}'}},
+        ]}}]})
+        events = _parse(t.finish('tool_calls'))
+        start = next(e for e in events if e[0] == 'content_block_start')
+        self.assertEqual(start[1]['content_block']['id'], 'call_1')
+        self.assertEqual(start[1]['content_block']['name'], 'Bash')
 
 
 class StreamBufferBoundTest(unittest.TestCase):
@@ -729,10 +751,9 @@ class ToolResultImageTest(unittest.TestCase):
                          {'type': 'text', 'text': '这张图什么颜色'})
 
     def test_unknown_shape_still_stringified(self) -> None:
-        """既无文字也无图片的未知形态：保持旧兜底，不因本次修复丢内容。"""
-        msgs = self._convert([{'type': 'document', 'data': 'weird'}])
-        self.assertEqual(len(msgs), 1, '无图片则不应产生额外的 user 消息')
-        self.assertIn('document', msgs[0]['content'])
+        """Unsupported attachments fail before a paid provider dispatch."""
+        with self.assertRaises(ValueError):
+            self._convert([{'type': 'document', 'data': 'weird'}])
 
     def test_large_image_never_becomes_text(self) -> None:
         """回归底线：3MB 级图片不得以字符串形态出现在任何消息里。"""

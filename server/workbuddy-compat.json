@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "version": "workbuddy-prompts-20261104.2",
+  "platform": "workbuddy",
+  "roles": ["system", "developer"],
+  "rules": [
+    {
+      "id": "referenced-paths",
+      "match": "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root",
+      "replacement": "Tokens beginning with @ refer to file paths cited by the user. Relative paths are resolved against the workspace root",
+      "evidence": "Existing scoped compatibility contract"
+    },
+    {
+      "id": "codex-cli-identity",
+      "match": "You are a coding agent running in the Codex CLI",
+      "replacement": "You are a coding agent, running in the Codex CLI",
+      "evidence": "2026-11-03 bounded live comparison; workbuddy2api-hub PR 744"
+    },
+    {
+      "id": "claude-cli-identity",
+      "match": "You are Claude Code, Anthropic's official CLI for Claude",
+      "replacement": "You are Claude Code, Anthropic's official CLI tool for Claude",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-cli-identity-variants",
+      "match": "You are Claude Code, Anthropic's official CLI tool for Claude",
+      "variants": [
+        "You are Claude Code, Anthropic’s official CLI tool for Claude",
+        "You are Claude Code, Anthropic’s official CLI for Claude",
+        "You are Claude Code, Anthropic's official CLI for Claude"
+      ],
+      "case_insensitive": true,
+      "replacement": "Your role is Claude Code, Anthropic's official CLI tool for Claude",
+      "evidence": "2026-11-04 Hub 4df31cf template coverage; retain application identity and system/developer scope"
+    },
+    {
+      "id": "claude-billing-metadata",
+      "match": "x-anthropic-billing-header",
+      "replacement": "x-anthropic-billing-hdr",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-feedback-template",
+      "match": "To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+      "replacement": "To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "claude-branch-template",
+      "match": "Main branch (you will usually use this for PRs)",
+      "replacement": "Default branch (you will usually use this for PRs)",
+      "evidence": "2026-11-03 incident comparison"
+    },
+    {
+      "id": "dsh-harness-identity",
+      "match": "You are an AI agent powered by DeepSeek Harness",
+      "replacement": "You are an AI agent, powered by DeepSeek Harness",
+      "evidence": "2026-11-04 bounded live system-prompt comparison; DSH 66-tool request verified"
+    },
+    {
+      "id": "dsh-model-identity",
+      "match": "You are a coding agent powered by the ",
+      "replacement": "You are a coding agent, powered by the ",
+      "evidence": "2026-11-04 bounded live system-prompt comparison; DSH 66-tool request verified"
+    },
+    {
+      "id": "dsh-web-gui-location",
+      "match": "You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names.",
+      "replacement": "You are interacting with the user through the DeepSeek Harness Web GUI whose URL is named in the runtime context.",
+      "evidence": "2026-11-04 bounded live system-prompt comparison; DSH 66-tool request verified"
+    },
+    {
+      "id": "dsh-web-gui-reference",
+      "match": "When the user refers to \"this page\", \"this GUI\", or \"this app\" without naming another target, they mean this GUI.",
+      "replacement": "When a user refers to \"this page\", \"this GUI\", or \"this app\" without naming another target, the reference is to this GUI.",
+      "evidence": "2026-11-04 bounded live system-prompt comparison; DSH 66-tool request verified"
+    }
+  ]
+}

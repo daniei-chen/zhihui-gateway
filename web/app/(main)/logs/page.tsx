@@ -1,9 +1,10 @@
 'use client';
 
 import {useCallback, useRef, useState} from 'react';
-import {ScrollText, RotateCcw, Trash2, ChevronLeft, ChevronRight} from 'lucide-react';
+import {ScrollText, RotateCcw, ChevronLeft, ChevronRight} from 'lucide-react';
 import {useHeartbeat} from '@/lib/use-heartbeat';
-import {notify} from '@/lib/toast';
+import {AttemptEvidence} from '@/components/operations/AttemptEvidence';
+import {OutcomeExplorer} from '@/components/operations/OutcomeExplorer';
 import {keyApi, logApi} from '@/lib/api';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {useDebounced} from '@/lib/use-debounce';
@@ -11,7 +12,6 @@ import type {ApiKey, RequestLog} from '@/lib/types';
 import {fmtCredit, fmtDateTime, fmtDateTimeMarked, fmtLatency, fmtNumber} from '@/lib/format';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {EmptyState} from '@/components/common/layout/EmptyState';
-import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {useAuth} from '@/lib/auth-context';
@@ -176,6 +176,7 @@ export default function LogsPage() {
     isInitialFailed,
     isRefreshing,
     reload: reloadLogs,
+    refresh: refreshLogs,
   } = useAsyncAll(
     {
       logs: () =>
@@ -219,7 +220,7 @@ export default function LogsPage() {
   }, [reloadLogs, reloadKeys]);
 
   // 新请求会不断写入日志；心跳刷新只更新当前筛选下的列表，不会重置筛选条件
-  useHeartbeat(reloadLogs, 60000);
+  useHeartbeat(refreshLogs, 60000);
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -264,23 +265,9 @@ export default function LogsPage() {
       actions={
         <>
           {isAdmin && (
-            <ConfirmDialog
-              title={t('logs.clearTitle')}
-              description={t('logs.clearDesc')}
-              confirmText={t('common.clear')}
-              destructive
-              onConfirm={async () => {
-                await logApi.clear();
-                notify.ok(t('logs.cleared'));
-                refetchFromFirstPage();
-              }}
-              trigger={
-                <Button variant="outline" size="sm" className="rounded-full text-red-500">
-                  <Trash2 />
-                  {t('common.clear')}
-                </Button>
-              }
-            />
+            <span role="note" className="text-muted-foreground text-xs">
+              {t('logs.retentionNotice')}
+            </span>
           )}
         </>
       }
@@ -301,6 +288,7 @@ export default function LogsPage() {
         ) : (
           <LogsSkeleton />
         )}
+        <OutcomeExplorer />
       </div>
     );
   }
@@ -526,6 +514,7 @@ export default function LogsPage() {
         </div>
       </section>
 
+      <OutcomeExplorer />
       <Drawer open={!!detail} onOpenChange={(v) => !v && setDetail(null)}>
         <DrawerContent>
           <DrawerHeader>
@@ -534,7 +523,10 @@ export default function LogsPage() {
           </DrawerHeader>
           {detail && (
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-8 text-xs">
+              <AttemptEvidence requestId={detail.request_id} />
               {([
+                ['executionId', t('operations.executionId'), detail.request_id || '—'],
+                ['clientRequestId', t('operations.clientRequestId'), detail.client_request_id || '—'],
                 ['ip', t('logs.rowIp'), detail.ip],
                 ['key', t('logs.rowKey'), detail.key_name || '—'],
                 // 账号来自上游日志回填，可能比请求本身晚几秒；这里只能说
@@ -543,6 +535,11 @@ export default function LogsPage() {
                 ['model', t('logs.rowModel'), detail.model || '—'],
                 ['mapped', t('logs.rowMappedModel'), detail.mapped_model || '—'],
                 ['status', t('logs.rowStatus'), String(detail.status)],
+                ['httpStatus', t('logs.rowHttpStatus'), detail.http_status == null ? '—' : String(detail.http_status)],
+                ['terminal', t('logs.rowTerminal'), detail.terminal_state || '—'],
+                ['recordedStatus', t('logs.rowRecordedStatus'), detail.recorded_status == null ? '—' : String(detail.recorded_status)],
+                ['compatibility', t('logs.rowCompatibility'), detail.compatibility_version || '—'],
+                ['compatibilityRules', t('logs.rowCompatibilityRules'), detail.compatibility_rules?.join(', ') || '—'],
                 [
                   'firstToken',
                   t('logs.rowFirstToken'),
@@ -588,7 +585,7 @@ export default function LogsPage() {
                 ['error', t('logs.rowError'), detail.error || '—'],
               ] as [string, string, string][]).map(([id, k, v]) => {
                 // 这些字段内容较长且常需要贴出来（排查 / 反馈），给出复制入口
-                const copyable = ['ip', 'ua', 'error'].includes(id) && v !== '—';
+                const copyable = ['ip', 'ua', 'error', 'executionId', 'clientRequestId'].includes(id) && v !== '—';
                 return (
                   <div key={id} className="flex items-start gap-3">
                     <div className="w-32 shrink-0 text-muted-foreground">{k}</div>

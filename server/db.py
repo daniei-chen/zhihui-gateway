@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import contextvars
 import sqlite3
 import threading
 import time
@@ -14,8 +15,83 @@ from . import config
 
 logger = logging.getLogger('workbuddy.db')
 
+# 2026-10-23 审计：request_logs 原先没有平台维度，三平台合一后无法按平台核算
+_REQUEST_PLATFORM: contextvars.ContextVar = contextvars.ContextVar(
+    'request_platform', default='')
+
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
+
+#: U27（2026-10-28）：写事务的**等待预算**（毫秒）。原先只有
+#: `sqlite3.connect(timeout=5.0)` 的隐式默认，代码里不可见；现在显式设置并
+#: 在 `transaction()` 里记录实际等待。**不改变行为**：仍然是「等不到就抛
+#: `database is locked`」，不做应用层重试（重试会把尾延迟放大成雪崩）。
+_BUSY_TIMEOUT_MS = 5000
+
+#: 写事务等待的可观测计数。只做记录，不参与任何决策。
+#: * `transactions`：`transaction()` 的**进入次数（含嵌套层）**；
+#: * `lock_wait_*`：进程内 RLock 的排队时间（同一进程的线程在这里串行）；
+#: * `begin_*`：`BEGIN IMMEDIATE` 的真实耗时（跨进程写锁竞争的体现）；
+#: * `busy_errors`：等满 `busy_timeout` 仍拿不到写锁的次数（**这才是「等待预算
+#:   被击穿」的信号**，SQLite 内部不重试，所以没有「重试次数」可记）。
+_TXN_STATS: dict = {
+    'transactions': 0, 'lock_wait_total_ms': 0.0, 'lock_wait_max_ms': 0.0,
+    'slow_lock_50ms': 0, 'slow_lock_500ms': 0,
+    'begin_total_ms': 0.0, 'begin_max_ms': 0.0,
+    'slow_begin_50ms': 0, 'slow_begin_500ms': 0,
+    'busy_errors': 0, 'busy_timeout_ms': _BUSY_TIMEOUT_MS,
+}
+
+
+def _record_lock_wait(ms: float) -> None:
+    stats = _TXN_STATS
+    stats['transactions'] += 1
+    stats['lock_wait_total_ms'] += ms
+    if ms > stats['lock_wait_max_ms']:
+        stats['lock_wait_max_ms'] = ms
+    if ms >= 50.0:
+        stats['slow_lock_50ms'] += 1
+    if ms >= 500.0:
+        stats['slow_lock_500ms'] += 1
+
+
+def _record_begin(ms: float) -> None:
+    stats = _TXN_STATS
+    stats['begin_total_ms'] += ms
+    if ms > stats['begin_max_ms']:
+        stats['begin_max_ms'] = ms
+    if ms >= 50.0:
+        stats['slow_begin_50ms'] += 1
+    if ms >= 500.0:
+        stats['slow_begin_500ms'] += 1
+
+
+def _record_busy(exc: Exception) -> None:
+    text = str(exc).lower()
+    if 'locked' in text or 'busy' in text:
+        _TXN_STATS['busy_errors'] += 1
+
+
+def transaction_stats() -> dict:
+    """U27：写事务等待预算的只读快照（给 /metrics 或运维脚本用）。
+
+    `busy_timeout_ms` 是**真实生效**的值（从连接读 `PRAGMA busy_timeout`），
+    不是常量副本 —— 两者若不一致，这里能看出来。
+    """
+    stats = dict(_TXN_STATS)
+    count = stats['transactions'] or 0
+    stats['lock_wait_mean_ms'] = round(stats['lock_wait_total_ms'] / count, 3) if count else 0.0
+    stats['begin_mean_ms'] = round(stats['begin_total_ms'] / count, 3) if count else 0.0
+    stats['lock_wait_total_ms'] = round(stats['lock_wait_total_ms'], 3)
+    stats['begin_total_ms'] = round(stats['begin_total_ms'], 3)
+    stats['lock_wait_max_ms'] = round(stats['lock_wait_max_ms'], 3)
+    stats['begin_max_ms'] = round(stats['begin_max_ms'], 3)
+    try:
+        row = query_one('PRAGMA busy_timeout')
+        stats['busy_timeout_ms'] = int(row[0]) if row else None
+    except Exception:  # noqa: BLE001 - 快照不可读不影响调用方
+        stats['busy_timeout_ms'] = None
+    return stats
 
 
 def day_of(ts: int | float | None = None) -> str:
@@ -96,6 +172,20 @@ def day_start_ts(day: str | None = None) -> int:
 
 
 SCHEMA = """
+-- 登录防爆破计数的持久化镜像（2026-10-27 F2）：security 层写穿透缓存，
+-- 重启后回载窗口内的计数，锁定不再因发布重启被清零。旁路表：读不到不影响登录。
+CREATE TABLE IF NOT EXISTS login_fails_ip (
+  ip      TEXT PRIMARY KEY,
+  fails   INTEGER NOT NULL,
+  first   REAL    NOT NULL,
+  updated REAL    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_fails_user (
+  username TEXT PRIMARY KEY,
+  fails    INTEGER NOT NULL,
+  first    REAL    NOT NULL,
+  updated  REAL    NOT NULL
+);
 CREATE TABLE IF NOT EXISTS api_keys (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT    NOT NULL,
@@ -106,6 +196,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   max_ips       INTEGER NOT NULL DEFAULT 0,
   ip_allowlist  TEXT    NOT NULL DEFAULT '[]',
   models        TEXT    NOT NULL DEFAULT '[]',
+  platforms     TEXT    NOT NULL DEFAULT '["workbuddy","qoder","trae"]',
   -- 版本归属（cn / global / 空 = 不限制）：这把密钥只能调用该版本的模型。
   -- 空值是**历史密钥**的存量形态（本列引入前创建的），保持其原有行为不变，
   -- 界面上单独标注以便管理员补填。新建密钥一律要选一个版本。
@@ -121,6 +212,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_keys_prefix ON api_keys(prefix);
+
+CREATE TABLE IF NOT EXISTS key_daily_usage (
+  key_id INTEGER NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0,
+  credit_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(key_id,day)
+);
 
 CREATE TABLE IF NOT EXISTS api_key_ips (
   key_id     INTEGER NOT NULL,
@@ -153,7 +249,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
   -- 版本（cn / global）：由请求的模型名前缀判定（上游的路由协议）。
   -- 为什么必须存：界面按版本切换时，日志与统计要跟着切；不存就无法回溯过滤。
   -- NULL = 该字段上线前的历史记录（或模型名无前缀）——按 cn 归类，见 realm_of_model。
-  realm             TEXT
+  realm             TEXT,
+  channel           TEXT,
+  -- 会话键（sha256 前 16 位；NULL = 客户端未提供也无法推导）
+  session_key       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 
@@ -459,16 +558,53 @@ def _explain_db_open_failure(exc: Exception) -> str:
 
 
 def connect() -> sqlite3.Connection:
+    # Direct callers (background jobs, startup and schema maintenance) do not
+    # necessarily hold query()/execute()'s lock. Serialize the entire first-open
+    # and migration sequence so no thread can replace/leak another connection
+    # or observe a half-initialized schema. RLock permits initialization helpers
+    # to call back into query()/connect().
+    with _lock:
+        return _connect_locked()
+
+
+def _connect_locked() -> sqlite3.Connection:
     global _conn
     if _conn is None:
         config.ensure_dirs()
         try:
             _conn = sqlite3.connect(str(config.DB_PATH), check_same_thread=False)
             _conn.row_factory = sqlite3.Row
+            if _conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_wb_restore_quarantine'").fetchone():
+                _conn.close()
+                _conn = None
+                raise RuntimeError('该数据库是隔离 PG 恢复产物；缺少钱包配对与离线激活证明，禁止作为现网主库启动')
             _conn.execute('PRAGMA journal_mode=WAL')
-            _conn.execute('PRAGMA synchronous=NORMAL')
+            _conn.execute('PRAGMA synchronous=FULL')
+            # U27（2026-10-28）：把等待预算**显式化**。这个值原先来自
+            # `sqlite3.connect(timeout=5.0)` 的驱动默认（实测 `PRAGMA busy_timeout`
+            # 就是 5000），代码里看不到、也没人记录命中 —— 于是「某请求等了 4.9 秒」
+            # 与「某请求 0.3 毫秒」在指标上完全一样。
+            # 这里显式写成 5000（**值不变、行为不变**），并让 `transaction()`
+            # 记录等待时间与 busy 错误，见 `transaction_stats()`。
+            _conn.execute('PRAGMA busy_timeout=%d' % _BUSY_TIMEOUT_MS)
             _conn.executescript(SCHEMA)
             _migrate(_conn)
+            # K23：schema 版本登记 + expand 计划（既有 _MIGRATIONS 补列之后执行，
+            # 不替代它）。收缩步骤永远是 deferred；迁移失败直接抛出 —— 带着未知
+            # schema 启动比启动失败更危险。
+            from . import migrations as _migrations
+            try:
+                _migrations.ensure(_conn)
+                _migrations.schemaver.assert_readable(
+                    _conn, _migrations.CODE_SCHEMA_VERSION)
+            except _migrations.schemaver.MigrationError as exc:
+                # 与下面的 OperationalError 同样处理：不留半开连接，并给出可读原因
+                try:
+                    _conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                _conn = None
+                raise RuntimeError(f'数据库 schema 迁移失败：{exc}') from exc
         except sqlite3.OperationalError as exc:
             # 失败时不要留下半开的连接：否则后续调用会拿到一个不能用的 _conn，
             # 报出更莫名的错误（例如「attempt to write a readonly database」）
@@ -631,6 +767,8 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # prompt_cache_hit_tokens / prompt_cache_miss_tokens / prompt_cache_write_tokens。
     # **可空**：老上游不给这三个字段时是 NULL（「没数据」），与「给了但是 0」不是
     # 一回事——后者代表这次请求真的没命中缓存，而前者代表我们不知道。
+    # 三平台合一（2026-10-23）：记录本次请求实际走的平台，便于按平台核算。
+    ('request_logs', 'platform', 'TEXT'),
     ('request_logs', 'cache_hit_tokens', 'INTEGER'),
     ('request_logs', 'cache_miss_tokens', 'INTEGER'),
     ('request_logs', 'cache_write_tokens', 'INTEGER'),
@@ -639,7 +777,15 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ('usage_daily', 'cache_hit_tokens', 'INTEGER NOT NULL DEFAULT 0'),
     ('usage_daily', 'cache_miss_tokens', 'INTEGER NOT NULL DEFAULT 0'),
     ('api_keys', 'quota_credit', 'REAL NOT NULL DEFAULT 0'),
+    ('api_keys', 'daily_token_quota', 'INTEGER NOT NULL DEFAULT 0'),
+    ('api_keys', 'daily_credit_quota', 'REAL NOT NULL DEFAULT 0'),
+    ('api_keys', 'assigned_to', "TEXT NOT NULL DEFAULT ''"),
     ('api_keys', 'used_credit', 'REAL NOT NULL DEFAULT 0'),
+    # 密钥来源（K01-S1）：'manager' = 本管理端创建；'qtg-legacy' = 从 QTG 旧库迁移。
+    # **先扩后收**：存量行一律默认 'manager'，升级后行为与从前完全一致；迁移脚本
+    # 只会给新插入的权威行写 'qtg-legacy'，回退时可按它精确清理，不误删新 key。
+    # 与 legacymig.API_KEYS_SOURCE_DECL 保持一致（test_legacy_keys 校验两处一致）。
+    ('api_keys', 'source', "TEXT NOT NULL DEFAULT 'manager'"),
     # 入站请求被拦的**原因**（issue #33）。
     #
     # 此前这张表只有一个 blocked 布尔：界面显示「已拦截」，但看不出是「没带
@@ -679,6 +825,9 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ('red_packet_shares', 'token', "TEXT NOT NULL DEFAULT ''"),
     ('red_packet_shares', 'claimed_by_ip', 'TEXT'),
     ('red_packet_shares', 'claimed_at', 'INTEGER'),
+    ('request_logs', 'effort', 'TEXT'),
+    ('request_logs', 'channel', 'TEXT'),
+    ('request_logs', 'session_key', 'TEXT'),
 )
 
 
@@ -707,6 +856,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f'UPDATE {table} SET {new}=? WHERE rowid=?', (units(row[1] or 0),row[0]))
 
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id) WHERE request_id IS NOT NULL')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_key_daily_day ON key_daily_usage(day,key_id)')
+    from . import dailyquota
+    dailyquota.seed_existing(conn)
 
 
 def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:
@@ -881,13 +1033,15 @@ def bump_usage(
     credit: float | None = None,
     realm: str | None = None,
     cache: tuple[int, int] | None = None,
+    *, ts: int | float | None = None,
 ) -> None:
     """累计当日用量。credit 为本次真实扣费，缺省不计入（不按 0 记）。
 
     realm（cn / global）由调用方按模型名前缀判定后传入；缺省归 cn
     （与 realm_of_model 的口径一致：无前缀即国内版）。
     """
-    day = day_of()
+    event_ts = time.time() if ts is None else ts
+    day, hour = day_of(event_ts), hour_of(event_ts)
     r = realm if realm in ('cn', 'global') else realm_of_model(model)
     ch, cm = cache if cache else (0, 0)
     from .ledger import units, SCALE
@@ -914,7 +1068,7 @@ def bump_usage(
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
         '  credit = credit + excluded.credit',
-        (day, hour_of(), key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
+        (day, hour, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
     )
     # Integer totals are updated without adding binary floats. Legacy REAL fields
     # are refreshed as presentation values in the caller's same transaction.
@@ -923,9 +1077,9 @@ def bump_usage(
     execute('UPDATE usage_daily SET credit=credit_units*1.0/? WHERE day=? AND key_id=? AND model=? AND realm=?',
             (SCALE,day,key_id,model,r))
     execute('UPDATE usage_hourly SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (amount,day,hour_of(),key_id,model,r))
+            (amount,day,hour,key_id,model,r))
     execute('UPDATE usage_hourly SET credit=credit_units*1.0/? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (SCALE,day,hour_of(),key_id,model,r))
+            (SCALE,day,hour,key_id,model,r))
 
 
 def realm_of_model(model: str | None) -> str:
@@ -1173,6 +1327,8 @@ def _prune_side_tables() -> None:
                                   time.localtime(now - _HOURLY_RETAIN_DAYS * 86400))
     task_cutoff = now - _TASK_LOG_RETAIN_DAYS * 86400
     for sql, args in (
+        # request_outcomes 只增不减且无触发器保护，按同一保留期滚动清理
+        ('DELETE FROM request_performance WHERE ts < ?', (int(time.time()) - 7 * 86400,)),
         ('DELETE FROM usage_hourly WHERE day < ?', (hourly_cutoff,)),
         ('DELETE FROM task_logs WHERE ts < ?', (task_cutoff,)),
         # 保留最新 N 行：删除 id <= 第 N+1 新那行的 id；不足 N 行时子查询为 NULL，
@@ -1191,21 +1347,40 @@ def _prune_request_logs() -> None:
 
     旁路操作：任何失败都不能影响写入本身（更不能影响转发）。
     """
-    cutoff = int(time.time()) - _REQUEST_LOG_RETAIN_DAYS * 86400
     try:
-        execute('DELETE FROM request_logs WHERE ts < ?', (cutoff,))
+        from . import archiveworker
+        archiveworker.notify()
     except Exception:  # noqa: BLE001
         pass
     _prune_side_tables()
 
 
 def add_request_log(**fields: object) -> None:
+    """落一行请求日志。列由固定元组决定，缺省字段写 NULL。
+
+    `client_request_id`（RV01）：调用方自带的 `X-Request-ID`，已由
+    `observability.client_request_id_from_headers` 校验过。它可以缺省（None）——
+    NULL 表示「调用方没给或不合法」，**绝不**用 `request_id`（服务端执行 ID）
+    回填，两者语义不同：前者是可伪造的相关性提示，后者是账本主键。
+    """
     global _request_log_writes
     columns=('ts','key_id','ip','model','mapped_model','status','prompt_tokens','completion_tokens',
              'latency_ms','first_token_ms','ua','error','stream','credit','realm','account',
              'cache_hit_tokens','cache_miss_tokens','cache_write_tokens',
              'request_id','endpoint','method','protocol','http_status','terminal_state','error_stage',
-             'release_id','usage_source','usage_complete','first_byte_ms')
+             'release_id','usage_source','usage_complete','first_byte_ms','platform',
+             # K27：实际路由到的平台/上游（v4 迁移新增；NULL = 未记录，不是 workbuddy）
+             'actual_platform','upstream_ref',
+             # RV01：调用方关联 ID（X-Request-ID，校验过）。可空：NULL = 未提供/不合法，
+             # 且**绝不**用服务端 request_id 回填。它不是主键，只用于跨系统相关性。
+             'client_request_id',
+             'effort','channel','session_key','compatibility_version','compatibility_rules')
+    if not fields.get('platform'):
+        try:
+            from .routers import gateway as _gw
+            fields['platform'] = _gw.forced_platform.get() or 'workbuddy'
+        except Exception:  # noqa: BLE001
+            pass
     execute('INSERT INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
             tuple(fields.get(c) for c in columns))
     _request_log_writes += 1
@@ -1462,6 +1637,7 @@ def backfill_usage_from_logs() -> dict:
     因此可重复执行而不会重复计数。
     """
     _require_legacy_repair()
+    _credit_before = credit_units_snapshot()
     # 应有用量（按天 × 密钥 × 模型）
     # 必须与 bump_usage 用同一时区口径（本地），否则凌晨的调用会被算成两天
     #
@@ -1527,7 +1703,7 @@ def backfill_usage_from_logs() -> dict:
     # 请求日志 → 应有值 → 与现值比差额 → MAX 写入，所以重复执行不会重复计数。
     fixed_h = _backfill_hourly_from_logs()
     _sync_legacy_credit_units(connect())
-
+    assert_credit_units_unchanged(_credit_before, "backfill_usage_from_logs")
     return {
         'repaired': fixed,
         'repaired_hourly': fixed_h,
@@ -1621,6 +1797,7 @@ def rebuild_usage_from_logs() -> dict:
     那部分历史汇总会随之丢失（接口上已明确标注）。
     """
     _require_legacy_repair()
+    _credit_before = credit_units_snapshot()
     # 归一化表达式必须**同时**用在 SELECT 与 GROUP BY 上，不能只在 SELECT 里写
     # 别名、GROUP BY 里复用别名。
     #
@@ -1690,6 +1867,7 @@ def rebuild_usage_from_logs() -> dict:
         except Exception:
             conn.rollback()
             raise
+    assert_credit_units_unchanged(_credit_before, "rebuild_usage_from_logs")
     after = query_one('SELECT COUNT(*) AS c, COALESCE(SUM(requests),0) AS r, '
                       'COALESCE(SUM(prompt_tokens+completion_tokens),0) AS t FROM usage_daily')
     return {
@@ -1707,11 +1885,27 @@ _atomic_state=threading.local()
 @contextmanager
 def transaction():
     # All operations hold the existing RLock; nesting never commits the outer transaction.
-    with _lock:
+    #
+    # U27（2026-10-28）：语义**一字不改**（RLock 串行 + BEGIN IMMEDIATE + 外层提交/
+    # 回滚 + 深度计数），只是把「等了多久」记下来：
+    #   * RLock 排队时间 = 同进程线程间的串行化成本；
+    #   * BEGIN IMMEDIATE 耗时 = 跨进程写锁竞争（另一实例 / 定时任务 / 备份）；
+    #   * 等满 busy_timeout 仍失败 → busy_errors +1，异常照原样抛出。
+    # 不加重试：应用层重试会把尾延迟放大成雪崩，这里只做**可观测**。
+    started = time.perf_counter()
+    _lock.acquire()
+    try:
+        _record_lock_wait((time.perf_counter() - started) * 1000.0)
         conn=connect()
         depth=getattr(_atomic_state,'depth',0)
         if depth == 0:
-            conn.execute('BEGIN IMMEDIATE')
+            begin_started = time.perf_counter()
+            try:
+                conn.execute('BEGIN IMMEDIATE')
+            except sqlite3.OperationalError as exc:
+                _record_busy(exc)
+                raise
+            _record_begin((time.perf_counter() - begin_started) * 1000.0)
         _atomic_state.depth=depth+1
         try:
             yield conn
@@ -1723,6 +1917,8 @@ def transaction():
             raise
         finally:
             _atomic_state.depth=depth
+    finally:
+        _lock.release()
 
 _MIGRATIONS += (
     ('request_logs','request_id','TEXT'),
@@ -1736,14 +1932,161 @@ _MIGRATIONS += (
     ('request_logs','usage_source','TEXT'),
     ('request_logs','usage_complete','INTEGER'),
     ('request_logs','first_byte_ms','INTEGER'),
+    ('request_logs','compatibility_version','TEXT'),
+    ('request_logs','compatibility_rules','TEXT'),
 )
 SCHEMA += '''
+-- 0.1.19: 回执表原本在门户请求的热路径上按需 CREATE（budget.prepare 每个请求一次，
+-- 独立事务且会 commit/fsync）。表结构固定、无迁移需求，直接并入启动 schema，
+-- 运行期不再执行 DDL。portalwallet.RECEIPTS 常量保留供测试使用。
+CREATE TABLE IF NOT EXISTS portal_spend_receipts(
+ request_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS request_outcomes(
  request_id TEXT PRIMARY KEY, ts INTEGER NOT NULL, endpoint TEXT, method TEXT, protocol TEXT,
- http_status INTEGER, terminal_state TEXT, error_stage TEXT, latency_ms INTEGER, release_id TEXT
+ http_status INTEGER, terminal_state TEXT, error_stage TEXT, latency_ms INTEGER, release_id TEXT,
+ -- RV01：调用方关联 ID（可空，NULL = 调用方未提供或不合法；旧库由 migrations v6 补列）
+ client_request_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_request_outcomes_ts ON request_outcomes(ts);
 '''
+from .requestperf import SCHEMA as _PERFORMANCE_SCHEMA
+SCHEMA += _PERFORMANCE_SCHEMA
 from .ledger import SCHEMA as _LEDGER_SCHEMA
 SCHEMA += _LEDGER_SCHEMA
+from .providerevents import SCHEMA as _PROVIDER_EVENTS_SCHEMA
+SCHEMA += _PROVIDER_EVENTS_SCHEMA
+SCHEMA += '''CREATE TABLE IF NOT EXISTS request_lifetime_ends_v2(
+ request_id TEXT PRIMARY KEY,key_id INTEGER NOT NULL,owner TEXT NOT NULL,ended_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_resolution_evidence_v2(
+ request_id TEXT PRIMARY KEY,actor TEXT NOT NULL,reason TEXT NOT NULL,evidence TEXT NOT NULL,created_at INTEGER NOT NULL
+);'''
+# K01-S1：QTG 旧 key 迁移台账（legacy_qtg_keys）。DDL 由 legacymig 维护——
+# 与 ledger 的用法同一模式：表的所有者写建表语句，db 只在初始化路径里执行，
+# 避免两处 DDL 各写一遍然后漂移（CREATE TABLE IF NOT EXISTS 可重复执行）。
+from .legacymig import SCHEMA as _LEGACY_QTG_SCHEMA
+SCHEMA += _LEGACY_QTG_SCHEMA
 SCHEMA += 'CREATE TABLE IF NOT EXISTS readiness_probe(id INTEGER PRIMARY KEY CHECK(id=1), ts INTEGER NOT NULL);'
+
+
+# ── U03：重建/修复入口不得改写 api_keys.used_credit_units ──────────────────
+#
+# 背景（2026-10-28 审计 U03，P0）：`request_logs` 受 **90 天保留期裁剪**
+# （`_prune_request_logs`），而 `api_keys.used_credit_units` 是**终身累计**的
+# 配额执法值。任何"用 SUM(request_logs.credit) 覆盖 used_credit_units"的做法，
+# 在裁剪发生之后都会把已消耗的配额**退回去**——用户白嫖一段历史，越老越严重。
+#
+# 因此本模块立下三条不变量：
+#   1. 重建/修复（rebuild_usage_from_logs / backfill_usage_from_logs）只允许
+#      改写 usage_daily / usage_hourly 投影，**不得**触碰 api_keys
+#      ——由 assert_credit_units_unchanged 在收尾处结构性自检；
+#   2. 需要修漂移时，基线只能用**不可变事件** usage_events（有 no_update/
+#      no_delete 触发器，永不裁剪）；修正落 adjustment_events（同样不可变，
+#      仅作审计凭据、**不计入基线**，否则自我叠加会重复加钱），
+#      并且只能做**增量**调整；
+#   3. 任何调整**只允许上调**（补记漏记），绝不下调——下调即等于返还配额；
+#      enforced > expected 一律只报告不写库。
+
+def credit_units_snapshot() -> dict:
+    """当前每个密钥的 used_credit_units 快照（用于证明重建没有改写它）。"""
+    return {int(r['id']): int(r['used_credit_units'] or 0)
+            for r in query('SELECT id, used_credit_units FROM api_keys')}
+
+
+def assert_credit_units_unchanged(before: dict, operation: str) -> None:
+    """重建/修复收尾自检：api_keys.used_credit_units 必须一字未改。
+
+    这是**结构性**约束，不是靠自觉：request_logs 可被 90 天裁剪，
+    used_credit_units 不可，两者绝不能互相覆盖（U03）。
+    """
+    after = credit_units_snapshot()
+    if before == after:
+        return
+    changed = {k: (before.get(k), after.get(k))
+               for k in set(before) | set(after) if before.get(k) != after.get(k)}
+    raise RuntimeError(
+        '%s 改写了 api_keys.used_credit_units（%s）—— 重建只能改写 '
+        'usage_daily/usage_hourly 投影；累计额度只能按不可变事件增量调整'
+        % (operation, changed))
+
+
+def reconcile_credit_from_events(actor: str, reason: str, *, apply: bool = False) -> dict:
+    """用**不可变事件**核对并（可选）增量修正 used_credit_units。
+
+    与已废弃的危险做法（deploy/reconcile_credits.py --apply：把
+    SUM(request_logs.credit) 直接写回 api_keys）的区别：
+      * 基线不是 request_logs（90 天会被裁掉），而是 usage_events
+        （不可变事件、永不裁剪）；adjustment_events 只是修正的**审计凭据**，
+        不计入基线（否则自我叠加，重复执行会一直加钱）；
+      * 只做**增量**调整，且**只允许上调**。enforced > expected 只报告不写库
+        ——下调就是返还已消耗配额，正是 U03 要封的风险；
+      * 每次实际写入都落 adjustment_events（含 actor/reason，不可变）+
+        audit_logs，满足审计要求。
+
+    幂等：delta 由当前库值现算，重复执行第二次 delta=0，不产生新事件。
+    expected 只覆盖账本上线之后，因此**偏小是正常的**，不代表多扣。
+    """
+    actor = str(actor or '').strip()
+    reason = str(reason or '').strip()
+    if not actor or not reason:
+        raise ValueError('需要 actor 与 reason（审计要求）')
+    rows = [dict(r) for r in query(
+        'SELECT k.id, k.used_credit_units, '
+        '  COALESCE((SELECT SUM(e.credit_units) FROM usage_events e '
+        "            WHERE e.key_id = k.id), 0) - COALESCE((SELECT event_units_before "
+        "FROM usage_reset_events r WHERE r.key_id=k.id ORDER BY r.id DESC LIMIT 1),0) AS expected "
+        'FROM api_keys k ORDER BY k.id')]
+    adjustable, protected = [], []
+    for r in rows:
+        cur = int(r['used_credit_units'] or 0)
+        want = int(r['expected'] or 0)
+        item = {'key_id': int(r['id']), 'enforced_units': cur,
+                'expected_units': want, 'delta_units': want - cur}
+        if want > cur:
+            adjustable.append(item)
+        elif want < cur:
+            protected.append(item)
+    applied = []
+    if apply and adjustable:
+        with transaction():
+            for item in adjustable:
+                kid = item['key_id']
+                # 事务内重读：并发下 delta 可能已变小甚至为 0
+                fresh = query_one('SELECT used_credit_units FROM api_keys WHERE id = ?',
+                                  (kid,))
+                if fresh is None:
+                    continue
+                cur = int(fresh['used_credit_units'] or 0)
+                latest=query_one('SELECT COALESCE(SUM(credit_units),0) - COALESCE('
+                    '(SELECT event_units_before FROM usage_reset_events WHERE key_id=? ORDER BY id DESC LIMIT 1),0) '
+                    'AS expected, COALESCE((SELECT id FROM usage_reset_events WHERE key_id=? ORDER BY id DESC LIMIT 1),0) '
+                    'AS reset_epoch FROM usage_events WHERE key_id=?',(kid,kid,kid))
+                item['expected_units']=int(latest['expected'])
+                delta = item['expected_units'] - cur
+                if delta <= 0:
+                    continue
+                execute('UPDATE api_keys SET used_credit_units = used_credit_units + ? '
+                        'WHERE id = ?', (delta, kid))
+                execute('UPDATE api_keys SET used_credit = used_credit_units * 1.0 / ? '
+                        'WHERE id = ?', (1000000, kid))
+                event_id = 'reconcile:%d:%d' % (kid, item['expected_units'])
+                if latest['reset_epoch']:
+                    event_id='reconcile:%d:epoch:%d:%d' % (kid,latest['reset_epoch'],item['expected_units'])
+                execute('INSERT OR IGNORE INTO adjustment_events VALUES(?,?,?,?,?,?,?,?)',
+                        (event_id, event_id, int(time.time()), kid, 0, delta,
+                         actor[:128], reason[:500]))
+                add_audit_log(actor, 'credit.reconcile', 'key:%d' % kid,
+                              '%s delta_units=%d' % (reason[:400], delta))
+                applied.append({'key_id': kid, 'delta_units': delta})
+    return {
+        'apply': bool(apply),
+        'scale': 'credit_units',
+        'adjustable_keys': adjustable,
+        'protected_keys': protected,
+        'applied': applied,
+        'applied_units': sum(x['delta_units'] for x in applied),
+        'note': 'expected 基线为不可变事件 usage_events（不裁剪）；修正落 adjustment_events（不可变审计凭据）；'
+                '只上调不下调，下调等于返还已消耗配额；'
+                'expected 只覆盖账本上线后，偏小属正常',
+    }

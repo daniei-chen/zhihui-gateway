@@ -1,25 +1,21 @@
 'use client';
 
-import {useCallback, useState} from 'react';
-import {Activity, TrendingUp, KeyRound, Cpu, Wrench, RotateCcw, Coins, AlertTriangle, Server} from 'lucide-react';
-import {
-  Area,
-  Bar,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import {useEffect, useState} from 'react';
+import dynamic from 'next/dynamic';
+import {Activity, TrendingUp, KeyRound, Cpu, Wrench, RotateCcw, Coins, AlertTriangle} from 'lucide-react';
+// K37：recharts 由 dynamic 组件单独拆包（页面文件里不 import），首屏 JS 不含图表代码。
+const TokenTrendChart = dynamic(
+  () => import('@/components/stats/TokenTrendChart').then((m) => m.TokenTrendChart),
+  {ssr: false},
+);
+import {ChartPlaceholder} from '@/components/charts/ChartPlaceholder';
+import {ChartDataTable} from '@/components/charts/ChartDataTable';
+import {useAfterFirstPaint} from '@/lib/use-after-first-paint';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {useAsyncAll} from '@/lib/use-async-data';
 import {statsApi, errText} from '@/lib/api';
 import type {
   StatsSummary,
-  UpstreamStats,
   UsageBreakdown,
   UsagePoint,
   UsageHourPoint,
@@ -28,10 +24,10 @@ import {
   chartSpecFor,
   dailySeries,
   hourlySeries,
-  todayKeyLocal,
   type ChartPoint,
 } from '@/lib/usage-chart';
 import {fmtCompact, fmtNumber, fmtCredit} from '@/lib/format';
+import {formatCacheHitRate, formatCacheRequestRate, formatOutputRate, usageTokenTotal} from '@/lib/usage-metrics';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {StatCard} from '@/components/common/layout/StatCard';
 import {EmptyState} from '@/components/common/layout/EmptyState';
@@ -40,6 +36,7 @@ import {LoadError} from '@/components/common/states/LoadError';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {useAuth} from '@/lib/auth-context';
 import {useRealm} from '@/lib/realm-context';
+import {usePlatform} from '@/lib/platform-context';
 import {Button} from '@/components/ui/button';
 import {
   Select,
@@ -104,6 +101,7 @@ function usageHealthDetail(
 
 export default function StatsPage() {
   const {isAdmin} = useAuth();
+  const {platform} = usePlatform();
   // 统计随顶部版本切换：两个版本走的是不同账号池，混在一起看没有意义
   const {realm, label: realmName} = useRealm();
   const t = useT();
@@ -123,6 +121,32 @@ export default function StatsPage() {
   const d = Number(days) || 1;
 
   /**
+   * 当前时间（本地时区）——**只在 hydration 之后填**。
+   *
+   * 直接调 `new Date()` 参与渲染会让服务端与客户端算出不同结果：#418
+   * （`args[]=HTML`）在生产静态导出上偶发 2.5% 就是这类"渲染期取当前时间"造成的
+   * ——构建期的 SSG HTML 用的是构建那一刻的小时/日期，客户端用的是现在。
+   *
+   * 初值 null 时图表按"没有当前小时标记、不按今天过滤"渲染，与 SSG HTML 一致；
+   * 挂载后再补真实值并重绘。
+   */
+  const [nowTick, setNowTick] = useState<{hour: number; today: string} | null>(null);
+  useEffect(() => {
+    const read = () => {
+      const n = new Date();
+      const pad = (v: number) => String(v).padStart(2, '0');
+      setNowTick({
+        hour: n.getHours(),
+        today: `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`,
+      });
+    };
+    read();
+    // 跨小时/跨天时让"当前小时"标记与今日口径跟上（页面可能开着一整夜）
+    const id = window.setInterval(read, 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  /**
    * 本页四份统计。
    *
    * `realm` 与 `days` 都算**数据上下文**（而不是「查询范围」）：改了时段，四张卡片
@@ -136,6 +160,7 @@ export default function StatsPage() {
     isInitialFailed,
     isRefreshing,
     reload,
+    refresh,
   } = useAsyncAll(
     {
       summary: () => statsApi.summary(realm),
@@ -150,53 +175,20 @@ export default function StatsPage() {
     [realm, days],
   );
 
-  /**
-   * 上游自己那份统计（issue #59），**单独一个 hook**。改动前它也是单独拉的
-   * （在原代码里不进 `allSettled`），拆开是恢复那个结构，理由有两条：
-   *
-   *  · 它失败时**故意退化成 `{available: false}` 而不是抛错**，好让面板就地写清
-   *    原因、不弹提示（上游没起来、镜像太旧都会取不到，那是常态）。可这样一来它
-   *    就成了一次「成功的取数」——若和上面那组放在一起，五份全挂时它照样有值，
-   *    「一份都没取到」的判据就被顶掉了：页面不进整页错误态，反而照常渲染四张 0
-   *    卡片和「暂无数据」，正是本批要修的那句谎话。
-   *  · 它本来就不属于 `errors` 的语义范围——上面那条「部分数据加载失败」是给本页
-   *    四份数据用的，上游取不到不该算进去。
-   *
-   * 依赖用 `refreshDeps` 而不是 `deps`：时段 / 版本变了要跟着重取（改动前就是
-   * 这样），但**不清空**——它跟时段无关，清空只会让面板闪一下「上游统计暂不可用」。
-   */
-  const {values: upstreamValues, reload: reloadUpstream} = useAsyncAll(
-    {
-      upstream: async () => {
-        try {
-          return await statsApi.upstream();
-        } catch {
-          return {available: false} as UpstreamStats;
-        }
-      },
-    },
-    [],
-    [realm, days],
-  );
-
   const summary: StatsSummary | null = values.summary ?? null;
   const daily: UsagePoint[] = values.daily ?? EMPTY_POINTS;
   const byModel: UsageBreakdown[] = values.byModel ?? EMPTY_BREAKDOWN;
   const byKey: UsageBreakdown[] = values.byKey ?? EMPTY_BREAKDOWN;
-  const upstream: UpstreamStats | null = upstreamValues.upstream ?? null;
 
   const failedCount = Object.keys(errors).length;
 
-  /** 重试：两组一起重来，避免「点了重试、上游面板还是旧的」 */
-  const retry = useCallback(() => {
-    reload();
-    reloadUpstream();
-  }, [reload, reloadUpstream]);
+  const retry = reload;
 
-  // 用量随调用持续累计，心跳刷新让页面保持接近实时
-  useHeartbeat(retry, 60000);
+  useHeartbeat(refresh, 60000);
 
   const spec = chartSpecFor(d);
+  // K37：图表在首屏之后才挂载（dynamic 拆包 + 空闲帧渲染），等待期用同高度占位。
+  const chartsReady = useAfterFirstPaint();
   const hourly: UsageHourPoint[] = values.hourly ?? EMPTY_HOURS;
   /**
    * 趋势图的点。**粒度跟着范围走**（粒度/形态的判据在 lib/usage-chart.ts）：
@@ -204,8 +196,8 @@ export default function StatsPage() {
    *  · 多日 → 按天并补齐到窗口长度（缺的那天不再是「凭空消失」而是画成 0）。
    */
   const chartData: ChartPoint[] = spec.granularity === 'hour'
-    ? hourlySeries(hourly, new Date().getHours())
-    : dailySeries(daily, d, todayKeyLocal());
+    ? hourlySeries(hourly, platform === 'qoder' ? hourly[0]?.current_hour ?? undefined : nowTick?.hour)
+    : dailySeries(daily, d, platform === 'qoder' ? undefined : nowTick?.today);
 
   /** 今日失败总数（4xx + 5xx）。单独来自请求日志——用量汇总只含成功请求。 */
   const todayFailed =
@@ -410,195 +402,54 @@ export default function StatsPage() {
         </div>
         <div className="h-[260px] w-full">
           {chartData.length ? (
-            <ResponsiveContainer width="100%" height="100%">
-              {/* 用 ComposedChart 而不是 BarChart：BarChart 会忽略非 Bar 子组件，
-                  失败曲线（Line）根本不会被渲染 —— 实测踩过，图上一条线都没有。 */}
-              <ComposedChart data={chartData} margin={{top: 4, right: 8, bottom: 0, left: -8}} barCategoryGap="20%">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={11}
-                  stroke="var(--muted-foreground)"
-                  /* 24 个小时（或 90 天）标签全画出来会糊成一片，按 spec 抽稀。 */
-                  interval={Math.max(0, spec.tickEvery - 1)}
-                />
-                <YAxis tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" tickFormatter={(v) => fmtCompact(Number(v))} />
-                <Tooltip
-                  cursor={{fill: 'var(--accent)'}}
-                  contentStyle={{
-                    background: 'var(--popover)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 12,
-                    fontSize: 12,
-                  }}
-                  formatter={(value, name) => {
-                    const label = String(name);
-                    if (label === 'tokens') return [fmtNumber(Number(value)), 'Token'];
-                    if (label === 'failed') {
-                      return [fmtNumber(Number(value)), t('dashboard.failedRequests')];
-                    }
-                    return [fmtNumber(Number(value)), t('metric.requests')];
-                  }}
-                />
-                {spec.shape === 'bar' ? (
-                  <Bar
-                    dataKey="tokens"
-                    name="tokens"
-                    fill="var(--chart-1)"
-                    radius={[4, 4, 0, 0]}
-                    /* 限制柱宽：只有一两天数据时，柱子不会被拉伸占满整个图表 */
-                    maxBarSize={48}
-                  >
-                    {/* 当前小时单独上色：一眼看出「现在走到哪一格」，
-                        右边的空档也就自然读成「今天还没到那些时候」。 */}
-                    {chartData.map((p) => (
-                      <Cell
-                        key={p.full}
-                        fill={p.isNow ? 'var(--chart-2)' : 'var(--chart-1)'}
-                      />
-                    ))}
-                  </Bar>
-                ) : (
-                  /* 30 / 90 天用面积：柱子细得看不清起伏，而面积图的形状对
-                     「总量趋势」更直观（尖峰一眼可见）。 */
-                  <Area
-                    type="monotone"
-                    dataKey="tokens"
-                    name="tokens"
-                    stroke="var(--chart-1)"
-                    fill="var(--chart-1)"
-                    fillOpacity={0.18}
-                    strokeWidth={2}
-                  />
-                )}
-                {/* 失败数用一条线叠在同一张图上：它与 token 柱不同量级，做成柱子
-                    会把柱形压扁。线只作「那天出过事」的信号，具体数值看悬停。
-                    没有失败时贴着 0，不干扰读数。 */}
-                <Line
-                  type="monotone"
-                  dataKey="failed"
-                  name="failed"
-                  stroke="var(--destructive)"
-                  strokeWidth={1.5}
-                  strokeDasharray="4 3"
-                  dot={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
+            chartsReady ? (
+              <TokenTrendChart
+                data={chartData}
+                shape={spec.shape}
+                tickEvery={spec.tickEvery}
+                tokensLabel="Token"
+                requestsLabel={t('metric.requests')}
+                failedLabel={t('dashboard.failedRequests')}
+              />
+            ) : (
+              <ChartPlaceholder h={260} />
+            )
           ) : (
             <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('stats.noUsageData')}</div>
           )}
         </div>
+        {chartData.length > 0 && <ChartDataTable
+          title={t('stats.tokenTrend')}
+          columns={[t('a11y.period'), 'Token', t('metric.requests'), t('dashboard.failedRequests')]}
+          rows={chartData.map((point) => [point.full, point.tokens, point.requests, point.failed])}
+        />}
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <BreakdownPanel title={t('stats.byModel')} icon={Cpu} items={byModel} throughput />
-        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} />
-      </section>
-
-      {/* 上游自己那份统计（issue #59）。**单独一段、口径写明**：它含直连上游的
-          调用、且自上游进程启动累计，与上面的时段选择器无关——混着看会得出
-          「今日请求包含了直连流量」这种错误结论。取不到时只写原因，不弹提示。 */}
-      <section className="rounded-[20px] bg-muted p-4">
-        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Server className="h-4 w-4" />
-            {t('stats.upstreamTitle')}
-          </div>
-          <div className="text-[11px] text-muted-foreground">{t('stats.upstreamNote')}</div>
-        </div>
-        {upstream && (!upstream.available || upstream.enabled === false) ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t('stats.upstreamUnavailable')}
-            {upstream.error ? `：${upstream.error}` : ''}
-            {upstream.message ? `（${upstream.message}）` : ''}
-          </p>
-        ) : upstream?.total ? (
-          <>
-            <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-xs">
-              <UpstreamMetric label={t('metric.requests')} value={fmtNumber(upstream.total.requests)} />
-              <UpstreamMetric label={t('stats.upstreamSuccess')} value={fmtNumber(upstream.total.success)} />
-              <UpstreamMetric
-                label={t('dashboard.failedRequests')}
-                value={fmtNumber(upstream.total.failed)}
-                tone={upstream.total.failed ? 'warning' : undefined}
-              />
-              <UpstreamMetric label="Token" value={fmtCompact(upstream.total.total_tokens)} />
-              <UpstreamMetric label={t('metric.paid')} value={fmtCredit(upstream.total.credit)} />
-              <UpstreamMetric
-                label={t('stats.cacheHitRate')}
-                value={fmtPercent(upstream.total.cache_hit_rate)}
-              />
-            </div>
-            {(upstream.models?.length ?? 0) > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-b border-border/60 hover:bg-transparent">
-                    <TableHead className="pl-0 text-[11px] text-muted-foreground">{t('metric.name')}</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">{t('metric.requestsShort')}</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">Token</TableHead>
-                    <TableHead className="text-[11px] text-muted-foreground">{t('metric.paid')}</TableHead>
-                    <TableHead className="pr-0 text-[11px] text-muted-foreground">{t('stats.cacheHitRate')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {upstream.models?.map((m, i) => (
-                    <TableRow key={`${m.model}-${i}`} className="border-b border-border/40">
-                      <TableCell className="pl-0">
-                        <span className="max-w-[220px] truncate text-xs font-medium">{m.model || t('metric.unknown')}</span>
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtNumber(m.requests)}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtCompact(m.total_tokens)}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{fmtCredit(m.credit)}</TableCell>
-                      <TableCell className="pr-0 text-xs tabular-nums">{fmtPercent(m.cache_hit_rate)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </>
-        ) : null}
+        <BreakdownPanel title={t('stats.byModel')} icon={Cpu} items={byModel} />
+        <BreakdownPanel title={t('stats.byKey')} icon={KeyRound} items={byKey} currentKeys retainedLogs={platform !== 'workbuddy'} />
       </section>
     </div>
   );
-}
-
-/** 上游统计里的一个数字（标签 + 值）。失败数用琥珀色标出来。 */
-function UpstreamMetric({label, value, tone}: {label: string; value: string; tone?: 'warning'}) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`font-medium tabular-nums ${tone === 'warning' ? 'text-amber-600 dark:text-amber-400' : ''}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
-/** 上游给的是 0~1 的比例；拿不到就显示占位符，不显示 0%（那是「一次没命中」的意思）。 */
-function fmtPercent(v: number | undefined | null): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
-  return `${Math.round(v * 100)}%`;
 }
 
 function BreakdownPanel({
   title,
   icon: Icon,
   items,
-  throughput = false,
+  currentKeys = false,
+  retainedLogs = false,
 }: {
   title: string;
   icon: typeof Cpu;
   items: UsageBreakdown[];
-  /** 显示「输出 tok/s」列（只有按模型表需要，按密钥没有这项） */
-  throughput?: boolean;
+  currentKeys?: boolean;
+  retainedLogs?: boolean;
 }) {
   const t = useT();
-  const max = Math.max(1, ...items.map((i) => i.prompt_tokens + i.completion_tokens));
+  const max = Math.max(1, ...items.map((i) => usageTokenTotal(i) ?? 0));
   return (
-    <div className="rounded-[20px] bg-muted p-4">
+    <div className="min-w-0 rounded-[20px] bg-muted p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <Icon className="h-4 w-4" />
         {title}
@@ -610,19 +461,21 @@ function BreakdownPanel({
               <TableHead className="pl-0 text-[11px] text-muted-foreground">{t('metric.name')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">{t('metric.requestsShort')}</TableHead>
               <TableHead className="text-[11px] text-muted-foreground">Token</TableHead>
-              {throughput && (
-                <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground">
-                  {t('stats.tokensPerSec')}
-                </TableHead>
-              )}
+              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground" title={t('stats.cacheRequestDefinition')}>
+                {t('stats.cacheRequestRate')}
+                <span className="block font-normal text-muted-foreground/80">{t('stats.cacheTokenShare')}</span>
+              </TableHead>
+              <TableHead className="whitespace-nowrap text-[11px] text-muted-foreground">
+                {t('stats.tokensPerSec')}
+              </TableHead>
               <TableHead className="pr-0 text-[11px] text-muted-foreground">{t('metric.paid')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((it, i) => {
-              const tokens = it.prompt_tokens + it.completion_tokens;
+              const tokens = usageTokenTotal(it);
               return (
-                <TableRow key={`${it.name}-${i}`} className="border-b border-border/40">
+                <TableRow key={it.key_id ?? `${it.name}-${i}`} className="border-b border-border/40">
                   <TableCell className="pl-0">
                     <div className="flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full" style={{background: CHART_COLORS[i % CHART_COLORS.length]}} />
@@ -632,27 +485,25 @@ function BreakdownPanel({
                       <div
                         className="h-full rounded-full"
                         style={{
-                          width: `${(tokens / max) * 100}%`,
+                          width: `${tokens === null ? 0 : (tokens / max) * 100}%`,
                           background: CHART_COLORS[i % CHART_COLORS.length],
                         }}
                       />
                     </div>
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtNumber(it.requests)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{fmtCompact(tokens)}</TableCell>
-                  {throughput && (
-                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                      {typeof it.tokens_per_sec === 'number' ? (
-                        <span title={t('stats.throughputHint', {n: it.throughput_samples ?? 0})}>
-                          {it.tokens_per_sec.toFixed(1)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground/70">—</span>
-                      )}
-                    </TableCell>
-                  )}
+                  <TableCell className="text-xs tabular-nums">{tokens === null ? '—' : fmtCompact(tokens)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.cacheRequestHint', {hit: it.cache_hit_requests ?? 0, total: it.cache_observed_requests ?? 0})}>
+                    {formatCacheRequestRate(it)}
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground" title={t('stats.cacheHitHint')}>
+                      Token {formatCacheHitRate(it)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums" title={t('stats.throughputHint', {n: it.throughput_samples ?? 0})}>
+                    {formatOutputRate(it.tokens_per_sec)}
+                  </TableCell>
                   <TableCell className="pr-0 text-xs tabular-nums">
-                    {it.credit > 0 ? fmtCredit(it.credit) : <span className="text-muted-foreground/70">—</span>}
+                    {fmtCredit(it.credit)}
                   </TableCell>
                 </TableRow>
               );
@@ -667,6 +518,8 @@ function BreakdownPanel({
           className="flex flex-col items-center justify-center py-10 text-center"
         />
       )}
+      {items.length > 0 && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t('stats.cacheScopeHint')}</p>}
+      {currentKeys && <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{t(retainedLogs ? 'stats.retainedKeyLogsHint' : 'stats.currentKeysHint')}</p>}
     </div>
   );
 }
@@ -675,7 +528,7 @@ function BreakdownPanel({
  * 首屏骨架。
  *
  * 逐块对着真实版面：四张统计卡（同高 88/96px）、趋势图（同高 260px）、两张分解表、
- * 上游面板。尺寸必须对齐——骨架比真实内容矮的话，数据到位时整页会往下窜一下，
+ * 尺寸必须对齐——骨架比真实内容矮的话，数据到位时整页会往下窜一下，
  * 比没有骨架更难受。
  */
 function StatsSkeleton() {
@@ -722,17 +575,7 @@ function StatsSkeleton() {
         ))}
       </section>
 
-      <section className="rounded-[20px] bg-muted p-4">
-        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <SkeletonBar className="h-3.5 w-24" />
-          <SkeletonBar className="h-3 w-40" />
-        </div>
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          {Array.from({length: 5}, (_, i) => (
-            <SkeletonBar key={i} className="h-3 w-20" />
-          ))}
-        </div>
-      </section>
+
     </>
   );
 }

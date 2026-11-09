@@ -8,31 +8,38 @@ from fastapi.responses import JSONResponse
 
 from .. import config, security
 from ..iputil import client_ip
+from ..services.asyncwork import joined_thread
 
 logger = logging.getLogger('workbuddy.auth')
 
 router = APIRouter(prefix='/api', tags=['auth'])
+_login_active = 0
+_LOGIN_MAX_ACTIVE = 4
 
 
 @router.get('/healthz')
 def healthz() -> dict:
-    return {'ok': True, 'service': 'workbuddy-manager'}
+    return {'ok': True, 'service': 'zhihui-gateway'}
 
 @router.get('/readyz')
 def readyz():
     from .. import operational
-    result=operational.readiness()
+    ready = operational.public_readiness()
     # Public readiness intentionally returns one bit. Detailed health requires a user.
-    return JSONResponse({'ok':result['ok']},status_code=200 if result['ok'] else 503)
+    return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
 
 @router.get('/operations/health')
-def operations_health(user:dict=Depends(security.require_admin)):
+def operations_health(user:dict=Depends(security.require_panel_reader)):
     from .. import operational
     return operational.status()
 
 
 @router.post('/login')
 async def login(request: Request) -> JSONResponse:
+    # Login creates ambient browser authority. Protect the initial login too:
+    # a cross-site form can submit valid JSON with a text/plain content type,
+    # even when the victim has no existing session cookie.
+    security.check_same_origin(request, require_cookie=False)
     ip = client_ip(request)
 
     # 先解析用户名，以便同时做「按 IP」与「按用户名」的锁定判断
@@ -49,11 +56,28 @@ async def login(request: Request) -> JSONResponse:
     username = str(body.get('username', '')).strip()[:64]
     password = str(body.get('password', ''))
 
+    global _login_active
+    if _login_active >= _LOGIN_MAX_ACTIVE:
+        raise HTTPException(status_code=429, detail='登录繁忙，请稍后重试')
+    _login_active += 1
+    try:
+        # PBKDF2 and atomic user-store/DB work must not stall inference streams.
+        # joined_thread retains this admission slot until the worker has ended,
+        # including repeated client cancellation. No unbounded work queue.
+        return await joined_thread(_complete_login, request, ip, username, password)
+    finally:
+        _login_active -= 1
+
+
+def _complete_login(request: Request, ip: str, username: str, password: str) -> JSONResponse:
     if security.login_blocked(ip, username):
         raise HTTPException(status_code=429, detail='失败次数过多，请 10 分钟后再试')
 
     cfg = security.load_users()
     user = next((u for u in cfg.get('users', []) if u.get('username') == username), None)
+    if not user:
+        # Avoid a no-KDF fast path that reveals whether the username exists.
+        security.dummy_verify(password)
     if not user or not security.verify_pwd(password, user.get('pwd_hash', '')):
         # 同时记 IP 与用户名：前者防单机爆破，后者防换 IP 打同一账号
         security.record_fail(ip, username)
@@ -61,6 +85,19 @@ async def login(request: Request) -> JSONResponse:
         security.audit({'username': username or '(空)'}, 'login_failed', username,
                        f'来源 {ip}', ip=ip)
         raise HTTPException(status_code=401, detail='用户名或密码错误')
+
+    # Password verification is intentionally outside the user-store lock. Bind
+    # signing to that exact snapshot so a concurrent reset cannot mint a fresh
+    # session for an old password, deleted account or previous role.
+    from .. import userstore
+    with userstore.locked(config.USERS_FILE):
+        current_cfg = security.load_users(allow_bootstrap=False)
+        current = next((row for row in current_cfg['users'] if row.get('username') == username), None)
+        if (current is None or security._authorization_fingerprint(cfg, user)
+                != security._authorization_fingerprint(current_cfg, current)):
+            raise HTTPException(status_code=401, detail='登录状态已失效，请重新登录')
+        token = security.issue_token(username, user.get('role', 'viewer'),
+                                     expected_sv=int(user.get('sv', 0)))
 
     security.clear_fail(ip, username)
     # URL 与 Host 都写进日志，便于在反馈里直接看出真实监听形态
@@ -71,7 +108,6 @@ async def login(request: Request) -> JSONResponse:
     if warn:
         logger.warning(warn)
     # orig 缺省 = 现在（首次登录）：这次是会话的**起点**，后续续期不会推后它。
-    token = security.issue_token(username, user.get('role', 'viewer'))
     security.audit(user, 'login', username, f'来源 {ip}', ip=ip)
     resp = JSONResponse({'ok': True, 'username': username, 'role': user.get('role', 'viewer')})
     resp.set_cookie(
@@ -87,7 +123,8 @@ async def login(request: Request) -> JSONResponse:
 
 
 @router.post('/logout')
-def logout() -> JSONResponse:
+def logout(request: Request) -> JSONResponse:
+    security.check_same_origin(request, require_cookie=False)
     resp = JSONResponse({'ok': True})
     resp.delete_cookie(config.COOKIE_NAME, path='/')
     return resp
@@ -96,6 +133,19 @@ def logout() -> JSONResponse:
 @router.get('/me')
 def me(user: dict = Depends(security.current_user)) -> dict:
     return {'username': user.get('username'), 'role': user.get('role', 'viewer')}
+
+
+@router.get('/authz/probe')
+def identity_probe(request: Request, user: dict = Depends(security.current_user)) -> JSONResponse:
+    """Authentication only; QTG authorizes each actual operation, not this GET.
+
+    Never call a business settings endpoint or return a long-lived credential.
+    Cache disabled so role changes/revocation are checked on every edge request.
+    """
+    from .. import edgeidentity
+    return JSONResponse({'ok': True, 'probe': 'manager-identity-v1'}, headers={
+        'X-QTG-Identity': edgeidentity.assertion(request, user),
+        'Cache-Control': 'no-store', 'Vary': 'Cookie, Authorization, X-API-Key'})
 
 
 @router.post('/sessions/revoke')

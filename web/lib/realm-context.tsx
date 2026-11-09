@@ -4,6 +4,7 @@ import {createContext, useCallback, useContext, useEffect, useMemo, useState} fr
 
 import {t as translate} from './i18n';
 import {useI18n} from './i18n/provider';
+import {useHydrated} from './use-hydrated';
 
 /**
  * 版本（realm）切换。
@@ -64,8 +65,9 @@ export function RealmProvider({children}: {children: React.ReactNode}) {
 
 export function useRealm(): RealmCtx {
   const v = useContext(Ctx);
+  const hydrated = useHydrated();
   if (!v) throw new Error('useRealm 必须在 RealmProvider 内使用');
-  return v;
+  return hydrated ? v : {...v, realm: 'cn', label: '国内版'};
 }
 
 /**

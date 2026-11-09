@@ -22,7 +22,7 @@ from pathlib import Path
 
 import logging
 
-from .. import config, db
+from .. import config, db, product
 from .errtext import err_text
 
 logger = logging.getLogger(__name__)
@@ -45,26 +45,30 @@ PACKAGE_META_KEY = 'update_package'
 PACKAGE_MAX_BYTES = 63 * 1024 * 1024
 
 
-def _read_package_version(path: Path) -> str:
-    """从发布包里读出 `.version`（只解那一个成员，不展开整包）。
-
-    更新器（deploy/update.py）里有一份同样的实现 —— 这条刻意不共用：面板不该为了
-    读一个字符串去 import 那个脚本。`server/tests/test_update_package.py` 拿同一份
-    包断言两边读出来的版本号一致，防漂移。
-    """
-    import tarfile
-
+def managed_release() -> bool:
+    """An unreadable, broken-link or malformed marker must not reopen writes."""
     try:
-        with tarfile.open(path, 'r:gz') as tf:
-            for member in tf:
-                name = member.name.replace('\\', '/')
-                if name.count('/') == 1 and name.endswith('/.version'):
-                    fh = tf.extractfile(member)
-                    return fh.read(64).decode('utf-8', 'replace').strip() if fh else ''
-    except (OSError, tarfile.TarError) as exc:
-        raise ValueError(
-            f'升级包读不了（{err_text(exc)}）—— 确认它是发布页面下载的 .tar.gz') from exc
-    return ''
+        (config.ROOT / 'deploy/managed-release.json').lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def require_legacy_package_writes() -> None:
+    if managed_release():
+        raise ValueError('当前为受控维护版本，离线包上传和删除已停用；请使用受信发布流程。')
+
+
+def _read_package_version(path: Path) -> str:
+    from ..packagecheck import inspect_package
+    try:
+        return inspect_package(path)['version']
+    except ValueError as exc:
+        if str(exc) == '升级包缺少 .version':
+            return ''
+        raise
 
 
 def allow_unverified_package() -> bool:
@@ -91,11 +95,16 @@ def package_meta() -> dict:
             meta['size'] = PACKAGE_FILE.stat().st_size
         except OSError:
             meta['present'] = False
+    if managed_release():
+        # Presence and historical caller-supplied digests are not approval.
+        meta.update(upload_enabled=False, installable=False, publisher_verified=False,
+                    update_policy='trusted-publisher-required')
     return meta
 
 
 def record_package(*, name: str, size: int, sha256: str, version: str,
                    expected_sha256: str = '', uploaded_by: str = '') -> dict:
+    require_legacy_package_writes()
     meta = {
         'name': name,
         'size': int(size),
@@ -112,6 +121,7 @@ def record_package(*, name: str, size: int, sha256: str, version: str,
 
 def clear_package() -> None:
     """删掉升级包与记录（更新完成后、或用户手动清掉时调）。"""
+    require_legacy_package_writes()
     try:
         PACKAGE_FILE.unlink(missing_ok=True)
     except OSError:
@@ -269,6 +279,11 @@ def read_status() -> dict:
             else:
                 cleaned.append(redact_credentials(str(item)))
         status['logs'] = cleaned
+    # Runtime log/status files must not override the release-owned update policy.
+    status['version'] = current_version()
+    from .. import release_identity
+    status['release_id'] = release_identity.current()
+    status['product'] = product.metadata(config.ROOT, managed=managed_release())
     return status
 
 
@@ -276,8 +291,8 @@ def current_version() -> str:
     """当前部署版本。
 
     以代码里的版本号为准，`.version` 标记只作部署痕迹：
-    两者不一致时说明旧版更新流程没能替换标记（代码已换、标记还是旧的），
-    此时采信代码并顺手把标记纠正过来，避免界面一直显示旧版本。
+    两者不一致时采信代码，避免界面显示旧版本。读取接口不能写入发布目录；
+    标记由发布控制器安装，不能通过查看状态改变已签名制品。
     """
     code = _app_version()
     marker = config.ROOT / '.version'
@@ -292,11 +307,6 @@ def current_version() -> str:
         return str(v or '').strip().lstrip('vV')
 
     if code and code != '0.0.0' and norm(code) != norm(marker_ver):
-        # 自愈：把标记对齐到实际代码版本
-        try:
-            marker.write_text(f'v{norm(code)}\n', encoding='utf-8')
-        except Exception:  # noqa: BLE001
-            pass
         return f'v{norm(code)}'
     if marker_ver:
         return marker_ver
@@ -540,7 +550,7 @@ def start_update(target: str, *, source: str = 'release') -> tuple[bool, str]:
     """
     # 本地定制：受控维护版本（签名清单托管）不允许网页自助更新，
     # 否则会覆盖本地修复、且新包与 managed-release 清单对不上导致服务起不来。
-    if (config.ROOT / 'deploy' / 'managed-release.json').exists():
+    if managed_release():
         return False, '当前为受控维护版本，请使用已验证的发布包升级；网页更新已暂停以保护本地修复。'
     if target not in ('manager', 'upstream', 'both'):
         return False, '参数不合法'
@@ -713,7 +723,7 @@ VERSION_CACHE_TTL = 6 * 3600          # 6 小时
 # 用 5 分钟换来界面及时恢复。
 _ASSETS_PENDING_TTL = 5 * 60
 # 管理端仓库（owner/name），用于查询最新 Release
-MANAGER_REPO = os.environ.get('WB_MANAGER_REPO') or 'ithtelab/workbuddy-manager'
+MANAGER_REPO = product.REPOSITORY
 
 
 def github_token() -> str:
@@ -823,7 +833,7 @@ def _release_latest_via_redirect(url: str) -> dict:
         raise ValueError('not a releases/latest API URL')
     repo = f'{m.group(1)}/{m.group(2)}'
     page = f'https://github.com/{repo}/releases/latest'
-    req = urllib.request.Request(page, headers={'User-Agent': 'workbuddy-manager-updater'})
+    req = urllib.request.Request(page, headers={'User-Agent': 'zhihui-gateway-updater'})
     try:
         with _NO_REDIRECT_OPENER.open(req, timeout=15):
             raise RuntimeError('releases/latest 没有返回重定向')
@@ -866,7 +876,7 @@ def _gh_get(url: str, timeout: int = 15) -> object:
     for candidate in candidates:
         headers = {
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'workbuddy-manager-updater',
+            'User-Agent': 'zhihui-gateway-updater',
         }
         # 认证后 5000 次/小时；未认证仅 60 次/小时/IP——共享出口（TUN/系统代理）
         # 极易被同出口的其他用户打满，表现为设置页"检测更新"偶发 403
@@ -934,7 +944,7 @@ def _read_cache() -> dict:
         return {}
     try:
         data = json.loads(_VERSION_CACHE_FILE.read_text(encoding='utf-8'))
-        return data if isinstance(data, dict) else {}
+        return data if isinstance(data, dict) and data.get('repository') == MANAGER_REPO else {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -942,6 +952,7 @@ def _read_cache() -> dict:
 def _write_cache(data: dict) -> None:
     try:
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        data = {**data, 'repository': MANAGER_REPO}
         _VERSION_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
     except Exception:  # noqa: BLE001
         pass
