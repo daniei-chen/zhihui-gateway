@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN" class="zh-light-refinement">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<meta content="light" name="color-scheme"/>
+<meta content="#f8f9fb" name="theme-color"/>
+<meta content="智汇 ZHIHUI，面向授权用户的多平台 AI 网关。连接 WorkBuddy、Qoder 与 Trae，整理工具入口、授权、调用记录与用量。" name="description"/>
+<title>智汇 ZHIHUI — 多平台 AI 网关</title>
+
+
+
+
+
+
+
+<!-- zhihui-brand-icons:20261029 -->
+<link rel="icon" href="/home-assets/r-37e06d65f8431be8231d/favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+<link rel="icon" href="/home-assets/r-37e06d65f8431be8231d/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/home-assets/r-37e06d65f8431be8231d/favicon-16x16.png" type="image/png" sizes="16x16">
+<link rel="icon" href="/home-assets/r-37e06d65f8431be8231d/favicon.svg" type="image/svg+xml" sizes="any">
+<link rel="apple-touch-icon" href="/home-assets/r-37e06d65f8431be8231d/apple-touch-icon.png" sizes="180x180">
+<link rel="manifest" href="/home-assets/r-37e06d65f8431be8231d/site.webmanifest">
+
+
+
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/source.css"/>
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/upgrade.css"/>
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/motion.css"/>
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/chapters.css"/>
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/sculpture.css"/>
+<link rel="stylesheet" href="/home-assets/r-37e06d65f8431be8231d/styles/color-release.css"><style>
+    .public-console-frame{display:block;width:100%;height:min(72vw,770px);border:0;background:#fff}
+    @media(max-width:760px){.public-console-frame{height:650px}}
+    .review-badge{position:fixed;z-index:100;bottom:12px;right:12px;padding:7px 12px;border:1px solid #e7e8ec;border-radius:20px;background:#fffffff2;color:#687285;font:10px sans-serif;pointer-events:none}
+    </style></head>
+<body>
+<a class="skip-link" href="#product">跳到主要内容</a>
+
+<div aria-hidden="true" class="scroll-progress" id="scrollProgress"></div>
+<main>
+
+<div id="top" data-motion-scope>
+<div class="ambient-flow" aria-hidden="true"><canvas id="zh-intelligence-canvas"></canvas></div>
+
+<div class="container navigation-wrap">
+<nav aria-label="主导航" class="nav">
+<a aria-label="智汇官网首页" class="logo" href="#top">
+<svg aria-hidden="true" class="logo-sign" fill="none" viewbox="0 0 40 40"><defs><lineargradient gradientunits="userSpaceOnUse" id="brandZGradient" x1="6" x2="34" y1="5" y2="35"><stop stop-color="#7391FA"></stop><stop offset="1" stop-color="#4D6CEB"></stop></lineargradient></defs><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="url(#brandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"></path></svg>
+        智汇 <span class="logo-caption">ZHIHUI</span>
+</a>
+<div class="nav-center">
+<a href="#task-scene">体验</a><a href="#platforms">三种入口</a><a href="#preview">工作台</a><a href="#setup">接入</a>
+</div>
+<div class="nav-actions"><a class="nav-source" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank" aria-label="在 GitHub 查看智汇网关源码">GitHub <span aria-hidden="true">↗</span></a></div>
+<button aria-controls="mobileMenu" aria-expanded="false" aria-label="打开菜单" class="mobile-trigger" id="mobileTrigger" type="button"><svg fill="none" height="23" stroke="currentColor" stroke-linecap="round" stroke-width="1.7" viewbox="0 0 24 24" width="23"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
+</nav>
+<div class="mobile-menu" id="mobileMenu"><a href="#task-scene">开发任务演示</a><a href="#ride-preview">专注向前</a><a href="#product">产品</a><a href="#platforms">平台接入</a><a href="#routing">路由机制</a><a href="#ledger">计量账本</a><a href="#preview">首屏工作台</a><a href="#setup">快速接入</a><a href="#boundary">安全边界</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码</a><a href="/portal/">用户登录 ↗</a><a href="/login/">管理员登录 ↗</a></div>
+</div>
+<header aria-labelledby="hero-title" class="hero container">
+<div class="hero-copy">
+<div class="eyebrow"><i class="dot" aria-hidden="true"></i> ZHIHUI / PRIVATE AI INFRASTRUCTURE</div>
+<div class="hero-signature"><svg aria-hidden="true" class="hero-signature-mark" fill="none" viewbox="0 0 220 175"><defs><lineargradient gradientunits="userSpaceOnUse" id="heroZShade" x1="28" x2="182" y1="15" y2="162"><stop stop-color="#B3CDFF"></stop><stop offset=".5" stop-color="#7D98F5"></stop><stop offset="1" stop-color="#9DABF8"></stop></lineargradient><lineargradient gradientunits="userSpaceOnUse" id="heroZLight" x1="58" x2="167" y1="20" y2="139"><stop stop-color="#F8FCFF"></stop><stop offset="1" stop-color="#E6EDFF"></stop></lineargradient></defs><path d="M49 32H174L47 143H174" opacity=".88" stroke="url(#heroZLight)" stroke-linecap="round" stroke-linejoin="round" stroke-width="30"></path><path d="M49 32H174L47 143H174" stroke="url(#heroZShade)" stroke-linecap="round" stroke-linejoin="round" stroke-width="21"></path><path d="M49 23H174" opacity=".75" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2"></path></svg><p class="hero-kicker">三种入口，同一个智汇。</p></div>
+<h1 id="hero-title"><span class="muted"><span class="zh23-phrase">让灵感出发，</span><span class="zh23-phrase">让工作向前。</span></span></h1>
+<p class="intro">WorkBuddy、Qoder、Trae，汇入一个清晰入口。</p>
+<div class="hero-actions"><a class="btn btn-dark" href="/login/" aria-label="管理员登录智汇控制台">管理员登录 <span aria-hidden="true">↗</span></a><a class="hero-explore" href="/portal/" aria-label="用户登录智汇工作台">用户登录 <span aria-hidden="true">↗</span></a></div>
+<div class="hero-tagline"><span><i aria-hidden="true"></i>三种入口</span><span><i aria-hidden="true"></i>独立授权</span><span><i aria-hidden="true"></i>用量可查</span><button class="motion-control" id="zh-motion-control" type="button" aria-pressed="false">暂停动效</button></div>
+</div>
+<div class="visual-wrap" id="preview" data-motion-scope>
+<div aria-hidden="true" class="visual-halo"></div>
+
+
+<div aria-label="智汇控制台预览：顶部工具栏、仪表盘和底部 Dock，使用合成示例数据。" class="demo-browser" role="region">
+<div class="browser-top"><div class="traffic"><span></span><span></span><span></span></div><div class="browser-arrows"><span>‹</span><span>›</span></div><div class="address-bar"><svg class="address-lock" fill="none" stroke="#b6bcc7" stroke-width="2" viewbox="0 0 24 24"><rect height="11" rx="2" width="14" x="5" y="10"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg> zhihui / workspace</div></div>
+<div class="console-capture" data-preview-build="L56xJIgc6_WtFFG8UVFfz"><iframe class="public-console-frame" src="/home-assets/console-flow-20261030-1/dashboard/" title="仪表盘原生渲染 · 公开只读示例" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy"></iframe>
+
+</div>
+</div>
+<div class="demo-caption">真实控制台界面 · 示例数据。账号与用量请登录查看。</div>
+</div>
+</header>
+</div>
+<section class="story-screen task-screen" id="task-scene" data-motion-scope aria-labelledby="task-title">
+  <div class="container task-layout">
+    <div class="story-copy reveal">
+      <div class="overline">02 / FROM IDEA TO DONE</div>
+      <h2 id="task-title">想法向前，<br>任务跟上。</h2>
+      <p class="story-lead">需求、实现、验证。<br>每一步，都有上下文。</p>
+      <p class="story-detail">WorkBuddy、Qoder、Trae，各展所长。智汇整理入口，你专注眼前。</p>
+      <a class="story-link" href="#platforms">找到适合你的入口 <span aria-hidden="true">↗</span></a>
+      <div class="scene-controls"><span>开发任务动画 · 示例内容</span><button id="taskMotionControl" type="button" aria-pressed="false">暂停演示</button></div>
+    </div>
+    <div class="task-frame-wrap reveal"><iframe id="taskWorkspace" src="/home-assets/r-bb0b5ad4c7a0582efcf4/animations/task-workspace.html" title="智汇工作空间：上下文汇聚、实现、验证与回执的动态示例" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="-1"></iframe></div>
+  </div>
+</section>
+<section class="story-screen ride-screen" id="ride-preview" data-motion-scope aria-labelledby="ride-title">
+  <div class="container ride-layout">
+    <div class="ride-art reveal"><iframe loading="lazy" id="pelicanRide" src="/home-assets/r-bb0b5ad4c7a0582efcf4/animations/velo-coast.html" title="海岸夕照：鹧鸪骑着带花篮的复古单车，可拖动旋转" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="0"></iframe></div>
+    <div class="story-copy reveal">
+      <div class="overline">03 / A LITTLE JOY IN MOTION</div>
+      <h2 id="ride-title">向着海风，<br>轻快创造。</h2>
+      <p class="story-lead">让工具接住灵感，<br>把快乐，做进作品。</p>
+      <p class="story-detail">不同的工具，各展所长。少一点来回，多一点创造。</p>
+      <div class="ride-principles"><span>三种入口</span><span>权限随需</span><span>调用有迹可循</span></div>
+      <a class="story-link" href="#preview">看看你的工作台 <span aria-hidden="true">↗</span></a>
+      <div class="scene-controls"><span>海岸骑行 · 拖动旋转</span><button id="rideMotionControl" type="button" aria-pressed="false">暂停骑行</button></div>
+    </div>
+  </div>
+</section>
+
+<section class="sculpture-section" id="perspective" aria-labelledby="perspective-title" data-motion-scope>
+  <div class="container sculpture-layout">
+    <div class="sculpture-copy reveal">
+      <div class="overline">04 / A MOMENT TO THINK</div>
+      <h2 id="perspective-title">工具向前，<br>思考向深。</h2>
+      <p class="sculpture-lead">把判断留给自己，<br>把重复交给工具。</p>
+      <p class="sculpture-description">好工具的意义，是为值得投入的事情腾出空间。让 WorkBuddy、Qoder、Trae 接上你的工作方式；方向、取舍与下一步，始终由你决定。</p>
+      <div class="sculpture-rule"></div>
+      <p class="sculpture-caption"><span>01</span> 想清楚，再向前。</p>
+      <a href="#setup" class="sculpture-link">连接你的下一步 <span aria-hidden="true">↗</span></a>
+    </div>
+    <figure class="sculpture-gallery reveal" id="thinkerGallery" data-state="idle">
+      <div class="gallery-heading"><span>THE THINKER</span><span>RODIN / 1880</span></div>
+      <div class="sculpture-viewport" id="thinkerViewport" aria-label="白色思考者雕塑三维展示">
+        <img class="sculpture-poster" src="/home-assets/r-37e06d65f8431be8231d/models/thinker-poster.webp" width="1000" height="1160" loading="lazy" alt="白色思考者雕塑，俯身坐于岩石，右手托住下颌，肘部支撑在左腿上。">
+        <span class="gallery-watermark" aria-hidden="true">THINK.</span>
+        <div class="sculpture-loading" id="thinkerStatus" role="status">三维雕塑 · 正在准备</div>
+        <noscript><p class="sculpture-noscript">启用 JavaScript 可旋转查看雕塑。</p></noscript>
+      </div>
+      <figcaption class="gallery-footer">
+        <div><strong>思考者</strong><p id="thinkerHint">拖动旋转 · 聚焦细节</p></div>
+        <div class="sculpture-controls" aria-label="雕塑查看控制">
+          <button type="button" data-sculpture-view="full" aria-pressed="true" disabled>全貌</button>
+          <button type="button" data-sculpture-view="detail" aria-pressed="false" disabled>细节</button>
+          <button type="button" id="thinkerMotion" aria-pressed="false" disabled>暂停转动</button>
+          <button type="button" id="thinkerReset" aria-label="重置雕塑视角" disabled>↺</button>
+        </div>
+      </figcaption>
+      <details class="sculpture-credit"><summary>关于这件作品与模型</summary><p>奥古斯特·罗丹《思考者》。扫描：<a href="https://commons.wikimedia.org/wiki/File:Scan_the_World_-_The_Thinker_(Auguste_Rodin).stl" target="_blank" rel="noopener noreferrer">Scan the World</a>。模型与本地衍生渲染遵循 <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>。页面采用白色材质，保留扫描几何；仅作展示，不代表相关机构对产品的背书。<a href="/home-assets/r-37e06d65f8431be8231d/models/ATTRIBUTION.txt">模型说明</a></p></details>
+    </figure>
+  </div>
+</section>
+
+<div aria-label="WorkBuddy、Qoder、Trae 三种入口" class="partners-marquee" data-motion-scope><div aria-hidden="true" class="partner-track"><span><b>WORKBUDDY</b></span><span class="sep" aria-hidden="true">·</span><span><b>QODER</b></span><span class="sep" aria-hidden="true">·</span><span><b>TRAE</b></span><span class="sep" aria-hidden="true">·</span><span><b>WORKBUDDY</b></span><span class="sep" aria-hidden="true">·</span><span><b>QODER</b></span><span class="sep" aria-hidden="true">·</span><span><b>TRAE</b></span><span class="sep" aria-hidden="true">·</span></div></div>
+<section class="section" id="product" data-motion-scope><div class="container"><div class="section-header-row reveal"><div><div class="section-eyebrow">DESIGNED FOR CONTROL</div><h2 class="section-title">从接入到回看，都在这里。</h2></div><p>入口、授权、用量，按工作的顺序安排。</p></div><div class="feature-grid"><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="7" rx="2" width="8" x="2" y="4"></rect><rect height="7" rx="2" width="8" x="14" y="4"></rect><rect height="7" rx="2" width="8" x="8" y="15"></rect><path d="M6 11v3h6m6-3v3h-6"></path></svg></div><h3>入口归一</h3><p>三种工作方式，一个清晰入口。</p><div class="feature-scene source-strips" aria-hidden="true"><div class="source-tags"><span>WorkBuddy</span><span>Qoder</span><span>Trae</span></div><span class="source-join"></span><span class="source-terminal">统一入口</span></div></article><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><rect height="11" rx="2" width="18" x="3" y="9"></rect><path d="M7 9V7a5 5 0 0 1 10 0v2M9 14h6"></path></svg></div><h3>权限随需</h3><p>谁来用、能用什么，清楚地设定。</p><div class="feature-scene" aria-hidden="true"><div class="access-mask">zh- ···· ····</div><div class="access-checks"><span>Key</span><i>›</i><span>IP</span><i>›</i><span>模型</span></div></div></article><article class="feature reveal" data-blue-card><div class="feature-ico"><svg fill="none" stroke="currentColor" stroke-width="1.65" viewbox="0 0 24 24"><path d="M4 17l4-4 3 2 7-8 2 2"></path><path d="M3 3v18h18"></path></svg></div><h3>用量可查</h3><p>看得到消耗，也保留待核对的部分。</p><div class="quota-ribbon" aria-label="额度条外观演示，不代表真实余额"><div class="quota-ribbon-label"><span>额度边界</span><small>界面示意 · 非实时额度</small></div><div class="quota-track" aria-hidden="true"><span class="quota-fill"></span></div><div class="quota-scale" aria-hidden="true"><span>0</span><span>额度边界 · 示意</span><span>100</span></div></div></article></div></div></section>
+<section class="ext-section soft" id="platforms" data-motion-scope><div class="container">
+<div class="ext-header reveal"><div><div class="overline"><span class="eyedot"></span>05 / THREE PLATFORMS</div><h2 class="big-title">熟悉的工具，有序地连接。</h2></div><p class="section-lead">选择工具，查看对应的接入方式。</p></div>
+<div class="platform-stage reveal">
+<div class="platform-aside"><span class="overline">CHOOSE YOUR TOOL</span><h3>从你的习惯开始</h3><p>WorkBuddy、Qoder、Trae，各有入口，各守边界。</p>
+<div aria-label="切换平台介绍" class="platform-choices" role="group">
+<button aria-pressed="true" class="platform-choice active" data-platform="workbuddy" type="button"><span><span class="choice-name">WorkBuddy</span><span class="choice-desc">国内 / 国际版本</span></span><span class="choice-arrow">↗</span></button>
+<button aria-pressed="false" class="platform-choice" data-platform="qoder" type="button"><span><span class="choice-name">Qoder</span><span class="choice-desc">独立引擎入口</span></span><span class="choice-arrow">↗</span></button>
+<button aria-pressed="false" class="platform-choice" data-platform="trae" type="button"><span><span class="choice-name">Trae</span><span class="choice-desc">独立引擎入口</span></span><span class="choice-arrow">↗</span></button></div></div>
+<div aria-live="polite" class="platform-display">
+<div class="platform-topline"><div class="overline">ROUTING TO <strong id="platformName">WORKBUDDY</strong></div><span class="mini-pill" id="platformNode">WorkBuddy</span></div>
+<div class="routing-fabric" aria-label="三平台蓝色光路，选择工具可同步查看接入说明"><div class="signal-diagram" data-selected-platform="workbuddy">
+<div class="signal-orbit" aria-hidden="true"></div><div class="signal-orbit orbit-outer" aria-hidden="true"></div>
+<svg class="signal-wires" viewBox="0 0 520 360" preserveAspectRatio="none" aria-hidden="true">
+<defs><linearGradient id="signalWire" x1="0" x2="1"><stop stop-color="#b5cdfa"/><stop offset=".48" stop-color="#557ee4"/><stop offset="1" stop-color="#94b3f4"/></linearGradient></defs>
+<path class="signal-input" d="M75 180 C135 180 148 180 218 180"/>
+
+<path data-signal-route="workbuddy" class="is-selected" d="M260 180 C325 180 330 135 391 135"/>
+<path data-signal-route="qoder" class="" d="M260 180 C325 180 330 225 391 225"/>
+<path data-signal-route="trae" class="" d="M260 180 C325 180 330 315 391 315"/>
+<path class="signal-travel" d="M75 180 C135 180 148 180 218 180"/>
+<circle cx="183" cy="180" r="3" fill="#7e9ff1"/>
+</svg>
+<div class="signal-client"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-12-2 14"/></svg><span>API 请求</span></div>
+<div class="signal-core"><div class="signal-core-inner"><svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.5"/></svg></div><span>智汇网关</span></div>
+<div class="signal-platforms" role="group" aria-label="选择首屏路由示意平台">
+<button class="signal-source is-selected" type="button" data-hero-platform="workbuddy" aria-pressed="true"><span class="signal-source-mark">W</span><span><strong>WorkBuddy</strong><small>/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
+<button class="signal-source" type="button" data-hero-platform="qoder" aria-pressed="false"><span class="signal-source-mark">Q</span><span><strong>Qoder</strong><small>/qoder/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
+<button class="signal-source" type="button" data-hero-platform="trae" aria-pressed="false"><span class="signal-source-mark">T</span><span><strong>Trae</strong><small>/trae/v1</small></span><span class="signal-source-arrow" aria-hidden="true">↗</span></button>
+</div>
+</div>
+</div><div class="platform-grid"><div class="p-fact"><span>ACCESS / 入口</span><strong id="platformPrefix">/v1/*</strong></div><div class="p-fact"><span>SERVICE / 适配</span><strong id="platformEngine">workbuddy2api</strong></div><div class="p-fact"><span>MANAGEMENT</span><strong>统一控制面</strong></div></div>
+<div aria-live="polite" class="zh3-linkline"><span aria-hidden="true" class="zh3-sync-light"></span><span id="zh3PlatformContext">WorkBuddy · 光路与代码已同步</span><a class="zh3-inline-action" href="#routing">查看这条路径 <span aria-hidden="true">↗</span></a></div><div class="platform-caption"><span>ⓘ</span><span id="platformText">分平台路由，不混用授权。此处仅展示结构。</span></div>
+</div>
+</div></div></section>
+<section id="routing" data-motion-scope style="padding:0 0 100px"><div class="container"><div class="dark-feature reveal"><div class="dark-content"><div><div class="section-eyebrow">06 / REQUEST PATH</div><h2>一次调用，路径清楚。</h2><p>从入口校验到路径选择，看看请求如何向前。</p><div aria-label="切换路由示意场景" class="mode-chips" role="group"><button aria-pressed="true" class="mode selected" data-route="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="mode" data-route="qoder" type="button">Qoder</button><button aria-pressed="false" class="mode" data-route="trae" type="button">Trae</button></div><div aria-live="polite" class="route-live"><span aria-hidden="true" class="route-live-dot"></span><span id="routeLiveSummary">当前展示：WorkBuddy · /v1/*</span><span class="route-live-disclaimer">逻辑模拟</span></div><div class="zh23-route-experience">
+<div aria-label="模拟场景" class="zh23-scenarios" role="group">
+<button aria-pressed="true" class="zh23-scenario on" data-scenario="fresh" type="button">首次请求</button>
+<button aria-pressed="false" class="zh23-scenario" data-scenario="sticky" type="button">连续会话</button>
+<button aria-pressed="false" class="zh23-scenario" data-scenario="fallback" type="button">上游不可用</button>
+</div>
+<button aria-label="演示一次请求经过网关的过程" class="zh23-run" id="zh23Run" type="button"><span class="zh23-run-mark">▶</span> 演示一次请求</button>
+</div>
+<div aria-label="模拟请求流程" class="route-steps">
+<span class="route-step"><i>01</i> 凭证检查</span>
+<span class="route-step"><i>02</i> 选择路径</span>
+<span class="route-step"><i>03</i> <strong id="routeDestination">WorkBuddy</strong></span>
+</div><div aria-live="polite" class="zh23-route-result" role="status">
+<span aria-hidden="true" class="zh23-route-led"></span>
+<span id="zh23RouteStatus">选择场景并点击“演示一次请求”</span>
+</div><div class="route-notes"><span><i class="tag-dot"></i>分平台入口</span><span><i class="tag-dot"></i>兼容 API</span><span><i class="tag-dot"></i>权限校验</span></div></div><div aria-label="路由路径可视化，非实时请求" class="network" data-blue-card><svg aria-hidden="true" preserveaspectratio="none" viewbox="0 0 550 360"><path class="lines" d="M80 90 C160 90 183 178 271 178 C363 178 370 135 472 135" id="netA"></path><path class="lines" d="M80 90 C160 90 183 178 271 178 C363 178 370 220 472 220" id="netC"></path><path class="lines" d="M80 90 C160 90 183 178 271 178 C363 178 370 305 472 305" id="netB"></path><path d="M80 90 C160 90 183 178 271 178 C363 178 366 92 472 92" fill="none" id="zh23Trail" opacity="0" stroke="#6d8bf3" stroke-linecap="round" stroke-width="2.2"></path>
+<circle cx="80" cy="90" fill="#91aaff" id="zh23TravelerHalo" opacity="0" r="10"></circle>
+<circle cx="80" cy="90" fill="#6889f4" id="zh23Traveler" opacity="0" r="4.5"></circle></svg><div class="network-label input">Client Request<small>Authorization: Bearer ••••</small></div><div class="network-core"><span>Z</span></div><div class="network-label account-a is-current" data-platform-target="workbuddy"><i class="state-light"></i>WorkBuddy<small>/v1/*</small></div><div class="network-label account-c" data-platform-target="qoder"><i class="state-light purple"></i>Qoder<small>/qoder/v1/*</small></div><div class="network-label account-b" data-platform-target="trae"><i class="state-light teal"></i>Trae<small>/trae/v1/*</small></div><div class="network-label result">请求回执<small>用量依据 · 记录留存</small></div><div class="network-caption">INTERACTIVE ILLUSTRATION · NOT LIVE TELEMETRY</div></div></div></div></div></section>
+<section class="ext-section" id="ledger" data-motion-scope><div class="container">
+<div class="ledger-head reveal"><div class="overline">07 / USAGE RECORD</div><h2 class="big-title">每次调用，留下一份依据。</h2><p class="section-lead">已确认的记清楚，未确认的留待核对。</p></div>
+<div class="ledger-wrap reveal" data-ledger-state="settled"><div aria-label="切换计量流程模拟" class="ledger-select" role="group"><button aria-pressed="true" class="ledger-switch active" data-ledger="settled" type="button">正常结算</button><button aria-pressed="false" class="ledger-switch" data-ledger="unknown" type="button">用量缺失</button><button aria-pressed="false" class="ledger-switch" data-ledger="reject" type="button">准入拒绝</button></div>
+<div class="ledger-flow"><article class="ledger-card" id="ledgerCardA"><div class="count">01 · BEFORE REQUEST</div><div><div class="card-symbol">◇</div><h3>预算预留</h3><p>调用前，先预留预算。</p></div></article><article class="ledger-card" id="ledgerCardB"><div class="count">02 · UPSTREAM RESULT</div><div><div class="card-symbol">↗</div><h3 id="ledgerMiddleTitle">接收用量</h3><p id="ledgerMiddleDesc">以返回的 usage 为依据。</p></div></article><article class="ledger-card focus" id="ledgerCardC"><div class="count">03 · LEDGER STATE</div><div><div class="card-symbol">✓</div><h3 id="ledgerLastTitle">记录结算</h3><p id="ledgerLastDesc">按已知消耗，完成结算。</p></div></article></div>
+<div aria-live="polite" class="ledger-result" id="ledgerResult"><div class="result-badge" id="ledgerBadge">SETTLED</div><p id="ledgerDetail">确认用量后结算，记录每一步。</p></div>
+</div>
+<p class="tiny-label" style="text-align:center;margin-top:18px">流程示意 · 不读取生产账本</p>
+</div></section>
+
+
+
+<section class="detail-section" id="engineering" data-motion-scope>
+  <div class="container">
+    <div class="ext-header reveal"><div><div class="overline">A CLOSER LOOK</div><h2 class="big-title">细节展开，心里有数。</h2></div><p class="section-lead">模型能做什么，用量去了哪里。<br>在真实界面里看清楚。</p></div>
+    <div class="detail-grid">
+      <article class="detail-card reveal"><div class="detail-copy"><span class="overline">MODEL CATALOG</span><h3>选模型，也看能力。</h3><p>把模型范围、能力标签与筛选放在同一个视图，按当前任务选择。</p><a class="story-link" href="/models/">查看模型 <span aria-hidden="true">↗</span></a></div><picture><source media="(max-width:600px)" srcset="/home-assets/r-37e06d65f8431be8231d/preview/models-mobile.jpg" width="390" height="650"><img src="/home-assets/r-37e06d65f8431be8231d/preview/models-desktop.jpg" width="1440" height="930" loading="lazy" alt="智汇模型目录真实构建界面，合成示例数据"></picture></article>
+      <article class="detail-card reveal"><div class="detail-copy"><span class="overline">USAGE INSIGHTS</span><h3>每次投入，都能回看。</h3><p>从 Token 趋势，到模型与密钥明细，让使用情况有据可查。</p><a class="story-link" href="/stats/">查看用量 <span aria-hidden="true">↗</span></a></div><picture><source media="(max-width:600px)" srcset="/home-assets/r-37e06d65f8431be8231d/preview/stats-mobile.jpg" width="390" height="650"><img src="/home-assets/r-37e06d65f8431be8231d/preview/stats-desktop.jpg" width="1440" height="930" loading="lazy" alt="智汇用量统计真实构建界面，合成示例数据"></picture></article>
+    </div><p class="detail-note">真实控制台构建 · 合成示例数据，非当前运行状态</p>
+  </div>
+</section>
+
+<section class="section code-section" id="setup" data-motion-scope><div class="container"><div class="code-layout"><div class="reveal"><div class="section-eyebrow">08 / GET CONNECTED</div><h2 class="section-title">选好入口，就从这里开始。</h2><p class="section-description">按工具查看配置，复制后替换为你的授权信息。</p><div aria-label="接口路由示例" class="code-tabline" role="group"><button aria-pressed="true" class="code-tab on" data-code="workbuddy" type="button">WorkBuddy</button><button aria-pressed="false" class="code-tab" data-code="qoder" type="button">Qoder</button><button aria-pressed="false" class="code-tab" data-code="trae" type="button">Trae</button></div><div aria-label="切换代码示例格式" class="format-tabs" role="group"><button aria-pressed="true" class="on" data-format="curl" type="button">cURL</button><button aria-pressed="false" data-format="python" type="button">Python SDK</button><button aria-pressed="false" data-format="env" type="button">环境变量</button></div><p class="hint" id="setupHint">实际地址、协议与可用模型，以你的控制台配置为准。</p></div><div class="reveal"><div class="terminal"><div class="terminal-top"><div class="terminal-dots"><i></i><i></i><i></i></div><span class="terminal-filename" id="codeFilename">bash · gateway-request.sh</span><button class="copy-code" id="copyCode" type="button">复制代码 ↗</button></div><pre><code id="codeBlock"></code></pre></div></div></div></div></section>
+
+
+<section class="section" id="boundary" data-motion-scope><div class="container"><div class="boundary"><div class="reveal"><div class="section-eyebrow">PRIVATE BY DESIGN</div><h2 class="section-title">连接更多，边界依然清楚。</h2><p class="section-description">在你的授权范围内，使用你的工具与资源。</p><div style="margin-top:27px"><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway/blob/main/README.md" rel="noopener noreferrer" target="_blank">阅读项目 README <span>↗</span></a></div></div><div class="boundary-points reveal"><div class="boundary-item"><div class="boundary-number">01</div><div><h3>授权访问</h3><p>仅向获授权用户开放，按权限使用。</p></div></div><div class="boundary-item"><div class="boundary-number">02</div><div><h3>凭据受控</h3><p>凭据在控制台中管理，公开页面使用示例。</p></div></div><div class="boundary-item"><div class="boundary-number">03</div><div><h3>真实有据</h3><p>界面预览与运行状态分开呈现。</p></div></div></div></div></div></section>
+<section class="faq-section" id="faq" data-motion-scope><div class="container"><div class="faq-layout"><div class="reveal"><div class="overline">QUESTIONS, ANSWERED</div><h2 class="big-title">开始之前，了解这些。</h2><p class="section-lead">工具、授权与数据，一次说清。</p></div><div class="faq-list reveal">
+<div class="faq-item open"><button aria-expanded="true" class="faq-question" type="button">智汇是公开注册的 API 平台吗？<span>+</span></button><div class="faq-answer"><p>仅面向本人及获授权用户。已有账号可直接登录，新用户需要管理员提供的一次性邀请码；注册同时受浏览器设备登记与限流保护。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">三种入口可以混用账号和权限吗？<span>+</span></button><div class="faq-answer"><p>请按各入口的授权与接入配置使用。WorkBuddy、Qoder、Trae 的配置和权限不应直接互换。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">怎样确认当前能用的模型？<span>+</span></button><div class="faq-answer"><p>在控制台查看当前模型范围。可用性会随工具、授权、额度和运行状态变化。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">用量暂时缺失，会算成零吗？<span>+</span></button><div class="faq-answer"><p>不会。未知用量保留为 unknown，待核对后再处理。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">网站会展示我的 API Key 吗？<span>+</span></button><div class="faq-answer"><p>不会。公开首页不读取真实 Key；密钥在授权后的控制台中管理。</p></div></div>
+<div class="faq-item"><button aria-expanded="false" class="faq-question" type="button">动画和工作台预览是实时运行画面吗？<span>+</span></button><div class="faq-answer"><p>开发任务动画展示工作过程，图表数字为演示值；工作台预览使用合成示例数据。真实账号与用量请登录查看。</p></div></div>
+</div></div></div></section>
+<section class="footcta" data-motion-scope><div class="container reveal"><div class="section-eyebrow">ZHIHUI / UNIFIED AI GATEWAY</div><h2>下一个想法，从智汇出发。</h2><p>用户与管理员，各有清晰入口。</p><div class="hero-actions"><a class="btn btn-dark" href="/login/">管理员登录 ↗</a><a class="btn btn-soft" href="/portal/">用户登录 ↗</a><a class="btn btn-soft" href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">GitHub 源码 ↗</a></div></div></section>
+</main>
+<footer class="footer"><div class="container footer-content"><div><a class="logo" href="#top"><svg aria-hidden="true" class="logo-sign" fill="none" viewbox="0 0 40 40"><defs><lineargradient gradientunits="userSpaceOnUse" id="footerBrandZGradient" x1="6" x2="34" y1="5" y2="35"><stop stop-color="#7391FA"></stop><stop offset="1" stop-color="#4D6CEB"></stop></lineargradient></defs><path d="M8.5 10.5H31.5L8.5 29.5H31.5" stroke="url(#footerBrandZGradient)" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.6"></path></svg> 智汇</a><div class="footer-meta">ZHIHUI · 智汇网关<br/>WorkBuddy · Qoder · Trae</div></div><div class="footer-links"><a href="#platforms">平台</a><a href="#ledger">账本</a><a href="#preview">控制台</a><a href="#faq">常见问题</a><a href="https://github.com/daniei-chen/zhihui-gateway" rel="noopener noreferrer" target="_blank">源码 ↗</a></div></div></footer>
+<div aria-live="polite" class="toast" id="toast" role="status">已复制到剪贴板</div>
+
+
+
+
+
+
+
+
+
+
+
+<script src="/home-assets/r-37e06d65f8431be8231d/scripts/upgrade.js"></script>
+<script src="/home-assets/r-37e06d65f8431be8231d/scripts/motion.js"></script>
+<script src="/home-assets/r-37e06d65f8431be8231d/scripts/ride.js"></script>
+<script type="module" src="/home-assets/r-37e06d65f8431be8231d/scripts/sculpture.js"></script>
+<script type="module" src="/home-assets/r-37e06d65f8431be8231d/scripts/connected-paths.js"></script></body>
+</html>

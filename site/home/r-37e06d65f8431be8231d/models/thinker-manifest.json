@@ -1,0 +1,52 @@
+{
+  "title": "The Thinker",
+  "sculptor": "Auguste Rodin",
+  "scanAuthor": "Scan the World",
+  "sourcePage": "https://commons.wikimedia.org/wiki/File:Scan_the_World_-_The_Thinker_(Auguste_Rodin).stl",
+  "sourceSHA1": "486307df3882858a36cbb5812beaf5f881b800c7",
+  "sourceSHA256": "ae9427b19c0b5cc0c680a01793b361766cc6175be8ba6f1c9a0f0b30e2b3c5e7",
+  "license": "CC-BY-SA-4.0",
+  "licenseURL": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "sourceBytes": 41874184,
+  "triangles": 837482,
+  "vertices": 418714,
+  "sourceBounds": [
+    [
+      0.00688934326171875,
+      0.006557464599609375,
+      0.00000286102294921875
+    ],
+    [
+      77.32318115234375,
+      102.92179870605469,
+      130
+    ]
+  ],
+  "bounds": [
+    [
+      -0.7136888631752204,
+      0,
+      -0.9499868631360023
+    ],
+    [
+      0.7136888631752203,
+      2.3999999999999995,
+      0.9499868631360024
+    ]
+  ],
+  "watertight": true,
+  "consistentWinding": true,
+  "degenerateFaces": 0,
+  "changes": [
+    "Rigid axis rotation, translation and uniform scale to height 2.4.",
+    "Smooth vertex normals and warm white display material.",
+    "Draco compression, position quantization 18 bits; no face decimation or pose edits."
+  ],
+  "validationLimits": "Topology checks do not prove absence of all self intersections or scan defects. Browser visual QA remains separate.",
+  "compressedBytes": 10756240,
+  "decodedTriangles": 837482,
+  "decodedVertices": 418714,
+  "maxPositionError": 0.00000476837158203125,
+  "positionErrorRelativeToHeight": 0.000001986821492513021,
+  "indexOrderPreserved": true
+}

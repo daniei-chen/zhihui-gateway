@@ -1,0 +1,8 @@
+{
+  "approvedHomeDescriptor": "9b14b6636405597d9af99dcc63a68d13fc98000aa930fedc83f2b27d3f218395",
+  "page": "zhihui-home",
+  "previousRelease": "home-product-002-b45e552100beaddd08861e18",
+  "scope": "Homepage layout and local interactions only; no business state changes.",
+  "sourceCommit": "82bddf39f3f279f680bd8329158b1e248c2d99d4",
+  "version": "0.0.2"
+}

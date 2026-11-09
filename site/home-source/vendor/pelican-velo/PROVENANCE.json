@@ -1,0 +1,39 @@
+{
+  "repository": "https://github.com/JacoryOu/pelican-velo",
+  "archive_sha256": "8ba44e6a2a6271a835e66d64d13f399a8a8bee89ef1c35cf1682c75661226fa8",
+  "retrieved": "2026-10-30",
+  "license": "MIT",
+  "selected_files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1066,
+      "sha256": "0400eb13e969bc11aa90bf1db6f9bd6520489b31782719be48debff8a9ebb6b1"
+    },
+    {
+      "path": "src/lib/utils.js",
+      "bytes": 8353,
+      "sha256": "b6b52a9f3bdaeec62e10b0fc9fec2a888cc1dac141230507f3d108dfb79466b6"
+    },
+    {
+      "path": "src/scene/bike.js",
+      "bytes": 15436,
+      "sha256": "f781446f30753420988d5990601fdd536858093d042cb2b3ae700697b2bc8635"
+    },
+    {
+      "path": "src/scene/ocean.js",
+      "bytes": 5418,
+      "sha256": "f19572ce016525044038718b16b5956012e80e27a684fb31ed3c570aedaf2206"
+    },
+    {
+      "path": "src/scene/pelican.js",
+      "bytes": 17825,
+      "sha256": "b0d3154c6506e6d06561ab592c2c737cd56107b1a0db633c137eaa593f0a9b39"
+    },
+    {
+      "path": "src/scene/sky.js",
+      "bytes": 4920,
+      "sha256": "d492d487082389b6049d855ba44b8f60c07104cda02487fef68399efd4e8439e"
+    }
+  ],
+  "policy": "Original selected sources retained byte-for-byte. Reduced derivatives live in src/velo-lite. No upstream scripts/installers executed."
+}

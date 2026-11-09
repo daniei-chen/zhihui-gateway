@@ -1,0 +1,43 @@
+{
+  "repository": "https://github.com/paper-design/shaders",
+  "commit": "1923e9f536ea079e2a95d23291cbfacfd69d37f6",
+  "license": "Apache-2.0",
+  "modifications": "None. Selected upstream source files; local renderer maintained separately.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    {
+      "path": "NOTICE",
+      "sha256": "c3155d6a359d9841d63f7feb4938d2c99bb4ef681fa20be1eb4bfa71307f746b",
+      "bytes": 55
+    },
+    {
+      "path": "packages/shaders/src/shader-utils.ts",
+      "sha256": "5805b80c74323b0a8fce8c8c3628b17372014f7417d0c7de3346fa532c6c903a",
+      "bytes": 3456
+    },
+    {
+      "path": "packages/shaders/src/shader-sizing.ts",
+      "sha256": "b4579aa325c6e662b271bed812415e5aed7cf8ff066a7940045f422458b7abeb",
+      "bytes": 1068
+    },
+    {
+      "path": "packages/shaders/src/types.ts",
+      "sha256": "7d726479d24cdccd0a77a47b7203a4dd231ae8c97035c12c568dc6966ddb6a64",
+      "bytes": 135
+    },
+    {
+      "path": "packages/shaders/src/get-shader-noise-texture.ts",
+      "sha256": "c5d36911326153219bd450def1e5e84250a37968d79b29d4d7b11eff7bf5ecf9",
+      "bytes": 23473
+    },
+    {
+      "path": "packages/shaders/src/shaders/smoke-ring.ts",
+      "sha256": "7a9b5694491b05612b470fa0fb51a06bb957dade3b65cf278530efa9e640ed96",
+      "bytes": 6137
+    }
+  ]
+}
