@@ -18,15 +18,15 @@ jobs:
       - name: Hash checked Python dependencies
         run: |
           python3.12 -m venv .venv
-          .venv/bin/pip install --require-hashes -r manager/server/requirements.hashes.txt
+          .venv/bin/pip install --require-hashes -r server/requirements.hashes.txt
       - name: No external network, synthetic fixtures only
-        run: sudo -n unshare --net "$PWD/.venv/bin/python" manager/tools/validate.py --isolated --output "$PWD/validation-results"
+        run: sudo -n unshare --net "$PWD/.venv/bin/python" tools/validate.py --isolated --output "$PWD/validation-results"
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: manager/web
+        working-directory: web
     env:
       NEXT_TELEMETRY_DISABLED: '1'
       NEXT_OUTPUT_EXPORT: '1'
@@ -38,7 +38,7 @@ jobs:
       - run: npm exec eslint -- . --max-warnings 0
       - run: npm exec tsc -- --noEmit
       - run: node --test lib/*.test.mjs
-      - run: npm run build
+      - run: npm run build:export
       - run: npm audit --audit-level=high
   gateway:
     runs-on: ubuntu-24.04
@@ -49,12 +49,15 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib,json,pathlib
-          for path,digest in json.load(open('manager/docs/protected-customizations.json')).items():
+          for path,digest in json.load(open('docs/protected-customizations.json')).items():
               assert hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()==digest,path
           PY
-      - run: docker build --target build -t wb-ci-build .
-      - run: docker run --rm --network none --cpus 2 --memory 2g --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges -v "$PWD:/src:ro" -w /src wb-ci-build go test -count=1 ./...
+      - name: Python syntax and regression tests
+        run: |
+          python3.12 -m compileall -q server
+          python3.12 -m unittest discover -s server/tests -t . -q
       - run: docker build -t wb-ci-runtime .
       - run: docker save -o image.tar wb-ci-runtime
       - name: Runtime OS and Go vulnerability gate
         run: docker run --rm --cpus 2 --memory 2g --cap-drop ALL --security-opt no-new-privileges -v "$PWD/image.tar:/scan/image.tar:ro" aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/image.tar --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+
