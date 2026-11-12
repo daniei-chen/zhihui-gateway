@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
-      - run: npm exec eslint -- .
+      - run: npm exec eslint -- . --max-warnings 0
       - run: npm exec tsc -- --noEmit
       - run: node --test lib/*.test.mjs
       - run: npm run build:export
@@ -54,8 +54,10 @@ jobs:
           PY
       - name: Python syntax and regression tests
         run: |
-          python3.12 -m compileall -q server
-          python3.12 -m unittest discover -s server/tests -t . -q
+          python3.12 -m venv .venv-gateway
+          .venv-gateway/bin/pip install --require-hashes -r server/requirements.hashes.txt
+          .venv-gateway/bin/python -m compileall -q server
+          .venv-gateway/bin/python -m unittest discover -s server/tests -t . -q
       - run: docker build -t wb-ci-runtime .
       - run: docker save -o image.tar wb-ci-runtime
       - name: Runtime OS and Go vulnerability gate
