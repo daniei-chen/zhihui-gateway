@@ -149,7 +149,11 @@ def writer_environment(source, release, *, helper=False, reconcile=False):
                 'WB_DB': '/opt/workbuddy-manager/data/manager.db',
                 'WB_USERS_FILE': '/opt/workbuddy-manager/data/users.json',
                 'WB_STATIC_DIR': str(release.root / 'web/out'),
-                'WB_MANAGER_HOST': '127.0.0.1', 'WB_MANAGER_PORT': '7865' if helper else '7866'})
+                'WB_MANAGER_HOST': '127.0.0.1', 'WB_MANAGER_PORT': '7865' if helper else '7866',
+                # Both generations must use the same admission ledger before
+                # any relay switch.  The helper remains read/serve-only below;
+                # this flag does not grant it background ownership.
+                'WB_SHARED_ADMISSION': '1'})
     if helper or reconcile:
         env['WB_BACKGROUND_JOBS'] = '0'
     return env
@@ -164,9 +168,9 @@ def writer_command(*, helper=False, reconcile=False):
             'pycache_prefix=/opt/zhihui-release/python-cache', '-m']
     if reconcile:
         return prefix + ['server.budget_reconcile']
-    return prefix + ['uvicorn',
-            'server.main:app', '--host', '127.0.0.1', '--port', '7865' if helper else '7866',
-            '--workers', '1', '--timeout-graceful-shutdown', '75', '--timeout-keep-alive', '75']
+    return prefix + ['server.serve', '--host', '127.0.0.1',
+            '--port', '7865' if helper else '7866',
+            '--timeout-graceful-shutdown', '75']
 
 
 class Launcher:
