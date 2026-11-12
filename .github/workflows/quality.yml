@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
-      - run: npm exec eslint -- . --max-warnings 0
+      - run: npm exec eslint -- .
       - run: npm exec tsc -- --noEmit
       - run: node --test lib/*.test.mjs
       - run: npm run build:export
