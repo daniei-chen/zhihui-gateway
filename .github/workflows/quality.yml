@@ -17,10 +17,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Hash checked Python dependencies
         run: |
-          python3.12 -m venv .venv
-          .venv/bin/pip install --require-hashes -r server/requirements.hashes.txt
+          python3.12 -m venv /tmp/zhihui-gateway-manager-venv
+          /tmp/zhihui-gateway-manager-venv/bin/pip install --require-hashes -r server/requirements.hashes.txt
       - name: No external network, synthetic fixtures only
-        run: sudo -n unshare --net "$PWD/.venv/bin/python" tools/validate.py --isolated --output "$PWD/validation-results"
+        run: sudo -n unshare --net env ZH_CI_NET_ISOLATED=1 /tmp/zhihui-gateway-manager-venv/bin/python tools/ci_regression.py
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -54,10 +54,10 @@ jobs:
           PY
       - name: Python syntax and regression tests
         run: |
-          python3.12 -m venv .venv-gateway
-          .venv-gateway/bin/pip install --require-hashes -r server/requirements.hashes.txt
-          .venv-gateway/bin/python -m compileall -q server
-          .venv-gateway/bin/python -m unittest discover -s server/tests -t . -q
+          python3.12 -m venv /tmp/zhihui-gateway-gateway-venv
+          /tmp/zhihui-gateway-gateway-venv/bin/pip install --require-hashes -r server/requirements.hashes.txt
+          /tmp/zhihui-gateway-gateway-venv/bin/python -m compileall -q server
+          sudo -n unshare --net env ZH_CI_NET_ISOLATED=1 /tmp/zhihui-gateway-gateway-venv/bin/python tools/ci_regression.py
       - run: docker build -t wb-ci-runtime .
       - run: docker save -o image.tar wb-ci-runtime
       - name: Runtime OS and Go vulnerability gate
