@@ -60,7 +60,8 @@ class RuntimeIdentity:
                         'WB_STATIC_DIR': str(release.root / 'web/out'), 'WB_MANAGER_HOST': '127.0.0.1',
                         'WB_MANAGER_PORT': '7866', 'PYTHONDONTWRITEBYTECODE': '1',
                         'PYTHONNOUSERSITE': '1', 'PYTHONSAFEPATH': '1',
-                        'PYTHONPYCACHEPREFIX': '/opt/zhihui-release/python-cache'}
+                        'PYTHONPYCACHEPREFIX': '/opt/zhihui-release/python-cache',
+                        'WB_SHARED_ADMISSION': '1'}
             if any(env.get(key.encode()) != value.encode() for key, value in selected.items()):
                 raise Rejected('writer data or import binding differs')
             if reconcile and env.get(b'WB_BACKGROUND_JOBS') != b'0':

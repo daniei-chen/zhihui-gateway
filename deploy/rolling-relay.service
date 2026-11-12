@@ -1,0 +1,33 @@
+[Unit]
+Description=Zhihui Gateway stable inference handoff relay
+After=network.target
+
+[Service]
+Type=simple
+User=10001
+Group=10001
+WorkingDirectory=/opt/workbuddy-manager
+Environment=PYTHONPATH=/opt/workbuddy-manager
+Environment=PYTHONNOUSERSITE=1
+Environment=WB_RELAY_BACKEND_OLD=http://127.0.0.1:7866
+Environment=WB_RELAY_BACKEND_NEW=http://127.0.0.1:7865
+Environment=WB_RELAY_ROUTE_FILE=/opt/workbuddy-manager/data/relay-route.json
+Environment=WB_RELAY_MAX_CONNECTIONS=128
+ExecStart=/opt/workbuddy-manager/venv/bin/python -P -s -B -m uvicorn server.relay_app:app --host 127.0.0.1 --port 7867 --workers 1 --timeout-keep-alive 75
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/workbuddy-manager/data
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryMax=512M
+TasksMax=256
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
