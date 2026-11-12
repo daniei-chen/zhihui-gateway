@@ -223,11 +223,16 @@ jobs:
           VERSION="${{ steps.vars.outputs.version }}"
           STAGE="${{ steps.pack.outputs.stage }}"
 
-          CODE_VER=$(python3 - "$STAGE/server/main.py" <<'PY'
-          import re, sys
-          text = open(sys.argv[1], encoding='utf-8').read()
-          m = re.search(r"version='([^']+)'", text)
-          print(m.group(1) if m else '')
+          CODE_VER=$(python3 - "$STAGE/server/product-release.json" "$STAGE/server/main.py" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          release = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          version = str(release.get('version') or '').strip()
+          main = Path(sys.argv[2]).read_text(encoding='utf-8')
+          if "def _release_version()" not in main or "return 'v' + identity()['version']" not in main:
+              raise SystemExit('server/main.py 未通过产品版本身份绑定检查')
+          print(version)
           PY
           )
           if [ "$CODE_VER" != "$VERSION" ]; then
