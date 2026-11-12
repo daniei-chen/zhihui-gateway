@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.2 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.3 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,26 +16,26 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md">Read the 1.2.2 changelog</a>
+<a href="CHANGELOG.md">Read the 1.2.3 changelog</a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#122--release-engineering) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#123--zero-downtime-release-engineering) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.2 · Release engineering
+## 1.2.3 · Zero-downtime release engineering
 
-**Current product version: `v1.2.2`.** This release makes version drift fail before packaging. The root version, service metadata, console identity, changelog and provenance all describe the same product version, and GitHub Actions binds packaged provenance to the checked out commit.
+**Current product version: `v1.2.3`.** This release makes dual-generation handoff, shared admission, draining, rollback and release evidence reviewable and testable.
 
-- **Release reliability:** stale product or candidate metadata fails the consistency gate.
-- **Security boundary:** secret redaction, unknown-usage review, single-writer behavior and controlled updates remain explicit; this release does not change provider endpoints, credentials or ledger semantics.
-- **CI reliability:** the quality workflow uses the repository's current `server/`, `web/` and `tools/` layout and checks hashes for protected customizations.
+- **Zero-downtime handoff:** the writer guard uses `server.serve`, a bounded 75-second graceful drain and shared admission; helper generations do not run background jobs.
+- **Routing and rollback:** the inference-only relay uses atomic monotonic route epochs, health rollback and deferred retirement while old requests remain active.
+- **Evidence and security:** Ed25519 two-phase signing, restore evidence, read-only retention audit, fail-closed watchdog state and host closure manifests are covered by gates.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.2)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.3)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -170,7 +170,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.2 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.3 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Historical audit boundary](docs/AUDIT-0.0.3.md) |
 
