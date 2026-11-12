@@ -13,6 +13,8 @@
 
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
+**中文** · [English](README.en.md)
+
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
 <a href="CHANGELOG.md">查看 1.2.1 版本说明</a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
@@ -98,6 +100,16 @@
 | WorkBuddy | `https://你的域名/v1` | Chat、Responses、Messages 适配 |
 | Qoder | `https://你的域名/qoder/v1` | 以该引擎能力和账号授权为准 |
 | Trae | `https://你的域名/trae/v1` | 以该引擎能力和账号授权为准 |
+
+| Method | Path | 说明 |
+| :--- | :--- | :--- |
+| GET | `/v1/models` | WorkBuddy 模型目录 |
+| POST | `/v1/chat/completions` | WorkBuddy 对话调用 |
+| POST | `/v1/responses` | Responses 兼容入口 |
+| POST | `/v1/messages` | Anthropic Messages 兼容入口 |
+| GET | `/qoder/v1/models` | Qoder 模型目录 |
+| POST | `/qoder/v1/chat/completions` | Qoder 对话调用 |
+| POST | `/trae/v1/chat/completions` | Trae 对话调用 |
 
 <details>
 <summary><b>一个最小调用示例</b> — 使用自己已授权的模型和网关密钥</summary>
@@ -186,3 +198,4 @@ cd zhihui-gateway
 <a href="https://zhihui.kaogong.art/"><img src="brand/zhihui-z.svg" width="32" height="32" alt="智汇蓝色 Z" /></a>
 <p><sub>智汇 ZHIHUI · 少一点喧闹，多一点可控。</sub></p>
 </div>
+
