@@ -81,6 +81,44 @@ class RemediationContracts(RejectionRetryIntegrationTest):
                 self.assertEqual(providerevents.collect(), 0)
                 self.assertEqual(providerevents.report('atomic-execution')['attempt_count'], 1)
 
+    def test_collector_quarantines_invalid_event_and_continues(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            events = root / 'data/provider-events-v2'
+            events.mkdir(parents=True)
+            invalid = {'event': 'workbuddy_provider_attempt_v2', 'request_id': 'quarantine-execution',
+                       'dispatch_id': 'bad-dispatch', 'rotation': 1, 'provider_attempt': 1,
+                       'phase': 'headers', 'ts': int(time.time()), 'account_uid': 'synthetic',
+                       'model': 'bad\nmodel', 'realm': 'cn', 'path': '/v2/chat/completions', 'status': 200}
+            valid = dict(invalid, dispatch_id='good-dispatch', model='m')
+            (events / 'bad-dispatch-01-01-headers.json').write_text(json.dumps(invalid))
+            (events / 'good-dispatch-01-01-headers.json').write_text(json.dumps(valid))
+            with mock.patch.object(config, 'UPSTREAM_DIR', root):
+                self.assertEqual(providerevents.collect(), 1)
+                self.assertEqual(providerevents.report('quarantine-execution')['attempt_count'], 1)
+            self.assertEqual(len(list((events / 'rejected').rglob('bad-dispatch-01-01-headers.json'))), 1)
+
+    def test_collector_retains_bounded_event_with_unknown_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            events = root / 'data/provider-events-v2'
+            events.mkdir(parents=True)
+            value = {'event': 'workbuddy_provider_attempt_v2', 'request_id': 'unknown-model-execution',
+                     'dispatch_id': 'unknown-model-dispatch', 'rotation': 1, 'provider_attempt': 1,
+                     'phase': 'sending', 'ts': int(time.time()), 'account_uid': 'synthetic',
+                     'model': '', 'realm': 'cn', 'path': '/v2/chat/completions', 'status': 0}
+            (events / 'unknown-model-dispatch-01-01-sending.json').write_text(json.dumps(value))
+            with mock.patch.object(config, 'UPSTREAM_DIR', root):
+                self.assertEqual(providerevents.collect(), 1)
+                self.assertEqual(providerevents.report('unknown-model-execution')['attempt_count'], 1)
+
+    def test_upstream_audit_scalar_redacts_credentials(self):
+        from server.routers.settings import _audit_scalar_value
+        self.assertEqual(_audit_scalar_value('api_key', 'synthetic-secret'), '<configured>')
+        self.assertEqual(_audit_scalar_value('device_token', 'synthetic-secret'), '<configured>')
+        self.assertNotIn('synthetic-password', _audit_scalar_value(
+            'upstream_url', 'https://user:synthetic-password@example.invalid/v1'))
+
     def test_provider_evidence_health_is_unknown_until_a_collection_sample(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 mock.patch.object(config, 'UPSTREAM_DIR', Path(temporary)), \

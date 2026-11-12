@@ -40,6 +40,21 @@ COLLECTION_STALE_SECONDS = 90
 _last_collection = {'at': None, 'error': None}
 
 
+def _quarantine_invalid(path: Path, root: Path) -> None:
+    """Move one malformed event aside so it cannot block valid evidence."""
+    rejected_root = root / 'rejected'
+    _directory(rejected_root, create=True)
+    rejected = rejected_root / time.strftime('%Y%m%d')
+    _directory(rejected, create=True)
+    target = rejected / path.name
+    if target.exists() or target.is_symlink():
+        suffix = hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:12]
+        target = rejected / f'{path.stem}-{suffix}{path.suffix}'
+    os.rename(path, target)
+    _sync_directory(rejected)
+    _sync_directory(root)
+
+
 def _directory(path, *, create=False):
     if create:
         path.mkdir(mode=0o700, exist_ok=True)
@@ -74,8 +89,13 @@ def record(value):
             or type(value['ts']) is not int or not 0 < value['ts'] <= time.time() + 300
             or value['path'] not in ('/v2/chat/completions', '/console/chat/completions')):
         raise ValueError('invalid provider evidence state')
-    if not all(isinstance(value[name], str) and 0 < len(value[name]) <= 128
-               and not any(ord(character) < 32 for character in value[name]) for name in ('account_uid', 'model')):
+    if not (isinstance(value['account_uid'], str) and 0 < len(value['account_uid']) <= 128
+            and not any(ord(character) < 32 for character in value['account_uid'])):
+        raise ValueError('invalid provider evidence account/model')
+    # Pre-send and transport events can arrive before the engine has a stable
+    # model label. Keep the bounded evidence instead of stopping collection.
+    if not (isinstance(value['model'], str) and len(value['model']) <= 128
+            and not any(ord(character) < 32 for character in value['model'])):
         raise ValueError('invalid provider evidence account/model')
     digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     key = tuple(value[name] for name in ('request_id', 'dispatch_id', 'rotation', 'provider_attempt', 'phase'))
@@ -112,8 +132,14 @@ def _collect(limit):
                 if not stat.S_ISREG(information.st_mode) or information.st_size > 8192 or not 1 <= information.st_nlink <= 2:
                     raise ValueError('unsafe provider evidence file')
                 raw = source.read(8193)
-            if not record(json.loads(raw)):
-                raise ValueError('provider evidence conflict; original retained')
+            try:
+                accepted = record(json.loads(raw))
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                _quarantine_invalid(path, root)
+                continue
+            if not accepted:
+                _quarantine_invalid(path, root)
+                continue
             processed = root / 'processed'
             _directory(processed, create=True)
             destination = processed / time.strftime('%Y%m%d')

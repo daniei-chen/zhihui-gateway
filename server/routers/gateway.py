@@ -1194,6 +1194,7 @@ def _upstream_hint(upstream: dict | None) -> str:
     base = str(up.get('base_url') or '').strip()
     if not base:
         return ''
+    display_base = proxyroutes.mask_url(base)
     try:
         host = urlsplit(base).hostname
     except ValueError:
@@ -1201,11 +1202,21 @@ def _upstream_hint(upstream: dict | None) -> str:
     proxy = config.effective_http_proxy()
     if proxy and host:
         if config._is_internal_host(host):       # noqa: SLF001 —— 与转发判断同一份实现
-            return f'（本次请求的上游：{base}；该地址属内网/本机，这一跳直连）'
+            return f'（本次请求的上游：{display_base}；该地址属内网/本机，这一跳直连）'
         masked = proxyroutes.mask_url(proxy)
-        return (f'（本次请求的上游：{base}；这一跳会经出口代理 {masked} —— '
+        return (f'（本次请求的上游：{display_base}；这一跳会经出口代理 {masked} —— '
                 f'代理到不了这个地址就会 502）')
-    return f'（本次请求的上游：{base}）'
+    return f'（本次请求的上游：{display_base}）'
+
+
+def _public_upstream_error(upstream: dict | None) -> str:
+    """Return a client-safe upstream failure message.
+
+    The full exception remains in the request record for operators. Raw
+    transport errors must not cross the API boundary because http clients may
+    include credentials, proxy URLs, or internal socket addresses in them.
+    """
+    return '上游暂时不可用，请稍后重试' + _upstream_hint(upstream)
 
 
 def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
@@ -1688,7 +1699,7 @@ async def list_models(request: Request):
     except Exception as exc:  # noqa: BLE001
         latency = int((time.time() - started) * 1000)
         _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
-        return _oai_error_with_blip_body(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
+        return _oai_error_with_blip_body(_public_upstream_error(upstream), 502, exc)
 
 
 def _as_anthropic_models(payload: object) -> object:
@@ -2422,7 +2433,7 @@ async def _chat(request: Request, upstream_path: str):
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
             _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
-            return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
+            return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)
 
     # 流式转发
     client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=_forwarding_identity(key,upstream), bounded_response=True)
@@ -2485,7 +2496,7 @@ async def _chat(request: Request, upstream_path: str):
         _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                 int((time.time() - started) * 1000), ua, str(exc), True,
                 effort=effort, session_key=session_key)
-        return _oai_error_with_blip(f'上游不可用: {exc}' + _upstream_hint(upstream), 502, exc)
+        return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)
     finally:
         if not handed_off:
             await _close_pending_response(resp, client, budgets)
