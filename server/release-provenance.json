@@ -1,14 +1,14 @@
 {
   "base_commit": "872961ecda9562e48590e88a9e1e6493e2c21d94",
   "base_release": "v0.0.7+stable.20261106.1",
-  "candidate_only": true,
+  "candidate_only": false,
   "database_rollback": false,
   "frontend_input_sha256": "82230e4f30f9e8b64c1960b303d85ac4993ce0c0bc157152d8abd1ec49f91680",
   "frontend_origin": "reconstructed-source",
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": false,
-  "release_id": "v0.0.8+stable.20261106.1",
+  "release_id": "v1.2.1",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".version": "7b66b7186fd4471d8386f89504ac0cd3fe4a751add5c56fb6de6b21b5d9b2c6f",
@@ -27,6 +27,6 @@
   "signed": false,
   "source_commit": "",
   "source_input_sha256": "32fb708b7b270e611aaf401c1a8bf7f6fb0e065eaa9963d37805da455f9697ef",
-  "source_kind": "version-alignment-on-accepted-runtime",
-  "version": "0.0.8"
+  "source_kind": "github-actions-release",
+  "version": "1.2.1"
 }
