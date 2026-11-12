@@ -38,6 +38,11 @@ class ReleaseConsistencyTests(unittest.TestCase):
         self.assertFalse(provenance['candidate_only'])
         self.assertEqual(provenance['source_kind'], 'github-actions-release')
 
+        writer = json.loads(
+            (ROOT / 'server/writer-capabilities.json').read_text(encoding='utf-8')
+        )
+        self.assertEqual(writer['release_id'], f'v{version}')
+
 
 if __name__ == '__main__':
     unittest.main()
