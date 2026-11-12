@@ -12,7 +12,7 @@
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "87247bd7ce2ced59c7010a93710c605b6e8e1653ceb7a875c1574aafa25c1aaf",
-    ".github/workflows/release.yml": "a68d45818c930ddd127bf5c94b158232e94ba551924c56a796ae30d3898ef4e6",
+    ".github/workflows/release.yml": "d35339e0e4db63473a270fdd242b4bb9f60666bb4e2b4372de589488bad2e395",
     "CHANGELOG.md": "83ae580f680fb1ee528d6bb9321a85be1cb1549892ce63bb205383483dbabccf",
     "Dockerfile": "471b28e1965ce17f237926817ed7e307589b354731fd5f7dd297b30343356026",
     "README.en.md": "b9dea1bc1b527a98edc3c4b5b37f46b93b82cdd98f591a011450e37f4a8f9259",
@@ -37,7 +37,7 @@
   "schema": 1,
   "signed": false,
   "source_commit": "",
-  "source_input_sha256": "c93c8b1ee23c12cef9a6e7a35e1966f68a5045267b19d0b01cbc54b73cdae943",
+  "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
   "version": "1.2.1"
 }
