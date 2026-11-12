@@ -1264,7 +1264,7 @@ async def messages(request: Request):
             latency = int((time.time() - started) * 1000)
             gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False,
                             session_key=session_key)
-            return _err(f'上游不可用：{exc}', 502, 'api_error')
+            return _err(gateway._public_upstream_error(upstream), 502, 'api_error')
 
     # ── 流式 ────────────────────────────────────────────────
     client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
@@ -1295,7 +1295,7 @@ async def messages(request: Request):
         latency = int((time.time() - started) * 1000)
         gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True,
                         session_key=session_key)
-        return _err(f'上游不可用：{exc}', 502, 'api_error')
+        return _err(gateway._public_upstream_error(upstream), 502, 'api_error')
 
     status_code = resp.status_code
     # U13：流中错误帧要带上游请求 ID。开流之后状态码已定，ID 是客户端唯一还能
