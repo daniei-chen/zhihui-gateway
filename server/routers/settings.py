@@ -15,6 +15,28 @@ from ..services import modelmap, reload, updater, wb2api
 router = APIRouter(prefix='/api', tags=['settings'])
 
 
+_AUDIT_SENSITIVE_KEY_MARKERS = (
+    'key', 'token', 'secret', 'password', 'credential', 'authorization',
+)
+
+
+def _audit_scalar_value(name: str, value: object) -> str:
+    """Return a bounded, credential-safe representation for audit details.
+
+    The submitted patch is user-controlled and may contain deployment secrets
+    even when the config writer later ignores that field. Audit records must
+    describe the change without becoming a second credential store.
+    """
+    key = str(name or '').casefold()
+    if any(marker in key for marker in _AUDIT_SENSITIVE_KEY_MARKERS):
+        return '<configured>' if value not in (None, '') else '<empty>'
+    text = str(value)
+    if '://' in text:
+        from ..services import updater
+        text = updater.redact_credentials(text)
+    return text[:128]
+
+
 # ── 上游配置 ─────────────────────────────────────────────
 @router.get('/settings/upstream')
 def get_upstream(user: dict = Depends(security.current_user)) -> dict:
@@ -37,7 +59,7 @@ async def save_upstream(body: dict, request: Request,
     # 「段=」，看起来像什么都没改。
     sections = ','.join(sorted(k for k in body if isinstance(body.get(k), dict)))
     top_keys = ','.join(sorted(
-        f'{k}={body[k]}' for k in body
+        f'{k}={_audit_scalar_value(k, body[k])}' for k in body
         if not isinstance(body.get(k), dict) and k != 'listen'
     ))
     security.audit(user, 'update_upstream', '',

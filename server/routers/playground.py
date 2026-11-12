@@ -115,7 +115,7 @@ async def chat(body: ChatIn, request: Request,
             int((time.time() - started) * 1000),
             request.headers.get('user-agent'), str(exc), body.stream,
         )
-        raise HTTPException(status_code=502, detail=f'上游不可用：{exc}') from exc
+        raise HTTPException(status_code=502, detail=gateway._public_upstream_error(upstream)) from exc
 
     if not body.stream:
         try:
@@ -129,7 +129,7 @@ async def chat(body: ChatIn, request: Request,
             gateway._record(None, ip, model_sent, '', 502, 0, 0,
                 int((time.time() - started) * 1000), request.headers.get('user-agent'),
                 str(exc), False)
-            raise HTTPException(status_code=502, detail=f'上游不可用：{exc}') from exc
+            raise HTTPException(status_code=502, detail=gateway._public_upstream_error(upstream)) from exc
         finally:
             await observability.close_stream(resp, client, timeout=deadline.close_timeout(budgets))
         # 非流式同样要记账（否则测试台的这部分开销查不到）
