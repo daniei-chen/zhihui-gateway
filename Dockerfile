@@ -89,13 +89,13 @@ RUN set -eu; \
     test -f /dist/index.html
 
 # ── 主镜像 ────
-FROM python:3.12-slim
+FROM python:3.12-alpine3.22
 
 # 环境变量：Python 不要写 pyc（容器是一次性的，写了也没用）、日志不缓冲
 #
 # PYTHONUSERBASE 指到 /app/.local：容器里以 uid 10001 运行，而依赖是 root 装的、
 # site-packages 归 root，**更新时装新依赖只能走用户站点**。钉死这个路径有两个理由：
-# ① 不依赖 Docker 把 HOME 设对；② /app 已经 chown 给 10001（见下方 useradd 那步），
+# ① 不依赖 Docker 把 HOME 设对；② /app 已经 chown 给 10001（见下方用户创建步骤），
 # 目录必须**先存在**——CPython 的 site.py 只在用户站点目录存在时才把它加进 sys.path。
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -150,7 +150,7 @@ COPY CHANGELOG.md README.md /app/
 #
 # /app/.local 是 PYTHONUSERBASE 的落点（见上面的 ENV）：容器内更新装新依赖时
 # 只能写用户站点，且该目录必须**先存在**，否则重启后的新进程不在 sys.path 上找它。
-RUN useradd -u 10001 -m -s /bin/bash app \
+RUN adduser -D -u 10001 -s /bin/sh app \
     && mkdir -p /app/data /app/.local /opt/workbuddy2api \
     && chown -R 10001:10001 /app /opt/workbuddy2api
 
