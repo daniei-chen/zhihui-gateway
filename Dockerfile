@@ -113,6 +113,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Pull security fixes released after the language runtime image was published.
+RUN apk upgrade --no-cache
+
 # 先装依赖（利用层缓存：代码改动不必重装依赖）
 #
 # 可选：PyPI 镜像。官方 PyPI 走国际 CDN，
