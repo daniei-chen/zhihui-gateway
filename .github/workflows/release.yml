@@ -86,7 +86,7 @@ jobs:
       - name: 后端单元测试
         run: |
           python3 -m pip install --quiet -r server/requirements.txt
-          python3 -m unittest discover -s server/tests -t . -v
+          python3 tools/ci_regression.py
 
       - name: 组装发布目录
         id: pack
