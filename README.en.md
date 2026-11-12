@@ -1,106 +1,200 @@
 <div align="center">
 
-# Zhihui Gateway · Manager
+<a href="https://zhihui.kaogong.art/">
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.1 · one controlled route for WorkBuddy, Qoder and Trae." />
+  </picture>
+</a>
 
-**One workspace, three clearly separated paths.**
+<br />
 
-![Version](https://img.shields.io/badge/version-1.2.1-blue)
-![Status](https://img.shields.io/badge/release-GitHub_Actions-6554c0)
-![Stack](https://img.shields.io/badge/FastAPI-Next.js-009688)
+**One workspace, three clear paths.**
 
-**English** · [简体中文](README.md) · [Product overview](../README.md) · [Changelog](CHANGELOG.md)
+Accounts, models, keys and usage stay together while platform authorization, boundaries and records remain explicit.
 
-<img src="docs/images/dashboard.png" alt="Dashboard with isolated synthetic data" width="100%" />
+**English** · [简体中文](README.md)
+
+<a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
+<a href="CHANGELOG.md">Read the 1.2.1 changelog</a>
+<a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
+
+<br /><br />
+
+[This release](#121--release-engineering) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
-> **1.2.1 is Zhihui's product version, not an inherited component's v1.x / v2.x version.**
-> Installation is controlled by the trusted publisher. Runtime identity and acceptance receipts determine what is actually active. Isolated Linux gates, signatures, paired backups, graceful draining and real acceptance are mandatory; code rollback never restores old business ledgers.
+<br />
 
-## Components And Boundaries
+## 1.2.1 · Release engineering
 
-### Local Candidate: One Default Key And Invitation Registration
+**Current product version: `v1.2.1`.** This release makes version drift fail before packaging. The root version, service metadata, console identity, changelog and provenance all describe the same product version, and GitHub Actions binds packaged provenance to the checked out commit.
 
-These changes remain in the local candidate. They are not enabled in production until the full gates, signatures and an explicit deployment instruction are complete.
+- **Release reliability:** stale product or candidate metadata fails the consistency gate.
+- **Security boundary:** secret redaction, unknown-usage review, single-writer behavior and controlled updates remain explicit; this release does not change provider endpoints, credentials or ledger semantics.
+- **CI reliability:** the quality workflow uses the repository's current `server/`, `web/` and `tools/` layout and checks hashes for protected customizations.
 
-- The homepage separates user login and administrator login. The user login page offers invitation registration.
-- Each workbench reuses one existing default key and does not offer multiple-key creation. A user without a key may initialize it once; existing plaintext cannot be read again and is not automatically rotated. Current key labels and statistics use the owning username, without rewriting usage history or ledgers.
-- Extra keys retained from older versions stay valid to avoid interrupting existing clients. The workbench displays one default and prevents further issuance.
-- Registration requires a one-time administrator invitation, a server-signed browser registration credential and persistent IP, network, device and global rate limits. Only the invitation hash is stored; plaintext is returned once. Registration grants no calling credits.
-- Device registration binds a browser, not an unforgeable physical device. Clearing cookies or changing browsers still requires another valid invitation and remains subject to rate limits.
-- The public reverse proxy must overwrite client-supplied IP identity headers and use the correct trusted proxy ranges. The example configuration requires trusted-publisher review; it does not automatically alter production.
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.1)
 
-Manager provides accounts, models, keys, logs and the administration UI. The WorkBuddy engine handles the account pool and provider requests. Qoder / Trae retain their separate adapters and authorization boundaries.
+> [!NOTE]
+> Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
 
-This is a maintained branch with local adaptations, not an unmodified-upstream panel. Candidate source, licenses, tests and build identities are retained. Historical installation guides are component references, not substitutes for the controlled release contract.
+<br />
 
-## v1.2.1 Highlights
+## Clear and usable
 
-The current product release is v1.2.1. It unifies the product version across the service, web console, release metadata and changelog, and makes stale release provenance fail the CI gate. GitHub Actions binds the packaged provenance to the checked out commit; the source release does not claim a production cutover by itself.
+A calm workspace keeps the account pool, models, keys and usage in one place.
 
-The following historical component behavior remains documented for compatibility:
+<a href="https://zhihui.kaogong.art/">
+  <picture>
+    <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
+    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="Synthetic Zhihui dashboard preview with platform switching and usage cards." />
+  </picture>
+</a>
 
-| Problem | Release behavior |
-|---|---|
-| Codex / Claude / DSH channel rejection | 11 versioned rules scoped to WorkBuddy system/developer, including Claude literal-template variants |
-| Amplified 11128 retries | Stop after both candidate paths reject; no repeated identical path or account penalty for refusal |
-| Concurrent account renewal | Go / Python coalescing, shared kernel locks, identity/generation checks and atomic persistence |
-| Implicit high reasoning on small budgets | No default thinking/high injection for budgets ≤1024 without explicit controls; native reasoning is not forcibly disabled |
-| Direct deletion of expired logs | Bounded background archives, line/SHA verification and exact-row deletion; unresolved references remain protected |
-| Unknown usage mistaken for wallet freezes | Read-only review with bounded evidence; unknown is neither measured zero nor wallet state |
-| Catalogue staleness and loading races | Coalescing, realm isolation, invalidation generations and freshness metadata |
-| Initial readiness sampling race | Await a real startup sample while preserving fail-closed and admission-drain rules |
-| Legacy updater branding and history mixed with current state | Independent Zhihui release center, source and matching receipts; retire web installation and explicitly archive legacy display files |
-| Layered retry amplification | A shared maximum of 8 provider-send authorizations across rotations, paths, gzip and Manager redispatch; missing or invalid receipts disable further rejection retries |
-| Full credit queries on page load | Local snapshot first; automatically refresh stale entries only, at most 64 per batch with failure backoff; preserve manual refresh and unknown-versus-zero semantics |
-| Replacing unchanged heartbeat data | Bounded structural sharing preserves stable JSON and row references without hiding changes or crossing group boundaries |
-| Ambiguous 502 diagnostics | Fixed error-family metrics and independent reachability, readiness, authentication, model, quota, channel and stream facts; bare 11128 is not automatically a channel refusal |
-| Unclear source and capability drift | Offline review of 39 public sources, explicit adaptation contracts, synthetic protocol fixtures and fragmented SSE fuzzing |
+<p align="center"><sub>Console rendering with synthetic data; it is not a production ledger.</sub></p>
 
-The `.4` cancellation, revoked-key and paired-backup fixes remain intact. Soft credit floors and large-request distribution default to disabled. See the [0.0.7 notes](docs/releases/v0.0.7.md) for scope and limitations.
+- **One workspace:** WorkBuddy, Qoder and Trae share the control surface while keeping their routes separate.
+- **Bounded authorization:** ordinary administrators see redacted information and add authorized accounts; super administrators manage keys, quotas, roles and system settings.
+- **Truthful usage:** missing provider evidence stays unknown instead of becoming a fabricated zero.
+- **Separate user space:** each user manages bound accounts, check-in batches, keys and request history within their own scope.
+- **Limited steward:** the steward reasons from bounded evidence and never receives shell, credential or ledger-edit authority.
 
-### Adaptation Is Not Provider Authorization
+<details>
+<summary><b>More workspace panels</b> — accounts, models, keys and usage</summary>
 
-Rules are idempotent and switchable. They do not alter user, assistant or tool bodies, tool arguments or images, and do not globally replace the number `11128`. Real refusals remain `channel_check_rejected`; future channel checks cannot be guaranteed unchanged.
+<br />
 
-Responses is an adapter, not a persistent-session, background-task or strict-tool-schema service. Unsupported semantics are explicitly rejected before provider consumption.
+| Account pool · identity and state | Models · sources and capabilities |
+| :---: | :---: |
+| <img src="site/home/preview/accounts-desktop.jpg" width="100%" alt="Synthetic account pool preview." /> | <img src="site/home/preview/models-desktop.jpg" width="100%" alt="Synthetic model center preview." /> |
+| **Keys · authorize when needed** | **Usage · verify every charge** |
+| <img src="site/home/preview/keys-desktop.jpg" width="100%" alt="Synthetic key management preview without real credentials." /> | <img src="site/home/preview/stats-desktop.jpg" width="100%" alt="Synthetic usage preview, not a production bill." /> |
 
-### Preserve Accounting Truth
+These are synthetic console previews, not a provider-availability claim.
+[Preview source and digest](site/home/preview/manifest.json) · [README visual asset manifest](docs/images/readme/manifest.json)
 
-Unknown provider usage and customer wallet holds are separate concepts. Lifetime consumption is not reconstructed from truncated logs, and immutable events are not rewritten. Review has no zero-out button; code rollback never restores an old business database.
+</details>
 
-## API Overview
+<br />
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/v1/chat/completions` | Chat-compatible calls using downstream keys |
-| POST | `/v1/responses` | Bounded Responses adaptation |
-| POST | `/v1/messages` | Messages adaptation |
-| GET | `/v1/models` | Models available within the authorized scope |
-| GET | `/api/budgets/review` | Administrator read-only paginated review |
-| GET | `/api/budgets/review/evidence` | Administrator bounded evidence view |
-| GET | `/api/logs/retention/status` | Most recent archive sample |
-| GET | `/readyz` | Bounded-age cached readiness without inference probes |
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/images/readme/capabilities-mobile.svg" />
+  <img src="docs/images/readme/capabilities.svg" width="100%" alt="Three independent platform routes for access, authorization and verified usage." />
+</picture>
 
-## Documentation
+<br />
 
-| Document | Contents |
-|---|---|
-| [Upgrade and rollback contract](docs/V007-OPERATIONS.md) | Defaults, approval gates, backups and failure recovery |
-| [Upstream adoption](docs/UPSTREAM-ADOPTION-v007.md) | Pinned sources and explicit adoption decisions |
-| [Usage](docs/usage.md) | Everyday operation and client connection |
-| [Features](docs/features.md) | Existing capabilities and limitations |
-| [Screenshots](docs/screenshots.md) | Screens and isolated examples |
-| [Development and tests](docs/development.md) | Component development reference |
-| [Security configuration](docs/security-notes.md) | Administration and network boundaries |
-| [Management API tokens](docs/api-tokens.md) | Scopes, expiry and session requirements |
-| [Account proxy routes](docs/account-proxy-routes.md) | Proxy settings and account scope |
-| [Historical security audit](docs/SECURITY-AUDIT.md) | Component history, not this release's acceptance proof |
-| [Component signing reference](docs/release-signing.md) | Never bypass the installed controlled trust chain |
-| [Deployment reference](deploy/README.md) | Includes native Windows templates; legacy one-click publishing is not valid for the controlled instance |
+## One entry, separate routes
 
-## Release And Non-Goals
+Changing the console view does not silently change a client's base URL.
 
-Prepare local artifacts and receipts only, then wait for explicit user approval. Approval still requires isolated Linux full gates, complete signatures, paired backups, controlled drain, version checks and bounded live acceptance. Never force-kill in-flight requests.
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="Clients pass through Zhihui authentication, routing and metering to WorkBuddy, Qoder or Trae." />
+</picture>
 
-No new sales, fee operations, advanced Responses state, media, offsite backups or Rust rewrite. Weak passwords and existing administrator policy are excluded from this task, not declared fixed. Existing component licenses and attribution are preserved.
+| Platform | Client Base URL | Note |
+| :--- | :--- | :--- |
+| WorkBuddy | `https://your-domain/v1` | Chat, Responses and Messages adapters |
+| Qoder | `https://your-domain/qoder/v1` | Subject to the engine and account authorization |
+| Trae | `https://your-domain/trae/v1` | Subject to the engine and account authorization |
+
+| Method | Path | Note |
+| :--- | :--- | :--- |
+| GET | `/v1/models` | WorkBuddy model catalog |
+| POST | `/v1/chat/completions` | WorkBuddy chat |
+| POST | `/v1/responses` | Responses-compatible entry point |
+| POST | `/v1/messages` | Anthropic Messages-compatible entry point |
+| GET | `/qoder/v1/models` | Qoder model catalog |
+| POST | `/qoder/v1/chat/completions` | Qoder chat |
+| POST | `/trae/v1/chat/completions` | Trae chat |
+
+<details>
+<summary><b>Minimal call example</b> — use a model and gateway key you already authorized</summary>
+
+```bash
+curl https://your-domain/v1/chat/completions \
+  -H "Authorization: Bearer $ZHIHUI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "YOUR_AUTHORIZED_MODEL",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 128
+  }'
+```
+
+Confirm the actual model ID, platform and region permissions in the model page first. A gateway key is not provider authorization; never put real keys in a repository, screenshot or ticket.
+
+</details>
+
+[Routing and permissions](server/routers/gateway.py) · [Budget reservations](server/budget.py) · [Immutable ledger](server/ledger.py)
+
+<br />
+
+## State support and limits clearly
+
+| Responses capability | Current contract |
+| :--- | :--- |
+| Full explicit history, ordinary tool turns, SSE and images | Supported and regression-tested |
+| `previous_response_id` / `conversation` | No server-side history; returns an explicit 400 before forwarding |
+| `background=true` | Background tasks are not supported; returns an explicit 400 |
+| `parallel_tool_calls=false` / function `strict=true` | The provider cannot guarantee it; returns an explicit 400 instead of silently ignoring it |
+| Custom tool grammar | Descriptive guidance only; strict enforcement is not claimed |
+
+> [!IMPORTANT]
+> **Failure is not zero cost, and cancellation is not proof that a provider stopped.** When processing state is uncertain, the ledger keeps unknown. Code rollback does not roll back newly created usage, authorization or session revocation records.
+
+<details>
+<summary><b>Reliability and recovery boundary</b></summary>
+
+- The main ledger uses WAL/FULL, while physical durability still depends on the operating system and storage.
+- Paired ledger snapshots take short write locks and perform integrity checks in an isolated copy.
+- Recovery writes to a new isolated directory, disables calls, revokes old sessions and archives credentials before re-enabling anything.
+- Production changes use a controlled drain and switch; the source release itself does not claim zero downtime.
+
+</details>
+
+<br />
+
+## Development and deployment
+
+**Python 3.12 · Node.js 22+ · Next.js 16 · React 19**
+
+```bash
+git clone https://github.com/daniei-chen/zhihui-gateway.git
+cd zhihui-gateway
+```
+
+| Goal | Start here |
+| :--- | :--- |
+| Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Console source](web/) · [Gateway service](server/) |
+| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.1 changelog](CHANGELOG.md) |
+| Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
+| Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Historical audit boundary](docs/AUDIT-0.0.3.md) |
+
+Local development is not a one-command installation of all three engines. Provider engines, account authorization, authentication and persistence need separate review.
+
+```text
+fixed source → isolated build and tests → hashes, signatures and receipt → controlled release → runtime verification
+```
+
+**Do not treat a GitHub source archive as a production installer.** Controlled instances use the trusted publisher and do not overwrite the runtime directory with `git pull && restart` or restore old business data during code rollback.
+
+<br />
+
+## Thanks and license
+
+Zhihui continues to evolve on top of existing components. Thanks to WorkBuddy Manager contributors, workbuddy2api, Qoder, Trae and the interface foundations that informed the project.
+
+The product is [MIT](LICENSE). Component licenses and third-party notices are in [LICENSE](LICENSE) and [UPSTREAM-NOTICES.md]; provider terms and account authorization remain separate.
+
+The cover, capability cards and routing diagram are self-contained SVG assets without remote fonts, scripts or images. Historical homepage assets retain their documented license and scope.
+
+<div align="center">
+<br />
+<a href="https://zhihui.kaogong.art/"><img src="brand/zhihui-z.svg" width="32" height="32" alt="Zhihui blue Z" /></a>
+<p><sub>Zhihui · less noise, more control.</sub></p>
+</div>
+
