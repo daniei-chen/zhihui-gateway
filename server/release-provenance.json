@@ -11,7 +11,7 @@
   "release_id": "v1.2.1",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
-    ".github/workflows/quality.yml": "df8bca4321ffed68f289b0b1a79af088f9d0a5837620a8408062ef7fe18e34f2",
+    ".github/workflows/quality.yml": "00b24b33ce43a9d4e3372875a91a509a17d5f5a891fc5d0e893560322320a39e",
     ".github/workflows/release.yml": "a68d45818c930ddd127bf5c94b158232e94ba551924c56a796ae30d3898ef4e6",
     "CHANGELOG.md": "955874af6b087845f7441e6253b6eb823dd3c7b9cbea0a9c37aea5efcc0c6466",
     "README.en.md": "b9dea1bc1b527a98edc3c4b5b37f46b93b82cdd98f591a011450e37f4a8f9259",
@@ -29,12 +29,13 @@
     "server/tests/test_release_integrity.py": "f99c9c7c30d6a9a3bf7f1fa36dff91dbb761977981f455e049152dd85c4d5d16",
     "server/tests/test_windows_scripts.py": "a15335cd8ecad93a5a160dfb53b37be3d92afe40c587a00ca353d37827317439",
     "server/writer-capabilities.json": "7925006e2c6cc6f7fb2c35c3dad0877013eea4e2d051d45aa23d8935e8083162",
+    "tools/ci_regression.py": "9eb0a8e5d422204866d4b96447dbf1de99d8b8d5fda2487ea3a1898fb34cabe4",
     "web/lib/product.ts": "78df9a7eb09160a0695cab991dc960891c752d2a83e84f03d0979259ea451545"
   },
   "schema": 1,
   "signed": false,
   "source_commit": "",
-  "source_input_sha256": "d89c3b843a2cf8aa0abcf94b5ffe5ddbb959cfaf6bc422761d5ad3423719e76f",
+  "source_input_sha256": "4baf38b64466a1f047e3379a3800ad723844d0b77d2fcb24c2b3c4d424d892b1",
   "source_kind": "github-actions-release",
   "version": "1.2.1"
 }
