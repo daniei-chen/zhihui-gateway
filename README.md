@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.1 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.2 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,26 +16,26 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md">查看 1.2.1 版本说明</a>
+<a href="CHANGELOG.md">查看 1.2.2 版本说明</a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#121--发布工程化版本) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#122--安全与稳定性修复) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.1 · 发布工程化版本
+## 1.2.2 · 安全与稳定性修复
 
-**本次版本：`v1.2.1`**。这一版统一产品版本身份，并把版本漂移变成发布前可检测的错误；GitHub Actions 会在发布包中绑定实际提交 SHA。
+**本次版本：`v1.2.2`**。这一版隔离坏 provider evidence、收紧敏感审计边界，并由 GitHub Actions 绑定实际提交 SHA。
 
-- **发布可靠性**：根版本、控制台显示、产品清单、变更日志和 provenance 统一为 `1.2.1`；不一致时构建门禁失败。
-- **安全边界**：敏感配置脱敏、未知用量待核对、单写入和受控更新边界继续保留；本版本不改变上游地址、账号凭据或账本语义。
+- **发布可靠性**：根版本、控制台显示、产品清单、变更日志和 provenance 统一为 `1.2.2`；不一致时构建门禁失败。
+- **安全边界**：坏 evidence 隔离、敏感配置脱敏、未知用量待核对、单写入和受控更新边界继续保留；本版本不改变上游地址、账号凭据或账本语义。
 - **CI 可靠性**：质量工作流改为使用仓库当前的 `server/`、`web/` 和 `tools/` 布局，并对关键定制文件执行哈希合同校验。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.1)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.2)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -171,7 +171,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.1 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.2 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 
