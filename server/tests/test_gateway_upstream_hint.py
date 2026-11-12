@@ -53,6 +53,12 @@ class UpstreamHintTest(unittest.TestCase):
     def test_empty_base_yields_nothing(self) -> None:
         self.assertEqual(self._hint(''), '')
 
+    def test_public_error_never_includes_raw_upstream_credentials(self) -> None:
+        message = gateway._public_upstream_error(
+            {'base_url': 'https://user:synthetic-password@up.example.com:7863'})
+        self.assertNotIn('synthetic-password', message)
+        self.assertIn('上游暂时不可用', message)
+
 
 if __name__ == '__main__':
     unittest.main()

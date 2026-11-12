@@ -44,6 +44,8 @@ logger = logging.getLogger('workbuddy.accountlog')
 # 间隔取长一些：回填晚几秒对「看谁在跳账号」没有影响，而读一次 docker
 # logs 有进程开销，没必要太频繁。
 _POLL_SECONDS = 15
+_ERROR_LOG_INTERVAL = 300
+_last_error_log_monotonic = 0.0
 
 # 每次采集读多少行。上游一行一个请求，500 行足以覆盖 15 秒内的活动
 # （实测高峰期也就每 15 秒几十条）；读太多只是白白解析。
@@ -235,6 +237,7 @@ def _collect_once() -> int:
 
 
 async def _loop() -> None:
+    global _last_error_log_monotonic
     while True:
         try:
             # 读 docker logs 是阻塞调用（subprocess），放线程池里跑——
@@ -246,7 +249,12 @@ async def _loop() -> None:
             from .. import operational
             operational.transition('provider_evidence', True, 'provider evidence collection unavailable')
             # 采集失败只是这一轮没有数据，下一轮继续；不影响任何请求
-            logger.warning('账号回填失败（不影响请求）: %s', exc)
+            now = asyncio.get_running_loop().time()
+            if now - _last_error_log_monotonic >= _ERROR_LOG_INTERVAL:
+                logger.warning('账号回填失败（不影响请求）: %s', exc)
+                _last_error_log_monotonic = now
+            else:
+                logger.debug('账号回填仍失败（已限频）: %s', exc)
         await asyncio.sleep(_POLL_SECONDS)
 
 
