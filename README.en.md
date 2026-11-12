@@ -4,8 +4,8 @@
 
 **One workspace, three clearly separated paths.**
 
-![Version](https://img.shields.io/badge/version-0.0.9-blue)
-![Status](https://img.shields.io/badge/release-signed_%26_controlled-6554c0)
+![Version](https://img.shields.io/badge/version-1.2.1-blue)
+![Status](https://img.shields.io/badge/release-GitHub_Actions-6554c0)
 ![Stack](https://img.shields.io/badge/FastAPI-Next.js-009688)
 
 **English** · [简体中文](README.md) · [Product overview](../README.md) · [Changelog](CHANGELOG.md)
@@ -14,7 +14,7 @@
 
 </div>
 
-> **0.0.7 is Zhihui's product version, not an inherited component's v1.x / v2.x version.**
+> **1.2.1 is Zhihui's product version, not an inherited component's v1.x / v2.x version.**
 > Installation is controlled by the trusted publisher. Runtime identity and acceptance receipts determine what is actually active. Isolated Linux gates, signatures, paired backups, graceful draining and real acceptance are mandatory; code rollback never restores old business ledgers.
 
 ## Components And Boundaries
@@ -34,7 +34,11 @@ Manager provides accounts, models, keys, logs and the administration UI. The Wor
 
 This is a maintained branch with local adaptations, not an unmodified-upstream panel. Candidate source, licenses, tests and build identities are retained. Historical installation guides are component references, not substitutes for the controlled release contract.
 
-## v0.0.7 Highlights
+## v1.2.1 Highlights
+
+The current product release is v1.2.1. It unifies the product version across the service, web console, release metadata and changelog, and makes stale release provenance fail the CI gate. GitHub Actions binds the packaged provenance to the checked out commit; the source release does not claim a production cutover by itself.
+
+The following historical component behavior remains documented for compatibility:
 
 | Problem | Release behavior |
 |---|---|
