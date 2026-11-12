@@ -165,6 +165,28 @@ jobs:
           echo "upstream_id=$UPSTREAM_ID" >> $GITHUB_OUTPUT
           # 写入版本标记：管理端「系统更新」页与安装流程据此显示当前版本
           echo "${TAG}" > "$STAGE/.version"
+          # 把不可伪造的 GitHub 提交绑定进发布包；仓库里的 provenance 模板不可能
+          # 预先知道自己未来的提交 SHA，因此这里在打包时写入实际 checkout 提交。
+          python3 - "$STAGE/server/release-provenance.json" "$TAG" "$GITHUB_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path, tag, commit = sys.argv[1:]
+          value = json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
+          value.update({
+              'candidate_only': False,
+              'release_id': tag,
+              'signed': False,
+              'source_commit': commit,
+              'source_kind': 'github-actions-release',
+              'version': tag.removeprefix('v'),
+          })
+          pathlib.Path(path).write_text(
+              json.dumps(value, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
           # 不含运行时数据与凭据
           find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
           echo "stage=$STAGE" >> $GITHUB_OUTPUT
@@ -594,3 +616,4 @@ jobs:
             windows/launcher/dist/WorkBuddyManagerSetup.exe \
             windows/launcher/dist/WorkBuddyManagerSetup.exe.sha256
           echo "已上传 Windows 安装器（含 .sha256）"
+
