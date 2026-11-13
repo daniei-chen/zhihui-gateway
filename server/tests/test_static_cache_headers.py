@@ -46,6 +46,9 @@ class StaticCacheHeaderTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.client = TestClient(app)
         cls.static = Path(config.STATIC_DIR)
+        if not cls.static.is_dir():
+            cls.client.close()
+            raise unittest.SkipTest('requires the built web/out static export')
 
     @classmethod
     def tearDownClass(cls) -> None:

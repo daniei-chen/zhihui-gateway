@@ -20,6 +20,8 @@ from server.routers import gateway
 
 class LiveHttpPlatformFlowTest(unittest.TestCase):
     def setUp(self):
+        if not os.environ.get('OPENAI_BASE_URL'):
+            self.skipTest('requires the isolated loopback provider (OPENAI_BASE_URL)')
         base = os.environ['OPENAI_BASE_URL'].rstrip('/')
         self.base = base.removesuffix('/v1')
         self.assertEqual(urlsplit(self.base).hostname, '127.0.0.1',

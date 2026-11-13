@@ -36,7 +36,7 @@ The candidate explicitly accepts one gzip member with `Content-Encoding: gzip`.
 Wire and decoded data are independently bounded. CRC, truncation, concatenated
 members, trailing bytes and aggregate capacity are validated before forwarding.
 
-`manager/client/zhihui_upload.py` implements the client-side policy: skip below
+`client/zhihui_upload.py` implements the client-side policy: skip below
 256 KiB, gzip level 1 above it, use gzip only if it saves at least ten percent.
 Third-party clients must opt in; server changes cannot compress bytes before a
 remote client uploads them. The decoded limit remains 128 MiB.

@@ -133,7 +133,11 @@ class AccountAuthorizationScopeTest(unittest.TestCase):
 
     def test_directory_symlink_retargeting_invalidates_bound_group(self):
         a, b, link = self.root / 'a', self.root / 'b', self.root / 'selected-link'
-        a.mkdir(); b.mkdir(); link.symlink_to(a, target_is_directory=True)
+        a.mkdir(); b.mkdir()
+        try:
+            link.symlink_to(a, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         upstreamsvc.update_upstream(self.group_id, {'auth_dir': str(link)})
         state = self.bind(self.group_id)
         link.unlink(); link.symlink_to(b, target_is_directory=True)

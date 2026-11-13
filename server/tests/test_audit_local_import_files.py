@@ -49,7 +49,10 @@ class LocalImportFileTest(unittest.TestCase):
         victim = self.root / 'outside.txt'
         victim.write_text('preserve')
         predictable = self.path.with_name(self.path.name + '.wbimport.tmp')
-        predictable.symlink_to(victim)
+        try:
+            predictable.symlink_to(victim)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         keyimport._atomic_write_text(self.path, '{}')
         self.assertEqual(victim.read_text(), 'preserve')
         self.assertTrue(predictable.is_symlink())
@@ -58,7 +61,10 @@ class LocalImportFileTest(unittest.TestCase):
         victim = self.root / 'outside.txt'
         victim.write_text('preserve')
         self.path.unlink()
-        self.path.symlink_to(victim)
+        try:
+            self.path.symlink_to(victim)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         with self.assertRaises(keyimport.ImportRefused):
             keyimport._atomic_write_text(self.path, 'changed')
         self.assertEqual(victim.read_text(), 'preserve')
@@ -70,7 +76,10 @@ class LocalImportFileTest(unittest.TestCase):
         target = self.root / 'real'
         target.mkdir()
         (target / 'config.json').write_text('preserve')
-        linked.symlink_to(target, target_is_directory=True)
+        try:
+            linked.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         hardlink = self.root / 'hardlink'
         os.link(self.path, hardlink)
         for path in (linked / 'config.json', hardlink, target):
@@ -111,7 +120,10 @@ class LocalImportFileTest(unittest.TestCase):
         victim = self.root / 'outside.txt'
         victim.write_text('preserve')
         predictable = self.path.with_name(self.path.name + '.wbimport-' + time.strftime('%Y%m%d-%H%M%S') + '.bak')
-        predictable.symlink_to(victim)
+        try:
+            predictable.symlink_to(victim)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         self.path.chmod(0o644)
         backup = keyimport._backup(self.path)
         self.assertNotEqual(backup, predictable)

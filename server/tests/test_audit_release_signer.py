@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -15,6 +16,7 @@ signer = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(signer)
 
 
+@unittest.skipUnless(os.name == 'posix', 'release signer mode contract requires POSIX permissions')
 class ReleaseSignerSafetyTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -68,7 +70,10 @@ class ReleaseSignerSafetyTest(unittest.TestCase):
             self.unchanged()
 
     def test_directory_symlink_cannot_supply_a_source(self):
-        (self.root / 'linked').symlink_to(self.root / 'server', target_is_directory=True)
+        try:
+            (self.root / 'linked').symlink_to(self.root / 'server', target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         with self.assertRaises(SystemExit):
             signer.main(self.args + ['--add', 'linked/new.py', '--dry-run'])
         self.unchanged()
@@ -95,6 +100,8 @@ class ReleaseSignerSafetyTest(unittest.TestCase):
                          ['managed-release.json', 'managed-release.sig'])
 
     def test_rebuild_add_sign_and_verify_round_trip(self):
+        if not shutil.which('openssl'):
+            self.skipTest('openssl is required for Ed25519 signer integration')
         key, trust = self.root / 'private.pem', self.root / 'public.pem'
         subprocess.run(['openssl', 'genpkey', '-algorithm', 'Ed25519', '-out', str(key)],
                        check=True, capture_output=True)
@@ -109,6 +116,8 @@ class ReleaseSignerSafetyTest(unittest.TestCase):
         self.assertEqual(self.signature.stat().st_mode & 0o777, 0o644)
 
     def test_wrong_signing_key_preserves_previous_trusted_signature(self):
+        if not shutil.which('openssl'):
+            self.skipTest('openssl is required for Ed25519 signer integration')
         key, wrong, trust = self.root / 'private.pem', self.root / 'wrong.pem', self.root / 'public.pem'
         for path in (key, wrong):
             subprocess.run(['openssl', 'genpkey', '-algorithm', 'Ed25519', '-out', str(path)],

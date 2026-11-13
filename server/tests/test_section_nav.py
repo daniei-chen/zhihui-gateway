@@ -61,7 +61,7 @@ def _node_major() -> int | None:
         return None
     try:
         out = subprocess.run([_NODE, '--version'], capture_output=True,
-                             text=True, timeout=15).stdout.strip()
+                             text=True, encoding='utf-8', errors='replace', timeout=15).stdout.strip()
         return int(out.lstrip('v').split('.')[0])
     except Exception:  # noqa: BLE001
         return None
@@ -118,7 +118,8 @@ class SectionNavBehaviourTest(unittest.TestCase):
         def run_once() -> subprocess.CompletedProcess:
             return subprocess.run(
                 [_NODE, '--experimental-strip-types', str(_SCRIPT)],
-                capture_output=True, text=True, timeout=120, cwd=str(_ROOT),
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=120, cwd=str(_ROOT),
             )
 
         proc = run_once()

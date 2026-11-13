@@ -84,7 +84,10 @@ class RestoreEvidenceTest(unittest.TestCase):
         external = self.root / 'protected'
         external.write_bytes(b'outside sentinel')
         sidecar = self.snapshot / 'recovery-manifest.json'
-        sidecar.symlink_to(external)
+        try:
+            sidecar.symlink_to(external)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         code, report = self.run_drill('--restore-sidecar', '--skip-sqlite')
         self.assertEqual(code, 0)
         self.assertEqual(external.read_bytes(), b'outside sentinel')

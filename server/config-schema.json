@@ -147,6 +147,41 @@
       "description": "Automatically release portal wallet holds for requests the gateway rejected before any supplier usage",
       "consumers": ["manager/server/portalwallet.py"]
     },
+    "WB_RELAY_ALLOWED_PATHS": {
+      "type": "string",
+      "sensitive": false,
+      "default": "",
+      "consumers": ["manager/server/relay_app.py"],
+      "description": "Optional comma-separated absolute inference paths; empty uses the built-in inference path set."
+    },
+    "WB_RELAY_BACKEND_NEW": {
+      "type": "string",
+      "sensitive": false,
+      "default": "http://127.0.0.1:7865",
+      "format": "http_url",
+      "consumers": ["manager/server/relay_app.py"]
+    },
+    "WB_RELAY_BACKEND_OLD": {
+      "type": "string",
+      "sensitive": false,
+      "default": "http://127.0.0.1:7866",
+      "format": "http_url",
+      "consumers": ["manager/server/relay_app.py"]
+    },
+    "WB_RELAY_MAX_CONNECTIONS": {
+      "type": "integer",
+      "sensitive": false,
+      "default": 128,
+      "minimum": 1,
+      "unit": "connections",
+      "consumers": ["manager/server/relay_app.py"]
+    },
+    "WB_RELAY_ROUTE_FILE": {
+      "type": "string",
+      "sensitive": false,
+      "default": "/opt/workbuddy-manager/data/relay-route.json",
+      "consumers": ["manager/server/relay_app.py"]
+    },
     "WB_BACKGROUND_JOBS": {
       "type": "boolean",
       "sensitive": false,

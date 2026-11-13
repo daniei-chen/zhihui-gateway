@@ -19,7 +19,9 @@ def module(name,directory):
         'WB2API_BASE':'http://127.0.0.1:17863','WB2API_CONTAINER':'wb-ci-isolation',
         'WB_UPSTREAM_DIR':str(directory/'upstream'),'WB2API_MODE':'docker',
         'WB_TRUST_PROXY':'0','WB_ENABLE_DOCS':'0','WB_INSTALL_DIR':str(directory),
-        'WB_SERVICE_NAME':'workbuddy-ci-isolation.service','WB_MANAGER_HOST':'127.0.0.1',
+        # Keep the synthetic service name aligned with the system-config test
+        # fixture.  The isolated runner does not install a real unit file.
+        'WB_SERVICE_NAME':'workbuddy-web.service','WB_MANAGER_HOST':'127.0.0.1',
         'PYTHONDONTWRITEBYTECODE':'1'})
     os.chdir(ROOT);sys.path.insert(0,str(ROOT))
     result=unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromName('server.tests.'+name))

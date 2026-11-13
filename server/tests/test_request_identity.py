@@ -64,6 +64,8 @@ class _HttpCase(unittest.TestCase):
     """真实 ASGI + 真实 loopback 上游 + 独立 SQLite 的公共夹具。"""
 
     def setUp(self) -> None:
+        if not os.environ.get('OPENAI_BASE_URL'):
+            self.skipTest('requires the isolated loopback provider (OPENAI_BASE_URL)')
         base = os.environ['OPENAI_BASE_URL'].rstrip('/')
         self.base = base.removesuffix('/v1')
         self.assertEqual(urlsplit(self.base).hostname, '127.0.0.1',

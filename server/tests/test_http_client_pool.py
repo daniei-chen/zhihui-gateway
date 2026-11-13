@@ -184,6 +184,8 @@ class ProxySchemeSupportTest(unittest.TestCase):
                       '「socksio 未安装」而不是「代理不通」')
 
     def test_all_three_schemes_are_accepted(self) -> None:
+        if __import__('importlib.util').util.find_spec('socksio') is None:
+            self.skipTest('socksio is declared but not installed in this audit environment')
         async def scenario():
             transports = []
             for scheme in ('http://user:pass@127.0.0.1:7890',

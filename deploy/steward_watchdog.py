@@ -169,7 +169,8 @@ def _queue(state: dict, *, rule: str, event: str, policy, now: int, detail: str,
                 "recipient": recipient, "payload": {"event": event, "rule": rule,
                 "severity": severity, "title": "智汇网关状态需要关注", "detail": detail,
                 "observed_at": now}, "status": "cancelled", "attempts": 0,
-                "finished_at": now, "next_at": now, "code": "alert_cooldown_30m",
+                "attempted_at": now, "finished_at": now, "next_at": now,
+                "code": "alert_cooldown_30m",
             })
             continue
         if (event, recipient) in existing:
@@ -227,6 +228,7 @@ def _send_pending(paths, state, policy, sender, now, control) -> int:
             continue
         row["status"] = "sending"
         row["attempts"] += 1
+        row["attempted_at"] = now
         atomic(_state_path(paths), state)
         try:
             raw = steward_config.secret_file(paths.smtp_file)

@@ -329,6 +329,8 @@ class HealthFreshnessTest(_Base):
         """隔离运行器的私有 loopback 上游：/status 可用 → fresh + 证据来源。"""
         import os
         from urllib.parse import urlsplit
+        if not os.environ.get('ZH_FAKE_PROVIDER_BASE'):
+            self.skipTest('requires the isolated loopback provider (ZH_FAKE_PROVIDER_BASE)')
         base = os.environ['ZH_FAKE_PROVIDER_BASE']
         self.assertEqual(urlsplit(base).hostname, '127.0.0.1')
         status = asyncio.run(wb2api.get_status(base_url=base))

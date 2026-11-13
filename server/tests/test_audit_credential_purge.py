@@ -37,8 +37,9 @@ class CredentialPurgeTest(unittest.TestCase):
         backups = list(self.root.glob('users.json.bak.*'))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), self.original)
-        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        if os.name == 'posix':
+            self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.path.stat().st_uid, self.path.stat().st_gid), (before.st_uid, before.st_gid))
         result = json.loads(self.path.read_text())
         self.assertNotEqual(result['secret'], 'synthetic-old-secret')
@@ -57,7 +58,10 @@ class CredentialPurgeTest(unittest.TestCase):
         external = self.root / 'protected'
         external.write_bytes(b'outside sentinel')
         predictable = self.root / 'users.json.bak'
-        predictable.symlink_to(external)
+        try:
+            predictable.symlink_to(external)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         self.assertEqual(purge.main(), 0)
         self.assertEqual(external.read_bytes(), b'outside sentinel')
         self.path.unlink()

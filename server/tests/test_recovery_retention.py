@@ -313,6 +313,12 @@ class PlaintextPurgeTest(RetentionBase):
         part = snap / 'snapshot.part-000.age'
         outside = self.root / 'outside.age'
         outside.write_bytes(part.read_bytes())
+        try:
+            probe = self.root / 'symlink-probe'
+            probe.symlink_to(outside)
+            probe.unlink()
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         for kind in ('symlink', 'hardlink'):
             part.unlink()
             if kind == 'symlink':
@@ -335,7 +341,10 @@ class PlaintextPurgeTest(RetentionBase):
         plan = retention.build_plaintext_plan()
         outside = self.root / 'outside-snapshot'
         snap.rename(outside)
-        snap.symlink_to(outside, target_is_directory=True)
+        try:
+            snap.symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
         self.assertEqual(retention.snapshot_dirs(), [])
         self.assertEqual(retention.apply_plaintext_plan(plan, plan['confirm_token']), 4)
         self.assertTrue((outside / 'snapshot.tar.gz').is_file())
@@ -349,6 +358,13 @@ class PlaintextPurgeTest(RetentionBase):
         protected.write_bytes(b'outside must survive')
         moved = self.root / 'original-snapshot'
         original = retention.cipher_matches
+
+        try:
+            probe = self.root / 'symlink-probe'
+            probe.symlink_to(outside, target_is_directory=True)
+            probe.unlink()
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
 
         def replace_directory(path, meta, **kwargs):
             result = original(path, meta, **kwargs)

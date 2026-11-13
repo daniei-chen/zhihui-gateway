@@ -21,13 +21,20 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 
 def main() -> int:
     path = Path(os.environ.get('WB_USERS_FILE', '') or 'users.json')
-    if not path.is_file():
+    try:
+        information = path.lstat()
+    except OSError:
+        information = None
+    if information is None or not stat.S_ISREG(information.st_mode) or path.is_symlink() \
+            or path.parent.is_symlink():
         print(f'未找到 users.json：{path}', file=sys.stderr)
         print('请用 WB_USERS_FILE 指定路径，例如：', file=sys.stderr)
         print('  WB_USERS_FILE=/opt/workbuddy-manager/users.json python3 purge_credentials.py',
@@ -35,12 +42,22 @@ def main() -> int:
         return 1
 
     try:
-        cfg = json.loads(path.read_text(encoding='utf-8'))
+        original = path.read_bytes()
+        cfg = json.loads(original.decode('utf-8'))
     except Exception as exc:
         print(f'解析失败（未做任何修改）：{exc}', file=sys.stderr)
         return 1
     if not isinstance(cfg, dict):
         print('文件不是合法 JSON 对象（未做任何修改）', file=sys.stderr)
+        return 1
+
+    users = cfg.get('users')
+    old_keys = cfg.get('api_keys')
+    if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):
+        print('users 必须是对象列表（未做任何修改）', file=sys.stderr)
+        return 1
+    if old_keys is not None and not isinstance(old_keys, list):
+        print('api_keys 必须是列表（未做任何修改）', file=sys.stderr)
         return 1
 
     changed = []
@@ -51,7 +68,6 @@ def main() -> int:
     changed.append(f'secret 已轮换（旧值长度 {len(old_secret)}）')
 
     # 2) 清空 legacy api_keys（曾用于换管理端权限）
-    old_keys = cfg.get('api_keys')
     if old_keys:
         cfg['api_keys'] = []
         changed.append(f'已清空 {len(old_keys)} 个遗留 api_keys')
@@ -60,20 +76,58 @@ def main() -> int:
 
     # 3) 顺带递增所有用户的会话版本，双保险
     n = 0
-    for u in cfg.get('users', []):
+    for user in users:
         try:
-            u['sv'] = int(u.get('sv') or 0) + 1
-            n += 1
+            user['sv'] = int(user.get('sv') or 0) + 1
         except (TypeError, ValueError):
-            u['sv'] = 1
-            n += 1
+            user['sv'] = 1
+        n += 1
     if n:
         changed.append(f'已递增 {n} 个用户的会话版本')
 
-    # 先备份再写：出问题可回滚
-    backup = path.with_suffix(path.suffix + '.bak')
-    backup.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
-    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    # 先保存**原始字节**，再通过随机、独占的备份名写入。固定的 `.bak` 名称
+    # 会被预先放置的链接劫持，且写入新配置前若失败就无法回滚原文件。
+    backup = path.with_name(path.name + '.bak.' + secrets.token_hex(12))
+    backup_fd = None
+    temporary = None
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        backup_fd = os.open(backup, flags, 0o600)
+        with os.fdopen(backup_fd, 'wb') as stream:
+            backup_fd = None
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(backup, 0o600)
+
+        fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '.rotate-',
+                                         dir=str(path.parent))
+        try:
+            os.chmod(temporary, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                fd = None
+                json.dump(cfg, stream, ensure_ascii=False, indent=2)
+                stream.write('\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            if fd is not None:
+                os.close(fd)
+        os.replace(temporary, path)
+        temporary = None
+    except Exception as exc:
+        print(f'写入失败（原文件未替换，备份保留）：{exc}', file=sys.stderr)
+        return 1
+    finally:
+        if backup_fd is not None:
+            os.close(backup_fd)
+        if temporary is not None:
+            try:
+                Path(temporary).unlink()
+            except OSError:
+                pass
 
     print('完成：')
     for c in changed:

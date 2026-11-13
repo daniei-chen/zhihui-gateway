@@ -2,6 +2,8 @@
 from contextlib import nullcontext
 import json
 from pathlib import Path
+import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -20,8 +22,9 @@ class BackupStatusPublicationTests(unittest.TestCase):
                     backupstatus.publish_verified_status({'restore_check':'ok','bytes':1},target)
             finally:
                 os.umask(previous)
-            self.assertEqual(target.parent.stat().st_mode & 0o777,0o755)
-            self.assertEqual(target.stat().st_mode & 0o777,0o644)
+            if os.name == 'posix':
+                self.assertEqual(target.parent.stat().st_mode & 0o777,0o755)
+                self.assertEqual(target.stat().st_mode & 0o777,0o644)
 
     def test_public_report_is_readable_and_omits_private_material(self):
         with tempfile.TemporaryDirectory() as root:
@@ -32,7 +35,8 @@ class BackupStatusPublicationTests(unittest.TestCase):
             data = json.loads(target.read_text())
             self.assertEqual(set(data),{'schema','created_at','bytes','restore_check','offsite'})
             self.assertIs(data['offsite'],True)
-            self.assertEqual(target.stat().st_mode & 0o777,0o644)
+            if os.name == 'posix':
+                self.assertEqual(target.stat().st_mode & 0o777,0o644)
             self.assertNotIn('fixture',target.read_text())
 
     def test_invalid_backup_preserves_previous_report(self):
@@ -50,7 +54,10 @@ class BackupStatusPublicationTests(unittest.TestCase):
             source=Path(root)/'private'
             source.write_text('untouched')
             link=Path(root)/'status.json'
-            link.symlink_to(source)
+            try:
+                link.symlink_to(source)
+            except OSError as exc:
+                self.skipTest(f'filesystem cannot create a synthetic symlink: {exc}')
             with self.assertRaises(ValueError):
                 backupstatus.publish_verified_status({'restore_check':'ok','bytes':1},link)
             self.assertEqual(source.read_text(),'untouched')
@@ -104,6 +111,8 @@ class PublicSignaturePermissionsTests(unittest.TestCase):
         import importlib.util
         import os
         import subprocess
+        if not shutil.which('openssl'):
+            self.skipTest('openssl is required for Ed25519 signer integration')
         signer = Path(__file__).resolve().parents[2]/'deploy/sign-release-ed25519.py'
         spec=importlib.util.spec_from_file_location('audit_signer_fixture',signer)
         module=importlib.util.module_from_spec(spec)
