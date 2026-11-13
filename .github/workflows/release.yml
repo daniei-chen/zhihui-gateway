@@ -97,6 +97,15 @@ jobs:
           cp -r server "$STAGE/"
           mkdir -p "$STAGE/web" && cp -r web/out "$STAGE/web/"
           cp -r deploy "$STAGE/"
+          # These two host-side serving gates are part of the signed, reproducible
+          # release closure.  A production host must not silently restore them
+          # from an older release during staging.
+          for required in web_preflight.py web_pool_preflight.py; do
+            test -s "$STAGE/deploy/$required" || {
+              echo "::error::发布包缺少宿主前端门禁 deploy/$required"
+              exit 1
+            }
+          done
           # 更新器再放一份到 server/：一键更新必然整体替换 server/，而旧版
           # 更新器可能不替换根目录 deploy/。放在 server/ 后，面板重启就能用
           # 新版更新器，不必先「更新一次才会更新更新器」（issue #240）。
@@ -358,6 +367,10 @@ jobs:
             if [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" = "true" ]; then
               echo "Release $TAG 还是草稿，覆盖产物"
               gh release upload "$TAG" "${STAGE}.tar.gz" "${STAGE}.zip" --clobber
+              # A previous failed/restarted run may have left a draft with stale
+              # hashes.  Refresh the notes from this exact build before leaving
+              # the draft available for operator verification.
+              gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_NOTES.md
             else
               # **已发布的 Release 绝不覆盖产物**：发布说明里印着 sha256，用户侧的
               # 更新器就是拿它核对的 —— 换掉字节流等于让所有人的更新校验失败
