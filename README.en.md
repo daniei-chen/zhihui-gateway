@@ -21,7 +21,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 <br /><br />
 
-[This release](#1210--candidate-instance-and-zero-downtime-handoff-safety) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1212--provider-rejection-diagnostics-and-ledger-observability) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
@@ -31,9 +31,9 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 **Current product version: `v1.2.12`.** This release classifies explicit provider quota and plan rejections for clearer ledger diagnostics while preserving conservative reconciliation boundaries.
 
-- **Zero-downtime handoff:** the writer guard uses `server.serve`, a bounded 75-second graceful drain and shared admission; helper generations do not run background jobs.
-- **Routing and rollback:** the inference-only relay uses atomic monotonic route epochs, health rollback and deferred retirement while old requests remain active.
-- **Evidence and security:** Ed25519 two-phase signing, read-only relay state, the `root:10001`/`0640` route contract, restore evidence and fail-closed watchdog state are covered by gates.
+- **Provider rejection classification:** explicit quota, plan and related rate-limit responses now appear as identifiable pending-review evidence instead of generic unknown failures.
+- **Conservative ledger evidence:** records without sufficient evidence stay unresolved; the gateway never guesses zero usage or releases user budget from a rejection alone.
+- **Online handoff:** v1.2.12 passed signed-closure, candidate-health and Manager generation handoff verification in production.
 
 **Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.12)
 
