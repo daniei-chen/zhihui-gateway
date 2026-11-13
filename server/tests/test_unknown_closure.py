@@ -90,6 +90,10 @@ class UnknownClosureTest(unittest.TestCase):
         self._log('r-cancel', status=499, terminal_state='client_cancelled')
         self._reserve('r-reject')
         self._log('r-reject')
+        self._reserve('r-qoder-plan-reject')
+        self._log('r-qoder-plan-reject', status=429,
+                  error='{"code":112,"message":"quota/plan rejected",'
+                        '"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}')
         self._reserve('r-nolog')
         self._reserve('r-unexplained')
         self._log('r-unexplained', error='upstream timeout')
@@ -97,12 +101,12 @@ class UnknownClosureTest(unittest.TestCase):
         self.assertEqual(summary['by_class']['charged_partial'], 1)
         self.assertEqual(summary['by_class']['usage_present'], 1)
         self.assertEqual(summary['by_class']['client_cancelled'], 1)
-        self.assertEqual(summary['by_class']['upstream_rejected'], 1)
+        self.assertEqual(summary['by_class']['upstream_rejected'], 2)
         self.assertEqual(summary['by_class']['no_request_log'], 1)
         self.assertEqual(summary['by_class']['unexplained'], 1)
-        self.assertEqual(summary['unknown_total'], 6)
+        self.assertEqual(summary['unknown_total'], 7)
         self.assertEqual(summary['auto_reconcilable'], 0)
-        self.assertEqual(summary['needs_human'], 6)
+        self.assertEqual(summary['needs_human'], 7)
 
     # ── 2. 下界语义 ────────────────────────────────────────────────────
     def test_summary_bounds_are_estimates_not_bills(self) -> None:
