@@ -1,8 +1,36 @@
-#!/usr/bin/env python3
-"""Safe Ed25519 manifest signer used by the managed release process.
+#!/opt/workbuddy-manager/venv/bin/python
+"""清单签名工具（Ed25519 通道）——后端 JSON 清单与前端 manifest.sha256 共用。
 
-Validation is completed before any output is replaced.  A failed signing or
-verification operation leaves the previous detached signature untouched.
+## 为什么需要这个文件
+
+生产启动门禁（`deploy/source_preflight.py`）验的是 **Ed25519 detached signature**，
+用 `openssl pkeyutl -verify -rawin`。但仓库里只有 `deploy/sign-release.sh`，它走的是
+**旧 RSA 通道**（`openssl dgst -sha256 -sign` + `release-signing.key` + `release-trust.pem`）。
+
+于是 2026-10-26 之前，319 文件清单的签名是一次性在 `/tmp` 里手敲出来的命令——也就是说：
+
+  * 验签能重现，**签名不能重现**；
+  * 换个人接手时，唯一能签出有效清单的办法是去翻历史命令；
+  * 而「签不出来」会逼人降级回 RSA 通道（把 `signature_algorithm` 改掉），
+    正好是门禁注释里说「不允许被降级」的那个方向。
+
+这个脚本把签名流程固化下来，并让后端清单与前端产物 manifest 走同一把密钥、
+同一套校验，避免两条通道各写一遍。
+
+## 用法
+
+    # 后端清单：重算逐文件 sha/mode 后签名（替代 sign-release.sh 的 RSA 版）
+    sudo WB_SIGN_KEY=/opt/zhihui-release/keys/release-priv.pem \\
+        deploy/sign-release-ed25519.py --rebuild --manifest deploy/managed-release.json
+
+    # 前端产物 manifest：签名（release-web-v2.sh 内部调用）
+    deploy/sign-release-ed25519.py --sign-only --manifest out/manifest.sha256 \\
+        --sig out/manifest.sig --key /opt/zhihui-release/keys/release-priv.pem
+
+    # 只校验，不改文件（CI / 巡检可跑）
+    deploy/sign-release-ed25519.py --verify --manifest deploy/managed-release.json
+
+退出码：0 成功，2 缺少密钥/锚、3 校验失败、4 清单与磁盘不一致。
 """
 from __future__ import annotations
 
@@ -10,212 +38,222 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
-import re
 import stat
 import subprocess
 import sys
 import tempfile
+from pathlib import Path, PurePosixPath
 
-
+#: 默认信任锚（与 source_preflight.py 用的是同一把公钥）
+DEFAULT_TRUST = '/opt/workbuddy-manager/release-trust-ed25519.pem'
+#: 清单里允许的文件权限（与 source_preflight.py 的 SAFE_MODES 保持一致）
 SAFE_MODES = {0o400, 0o440, 0o444, 0o600, 0o640, 0o644, 0o700, 0o750, 0o755}
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
+#: 必须可执行的文件
+ENTRYPOINTS = {'deploy/source_preflight.py', 'server/backup_application.py',
+               'deploy/web_preflight.py', 'deploy/sign-release-ed25519.py'}
+ALGORITHM = 'ed25519'
 
 
-def _fail(message: str, code: int = 4):
+def die(code: int, message: str) -> 'NoReturn':  # noqa: F821 - 仅用于类型提示可读性
+    sys.stderr.write('ABORT: %s\n' % message)
     raise SystemExit(code)
 
 
-def _root(manifest: Path) -> Path:
-    if manifest.name != "managed-release.json" or manifest.parent.name != "deploy":
-        _fail("manifest must be deploy/managed-release.json")
-    return manifest.parent.parent.resolve()
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _relative(value: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        _fail("unsafe release member")
-    path = PurePosixPath(value)
-    if (path.is_absolute() or ".." in path.parts or path.as_posix() != value
-            or value in ("deploy/managed-release.json", "deploy/managed-release.sig")):
-        _fail("unsafe release member")
-    return value
+def resolve_key(cli_key: str | None) -> Path:
+    """密钥来源：--key 优先，其次 WB_SIGN_KEY。**不接受空**：缺密钥就退出，不降级。"""
+    raw = cli_key or os.environ.get('WB_SIGN_KEY') or ''
+    if not raw:
+        die(2, '缺少签名私钥。用 --key 或 WB_SIGN_KEY 指定（私钥应离线保管，'
+               '签名时临时拷入并立即删除，见 /opt/workbuddy-manager/SIGNING.md）')
+    key = Path(raw)
+    if not key.is_file():
+        die(2, '签名私钥不存在：%s' % key)
+    return key
 
 
-def _member(root: Path, relative: str) -> Path:
-    relative = _relative(relative)
-    path = root / Path(*PurePosixPath(relative).parts)
-    current = root
-    for part in PurePosixPath(relative).parts:
-        current = current / part
-        try:
-            info = current.lstat()
-        except OSError:
-            _fail("release member missing")
-        if stat.S_ISLNK(info.st_mode):
-            _fail("release member symlink")
-    if not path.is_file() or path.is_symlink():
-        _fail("release member is not a regular file")
-    return path
-
-
-def _mode(path: Path) -> int:
-    mode = stat.S_IMODE(path.stat().st_mode)
-    if mode not in SAFE_MODES:
-        _fail("release member has unsafe mode")
-    return mode
-
-
-def _load(manifest: Path) -> dict:
-    try:
-        value = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        _fail("invalid manifest")
-    if not isinstance(value, dict) or not isinstance(value.get("files"), dict):
-        _fail("invalid manifest")
-    return value
-
-
-def _validate_existing(root: Path, value: dict) -> None:
-    for relative, item in value["files"].items():
-        if not isinstance(item, dict) or set(item) - {"candidate_sha256", "mode", "sha256"}:
-            _fail("invalid manifest member")
-        path = _member(root, relative)
-        mode = _mode(path)
-        expected_mode = item.get("mode")
-        if (type(expected_mode) is not int or expected_mode not in SAFE_MODES
-                or mode != expected_mode):
-            _fail("manifest member drift")
-
-
-def _build_value(manifest: Path, additions: list[str]) -> dict:
-    root = _root(manifest)
-    value = _load(manifest)
-    _validate_existing(root, value)
-    files = dict(value["files"])
-    # Rebuild the digest for every existing member.  A stale digest is a
-    # repairable manifest drift; a mode/path drift remains a hard refusal.
-    for relative, item in list(files.items()):
-        path = _member(root, relative)
-        files[relative] = {"candidate_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                           "mode": item["mode"]}
-    for relative in additions:
-        path = _member(root, relative)
-        mode = _mode(path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        files[relative] = {"candidate_sha256": digest, "mode": mode}
-    value["files"] = dict(sorted(files.items()))
-    value["signature_algorithm"] = "ed25519"
-    value["signature_required"] = True
-    return value
-
-
-def resolve_key(explicit: str | None = None) -> Path:
-    value = explicit or os.environ.get("WB_SIGN_KEY", "")
-    if not value:
-        raise SystemExit(2)
-    path = Path(value)
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit(2)
-    return path
-
-
-def _write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+def sign_file(key: Path, target: Path, signature: Path, *, trust: Path | None = None) -> None:
+    """Ed25519 detached signature，**raw over 目标文件字节**（与验签侧一致）。"""
+    # Failed signing must leave the previous detached signature intact.  OpenSSL
+    # writes only to an exclusively created sibling, then replace atomically.
+    fd, name = tempfile.mkstemp(prefix='.%s.' % signature.name, dir=signature.parent)
     temporary = Path(name)
+    os.close(fd)
     try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-
-
-def sign_file(key: Path, manifest: Path, signature: Path, *, trust: Path | None = None) -> None:
-    """Sign to a temporary file and replace the detached signature last."""
-
-    signature.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="zhihui-sign-") as directory:
-        output = Path(directory) / "signature"
-        result = subprocess.run(
-            ["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(key),
-             "-in", str(manifest), "-out", str(output)],
-            capture_output=True,
-        )
-        if result.returncode or not output.is_file():
-            raise SystemExit(3)
-        signed = output.read_bytes()
+        proc = subprocess.run(
+            ['openssl', 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
+             '-in', str(target), '-out', str(temporary)],
+            capture_output=True, timeout=30)
+        if proc.returncode:
+            die(3, '签名失败：%s' % proc.stderr.decode('utf-8', 'replace').strip()[:400])
         if trust is not None:
-            verify_temp = Path(directory) / "verify"
-            verify_temp.write_bytes(signed)
-            result = subprocess.run(
-                ["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey",
-                 str(trust), "-in", str(manifest), "-sigfile", str(verify_temp)],
-                capture_output=True,
-            )
-            if result.returncode:
-                raise SystemExit(3)
-        _write_atomic(signature, signed, 0o644)
+            verify_file(trust, target, temporary)
+        # Detached signatures are public verification material, even under umask 077.
+        temporary.chmod(0o644)
+        with temporary.open('rb') as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, signature)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def verify_file(trust: Path, manifest: Path, signature: Path) -> None:
-    result = subprocess.run(
-        ["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", str(trust),
-         "-in", str(manifest), "-sigfile", str(signature)],
-        capture_output=True,
-    )
-    if result.returncode:
-        raise SystemExit(3)
+def verify_file(trust: Path, target: Path, signature: Path) -> None:
+    if not trust.is_file():
+        die(2, '信任锚不存在：%s' % trust)
+    if not signature.is_file():
+        die(3, '签名文件不存在：%s' % signature)
+    proc = subprocess.run(
+        ['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(trust), '-rawin',
+         '-in', str(target), '-sigfile', str(signature)],
+        capture_output=True, timeout=30)
+    if proc.returncode:
+        die(3, '签名校验失败：%s' % target)
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--add", action="append", default=[])
-    parser.add_argument("--sign-only", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--key")
-    parser.add_argument("--trust")
+def _source_path(root: Path, relative: str) -> Path:
+    parts = PurePosixPath(relative)
+    if (not relative or parts.is_absolute() or '..' in parts.parts
+            or '\\' in relative or '\x00' in relative or parts.as_posix() != relative):
+        die(4, '不安全路径: %r' % relative)
+    path = root / relative
+    if any((root / Path(*parts.parts[:end])).is_symlink()
+           for end in range(1, len(parts.parts) + 1)):
+        die(4, '缺失或为软链: %s' % relative)
+    if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+        die(4, '缺失或越界: %s' % relative)
+    return path
+
+
+def rebuild_json_manifest(root: Path, manifest: Path, *, add=(), write: bool = True) -> dict:
+    """重算清单里每个文件的 sha256 / mode，并物理检查它们。
+
+    与 `sign-release.sh`（RSA 版）的检查等价：清单引用的文件必须存在、不是软链、
+    mode 在安全白名单内、entrypoint 必须可执行。清单的**键集合仍是人工维护**——
+    本脚本只重算哈希，不增删条目，避免「自动扫描把不该发布的文件签进来」。
+    """
+    release = json.loads(manifest.read_text(encoding='utf-8'))
+    if not isinstance(release, dict) or not isinstance(release.get('files'), dict):
+        die(4, '清单 files 必须是对象')
+    for relative in add:
+        release['files'].setdefault(relative, {})
+    if release.get('signature_algorithm') != ALGORITHM:
+        # 允许首次从旧清单升级：显式写入算法，而不是猜
+        release['signature_algorithm'] = ALGORITHM
+    if release.get('signature_required') is not True:
+        release['signature_required'] = True
+
+    problems: list[str] = []
+    if {'deploy/managed-release.json', 'deploy/managed-release.sig'}.intersection(release['files']):
+        die(4, '清单不得包含自身或其签名')
+
+    changed = 0
+    for relative, item in release['files'].items():
+        if not isinstance(item, dict):
+            problems.append('清单条目必须是对象: %s' % relative)
+            continue
+        path = _source_path(root, relative)
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode not in SAFE_MODES:
+            problems.append('权限不在白名单: %s=%o' % (relative, mode))
+            continue
+        if relative in ENTRYPOINTS and not mode & 0o111:
+            problems.append('entrypoint 不可执行: %s' % relative)
+            continue
+        digest = sha256_file(path)
+        if item.get('candidate_sha256') != digest or item.get('mode') != mode:
+            changed += 1
+            item['candidate_sha256'] = digest
+            item['mode'] = mode
+
+    if problems:
+        for problem in problems[:20]:
+            sys.stderr.write('  %s\n' % problem)
+        die(4, '清单与磁盘不一致（%d 项）' % len(problems))
+
+    # U11（2026-10-28）：把清单自述的 `version` 同步成 release 根的实际 `.version`。
+    # 此前 `--rebuild` 只重算逐文件哈希、从不更新这个字段，于是清单一直停在旧版本；
+    # 而 `backup_application.py` 用 `manifest.get('release_id') or manifest.get('version')`
+    # 当 release_id —— 每日备份的 latest.json 因此记的是错版本。
+    version_file = root / '.version'
+    if version_file.is_file():
+        try:
+            actual_version = version_file.read_text(encoding='utf-8').strip()
+        except OSError:
+            actual_version = ''
+        if actual_version and release.get('version') != actual_version:
+            print('version: %r -> %r' % (release.get('version'), actual_version))
+            release['version'] = actual_version
+
+    if write:
+        manifest.write_text(json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+                            encoding='utf-8')
+    print('%s %s: files=%d changed=%d' % (
+        'rebuilt' if write else 'dry-run (未写入)', manifest, len(release['files']), changed))
+    return release
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description='Ed25519 release manifest signer/verifier')
+    parser.add_argument('--manifest', required=True,
+                        help='后端 JSON 清单，或前端 manifest.sha256')
+    parser.add_argument('--sig', default=None,
+                        help='签名输出/输入（默认：清单同目录 manifest.sig / managed-release.sig）')
+    parser.add_argument('--key', default=None, help='签名私钥（或 WB_SIGN_KEY）')
+    parser.add_argument('--trust', default=DEFAULT_TRUST, help='Ed25519 信任锚')
+    parser.add_argument('--root', default=None,
+                        help='JSON 清单里的相对路径以哪个目录为根（默认为清单上两级）')
+    parser.add_argument('--rebuild', action='store_true', help='先重算 JSON 清单的逐文件哈希')
+    parser.add_argument('--add', action='append', default=None,
+                        help='把文件加入 JSON 清单（可重复；随后 --rebuild 会重算全部哈希）。'
+                             '只接受 SAFE_MODES 内的权限，拒绝软链。')
+    parser.add_argument('--sign-only', action='store_true', help='只签，不重算（前端 manifest）')
+    parser.add_argument('--verify', action='store_true', help='只校验签名，不写任何文件')
+    parser.add_argument('--dry-run', action='store_true', help='重算并报告，但不写/不签')
     args = parser.parse_args(argv)
-    manifest = Path(args.manifest)
-    root = _root(manifest)
+
+    manifest = Path(args.manifest).resolve()
+    if not manifest.is_file():
+        die(2, '清单不存在：%s' % manifest)
+    is_json = manifest.name.endswith('.json')
+    signature = Path(args.sig) if args.sig else manifest.with_name(
+        'managed-release.sig' if is_json else 'manifest.sig')
+
+    if args.verify:
+        verify_file(Path(args.trust), manifest, signature)
+        print('verify ok: %s' % manifest)
+        return 0
+
     if args.sign_only and args.add:
-        _fail("--sign-only cannot be combined with --add")
-    value = None if args.sign_only else _build_value(manifest, args.add)
-    if args.dry_run:
+        die(2, '--add 不能与 --sign-only 共用')
+    if args.sign_only and args.dry_run:
+        print('dry-run: %s（未写入、未签名）' % manifest)
         return 0
-    key = resolve_key(args.key)
-    signature = manifest.with_suffix(".sig")
-    if args.sign_only:
-        sign_file(key, manifest, signature, trust=Path(args.trust) if args.trust else None)
-        return 0
-    temporary_manifest = manifest.with_name(f".{manifest.name}.{os.getpid()}.tmp")
-    temporary_signature = manifest.with_name(f".{signature.name}.{os.getpid()}.tmp")
-    try:
-        raw = (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        _write_atomic(temporary_manifest, raw, stat.S_IMODE(manifest.stat().st_mode))
-        sign_file(key, temporary_manifest, temporary_signature, trust=Path(args.trust) if args.trust else None)
-        os.replace(temporary_manifest, manifest)
-        os.replace(temporary_signature, signature)
-    except BaseException:
-        try:
-            temporary_manifest.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            temporary_signature.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+
+    # Resolve the explicit signing key before modifying a manifest.  A dry run
+    # never needs a key and follows the same validation path as a real rebuild.
+    key = None if args.dry_run else resolve_key(args.key)
+
+    if not args.sign_only:
+        if not is_json:
+            die(2, '--rebuild 只适用于 JSON 清单；前端 manifest 请用 --sign-only')
+        root = Path(args.root).resolve() if args.root else manifest.parent.parent
+        rebuild_json_manifest(root, manifest, add=args.add or (), write=not args.dry_run)
+        if args.dry_run:
+            return 0
+
+    sign_file(key, manifest, signature, trust=Path(args.trust))
+    # 立刻用信任锚自验一次：签出来的东西必须当场可验，否则等于没签
+    verify_file(Path(args.trust), manifest, signature)
+    print('signed %s -> %s (%d bytes)' % (manifest, signature, signature.stat().st_size))
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())
