@@ -42,6 +42,12 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call[0].port for call in self.calls], [10001, 10002])
         self.assertEqual(self.relay.snapshot()['active'], {'old': 0, 'new': 0})
 
+    async def test_route_accepts_root_owned_group_readable_contract(self):
+        if __import__('os').name != 'posix':
+            self.skipTest('POSIX ownership contract')
+        self.path.chmod(0o640)
+        self.assertEqual(self.relay.route(), 'old')
+
     async def test_payload_credentials_and_correlation_pass_through_exactly(self):
         body = b'{"port":11128,"content":"fixture\\n"}'
         response = await self.request(body=body, headers={'Authorization': 'Bearer synthetic',
