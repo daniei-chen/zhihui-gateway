@@ -35,6 +35,11 @@
       "sha256": "75eb20f49e5166fa3cb0e6de7db9024b77cd61625926b68d18736df8b287ba98"
     },
     {
+      "path": "docs/images/readme/button-release-v1.2.17.svg",
+      "bytes": 1108,
+      "sha256": "3a52c9c1112054a29d13984054c671e5c5b6cb7a62ec8847c3e91cd3b91f047b"
+    },
+    {
       "path": "docs/images/readme/capabilities-mobile.svg",
       "bytes": 4937,
       "sha256": "563a148cb256df7a066e08e07e0b9940dace6b5b69b57456870cd4421480708a"

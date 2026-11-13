@@ -14,7 +14,7 @@ from server.services import updater
 class ProductOriginTests(unittest.TestCase):
     def test_version_is_product_not_component_baseline(self):
         value = product.identity()
-        self.assertEqual(value['version'], '1.2.16')
+        self.assertEqual(value['version'], '1.2.17')
         self.assertEqual(value['manager_baseline'], 'v10.7.22+audit.20261029.2')
 
     def test_updates_stay_in_owner_repository(self):
