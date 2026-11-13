@@ -213,6 +213,30 @@ def _restrict_permissions(path) -> None:
         pass
 
 
+def _existing_users_metadata(path):
+    """Capture the service-readable ownership contract before atomic replace."""
+    if os.name != 'posix':
+        return None
+    import stat
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        return None
+    # Keep only owner/group bits.  World access is never carried forward.
+    return info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode) & 0o660
+
+
+def _apply_users_metadata(path, metadata) -> None:
+    """Restore ownership/mode on the new inode before it becomes visible."""
+    if metadata is None or os.name != 'posix':
+        return
+    uid, gid, mode = metadata
+    os.chown(path, uid, gid)
+    os.chmod(path, mode or 0o600)
+
+
 @user_mutation
 def save_users(data: dict) -> None:
     """原子写入 users.json。
@@ -230,6 +254,7 @@ def save_users(data: dict) -> None:
     config.ensure_dirs()
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     target = config.USERS_FILE
+    metadata = _existing_users_metadata(target)
     tmp = target.with_name(f'.{target.name}.{secrets.token_hex(12)}.tmp')
 
     # Exclusive random temporary names avoid collisions and symlink truncation.
@@ -241,8 +266,13 @@ def save_users(data: dict) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         _restrict_permissions(tmp)
+        # os.replace creates a new inode.  A root-owned maintenance command
+        # must not silently turn an existing 10001-owned users.json into a
+        # 0600 root file that the guarded server cannot read on its next login.
+        _apply_users_metadata(tmp, metadata)
         os.replace(tmp, target)  # 原子替换：要么旧、要么新，不会半截
-        _restrict_permissions(target)
+        if metadata is None:
+            _restrict_permissions(target)
         if os.name == 'posix':
             directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
             try: os.fsync(directory)
