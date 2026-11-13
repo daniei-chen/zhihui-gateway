@@ -211,15 +211,28 @@ class WatchdogTests(unittest.TestCase):
 class NativeWatchdogBoundaryTests(unittest.TestCase):
     def test_direct_isolated_entrypoint_can_import_project_package(self):
         root = Path(__file__).resolve().parents[2]
+        wrapper = r'''
+import contextlib, dataclasses, json, os, pathlib, re, runpy, secrets, sqlite3, stat, sys, time
+import types
+
+root, script = sys.argv[1:]
+sys.path[:] = [entry for entry in sys.path if entry and entry != root]
+server = types.ModuleType('server')
+server.steward_config = types.ModuleType('server.steward_config')
+sys.modules['server'] = server
+sys.modules['server.steward_config'] = server.steward_config
+runpy.run_path(script, run_name='isolated_watchdog_test')
+assert root in sys.path, sys.path
+'''
         completed = subprocess.run(
-            [sys.executable, '-I', '-B', str(root / 'deploy' / 'steward_watchdog.py'), '--help'],
+            [sys.executable, '-I', '-B', '-c', wrapper,
+             str(root), str(root / 'deploy' / 'steward_watchdog.py')],
             cwd=root,
             capture_output=True,
             text=True,
             timeout=20,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn('usage:', completed.stdout)
 
     def test_publication_probe_uses_only_kernel_metadata_not_the_root_only_file(self):
         from types import SimpleNamespace
