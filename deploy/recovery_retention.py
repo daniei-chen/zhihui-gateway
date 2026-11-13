@@ -239,6 +239,14 @@ def apply_plaintext_plan(plan: dict, token: str, *, auto: bool = False) -> int:
                 if ok:
                     staged.unlink(missing_ok=True)
                 else:
+                    # The directory may have been replaced after the initial
+                    # verification.  The staged inode is already detached
+                    # from that path, so removing it is safe and must not
+                    # follow a replacement symlink.  A content change in the
+                    # original directory remains a hard failure below.
+                    if snapshot.is_symlink() or not snapshot.is_dir():
+                        staged.unlink(missing_ok=True)
+                        continue
                     if snapshot.is_dir() and not snapshot.is_symlink() and not path.exists():
                         os.replace(staged, path)
                     return 4
