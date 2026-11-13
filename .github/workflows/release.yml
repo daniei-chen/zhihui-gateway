@@ -29,14 +29,16 @@ on:
         type: string
 
 permissions:
-  contents: write
-  # 推容器镜像到 GHCR 需要显式声明 packages: write —— 只给 contents 会被拒
-  # （实测报错：denied: installation not allowed to Create organization package）。
-  packages: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # 推容器镜像到 GHCR 需要显式声明 packages: write —— 只给 contents 会被拒
+      # （实测报错：denied: installation not allowed to Create organization package）。
+      packages: write
     # 供后面的 installer 作业复用同一个 tag（workflow_dispatch 时 tag 来自输入）
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
@@ -52,13 +54,13 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=${TAG#v}" >> $GITHUB_OUTPUT
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.vars.outputs.tag }}
           fetch-depth: 0
 
       - name: 安装 Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # 22 起才有 ESM 的 TypeScript type stripping：几处「借 Node 直接跑真实 .ts
           # 实现」的用例（async-state / display-prefs 等）在 20 上会自我 skip —— 也就是
@@ -217,7 +219,7 @@ jobs:
 
       - name: 安装 Go（校验随包上游）
         if: steps.pack.outputs.has_upstream == '1'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: ${{ steps.pack.outputs.stage }}/upstream/go.mod
           cache: false
@@ -425,17 +427,17 @@ jobs:
         # 跨架构构建 arm64 层需要它：runner 是 amd64，模拟出 arm64 执行环境
         continue-on-error: true
         if: github.event_name == 'push' || inputs.tag != ''
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: 设置 Buildx
         continue-on-error: true
         if: github.event_name == 'push' || inputs.tag != ''
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: 登录 GHCR
         continue-on-error: true
         if: github.event_name == 'push' || inputs.tag != ''
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -449,7 +451,7 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'push' || inputs.tag != ''
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           # 多平台必须走 buildx 并直接 push：本地镜像库放不下多架构的 manifest list
@@ -498,7 +500,7 @@ jobs:
         continue-on-error: true
         if: steps.pack.outputs.has_upstream == '1' && (github.event_name == 'push' || inputs.tag != '')
         id: build_upstream
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ steps.pack.outputs.stage }}/upstream
           platforms: linux/amd64,linux/arm64
@@ -575,14 +577,16 @@ jobs:
   installer:
     needs: release
     runs-on: windows-2022
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release.outputs.tag }}
           # build.ps1 用 git describe 取版本号写进 exe 的文件属性
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
