@@ -51,3 +51,21 @@ class WriterGuardContractTests(unittest.TestCase):
             host._resume_ready("record", "candidate")
 
         self.assertEqual(len(attempts), 2)
+
+    def test_final_verification_ready_uses_the_same_retry_contract(self):
+        host = host_adapter.Host.__new__(host_adapter.Host)
+        expected = object()
+        attempts = []
+
+        def flaky_ready(record, candidate):
+            attempts.append((record, candidate))
+            if len(attempts) == 1:
+                raise host_adapter.Rejected("observed state changed during inspection")
+            return expected
+
+        host._ready = flaky_ready
+        with mock.patch.object(host_adapter.time, "monotonic", side_effect=[0.0, 0.0]), \
+                mock.patch.object(host_adapter.time, "sleep"):
+            self.assertIs(host._retry_ready("record", "candidate", "verify-ready"), expected)
+
+        self.assertEqual(len(attempts), 2)

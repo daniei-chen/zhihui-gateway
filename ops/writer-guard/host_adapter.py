@@ -251,34 +251,30 @@ class Host:
 
     def ready(self, record, candidate):
         self.ingress.verify(self.permit, fenced=True)
-        deadline = time.monotonic() + 90
-        while True:
-            try:
-                self.ready_identity = self._ready(record, candidate)
-                return
-            except Exception:
-                if time.monotonic() >= deadline:
-                    raise Rejected('candidate failed bounded readiness verification') from None
-                time.sleep(.5)
+        self.ready_identity = self._retry_ready(record, candidate, 'candidate-ready')
 
-    def _resume_ready(self, record, candidate):
+    def _retry_ready(self, record, candidate, label, expected=None):
         deadline = time.monotonic() + 90
         attempt = 0
         while True:
             attempt += 1
             try:
-                if self._ready(record, candidate) != self.ready_identity:
+                identity = self._ready(record, candidate)
+                if expected is not None and identity != expected:
                     raise Rejected('candidate changed between ready and resume')
-                return
+                return identity
             except Exception as exc:
                 try:
                     with open('/opt/zhihui-release/writer-state/resume-retry.log', 'a') as handle:
-                        handle.write('pre-ready %d %s %r\n' % (attempt, time.strftime('%H:%M:%S'), exc))
+                        handle.write('%s %d %s %r\n' % (label, attempt, time.strftime('%H:%M:%S'), exc))
                 except OSError:
                     pass
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(.5)
+
+    def _resume_ready(self, record, candidate):
+        return self._retry_ready(record, candidate, 'pre-ready', expected=self.ready_identity)
 
     def resume(self, record, candidate):
         original = self._bound(record, candidate)
@@ -319,7 +315,7 @@ class Host:
     def verify_complete(self, record, candidate):
         original = self._bound(record, candidate)
         self.ingress.verify(self.permit, fenced=False)
-        self._ready(record, candidate)
+        self._retry_ready(record, candidate, 'verify-ready')
         self.frontend.verify(candidate)
         timer = self.systemd.show(TIMER)
         if timer['ActiveState'] != ('active' if original['timer_active'] else 'inactive'):
