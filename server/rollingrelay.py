@@ -77,7 +77,11 @@ class StreamingRelay:
         try:
             info = os.fstat(fd)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4096
-                    or os.name == 'posix' and (info.st_uid not in (0, os.geteuid()) or info.st_mode & 0o077)):
+                    or os.name == 'posix' and (
+                        info.st_uid not in (0, os.geteuid())
+                        or (os.geteuid() != 0 and info.st_gid not in (0, os.getegid()))
+                        or info.st_mode & 0o022
+                        or not os.access(self.path, os.R_OK))):
                 raise RouteError('unsafe_route_file')
             with os.fdopen(fd, 'rb', closefd=False) as stream:
                 data = json.loads(stream.read(4097))
