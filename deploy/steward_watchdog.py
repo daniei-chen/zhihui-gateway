@@ -11,7 +11,15 @@ from pathlib import Path
 import secrets
 import sqlite3
 import stat
+import sys
 import time
+
+# systemd invokes this module as a direct isolated script (`python -I -B
+# .../deploy/steward_watchdog.py`), so Python does not add the repository root
+# to sys.path. Bind the sibling server package explicitly at the entrypoint.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from server import steward_config
 

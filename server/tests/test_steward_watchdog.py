@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, mock_open, patch
@@ -207,6 +209,18 @@ class WatchdogTests(unittest.TestCase):
 
 
 class NativeWatchdogBoundaryTests(unittest.TestCase):
+    def test_direct_isolated_entrypoint_can_import_project_package(self):
+        root = Path(__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [sys.executable, '-I', '-B', str(root / 'deploy' / 'steward_watchdog.py'), '--help'],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn('usage:', completed.stdout)
+
     def test_publication_probe_uses_only_kernel_metadata_not_the_root_only_file(self):
         from types import SimpleNamespace
         info = SimpleNamespace(st_mode=0o100600, st_uid=0, st_nlink=1, st_dev=0, st_ino=123)
