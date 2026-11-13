@@ -3,6 +3,16 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.6] - 2026-11-13
+
+This is a watchdog entrypoint hotfix: systemd direct execution with python -I -B now binds the project root before importing the server package.
+
+### Stability and monitoring
+
+- The watchdog entrypoint works under isolated Python invocation again.
+- An isolated direct-entry test protects this boundary from regressions.
+- This release does not change gateway request, ledger, administrator credential, or upstream routing semantics.
+
 ## [1.2.5] - 2026-11-13
 
 这是一次恢复链热修复版本：修正 isolated Python 直接执行 backup_application.py 时无法导入 backupstatus 的问题，恢复每日 verified backup status 发布。

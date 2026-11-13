@@ -8,7 +8,7 @@
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": false,
-  "release_id": "v1.2.5",
+  "release_id": "v1.2.6",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "27707d05ebfa7bdbe2da405e3c555a9c558fe3913365bd37d671334d668c6084",
@@ -26,7 +26,7 @@
     "deploy/rolling-relay-nginx.conf": "b58e33d5cd073c2ddfdfc68b380c81e9471d9dd09644e270b2d450bdc762e337",
     "deploy/rolling-relay.service": "0e1700371c94b7445b8762465c3e6a7f0bd21c458277cf5adb5d2e281d5cc21d",
     "deploy/sign-release-ed25519.py": "9b47e5c7ba6af719b5bae1ee322eb3af0594995ba4888e94a4c44be8f706d5d4",
-    "deploy/steward_watchdog.py": "afeafb11e8bedbaa1f314062fafe7e28cc6823246300dd3bf37bab5f14f55c7d",
+    "deploy/steward_watchdog.py": "16c1ce2f17f3e65aa8c59a05db6b7ee5835624a7e6b4ee2372eaed41771d2e74",
     "docker-compose.yml": "21abfa555b1da53c9e9bd54ddc7728d6c8898e3022e17df066c96826313e76ef",
     "docs/PRODUCT-RELEASE.md": "1fe17bdb9b75426f12db2451e4e03587fd7fb584e3832e0097c7b1b78fbffd6b",
     "docs/protected-customizations.json": "1eb33055492096d5caf87a52faa54d3b7ef94d2524549147f9f7a628d65c393d",
@@ -61,5 +61,5 @@
   "source_commit": "",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
-  "version": "1.2.5"
+  "version": "1.2.6"
 }
