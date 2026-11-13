@@ -3,7 +3,7 @@
 智汇的首页、登录页、控制台和 Manager 共用这个仓库。
 这里区分**本地开发**与**受控生产发布**，不提供会覆盖现有运行状态的一键安装命令。
 
-[回到产品介绍](../README.md) · [版本与升级](PRODUCT-RELEASE.md) · [审计边界](AUDIT-0.0.2.md)
+[回到产品介绍](../README.md) · [版本与变更](../CHANGELOG.md) · [安全审查](SECURITY-AUDIT.md)
 
 ## 本地开发
 
@@ -63,7 +63,7 @@ node site/tools/preview-server.mjs --port 4184
 
 访问 `http://127.0.0.1:4184` 或 `/login`。首页预览使用合成数据生成的控制台截图，不连接生产服务。
 此服务验证 `/home-assets/` 资源、CSP 和登录布局；控制台入口只到本地导航验证页，不提供业务 API 或真实认证。
-页面、手机入口与交互测试见 [site/README.md](../site/README.md)。
+页面、手机入口与交互测试见 [截图与界面边界](screenshots.md)。
 
 ## 生产升级
 
@@ -83,7 +83,7 @@ node site/tools/preview-server.mjs --port 4184
 - 回退代码不回退账本、额度、密钥、设备授权或会话撤销记录。
 - `manager/deploy/` 是继承组件参考，不代表这台服务器已安装的生产信任锚。
 
-完整合同见 [PRODUCT-RELEASE.md](PRODUCT-RELEASE.md)。
+发布边界见 [release-signing.md](release-signing.md)。
 
 ## 仓库地图
 
