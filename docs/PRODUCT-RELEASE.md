@@ -65,6 +65,8 @@ python3 deploy/trae_route.py http://127.0.0.1:8801 \
 ```
 工具拒绝公网地址、凭据、路径和非法端口；网关遇到缺失或不合规的路由文件会回到各平台的可信默认端口。路由文件只包含地址，不包含密钥；切换前后的健康、排空、账本和回退证据仍必须由受控发布器记录。
 
+Manager 的不停机候选必须使用发布包内的 `deploy/workbuddy-web-helper.service`，并完整继承当前 serving 代的 admission 参数（容量、请求体预算、队列和密钥并发）；缺少任一参数会被共享 admission ledger 以 `shared_admission_policy_changed` 拒绝。relay 以 UID/GID `10001:10001`、只读状态运行，root 发布工具写出的路由文件合同为 `root:10001`、`0640`，不能把 root-only 的 `0600` 文件直接交给 relay。
+
 ## 当前受控部署
 
 **当前生产状态不由源码版本页推断。** 线上运行版本、镜像 digest、回滚目标和健康验收以服务器审计报告及受控发布回执为准；源码 `1.2.9` 发布不自动宣称已切换生产。
