@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.17 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.18 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,26 +16,27 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.17.svg" width="166" height="44" alt="Read the 1.2.17 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.18.svg" width="166" height="44" alt="Read the 1.2.18 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1217--budget-review-truthfulness) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1218--controlled-recovery-and-budget-review-truthfulness) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.17 · Budget review truthfulness
+## 1.2.18 · Controlled recovery and budget review truthfulness
 
-**Current product version: `v1.2.17`.** This release keeps historical supplier rejections in the human review queue even when old resolution text says “archived”; it does not infer zero billing or mutate budget state.
+**Current product version: `v1.2.18`.** This release retries the first post-start readiness check within a bounded window and keeps historical supplier rejections in the human review queue even when old resolution text says “archived”; it does not infer zero billing or mutate budget state.
 
+- **Safer recovery:** transient protected-state changes after the candidate starts are retried for up to 90 seconds instead of immediately failing the transaction.
 - **Accurate review state:** the archived-pending API bucket now shares the same evidence classification as the summary and alert logic.
 - **Evidence boundary:** supplier rejection remains diagnostic evidence only; it is not treated as a zero-usage receipt.
-- **Regression coverage:** historical archive markers and current classifications are covered by a focused API test.
+- **Validation coverage:** controller retry behavior and historical archive markers are covered by focused tests.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.17)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.18)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -170,7 +171,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Controlled deployment](deploy/README.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.17 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.18 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Security audit report](docs/SECURITY-AUDIT.md) |
 | User documentation | [Usage](docs/usage.md) · [Features](docs/features.md) · [Screenshots](docs/screenshots.md) · [Development](docs/DEVELOPMENT.md) · [Security notes](docs/security-notes.md) · [API tokens](docs/api-tokens.md) · [Account egress](docs/account-proxy-routes.md) · [Security audit](docs/SECURITY-AUDIT.md) · [Release signing](docs/release-signing.md) |

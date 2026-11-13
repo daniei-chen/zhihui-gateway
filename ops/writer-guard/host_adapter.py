@@ -261,10 +261,28 @@ class Host:
                     raise Rejected('candidate failed bounded readiness verification') from None
                 time.sleep(.5)
 
+    def _resume_ready(self, record, candidate):
+        deadline = time.monotonic() + 90
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                if self._ready(record, candidate) != self.ready_identity:
+                    raise Rejected('candidate changed between ready and resume')
+                return
+            except Exception as exc:
+                try:
+                    with open('/opt/zhihui-release/writer-state/resume-retry.log', 'a') as handle:
+                        handle.write('pre-ready %d %s %r\n' % (attempt, time.strftime('%H:%M:%S'), exc))
+                except OSError:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(.5)
+
     def resume(self, record, candidate):
         original = self._bound(record, candidate)
-        if self._ready(record, candidate) != self.ready_identity:
-            raise Rejected('candidate changed between ready and resume')
+        self._resume_ready(record, candidate)
         self.frontend.activate(self.permit, record, candidate)
         self.frontend.verify(candidate)
         self.startup.verify(JOB)
