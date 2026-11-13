@@ -34,7 +34,7 @@
     },
     "migration_entry.py": {
       "mode": 420,
-      "sha256": "e6042eb0dd4e40bfd626e7996bf9ce2f83c4eb0f2ed0c4907c030d68b45328cd"
+      "sha256": "5c0ccbedc0b4204744782ab992d2aed6ba2152cf1902a5f60d81261cb16df3c4"
     },
     "retire_legacy.py": {
       "mode": 420,
@@ -66,7 +66,7 @@
     },
     "writer_inventory.py": {
       "mode": 420,
-      "sha256": "aadd7c212ef83e61d41594356790b42aa6bff600ecf61175b7a14a09cef79ea2"
+      "sha256": "6d1523142e2fac92888103e02450bbde577ad89e0c6b20a831f2dc2967b9dd40"
     }
   },
   "schema": "zhihui.writer-host-files",
