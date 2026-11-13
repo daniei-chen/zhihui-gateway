@@ -483,8 +483,12 @@ UNKNOWN_CLASSES = ('charged_partial', 'usage_present', 'client_cancelled',
                    'upstream_rejected', 'no_request_log', 'unexplained')
 
 #: 只认「请求没被上游处理」这一类标识；超时/断流不在其中。
+#: Qoder 的 quota/plan rejection 使用 429 + code=112，不能因为它不是 5xx
+#: 就落入 unexplained；它仍然只是拒绝证据，绝不等于零计费证据。
 _REJECTED_MARKERS = ('no_healthy_account', '"code":11102', '"code": 11102',
-                     'model_not_found', 'service info not found')
+                     '"code":112', '"code": 112', 'quota/plan rejected',
+                     'quota_exceeded', 'model_not_found', 'service info not found',
+                     'pricingUrl')
 
 _log = logging.getLogger('workbuddy.budget')
 
@@ -501,7 +505,7 @@ def _classify(row, log) -> str:
     if terminal == 'client_cancelled' or status == 499:
         return 'client_cancelled'
     error = str(log['error'] or '')
-    if status >= 500 and any(marker in error for marker in _REJECTED_MARKERS):
+    if status >= 400 and any(marker in error for marker in _REJECTED_MARKERS):
         return 'upstream_rejected'
     return 'unexplained'
 
