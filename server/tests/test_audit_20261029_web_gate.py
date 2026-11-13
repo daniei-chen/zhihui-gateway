@@ -92,3 +92,11 @@ def test_legacy_nonexecutable_metadata_is_explicitly_allowed(tmp_path):
     (root / 'BUILD_INFO.json').write_text('{"buildId":"fixture"}')
     with patch.object(module.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
         assert module.verify_tree(root, trust)[0]
+
+
+def test_host_serving_gates_are_repository_sources():
+    root = Path(__file__).resolve().parents[2]
+    for name in ('web_preflight.py', 'web_pool_preflight.py'):
+        path = root / 'deploy' / name
+        assert path.is_file()
+        assert 'manifest.sha256' in path.read_text(encoding='utf-8')

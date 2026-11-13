@@ -325,7 +325,7 @@ def add_user(body: UserIn, request: Request,
     而这一步当时没有任何记录。新建用户写随机 sv，避免同名重建后旧 cookie 复活。
     """
     pw = str(body.password)
-    problem = security.managed_user_password_problem(pw, body.username)
+    problem = security.panel_user_password_problem(pw, body.username)
     if problem:
         raise HTTPException(status_code=400, detail=problem)
     user = security.require_session_admin(request, security.current_user(request))
@@ -370,8 +370,7 @@ def update_user(username: str, body: UserPatch, request: Request,
         pw = str(body.password)
         # The root keeps its strong policy; role changes do not change other
         # users' password format or invalidate existing passwords by themselves.
-        problem = (security.password_problem(pw, username) if username == 'admin'
-                   else security.managed_user_password_problem(pw, username))
+        problem = security.panel_user_password_problem(pw, username)
         if problem:
             raise HTTPException(status_code=400, detail=problem)
         target['pwd_hash'] = security.make_hash(pw)

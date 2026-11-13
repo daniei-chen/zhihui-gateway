@@ -50,7 +50,8 @@ DEFAULT_TRUST = '/opt/workbuddy-manager/release-trust-ed25519.pem'
 SAFE_MODES = {0o400, 0o440, 0o444, 0o600, 0o640, 0o644, 0o700, 0o750, 0o755}
 #: 必须可执行的文件
 ENTRYPOINTS = {'deploy/source_preflight.py', 'server/backup_application.py',
-               'deploy/web_preflight.py', 'deploy/sign-release-ed25519.py'}
+               'deploy/web_preflight.py', 'deploy/web_pool_preflight.py',
+               'deploy/sign-release-ed25519.py'}
 ALGORITHM = 'ed25519'
 
 
