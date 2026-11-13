@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.10 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.11 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,7 +16,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.10.svg" width="166" height="44" alt="Read the 1.2.10 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.11.svg" width="166" height="44" alt="Read the 1.2.11 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
@@ -27,15 +27,15 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 <br />
 
-## 1.2.10 · Candidate instance and zero-downtime handoff safety
+## 1.2.11 · Upstream asset security and release-chain hardening
 
-**Current product version: `v1.2.10`.** This release gives the candidate Manager the serving generation's shared admission policy and runs the relay with a constrained identity, so a healthy candidate can receive traffic without restarting Manager.
+**Current product version: `v1.2.11`.** This release removes credential-like backups from the public WorkBuddy snapshot, audits the Qoder v1.9.9 candidate, and pins release actions and permissions.
 
 - **Zero-downtime handoff:** the writer guard uses `server.serve`, a bounded 75-second graceful drain and shared admission; helper generations do not run background jobs.
 - **Routing and rollback:** the inference-only relay uses atomic monotonic route epochs, health rollback and deferred retirement while old requests remain active.
 - **Evidence and security:** Ed25519 two-phase signing, read-only relay state, the `root:10001`/`0640` route contract, restore evidence and fail-closed watchdog state are covered by gates.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.10)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.11)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -170,7 +170,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.10 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.11 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Historical audit boundary](docs/AUDIT-0.0.3.md) |
 
@@ -197,4 +197,5 @@ The cover, capability cards and routing diagram are self-contained SVG assets wi
 <a href="https://zhihui.kaogong.art/"><img src="brand/zhihui-z.svg" width="32" height="32" alt="Zhihui blue Z" /></a>
 <p><sub>Zhihui · less noise, more control.</sub></p>
 </div>
+
 

@@ -3,6 +3,21 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.11] - 2026-11-13
+
+这是一次上游资产安全与发布链硬化版本。它不把国内服务器的当前运行状态冒充为已自动切换。
+
+### 安全与上游
+
+- 清理公开 `upstream-src` 快照中的 `auths.backup-*`、`config.json.bak-*`、`.local-config` 和其他备份型运行时文件；打包规则现在拒绝这些路径，防止凭据型备份重新进入公开资产。
+- 完成 `shuishuipingan/qoder2api-hub` v1.9.9 的独立版本审计；上游新增 PID 1 SIGTERM 快速退出和重复工具 index 隔离修复。
+- Qoder v1.9.9 候选已完成独立隔离 canary：health/ping 200、UID/GID 10001、SIGTERM 退出码 0；生产切换仍需主机 systemd 变更流程完成后再执行。
+
+### 发布链
+
+- Release、quality 和 fork 镜像 workflow 的第三方 action 固定到完整 commit SHA，quality frontend 显式使用 Node 22。
+- Release job 权限按用途收窄；上游源码包、README 图形按钮和产品版本元数据保持一致。
+
 ## [1.2.10] - 2026-11-13
 
 这是一次生产级候选实例与不停机交接安全增强版本。
@@ -566,4 +581,5 @@ This is a watchdog entrypoint hotfix: systemd direct execution with python -I -B
 - 长期稳定性、真实供应商长尾和离机灾备仍需持续验收，本版不代表所有审计问题已关闭。
 - 上述角色与每日额度管理能力已切换生产；二维码／手机号代管浏览器仍为实验原型，不提供未验收的生产入口。
 - 本次仅发布 WorkBuddy、Qoder、Trae 三平台；Codex / ChatGPT 网关后续独立开发，不提供尚未接通的第四入口。
+
 
