@@ -124,7 +124,7 @@ class HumanRolesHttpTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/users').status_code, 200)
         for role in ('account_admin', 'admin'):
             response = self.client.post('/api/users', json={
-                'username': 'synthetic-' + role, 'role': role, 'password': '6842097531'})
+                'username': 'synthetic-' + role, 'role': role, 'password': 'Synthetic-panel-password!'})
             self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.client.post('/api/users', json={
             'username': 'old-viewer', 'role': 'viewer', 'password': '6842097531'}).status_code, 422)
@@ -148,7 +148,7 @@ class HumanRolesHttpTest(unittest.TestCase):
 
         self.signin('admin')
         created = self.client.post('/api/users', json={
-            'username': 'second-super', 'role': 'admin', 'password': '6842097531'})
+            'username': 'second-super', 'role': 'admin', 'password': 'Synthetic-panel-password!'})
         self.assertEqual(created.status_code, 200, created.text)
         root_before = copy.deepcopy(stored('admin'))
 
@@ -214,7 +214,7 @@ class HumanRolesHttpTest(unittest.TestCase):
     def test_root_privileges_remain_preserved_when_another_super_exists(self):
         self.signin('admin')
         created = self.client.post('/api/users', json={
-            'username': 'second-super', 'role': 'admin', 'password': '6842097531'})
+            'username': 'second-super', 'role': 'admin', 'password': 'Synthetic-panel-password!'})
         self.assertEqual(created.status_code, 200, created.text)
         before = copy.deepcopy(security.load_users())
         for actor in ('admin', 'second-super'):
@@ -226,13 +226,13 @@ class HumanRolesHttpTest(unittest.TestCase):
                 self.assertEqual(self.client.delete('/api/users/admin').status_code, 400)
                 self.assertEqual(security.load_users(), before)
 
-    def test_managed_users_both_roles_accept_eight_or_more_raw_characters_and_can_log_in(self):
+    def test_managed_users_both_roles_accept_twelve_or_more_raw_characters_and_can_log_in(self):
         self.signin('admin')
-        cases = (('account_admin', '07392641'), ('admin', 'aB3!xY9?'),
-                 ('account_admin', 'nine-1234'), ('admin', '6842097531'),
+        cases = (('account_admin', 'Account-panel-password!'), ('admin', 'Admin-panel-password!'),
+                 ('account_admin', 'Nine-character-panel!'), ('admin', 'Another-panel-password!'),
                  ('account_admin', 'Long mixed password without a ten-character cap!'),
-                 ('admin', '智汇用户登录密码'), ('account_admin', '\U0001f680' * 7 + 'X'),
-                 ('admin', '  raw  8'))
+                 ('admin', 'panel-unicode-password!'), ('account_admin', '\U0001f680' * 7 + 'PanelX'),
+                 ('admin', '  raw panel password  '))
         for index, (role, password) in enumerate(cases):
             with self.subTest(role=role, length=len(password)):
                 username = 'managed-' + str(index)
@@ -248,7 +248,7 @@ class HumanRolesHttpTest(unittest.TestCase):
                 self.assertEqual(self.client.get('/api/me').json()['role'], role)
                 self.signin('admin')
 
-    def test_managed_user_create_rejects_fewer_than_eight_characters_without_mutation(self):
+    def test_panel_user_create_rejects_fewer_than_twelve_characters_without_mutation(self):
         self.signin('admin')
         before = copy.deepcopy(security.load_users())
         invalid = ('seven12', '0739264', '智汇密码七个字', '\U0001f680' * 7, '       ')
@@ -257,10 +257,10 @@ class HumanRolesHttpTest(unittest.TestCase):
                 response = self.client.post('/api/users', json={
                     'username': 'invalid-short', 'role': 'account_admin', 'password': password})
                 self.assertEqual(response.status_code, 400, response.text)
-                self.assertIn('8', response.json()['detail'])
+                self.assertIn('12', response.json()['detail'])
                 self.assertEqual(security.load_users(), before)
 
-    def test_nonroot_password_reset_uses_minimum_eight_for_both_roles_and_revokes(self):
+    def test_nonroot_password_reset_uses_panel_policy_for_both_roles_and_revokes(self):
         for role in ('account_admin', 'admin'):
             with self.subTest(role=role):
                 self.signin('admin')
@@ -273,7 +273,8 @@ class HumanRolesHttpTest(unittest.TestCase):
                     response = self.client.patch('/api/users/alice', json={'password': password})
                     self.assertEqual(response.status_code, 400, response.text)
                     self.assertEqual(security.load_users(), previous)
-                password = '07392641' if role == 'account_admin' else 'Mix!密码八位'
+                password = ('Account-admin-panel-password!'
+                            if role == 'account_admin' else 'Admin-panel-password!')
                 response = self.client.patch('/api/users/alice', json={'password': password})
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertTrue(response.json()['sessions_revoked'])
@@ -301,6 +302,13 @@ class HumanRolesHttpTest(unittest.TestCase):
                 self.assertEqual(security.managed_user_password_problem(password), '密码过于常见，请换一个')
         for password in ('alice1234', 'ALICE12345', 'ＡＬＩＣＥ12345'):
             self.assertEqual(security.managed_user_password_problem(password, 'alice'), '密码不能是用户名加数字')
+
+    def test_panel_password_policy_is_stronger_than_portal_compatibility_policy(self):
+        self.assertIsNone(security.panel_user_password_problem('Fresh-panel-password!', 'alice'))
+        self.assertIsNotNone(security.panel_user_password_problem('6842097531', 'alice'))
+        self.assertIsNotNone(security.panel_user_password_problem('short', 'alice'))
+        # The eight-character rule remains intentionally isolated to portal members.
+        self.assertIsNone(security.managed_user_password_problem('6842097531'))
 
     def test_common_password_create_and_reset_reject_atomically_but_legacy_login_remains(self):
         self.signin('admin')
@@ -380,11 +388,11 @@ class HumanRolesHttpTest(unittest.TestCase):
                          'a/b', 'a\\b', 'a?b', 'a#b', 'a%b', 'a\x00b', '.', '..'):
             with self.subTest(username=repr(username)):
                 response = self.client.post('/api/users', json={
-                    'username': username, 'role': 'account_admin', 'password': '6842097531'})
+                    'username': username, 'role': 'account_admin', 'password': 'Synthetic-panel-password!'})
                 self.assertEqual(response.status_code, 422, response.text)
                 self.assertEqual(security.load_users(), before)
         response = self.client.post('/api/users', json={
-            'username': 'synthetic.valid-用户', 'role': 'account_admin', 'password': '6842097531'})
+                    'username': 'synthetic.valid-用户', 'role': 'account_admin', 'password': 'Synthetic-panel-password!'})
         self.assertEqual(response.status_code, 200, response.text)
         security.migrate_user_roles()
         self.signin('synthetic.valid-用户')

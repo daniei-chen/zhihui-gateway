@@ -3,6 +3,16 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.7] - 2026-11-13
+
+这是一次管理端安全策略与发布闭包增强版本。
+
+### 安全与可复现发布
+
+- 管理端 `admin` 与 `account_admin` 新建或重置密码统一要求至少 12 位，并保留常见口令、重复字符和用户名加数字拦截；用户端门户继续使用独立兼容策略。
+- 将前端 serving tree 与 pool 的两个 Ed25519 门禁脚本纳入仓库、发布包和签名运行闭包，生产 staging 不再隐式复制旧版本宿主文件。
+- 重跑已有草稿 Release 时同步刷新发布说明，避免产物已更新而页面仍显示旧摘要。
+
 ## [1.2.6] - 2026-11-13
 
 This is a watchdog entrypoint hotfix: systemd direct execution with python -I -B now binds the project root before importing the server package.

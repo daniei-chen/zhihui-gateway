@@ -105,6 +105,17 @@ def managed_user_password_problem(pwd: str, username: str = '') -> str | None:
     return None
 
 
+def panel_user_password_problem(pwd: str, username: str = '') -> str | None:
+    """Use the root-grade policy for Manager panel users.
+
+    Portal members keep the separate eight-character compatibility policy above;
+    accounts that can sign in to the management panel must all use the stronger
+    twelve-character policy, regardless of whether their role is ``admin`` or
+    ``account_admin``.
+    """
+    return password_problem(pwd, username)
+
+
 def weak_admin_passwords(*, stop: threading.Event | None = None) -> list[str]:
     """启动时检测**存量**管理员是否仍在用已知弱口令。
 

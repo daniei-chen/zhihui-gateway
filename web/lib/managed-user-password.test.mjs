@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   MANAGED_USER_MIN_PASSWORD_LENGTH,
   ROOT_USER_MIN_PASSWORD_LENGTH,
+  PANEL_USER_MIN_PASSWORD_LENGTH,
   isManagedUserPassword,
   canResetUserPassword,
 } from './managed-user-password.ts';
@@ -19,14 +20,15 @@ test('managed user passwords accept at least eight unmodified Unicode code point
   }
 });
 
-test('only the protected admin account retains the existing minimum-length reset rule', () => {
+test('all management-panel identities use the twelve-character reset rule', () => {
   assert.equal(ROOT_USER_MIN_PASSWORD_LENGTH, 12);
+  assert.equal(PANEL_USER_MIN_PASSWORD_LENGTH, 12);
   assert.equal(canResetUserPassword('admin', '0123456789'), false);
   assert.equal(canResetUserPassword('admin', 'Root-Password!'), true);
   for (const username of ['alice', 'other-super-admin']) {
-    assert.equal(canResetUserPassword(username, '01234567'), true);
+    assert.equal(canResetUserPassword(username, '01234567'), false);
     assert.equal(canResetUserPassword(username, 'Root-Password!'), true);
-    assert.equal(canResetUserPassword(username, '12345678901'), true);
+    assert.equal(canResetUserPassword(username, '12345678901'), false);
     assert.equal(canResetUserPassword(username, '\u{1f600}'.repeat(7)), false);
   }
 });

@@ -271,7 +271,7 @@ test('Qoder hourly highlight follows the engine calendar, not the browser timezo
   assert.match(source, /hourlySeries\(hourly, platform === 'qoder' \? hourly\[0\]\?\.current_hour \?\? undefined : nowTick\?\.hour\)/);
 });
 
-test('user password reset keeps root policy distinct, preserves raw input and clears on close', async () => {
+test('user password reset applies the panel policy, preserves raw input and clears on close', async () => {
   const policy = load('lib/managed-user-password.ts', {});
   const jsx = (type, props) => ({type, props});
   for (const username of ['admin', 'alice']) {
@@ -303,8 +303,8 @@ test('user password reset keeps root policy distinct, preserves raw input and cl
     }
     assert.equal(writes.length, 0);
     if (username !== 'admin') {
-      for (const value of ['123456789', '1234567890', '12345678901', 'long-mixed-password',
-        '\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b', '\u{1f600}'.repeat(8)]) {
+      for (const value of ['123456789012', '1234567890123', 'long-mixed-password',
+        'panel-unicode-password!', '\u{1f600}'.repeat(12)]) {
         input(tree).props.onChange({target: {value}});
         tree = render();
         assert.equal(input(tree).props.value, value);
@@ -314,22 +314,22 @@ test('user password reset keeps root policy distinct, preserves raw input and cl
       tree = render();
       assert.equal(tree.props.confirmDisabled, true);
     }
-    input(tree).props.onChange({target: {value: username === 'admin' ? 'Root-Password!' : 'mixed123'}});
+    input(tree).props.onChange({target: {value: username === 'admin' ? 'Root-Password!' : 'Panel-user-password!'}});
     tree = render();
     assert.equal(tree.props.confirmDisabled, false);
     await tree.props.onConfirm();
-    assert.deepEqual(JSON.parse(JSON.stringify(writes[0])), {name: username, payload: {password: username === 'admin' ? 'Root-Password!' : 'mixed123'}});
+    assert.deepEqual(JSON.parse(JSON.stringify(writes[0])), {name: username, payload: {password: username === 'admin' ? 'Root-Password!' : 'Panel-user-password!'}});
     tree.props.onOpenChange(false);
     assert.equal(input(render()).props.value, '');
   }
 });
 
-test('five languages explain managed password minimum and translate the backend rejection', () => {
-  const phrase = '用户登录密码至少 8 位';
+test('five languages explain panel password minimum and translate the backend rejection', () => {
+  const phrase = '密码至少 12 位';
   for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
     const dict = JSON.parse(fs.readFileSync(path.join(root, 'lib/i18n/locales', locale + '.json'), 'utf8'));
     for (const key of ['managedPasswordHint', 'managedPasswordPlaceholder', 'resetManagedPasswordDesc']) {
-      assert.match(dict.settings[key], /8/, locale + ':' + key);
+       assert.match(dict.settings[key], /12/, locale + ':' + key);
     }
     if (locale === 'zh-CN') assert.deepEqual(dict.phrases, {});
     else assert.ok(dict.phrases[phrase], locale);
