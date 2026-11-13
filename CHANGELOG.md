@@ -3,6 +3,22 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.4] - 2026-11-13
+
+这是一次发布信任链与不停机迁移修复版本：修正 Ed25519 preflight、运行清单生成、前端清单签名和 writer inventory 的边界误报。
+
+### 安全与发布
+
+- managed release 清单现在绑定实际 `server/` 与 `deploy/` 闭包，强制 Ed25519 签名、权限校验、路径闭包和无字节码缓存。
+- 新增 web/out manifest 生成与签名工具；前端 serving 树、release 树和 next pool 都必须通过同一信任锚校验。
+- 修正 writer inventory 将 steward watchdog 误判为 writer 的规则，避免合法迁移被错误阻断；Nginx upstream keepalive 64 纳入 maintenance gate 的明确允许集合。
+
+### 迁移与边界
+
+- migration prepare 会验证实际运行 cwd、current 指针、前代身份、额外 writer 和 Nginx upstream；任何身份漂移都 fail closed。
+- 生产切换仍需单独验证 GitHub 产物、国内候选、签名闭包和运行健康；本版本不改变账号凭据、账本或计费语义。
+
+
 ## [1.2.3] - 2026-11-13
 
 这是一次不停机发布工程化版本：把双代服务交接、共享准入、排空、回滚和发布证据收敛为可验证的控制链。
