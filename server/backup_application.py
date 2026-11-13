@@ -8,6 +8,14 @@ sys.dont_write_bytecode = True
 from pathlib import Path
 import fcntl,hashlib,io,json,os,sqlite3,stat,tarfile,tempfile,time,subprocess
 
+# Recovery invokes this file directly with Python's isolated mode (-I), which
+# intentionally omits the script directory from import search.  Keep the
+# standalone recovery entrypoint self-contained so its final verified-status
+# publication can import the sibling module without depending on PYTHONPATH.
+_SERVER_DIR = str(Path(__file__).resolve().parent)
+if _SERVER_DIR not in sys.path:
+    sys.path.insert(0, _SERVER_DIR)
+
 BASE=Path('/root/backups/workbuddy-daily')
 MANAGER=Path('/opt/workbuddy-manager')
 GATEWAY=Path('/opt/workbuddy2api')
