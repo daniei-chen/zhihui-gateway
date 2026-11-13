@@ -16,7 +16,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md">Read the 1.2.10 changelog</a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.10-en.svg" width="166" height="44" alt="Read the 1.2.10 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
