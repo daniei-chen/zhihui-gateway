@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.14 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.15 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,26 +16,26 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.14.svg" width="166" height="44" alt="Read the 1.2.14 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.15.svg" width="166" height="44" alt="Read the 1.2.15 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1214--provider-rejection-diagnostics) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1215--cross-platform-release-consistency) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.14 · Provider rejection diagnostics
+## 1.2.15 · Cross-platform release consistency
 
-**Current product version: `v1.2.14`.** This release makes explicit provider channel, prompt-size and rate-limit rejections visible as `upstream_rejected`; conservative billing and ledger evidence boundaries remain in force.
+**Current product version: `v1.2.15`.** This release removes a case-colliding documentation path from the release package, aligns the user documentation contract, and adds it to the deterministic regression gate; request, billing and ledger evidence boundaries remain unchanged.
 
 - **Consistent version entry:** the first-screen button, heading, bilingual summary and update link all point to the current Release.
-- **Behavior preserved:** v1.2.12 provider rejection classification, conservative ledger review and Manager handoff boundaries remain the current contract.
+- **Package consistency:** the same user documentation set is shipped from Linux and Windows builds without case-colliding paths.
 - **Honest runtime boundary:** the README describes verified release and runtime evidence without treating the source version page as production proof.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.14)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.15)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -170,9 +170,10 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.14 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.15 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
-| Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Historical audit boundary](docs/AUDIT-0.0.3.md) |
+| Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Security audit report](docs/SECURITY-AUDIT.md) |
+| User documentation | [Usage](docs/usage.md) · [Features](docs/features.md) · [Screenshots](docs/screenshots.md) · [Development](docs/DEVELOPMENT.md) · [Security notes](docs/security-notes.md) · [API tokens](docs/api-tokens.md) · [Account egress](docs/account-proxy-routes.md) · [Security audit](docs/SECURITY-AUDIT.md) · [Release signing](docs/release-signing.md) |
 
 Local development is not a one-command installation of all three engines. Provider engines, account authorization, authentication and persistence need separate review.
 

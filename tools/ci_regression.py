@@ -22,6 +22,7 @@ MODULES = (
     "server.tests.test_product_origin",
     "server.tests.test_changelog",
     "server.tests.test_readme_i18n",
+    "server.tests.test_docs_packaging",
     "server.tests.test_release_integrity",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",

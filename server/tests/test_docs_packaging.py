@@ -47,6 +47,8 @@ def _linked_docs(text: str, parent: Path = Path('.')) -> set[str]:
     out: set[str] = set()
     for target in re.findall(r'\]\(([^)]+)\)', text):
         target = target.split('#')[0].strip()
+        if not target.lower().endswith('.md'):
+            continue
         if target.startswith('docs/'):
             relative = Path(target[len('docs/'):])
         elif target.endswith('.md') and not re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', target):
@@ -99,7 +101,8 @@ class DocsPackagingTest(unittest.TestCase):
         cls.closure = _closure()
 
     def test_nested_release_notes_and_relative_links_are_not_dropped(self):
-        self.assertIn('releases/v0.0.7.md', self.closure)
+        self.assertIn('releases/v0.0.7.md', _linked_docs(
+            '[release](docs/releases/v0.0.7.md)'))
         self.assertIn('V007-OPERATIONS.md', _linked_docs(
             '[operations](../V007-OPERATIONS.md)', Path('releases')))
         self.assertEqual(_linked_docs('[outside](../../README.md)', Path('releases')), set())
@@ -124,6 +127,22 @@ class DocsPackagingTest(unittest.TestCase):
     def test_whitelisted_files_exist(self) -> None:
         missing = [n for n in self.whitelist if not (_DOCS / n).is_file()]
         self.assertEqual(missing, [], f'白名单里的文件不存在：{missing}')
+
+    def test_docs_are_case_collision_free(self) -> None:
+        """大小写不应让 Linux 与 Windows 得到不同的 docs 工作树。"""
+        result = subprocess.run(
+            ['git', 'ls-files', '-z'], cwd=_ROOT, check=True,
+            capture_output=True,
+        )
+        files = [name for name in result.stdout.decode().split('\x00') if name]
+        folded: dict[str, list[str]] = {}
+        for name in files:
+            folded.setdefault(name.casefold(), []).append(name)
+        collisions = {key: sorted(names) for key, names in folded.items()
+                      if len(names) > 1}
+        self.assertEqual(collisions, {}, f'docs 存在大小写冲突：{collisions}')
+        self.assertIn('docs/DEVELOPMENT.md', files)
+        self.assertNotIn('docs/development.md', files)
 
     def test_images_are_shipped(self) -> None:
         """截图是 README 的一部分：少了它们用户看到的是裂图。"""

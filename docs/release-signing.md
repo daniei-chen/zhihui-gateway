@@ -1,6 +1,6 @@
-# v1.2.14 发布、摘要与运行信任合同
+# v1.2.15 发布、摘要与运行信任合同
 
-> 当前权威入口：[PRODUCT-RELEASE.md](PRODUCT-RELEASE.md)。本文件说明源码发布与国内受控运行之间的边界；GitHub Release 本身不等于服务器已经切换。
+> 当前版本入口：[CHANGELOG.md](../CHANGELOG.md)。本文件说明源码发布与国内受控运行之间的边界；GitHub Release 本身不等于服务器已经切换。
 
 ## 先区分源码、产物和运行状态
 

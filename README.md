@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.14 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.15 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,26 +16,26 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.14.svg" width="166" height="44" alt="查看 1.2.14 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.15.svg" width="166" height="44" alt="查看 1.2.15 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1214--上游拒绝诊断精度修复) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#1215--发布包跨平台一致性修复) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.14 · 上游拒绝诊断精度修复
+## 1.2.15 · 发布包跨平台一致性修复
 
-**本次版本：`v1.2.14`**。这一版补充明确上游拒绝的诊断分类，让渠道校验拒绝、提示词过长和上游限流不再混入 unexplained；扣费和账本证据边界继续保持保守。
+**本次版本：`v1.2.15`**。这一版修复 Linux 与 Windows 发布包的文档大小写冲突，统一用户文档入口并把发布包合同加入正式回归门禁；网关请求、扣费和账本证据边界保持不变。
 
 - **版本入口一致**：首屏按钮、标题、双语摘要和“本次更新”都指向当前 Release，避免进入旧版本说明。
-- **行为边界保留**：v1.2.12 的上游拒绝分类、保守账本核对和 Manager 交接说明继续作为当前合同。
+- **发布包一致**：不再同时存在大小写相同的文档路径，Linux 构建和 Windows 检出得到同一份用户文档。
 - **线上状态如实**：README 只描述已核对的发布与运行边界，不把源码版本页面当作生产状态证明。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.14)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.15)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -171,9 +171,10 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.14 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.15 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
-| 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
+| 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [安全审查报告](docs/SECURITY-AUDIT.md) |
+| 用户文档 | [使用](docs/usage.md) · [功能](docs/features.md) · [截图](docs/screenshots.md) · [开发](docs/DEVELOPMENT.md) · [安全说明](docs/security-notes.md) · [API Token](docs/api-tokens.md) · [账号出口](docs/account-proxy-routes.md) · [审计报告](docs/SECURITY-AUDIT.md) · [发布签名](docs/release-signing.md) |
 
 本地开发不是一键安装完整三平台服务。引擎、账号授权、认证与持久化需要单独配置，静态导出也不包含后端。
 
