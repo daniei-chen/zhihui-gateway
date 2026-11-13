@@ -99,6 +99,30 @@ jobs:
           cp -r server "$STAGE/"
           mkdir -p "$STAGE/web" && cp -r web/out "$STAGE/web/"
           cp -r deploy "$STAGE/"
+          # Root README references a small, synthetic visual preview set. Keep the
+          # release package self-contained without shipping the full site source tree.
+          mkdir -p "$STAGE/site/home/preview" "$STAGE/site/home-source"
+          for required in \
+              site/home/index.html \
+              site/home-source/INTEGRATION.md \
+              site/home/preview/accounts-desktop.jpg \
+              site/home/preview/dashboard-desktop.jpg \
+              site/home/preview/dashboard-mobile.jpg \
+              site/home/preview/keys-desktop.jpg \
+              site/home/preview/models-desktop.jpg \
+              site/home/preview/stats-desktop.jpg \
+              site/home/preview/manifest.json; do
+            test -s "$required" || {
+              echo "::error::README 视觉资产缺失：$required"
+              exit 1
+            }
+          done
+          cp site/home/index.html "$STAGE/site/home/index.html"
+          cp site/home-source/INTEGRATION.md "$STAGE/site/home-source/INTEGRATION.md"
+          for preview in accounts-desktop.jpg dashboard-desktop.jpg dashboard-mobile.jpg \
+              keys-desktop.jpg models-desktop.jpg stats-desktop.jpg manifest.json; do
+            cp "site/home/preview/$preview" "$STAGE/site/home/preview/$preview"
+          done
           # These two host-side serving gates are part of the signed, reproducible
           # release closure.  A production host must not silently restore them
           # from an older release during staging.
@@ -638,6 +662,7 @@ jobs:
             windows/launcher/dist/WorkBuddyManagerSetup.exe \
             windows/launcher/dist/WorkBuddyManagerSetup.exe.sha256
           echo "已上传 Windows 安装器（含 .sha256）"
+
 
 
 
