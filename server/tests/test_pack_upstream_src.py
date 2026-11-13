@@ -68,7 +68,12 @@ class SecretExclusionTest(unittest.TestCase):
         drop = ['.env', '.env.local', 'users.json', 'manager.db', 'manager.db-wal',
                 'update.log', 'logs/today.log', 'data/state.json',
                 'auths/workbuddy-u.json', 'config.json', '.venv/lib/x.py',
-                'server/__pycache__/main.pyc']
+                'server/__pycache__/main.pyc',
+                'auths.backup-2026-10-25/workbuddy-old.json',
+                'config.json.bak-2026-09-30-161355',
+                'config.json.pre-breaker-tune-20261027',
+                '.local-config/docker-compose.override.yml',
+                'nested/backups/credentials.json']
         for rel in keep + drop:
             self._write(rel)
 
@@ -129,3 +134,4 @@ class PackRoundTripTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -51,6 +51,8 @@ TOP = 'workbuddy2api'
 # auths / data，`.env`、`*.db`、`logs/` 会被原样打进公开资产）。
 EXCLUDE_DIRS = {'.git', '__pycache__', 'node_modules', '.venv', '.runtime',
                 'logs', 'tmp', 'data', 'auths'}
+EXCLUDE_DIR_PREFIXES = ('auths.backup', 'auths.bak', 'backup', 'backups',
+                        '.local-config')
 EXCLUDE_SUFFIX = {'.pyc', '.pyo', '.log', '.db', '.db-wal', '.db-shm',
                   '.sqlite', '.sqlite3'}
 EXCLUDE_NAMES = {'config.json', 'auths', 'data', 'users.json',
@@ -80,14 +82,22 @@ def _iter_files(root: Path) -> list[Path]:
         if not p.is_file():
             continue
         rel = p.relative_to(root)
-        if any(part in EXCLUDE_DIRS for part in rel.parts):
+        if any(part in EXCLUDE_DIRS or part.startswith(EXCLUDE_DIR_PREFIXES)
+               for part in rel.parts):
             continue
         if p.suffix in EXCLUDE_SUFFIX:
             continue
         # 只排除**顶层**的运行时文件/目录：源码树里若有 scripts/config.json 之类的
         # 示例文件，那是要保留的。`.env*` 一律排除（含 .env.local 这类备份）。
-        if len(rel.parts) == 1 and (rel.parts[0] in EXCLUDE_NAMES
-                                    or rel.parts[0].startswith('.env')):
+        top_name = rel.parts[0]
+        if len(rel.parts) == 1 and (
+                top_name in EXCLUDE_NAMES
+                or top_name.startswith('.env')
+                or top_name.startswith('config.json.')
+                or top_name.startswith('config.json-')
+                or top_name.startswith('auths.backup')
+                or top_name.startswith('auths.bak')
+                or top_name.endswith(('.bak', '.backup', '.old', '.orig', '~'))):
             continue
         out.append(p)
     return out
@@ -194,3 +204,4 @@ LICENSE 与版权声明。
 
 if __name__ == '__main__':
     sys.exit(main())
+
