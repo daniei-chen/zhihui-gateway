@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "智汇网关",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "repository": "daniei-chen/zhihui-gateway",
   "branch": "main",
   "release_channel": "github-actions",
