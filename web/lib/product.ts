@@ -3,4 +3,3 @@ export const PRODUCT_VERSION = '1.2.16';
 export const PRODUCT_REPOSITORY = 'daniei-chen/zhihui-gateway';
 export const PRODUCT_REPOSITORY_URL = `https://github.com/${PRODUCT_REPOSITORY}`;
 
-
