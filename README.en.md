@@ -21,7 +21,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 <br /><br />
 
-[This release](#1213--release-documentation-consistency) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1214--provider-rejection-diagnostics) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
