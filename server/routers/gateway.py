@@ -8,6 +8,7 @@ import sys
 from urllib.parse import urlsplit
 import logging
 import math
+from pathlib import Path
 import re
 import threading
 import time
@@ -42,6 +43,67 @@ _THREEWAY_SPEC = {
     'qoder': ('http://127.0.0.1:8799', '/opt/workbuddy-manager/engine/secrets/qoder_upstream_key'),
     'trae': ('http://127.0.0.1:8080', '/opt/workbuddy-manager/engine/secrets/aiwork_api_key'),
 }
+_TRAE_UPSTREAM_FILE = '/opt/workbuddy-manager/engine/var/trae_gateway_base'
+_DYNAMIC_UPSTREAM_LOCK = threading.Lock()
+_DYNAMIC_UPSTREAM_CACHE: dict[str, tuple[tuple[object, ...], str | None]] = {}
+
+
+def _safe_loopback_upstream(value: str) -> str | None:
+    """Accept only an HTTP loopback endpoint with no path or credentials.
+
+    The route file is an operational handoff point used during a drained
+    upstream cutover.  Keeping its grammar narrower than a general URL makes
+    a bad or tampered file fail back to the signed default instead of turning
+    the gateway into an arbitrary proxy.
+    """
+    try:
+        parsed = urlsplit(value.strip())
+        hostname = parsed.hostname
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (parsed.scheme != 'http' or hostname not in ('127.0.0.1', '::1')
+            or port is None or not 1 <= port <= 65535
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+        return None
+    host = '[::1]' if hostname == '::1' else hostname
+    return f'http://{host}:{port}'
+
+
+def _threeway_base(name: str, default: str) -> str:
+    """Read the optional atomic Trae route handoff without per-request parsing."""
+    if name != 'trae':
+        return default
+    route_path = os.environ.get('WB_TRAE_UPSTREAM_FILE', _TRAE_UPSTREAM_FILE)
+    route = Path(route_path)
+    if route.is_symlink():
+        return default
+    try:
+        info = route.stat()
+        marker = (route_path, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    except OSError:
+        return default
+    # The endpoint is not secret, but an untrusted writer must not be able to
+    # race the operator's handoff with a local service choice.  The published
+    # file is root-owned in production and intentionally read-only to group/
+    # others; the mode check keeps the same contract in portable deployments.
+    if os.name == 'posix' and info.st_mode & 0o022:
+        return default
+    with _DYNAMIC_UPSTREAM_LOCK:
+        cached = _DYNAMIC_UPSTREAM_CACHE.get(name)
+        if cached is not None and cached[0] == marker:
+            return cached[1] or default
+        try:
+            raw = route.read_text(encoding='ascii')
+        except (OSError, UnicodeDecodeError):
+            base = None
+        else:
+            base = _safe_loopback_upstream(raw)
+        _DYNAMIC_UPSTREAM_CACHE[name] = (marker, base)
+        if base is None:
+            logger.warning('invalid Trae upstream handoff; retaining trusted default')
+        return base or default
 
 
 def _threeway_upstream(name: str) -> dict | None:
@@ -49,7 +111,7 @@ def _threeway_upstream(name: str) -> dict | None:
     spec = _THREEWAY_SPEC.get(name)
     if not spec:
         return None
-    base, keyfile = spec
+    base, keyfile = _threeway_base(name, spec[0]), spec[1]
     try:
         with open(keyfile, encoding='utf-8') as fh:
             api_key = fh.read().strip()
