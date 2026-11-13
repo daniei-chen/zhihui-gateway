@@ -3,6 +3,19 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.5] - 2026-11-13
+
+这是一次恢复链热修复版本：修正 isolated Python 直接执行 backup_application.py 时无法导入 backupstatus 的问题，恢复每日 verified backup status 发布。
+
+### 备份与恢复
+
+- recovery 入口在 `python -I -B` 下显式绑定自身 server 目录，backup_application 的恢复校验和健康状态发布不再依赖外部 PYTHONPATH。
+- 保留 restore_check、配对账本隔离恢复、Ed25519 release closure 和真实文件摘要校验；备份失败继续 fail closed，不会伪造健康状态。
+
+### 版本边界
+
+- 本版本不自动修改账本 unknown 行或管理员密码；这两类生产数据必须保留可审计的人工作业证据。
+
 ## [1.2.4] - 2026-11-13
 
 这是一次发布信任链与不停机迁移修复版本：修正 Ed25519 preflight、运行清单生成、前端清单签名和 writer inventory 的边界误报。

@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.4 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.5 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,7 +16,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md">Read the 1.2.4 changelog</a>
+<a href="CHANGELOG.md">Read the 1.2.5 changelog</a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
@@ -27,15 +27,15 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 <br />
 
-## 1.2.4 · Zero-downtime release engineering
+## 1.2.5 · Zero-downtime release engineering
 
-**Current product version: `v1.2.4`.** This release makes dual-generation handoff, shared admission, draining, rollback and release evidence reviewable and testable.
+**Current product version: `v1.2.5`.** This release makes dual-generation handoff, shared admission, draining, rollback and release evidence reviewable and testable.
 
 - **Zero-downtime handoff:** the writer guard uses `server.serve`, a bounded 75-second graceful drain and shared admission; helper generations do not run background jobs.
 - **Routing and rollback:** the inference-only relay uses atomic monotonic route epochs, health rollback and deferred retirement while old requests remain active.
 - **Evidence and security:** Ed25519 two-phase signing, restore evidence, read-only retention audit, fail-closed watchdog state and host closure manifests are covered by gates.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.4)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.5)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -170,7 +170,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.4 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Product release contract](docs/PRODUCT-RELEASE.md) · [1.2.5 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Historical audit boundary](docs/AUDIT-0.0.3.md) |
 
