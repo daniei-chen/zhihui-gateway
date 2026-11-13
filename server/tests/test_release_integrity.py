@@ -145,5 +145,33 @@ class LegacyUpdaterBoundaryTest(unittest.TestCase):
             self.assertIn(requirement, doc, '文档缺少当前受控发布要求: ' + requirement)
 
 
+class ReadmeVisualAssetContractTest(unittest.TestCase):
+    """README 的离线视觉引用必须进入 tar/zip/Windows payload。"""
+
+    _ASSETS = (
+        'site/home/index.html',
+        'site/home-source/INTEGRATION.md',
+        'site/home/preview/accounts-desktop.jpg',
+        'site/home/preview/dashboard-desktop.jpg',
+        'site/home/preview/dashboard-mobile.jpg',
+        'site/home/preview/keys-desktop.jpg',
+        'site/home/preview/models-desktop.jpg',
+        'site/home/preview/stats-desktop.jpg',
+        'site/home/preview/manifest.json',
+    )
+
+    def test_source_assets_and_both_packagers_are_aligned(self) -> None:
+        for relative in self._ASSETS:
+            self.assertTrue((_ROOT / relative).is_file(), f'缺少 README 视觉资产：{relative}')
+
+        workflow = (_ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
+        launcher = (_ROOT / 'windows/launcher/build.ps1').read_text(encoding='utf-8')
+        for relative in self._ASSETS:
+            self.assertIn(relative.replace('/', '/'), workflow,
+                          f'Linux 发布器未纳入 README 视觉资产：{relative}')
+            self.assertIn(relative.replace('/', '\\'), launcher,
+                          f'Windows 发布器未纳入 README 视觉资产：{relative}')
+
+
 if __name__ == '__main__':
     unittest.main()

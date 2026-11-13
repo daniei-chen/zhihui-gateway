@@ -12,6 +12,7 @@
 - 删除旧的 `docs/development.md`，保留当前 `docs/DEVELOPMENT.md`，避免 Windows 工作树覆盖文件。
 - Release workflow 与 Windows launcher 使用同一份大写文档白名单；README 中英双语用户文档链接全部落在该白名单内。
 - 新增大小写路径冲突、文档引用闭包和实际发布白名单回归检查，避免再发布过时或缺失文档。
+- Release tar/zip 与 Windows payload 现在携带 README 实际引用的合成预览图、manifest、首页入口和集成说明；不把完整站点开发树带入安装包。
 
 
 ## [1.2.14] - 2026-11-14

@@ -526,6 +526,30 @@ Copy-Tree (Join-Path $repoRoot 'server') (Join-Path $stageDir 'server') @('__pyc
 Copy-Tree (Join-Path $repoRoot 'web\out') (Join-Path $stageDir 'web\out')
 Copy-Tree (Join-Path $repoRoot 'deploy') (Join-Path $stageDir 'deploy')
 
+# Root README 的合成预览必须在 Windows 安装包中可离线查看；只携带实际引用的
+# 小型资产，不把站点开发源码树整体塞进 payload。
+$stageSite = Join-Path $stageDir 'site'
+New-Item -ItemType Directory (Join-Path $stageSite 'home\preview') -Force | Out-Null
+New-Item -ItemType Directory (Join-Path $stageSite 'home-source') -Force | Out-Null
+$readmeVisualAssets = @(
+    'site\home\index.html',
+    'site\home-source\INTEGRATION.md',
+    'site\home\preview\accounts-desktop.jpg',
+    'site\home\preview\dashboard-desktop.jpg',
+    'site\home\preview\dashboard-mobile.jpg',
+    'site\home\preview\keys-desktop.jpg',
+    'site\home\preview\models-desktop.jpg',
+    'site\home\preview\stats-desktop.jpg',
+    'site\home\preview\manifest.json'
+)
+foreach ($relative in $readmeVisualAssets) {
+    $source = Join-Path $repoRoot $relative
+    if (-not (Test-Path $source -PathType Leaf)) { throw ('README 视觉资产缺失：' + $relative) }
+    $destination = Join-Path $stageDir $relative
+    New-Item -ItemType Directory (Split-Path $destination) -Force | Out-Null
+    Copy-Item $source $destination -Force
+}
+
 # windows\ 只带运行所需脚本（不携带 launcher 构建工具自身）
 $winScripts = @('start.cmd', 'stop.cmd', 'update.cmd', 'start.ps1', 'stop.ps1', 'update.ps1',
     'service-tools.ps1', 'prepare.ps1', 'python-env.ps1', 'README.md')
