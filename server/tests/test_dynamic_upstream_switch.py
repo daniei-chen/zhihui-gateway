@@ -1,4 +1,4 @@
-"""Contract tests for the atomic, loopback-only Trae route handoff."""
+"""Contract tests for atomic, loopback-only three-way route handoffs."""
 from __future__ import annotations
 
 import os
@@ -18,6 +18,7 @@ class DynamicUpstreamSwitchTest(unittest.TestCase):
         self.key = self.root / 'trae-key'
         self.key.write_text('test-key', encoding='utf-8')
         self.route = self.root / 'trae_gateway_base'
+        self.qoder_route = self.root / 'qoder_gateway_base'
         self.spec = {
             'qoder': ('http://127.0.0.1:8799', str(self.key)),
             'trae': ('http://127.0.0.1:8080', str(self.key)),
@@ -39,19 +40,30 @@ class DynamicUpstreamSwitchTest(unittest.TestCase):
             # A cache hit must not require reparsing the file for every request.
             self.assertEqual(gateway._threeway_upstream('trae')['base_url'],
                              'http://127.0.0.1:18080')
-            self.route.write_text('http://127.0.0.1:18081\n', encoding='ascii')
+            replacement = self.route.with_suffix('.next')
+            replacement.write_text('http://127.0.0.1:18081\n', encoding='ascii')
+            os.replace(replacement, self.route)
             self.assertEqual(gateway._threeway_upstream('trae')['base_url'],
                              'http://127.0.0.1:18081')
-            self.route.write_text('https://attacker.example/\n', encoding='ascii')
+            replacement.write_text('https://attacker.example/\n', encoding='ascii')
+            os.replace(replacement, self.route)
             gateway._DYNAMIC_UPSTREAM_CACHE.clear()
             self.assertEqual(gateway._threeway_upstream('trae')['base_url'],
                              'http://127.0.0.1:8080')
 
-    def test_route_handoff_never_changes_qoder(self) -> None:
+    def test_platform_route_files_are_isolated(self) -> None:
         self.route.write_text('http://127.0.0.1:18080\n', encoding='ascii')
         with mock.patch.dict(os.environ, {'WB_TRAE_UPSTREAM_FILE': str(self.route)}):
             self.assertEqual(gateway._threeway_upstream('qoder')['base_url'],
                              'http://127.0.0.1:8799')
+
+        self.qoder_route.write_text('http://127.0.0.1:18081\n', encoding='ascii')
+        with mock.patch.dict(os.environ, {'WB_QODER_UPSTREAM_FILE': str(self.qoder_route)}):
+            self.assertEqual(gateway._threeway_upstream('qoder')['base_url'],
+                             'http://127.0.0.1:18081')
+            # A Qoder handoff must not change Trae's independent route.
+            self.assertEqual(gateway._threeway_upstream('trae')['base_url'],
+                             'http://127.0.0.1:8080')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX mode bits are unavailable on this runner')
     def test_group_or_world_writable_route_is_ignored(self) -> None:
@@ -60,6 +72,11 @@ class DynamicUpstreamSwitchTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {'WB_TRAE_UPSTREAM_FILE': str(self.route)}):
             self.assertEqual(gateway._threeway_upstream('trae')['base_url'],
                              'http://127.0.0.1:8080')
+        self.qoder_route.write_text('http://127.0.0.1:18081\n', encoding='ascii')
+        self.qoder_route.chmod(0o666)
+        with mock.patch.dict(os.environ, {'WB_QODER_UPSTREAM_FILE': str(self.qoder_route)}):
+            self.assertEqual(gateway._threeway_upstream('qoder')['base_url'],
+                             'http://127.0.0.1:8799')
 
 
 if __name__ == '__main__':

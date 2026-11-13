@@ -43,7 +43,10 @@ _THREEWAY_SPEC = {
     'qoder': ('http://127.0.0.1:8799', '/opt/workbuddy-manager/engine/secrets/qoder_upstream_key'),
     'trae': ('http://127.0.0.1:8080', '/opt/workbuddy-manager/engine/secrets/aiwork_api_key'),
 }
-_TRAE_UPSTREAM_FILE = '/opt/workbuddy-manager/engine/var/trae_gateway_base'
+_THREEWAY_ROUTE_FILES = {
+    'qoder': '/opt/workbuddy-manager/engine/var/qoder_gateway_base',
+    'trae': '/opt/workbuddy-manager/engine/var/trae_gateway_base',
+}
 _DYNAMIC_UPSTREAM_LOCK = threading.Lock()
 _DYNAMIC_UPSTREAM_CACHE: dict[str, tuple[tuple[object, ...], str | None]] = {}
 
@@ -72,10 +75,11 @@ def _safe_loopback_upstream(value: str) -> str | None:
 
 
 def _threeway_base(name: str, default: str) -> str:
-    """Read the optional atomic Trae route handoff without per-request parsing."""
-    if name != 'trae':
+    """Read an optional atomic local route handoff without per-request parsing."""
+    if name not in _THREEWAY_ROUTE_FILES:
         return default
-    route_path = os.environ.get('WB_TRAE_UPSTREAM_FILE', _TRAE_UPSTREAM_FILE)
+    env_name = 'WB_%s_UPSTREAM_FILE' % name.upper()
+    route_path = os.environ.get(env_name, _THREEWAY_ROUTE_FILES[name])
     route = Path(route_path)
     if route.is_symlink():
         return default
@@ -102,7 +106,7 @@ def _threeway_base(name: str, default: str) -> str:
             base = _safe_loopback_upstream(raw)
         _DYNAMIC_UPSTREAM_CACHE[name] = (marker, base)
         if base is None:
-            logger.warning('invalid Trae upstream handoff; retaining trusted default')
+            logger.warning('invalid %s upstream handoff; retaining trusted default', name)
         return base or default
 
 
