@@ -17,6 +17,7 @@ PROPERTIES = ('Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlG
 DATA = '/opt/workbuddy-manager/data'
 RELEASES = '/opt/workbuddy-manager/releases/'
 SCRIPTS = (b'/usr/local/sbin/wb-budget-autoreconcile.py', b'backup_application.py')
+WRITER_MARKERS = (b'server.main:app', b'server.serve')
 
 
 def process_identity(proc, pid):
@@ -103,7 +104,7 @@ class LinuxInventory:
                 command = (path / 'cmdline').read_bytes()
                 if len(command) > 4 * 1024 * 1024:
                     raise Rejected('process command exceeds inspection bounds')
-                if (b'server.main:app' in command or b'/opt/workbuddy-manager/' in command
+                if (any(marker in command for marker in WRITER_MARKERS)
                         or any(script in command for script in SCRIPTS)):
                     reasons.add('manager-command')
                 try:
