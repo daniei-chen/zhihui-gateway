@@ -8,7 +8,7 @@
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": false,
-  "release_id": "v1.2.13",
+  "release_id": "v1.2.14",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "27707d05ebfa7bdbe2da405e3c555a9c558fe3913365bd37d671334d668c6084",
@@ -36,7 +36,7 @@
     "deploy/workbuddy-web-helper.service": "d5874fcb6bbc66ac5876213ca9ff596c05b3e735554f682148b91b71cb97ab32",
     "docker-compose.yml": "21abfa555b1da53c9e9bd54ddc7728d6c8898e3022e17df066c96826313e76ef",
     "docs/PRODUCT-RELEASE.md": "a56bf3b4c27743e842e517b26080dd0ccfe559e8189952dcf4c6caf0c407348c",
-    "docs/protected-customizations.json": "7bd760adc8e856b118a5798db64386987205cfe3144e65ea72f5750ed294cab3",
+    "docs/protected-customizations.json": "c81af36823c9d7ddd301478f0414fa70082bdf276d76e6e1563b3bbb0b2e045d",
     "docs/release-signing.md": "fde6423b46ddf88c631eca57e8675d0db90741272d813fbe58c74b41fb6f42ad",
     "ops/container-maintenance/maintenance.py": "7e2768235ee872dc6e9501a97254e96abf825355617086696f83d20677f38f72",
     "ops/writer-guard/host-files.json": "2754aff5743ee7664481452a2a5f5fb5f6496a58e33c10a0cb1cb02d1a769052",
@@ -88,6 +88,6 @@
   "source_commit": "",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
-  "version": "1.2.13"
+  "version": "1.2.14"
 }
 

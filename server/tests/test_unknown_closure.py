@@ -94,6 +94,15 @@ class UnknownClosureTest(unittest.TestCase):
         self._log('r-qoder-plan-reject', status=429,
                   error='{"code":112,"message":"quota/plan rejected",'
                         '"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}')
+        self._reserve('r-channel-reject')
+        self._log('r-channel-reject', status=400,
+                  error='{"code":11128,"message":"channel_check_rejected"}')
+        self._reserve('r-prompt-too-long')
+        self._log('r-prompt-too-long', status=400,
+                  error='{"code":"prompt_too_long","message":"request rejected"}')
+        self._reserve('r-rate-limit')
+        self._log('r-rate-limit', status=429,
+                  error='{"code":"rate_limit_exceeded","message":"request rejected"}')
         self._reserve('r-nolog')
         self._reserve('r-unexplained')
         self._log('r-unexplained', error='upstream timeout')
@@ -101,12 +110,12 @@ class UnknownClosureTest(unittest.TestCase):
         self.assertEqual(summary['by_class']['charged_partial'], 1)
         self.assertEqual(summary['by_class']['usage_present'], 1)
         self.assertEqual(summary['by_class']['client_cancelled'], 1)
-        self.assertEqual(summary['by_class']['upstream_rejected'], 2)
+        self.assertEqual(summary['by_class']['upstream_rejected'], 5)
         self.assertEqual(summary['by_class']['no_request_log'], 1)
         self.assertEqual(summary['by_class']['unexplained'], 1)
-        self.assertEqual(summary['unknown_total'], 7)
+        self.assertEqual(summary['unknown_total'], 10)
         self.assertEqual(summary['auto_reconcilable'], 0)
-        self.assertEqual(summary['needs_human'], 7)
+        self.assertEqual(summary['needs_human'], 10)
 
     # ── 2. 下界语义 ────────────────────────────────────────────────────
     def test_summary_bounds_are_estimates_not_bills(self) -> None:

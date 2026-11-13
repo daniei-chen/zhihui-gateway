@@ -485,10 +485,16 @@ UNKNOWN_CLASSES = ('charged_partial', 'usage_present', 'client_cancelled',
 #: 只认「请求没被上游处理」这一类标识；超时/断流不在其中。
 #: Qoder 的 quota/plan rejection 使用 429 + code=112，不能因为它不是 5xx
 #: 就落入 unexplained；它仍然只是拒绝证据，绝不等于零计费证据。
-_REJECTED_MARKERS = ('no_healthy_account', '"code":11102', '"code": 11102',
-                     '"code":112', '"code": 112', 'quota/plan rejected',
-                     'quota_exceeded', 'model_not_found', 'service info not found',
-                     'pricingUrl')
+_REJECTED_MARKERS = (
+    'no_healthy_account', '"code":11102', '"code": 11102',
+    '"code":112', '"code": 112', 'quota/plan rejected', 'quota_exceeded',
+    'model_not_found', 'service info not found', 'pricingUrl',
+    # These are explicit upstream refusal signals. They still do not prove
+    # zero provider-side billing; they only make the diagnostic bucket more
+    # precise than unexplained.
+    'channel_check_rejected', '"code":11128', '"code": 11128',
+    'prompt_too_long', 'rate_limit_exceeded',
+)
 
 _log = logging.getLogger('workbuddy.budget')
 
