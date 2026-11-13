@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.12 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.13 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,26 +16,26 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.12.svg" width="166" height="44" alt="查看 1.2.12 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.13.svg" width="166" height="44" alt="查看 1.2.13 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1212--上游拒绝诊断与账本可观测性) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#1213--发布文档一致性修复) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.12 · 上游拒绝诊断与账本可观测性
+## 1.2.13 · 发布文档一致性修复
 
-**本次版本：`v1.2.12`**。这一版把明确的上游配额/方案拒绝归入可识别的待核对分类，减少运行告警中的未知项，同时保留账本安全边界。
+**本次版本：`v1.2.13`**。这一版让 README 的版本入口、双语摘要、图形按钮和更新锚点与正式 Release 保持一致；v1.2.12 的网关行为与账本证据边界继续有效。
 
-- **上游拒绝分类**：明确的配额、方案拒绝和相关限流响应进入可识别的待核对记录，减少真实供应商问题被归入未知异常。
-- **账本证据边界**：证据不足的记录继续保留，不把拒绝或未知状态猜成零用量，也不自动释放用户额度。
-- **线上交接**：v1.2.12 已通过候选健康检查、签名闭包和 Manager 代际切换完成线上验收。
+- **版本入口一致**：首屏按钮、标题、双语摘要和“本次更新”都指向当前 Release，避免进入旧版本说明。
+- **行为边界保留**：v1.2.12 的上游拒绝分类、保守账本核对和 Manager 交接说明继续作为当前合同。
+- **线上状态如实**：README 只描述已核对的发布与运行边界，不把源码版本页面当作生产状态证明。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.12)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.13)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -171,7 +171,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.12 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.13 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 
