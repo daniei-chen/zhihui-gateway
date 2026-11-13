@@ -85,6 +85,16 @@ def _iter_files(root: Path) -> list[Path]:
         if any(part in EXCLUDE_DIRS or part.startswith(EXCLUDE_DIR_PREFIXES)
                for part in rel.parts):
             continue
+        name = rel.name
+        if (name.startswith('.env')
+                or name.startswith('config.json.bak')
+                or name.startswith('config.json.pre')
+                or name.startswith('auths.backup')
+                or name.startswith('auths.bak')
+                or name.endswith(('.bak', '.backup', '.old', '.orig', '~'))
+                or any(marker in name for marker in ('.bak-', '.backup-',
+                                                      '.old-', '.orig-'))):
+            continue
         if p.suffix in EXCLUDE_SUFFIX:
             continue
         # 只排除**顶层**的运行时文件/目录：源码树里若有 scripts/config.json 之类的
@@ -97,7 +107,9 @@ def _iter_files(root: Path) -> list[Path]:
                 or top_name.startswith('config.json-')
                 or top_name.startswith('auths.backup')
                 or top_name.startswith('auths.bak')
-                or top_name.endswith(('.bak', '.backup', '.old', '.orig', '~'))):
+                or top_name.endswith(('.bak', '.backup', '.old', '.orig', '~'))
+                or any(marker in top_name for marker in ('.bak-', '.backup-',
+                                                          '.old-', '.orig-'))):
             continue
         out.append(p)
     return out

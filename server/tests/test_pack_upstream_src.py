@@ -73,7 +73,10 @@ class SecretExclusionTest(unittest.TestCase):
                 'config.json.bak-2026-09-30-161355',
                 'config.json.pre-breaker-tune-20261027',
                 '.local-config/docker-compose.override.yml',
-                'nested/backups/credentials.json']
+                'nested/backups/credentials.json',
+                'docker-compose.override.yml.bak-20261008-213109',
+                'manager/.env.example',
+                'internal/server/handler.go.bak-1354']
         for rel in keep + drop:
             self._write(rel)
 
