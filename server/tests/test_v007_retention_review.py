@@ -128,6 +128,28 @@ class RetentionReviewTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             budgetreview.page(bucket='clear-all')
 
+    def test_review_archive_bucket_does_not_hide_supplier_rejection(self):
+        request_id = 'synthetic-rejected'
+        self.reservation(request_id)
+        db.execute(
+            'INSERT INTO request_logs(ts,key_id,status,request_id,terminal_state,'
+            'usage_source,error) VALUES(?,?,?,?,?,?,?)',
+            (self.old, 1, 502, request_id, 'upstream_error', 'unknown',
+             '{"error":{"code":"no_healthy_account"}}'))
+        # Preserve a historical marker that was incorrectly applied before the
+        # current archive policy excluded upstream_rejected.
+        db.execute(
+            'UPDATE budget_reservations SET resolution=? WHERE request_id=?',
+            (budget.ARCHIVE_RESOLUTION_PREFIX + 'historical marker', request_id))
+
+        archived = budgetreview.page(bucket='archived_pending', limit=100)
+        rejected = budgetreview.page(bucket='upstream_rejected', limit=100)
+
+        self.assertNotIn(request_id, {item['request_id'] for item in archived['items']})
+        item = next(item for item in rejected['items'] if item['request_id'] == request_id)
+        self.assertEqual(item['class'], 'upstream_rejected')
+        self.assertFalse(item['archived_pending'])
+
     def test_diagnostics_are_read_only_bounded_and_do_not_infer_wallet_freeze(self):
         self.reservation('synthetic-0')
         before = self.connection.total_changes

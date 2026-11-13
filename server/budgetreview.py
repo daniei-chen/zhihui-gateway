@@ -54,7 +54,12 @@ def page(*, limit=25, bucket='all', cursor=None, now=None):
         last = (row['created_at'], row['request_id'])
         record = logs.get(row['request_id'])
         classification = budget._classify(row, record)
-        archived = budget._is_archived(row) and classification in ('no_request_log', 'client_cancelled', 'upstream_rejected', 'unexplained')
+        # The review summary deliberately keeps upstream_rejected in the human
+        # queue: a supplier rejection is diagnostic evidence, not proof that
+        # no provider-side billing occurred.  Reuse budget's single source of
+        # truth here so historical resolution text cannot make that class look
+        # archived in the UI/API.
+        archived = budget._is_archived(row) and classification in budget.EVIDENCELESS_CLASSES
         if bucket == 'upstream_rejected' and classification != bucket:
             continue
         if bucket == 'archived_pending' and not archived:

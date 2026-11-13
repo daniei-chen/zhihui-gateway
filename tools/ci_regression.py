@@ -41,6 +41,7 @@ MODULES = (
     "server.tests.test_audit_release_signer",
     "server.tests.test_audit_restore_evidence",
     "server.tests.test_recovery_retention",
+    "server.tests.test_v007_retention_review",
     "server.tests.test_steward_watchdog",
     "server.tests.test_writer_guard_contract",
 )
