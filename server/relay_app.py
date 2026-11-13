@@ -13,8 +13,9 @@ import os
 from .rollingrelay import INFERENCE_PATHS, StreamingRelay
 
 
-def _address(name: str, default_port: int) -> str:
-    value = os.environ.get(name, f"http://127.0.0.1:{default_port}").strip()
+def _address(name: str, default: str) -> str:
+    """Read a backend URL with an explicit, schema-visible default."""
+    value = os.environ.get(name, default).strip()
     if not value:
         raise RuntimeError(f"{name} must not be empty")
     return value
@@ -32,8 +33,8 @@ def _paths() -> frozenset[str]:
 
 relay = StreamingRelay(
     {
-        "old": _address("WB_RELAY_BACKEND_OLD", 7866),
-        "new": _address("WB_RELAY_BACKEND_NEW", 7865),
+        "old": _address("WB_RELAY_BACKEND_OLD", "http://127.0.0.1:7866"),
+        "new": _address("WB_RELAY_BACKEND_NEW", "http://127.0.0.1:7865"),
     },
     os.environ.get("WB_RELAY_ROUTE_FILE", "/opt/workbuddy-manager/data/relay-route.json"),
     maximum=int(os.environ.get("WB_RELAY_MAX_CONNECTIONS", "128")),

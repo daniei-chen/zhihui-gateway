@@ -110,7 +110,11 @@ async def lifespan(app: FastAPI):
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
-    monitor_task = asyncio.create_task(operational.monitor())
+    # Take the first readiness sample before the monitor can publish a
+    # concurrent, partially-initialized result.  Starting the monitor first
+    # made the startup contract timing-dependent: /readyz could briefly report
+    # 503 even though initialization had completed successfully.
+    monitor_task = None
     # Portal accounts use a separate store; the persisted opt-in is off by default.
     from . import portalservice
     portal_checkins = None
@@ -205,6 +209,7 @@ async def lifespan(app: FastAPI):
         if config.BACKGROUND_JOBS:
             portal_checkins = asyncio.create_task(portalservice.automatic_loop())
         await operational.initialize_readiness()
+        monitor_task = asyncio.create_task(operational.monitor())
         yield
     finally:
         # A completed application lifetime must not leave expensive hash workers
@@ -249,15 +254,17 @@ async def lifespan(app: FastAPI):
         if instance_runtime is not None:
             await instance_runtime.close()
         heartbeat_task.cancel()
-        monitor_task.cancel()
+        if monitor_task is not None:
+            monitor_task.cancel()
         try:
             await heartbeat_task
         except asyncio.CancelledError:
             pass
-        try:
-            await monitor_task
-        except asyncio.CancelledError:
-            pass
+        if monitor_task is not None:
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
         from . import budgetowner
         budgetowner.close()
         tasklog.stop_collector()

@@ -119,7 +119,7 @@ def _node_major() -> int | None:
         return None
     try:
         out = subprocess.run([_NODE, '--version'], capture_output=True,
-                             text=True, timeout=15).stdout.strip()
+                             text=True, encoding='utf-8', errors='replace', timeout=15).stdout.strip()
         return int(out.lstrip('v').split('.')[0])
     except Exception:  # noqa: BLE001
         return None
@@ -186,7 +186,8 @@ class AsyncStateBehaviourTest(unittest.TestCase):
         self.assertTrue(_SCRIPT.is_file(), f'缺少测试脚本: {_SCRIPT}')
         proc = subprocess.run(
             [_NODE, '--experimental-strip-types', str(_SCRIPT)],
-            capture_output=True, text=True, timeout=120, cwd=str(_ROOT),
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=120, cwd=str(_ROOT),
         )
         out = (proc.stdout or '') + (proc.stderr or '')
         self.assertEqual(proc.returncode, 0, f'取数状态推导不符合预期：\n{out}')

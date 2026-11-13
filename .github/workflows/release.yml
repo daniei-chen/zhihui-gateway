@@ -162,6 +162,10 @@ jobs:
           done
           # docs-pack:end
           cp .env.example README.md README.en.md CHANGELOG.md LICENSE "$STAGE/"
+          # The documented opt-in upload helper is part of the release
+          # contract; users should not need to return to the source checkout
+          # to obtain it.
+          cp -r client "$STAGE/client"
           # 容器部署资产一并打包：用户下载发布包后可直接 docker compose up，
           # 不必再回仓库取这两个文件（实测漏打包过，Docker 用户拿不到）
           cp Dockerfile docker-compose.yml "$STAGE/"
@@ -662,7 +666,6 @@ jobs:
             windows/launcher/dist/WorkBuddyManagerSetup.exe \
             windows/launcher/dist/WorkBuddyManagerSetup.exe.sha256
           echo "已上传 Windows 安装器（含 .sha256）"
-
 
 
 

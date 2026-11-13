@@ -20,7 +20,8 @@ _MIN_MAJOR = 22
 _MAJOR = None
 if _NODE:
     try:
-        _out = subprocess.run([_NODE, '--version'], capture_output=True, text=True, timeout=20)
+        _out = subprocess.run([_NODE, '--version'], capture_output=True, text=True,
+                              encoding='utf-8', errors='replace', timeout=20)
         _MAJOR = int((_out.stdout or 'v0').strip().lstrip('v').split('.')[0])
     except Exception:  # noqa: BLE001
         _MAJOR = None
@@ -38,7 +39,8 @@ class UsageChartBehaviourTest(unittest.TestCase):
         def run_once() -> subprocess.CompletedProcess:
             return subprocess.run(
                 [_NODE, '--experimental-strip-types', str(_SCRIPT)],
-                capture_output=True, text=True, timeout=120, cwd=str(_ROOT),
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=120, cwd=str(_ROOT),
             )
 
         proc = run_once()

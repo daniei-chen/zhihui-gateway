@@ -26,7 +26,10 @@ def publish_verified_status(result, destination=DEFAULT_STATUS):
     fd, temporary = tempfile.mkstemp(prefix='.backup-status-', dir=destination.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            os.fchmod(stream.fileno(), 0o644)
+            if hasattr(os, 'fchmod'):
+                os.fchmod(stream.fileno(), 0o644)
+            else:  # pragma: no cover - exercised on Windows
+                os.chmod(temporary, 0o644)
             json.dump(public, stream, sort_keys=True)
             stream.write('\n')
             stream.flush()
