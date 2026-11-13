@@ -106,6 +106,23 @@ class LoadUsersDestructiveFallbackTest(unittest.TestCase):
         self.assertEqual(self._path.read_text(encoding='utf-8'), good,
                          '替换失败时旧文件应保持原样')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX ownership contract only')
+    def test_save_preserves_existing_service_ownership_contract(self) -> None:
+        """Atomic replacement must not make a guarded UID lose login access."""
+        self._write_good()
+        before = os.stat(self._path)
+        calls: list[tuple[str, int, int]] = []
+
+        def record(path, uid, gid):
+            calls.append((str(path), uid, gid))
+
+        with mock.patch('server.security.os.chown', side_effect=record):
+            security.save_users({'secret': 'S3', 'users': [], 'api_keys': []})
+
+        self.assertTrue(calls, 'users.json 的新 inode 没有恢复原属主/属组')
+        self.assertEqual(calls[-1][1:], (before.st_uid, before.st_gid))
+        self.assertEqual(os.stat(self._path).st_mode & 0o077, before.st_mode & 0o077)
+
 
 class InitialPasswordFileTest(unittest.TestCase):
     """issue #179：随机初始密码必须留一份能取回的明文，且改密后抹掉。

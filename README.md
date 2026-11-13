@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.7 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.8 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,7 +16,7 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md">查看 1.2.7 版本说明</a>
+<a href="CHANGELOG.md">查看 1.2.8 版本说明</a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
@@ -27,15 +27,15 @@
 
 <br />
 
-## 1.2.7 · 安全策略与发布闭包
+## 1.2.8 · 登录稳定性与上游切换
 
-**本次版本：`v1.2.7`**。这一版把管理端强密码策略与前端发布闭包纳入同一条可验证的控制链。
+**本次版本：`v1.2.8`**。这一版修复管理员改密后的登录稳定性问题，并把本机上游切换纳入可验证的控制链。
 
 - **管理端安全**：所有管理端角色的新建与重置密码至少 12 位，现有弱口令已通过受控轮换收敛。
 - **发布闭包**：前端 serving tree 与 pool 门禁脚本成为仓库和签名包的显式输入。
 - **不停机交接**：延续 writer guard、排空、共享准入、原子路由 epoch、恢复证据和 watchdog 门禁。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.7)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.8)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -171,7 +171,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.7 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [产品发布合同](docs/PRODUCT-RELEASE.md) · [1.2.8 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [历史审计边界](docs/AUDIT-0.0.3.md) |
 
