@@ -90,7 +90,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 只在**本仓库的默认分支**上构建，分支叫什么名字都行。其余分支的推送会进到这里
     # 但被跳过 —— 跳过不消耗构建时间，也不会让 latest 标签被 feature 分支覆盖。
     if: github.ref_name == github.event.repository.default_branch
@@ -103,11 +103,11 @@ jobs:
       #   · arm64 那一份靠 QEMU 交叉构建，若让装依赖与编译也跑在模拟环境里，
       #     会成为整个构建最慢的一段；
       #   · 前端构建失败会在**构建镜像之前**就报出来，不必等几分钟才发现。
-      # Node 版本与 Dockerfile 里的 node:20-slim 对齐。
+      # Node 版本与 Dockerfile 里的 node:22-slim 对齐。
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -246,3 +246,4 @@ jobs:
             echo ""
             echo "digest：\`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+

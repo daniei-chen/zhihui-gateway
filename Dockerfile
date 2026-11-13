@@ -46,7 +46,7 @@
 #   web/out 已存在 → 直接用它（发布包与 CI 走这条，秒过）
 #   否则           → 容器内 npm ci + next build（git clone 走这条，
 #                    用户不必先自行构建前端）
-FROM node:20-slim AS web-builder
+FROM node:22-slim AS web-builder
 
 WORKDIR /src
 
@@ -105,7 +105,6 @@ ENV PYTHONUNBUFFERED=1 \
     WB_INSTALL_DIR=/app \
     WB_DATA_DIR=/app/data \
     WB_STATIC_DIR=/app/web/out \
-    WB_AUTH_DIR=/opt/workbuddy2api/auths \
     WB_UPSTREAM_CONFIG=/opt/workbuddy2api/config.json \
     WB2API_BASE=http://127.0.0.1:7863 \
     WB_BASE_PATH="" \
@@ -165,4 +164,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7864/api/healthz', timeout=5).read()"]
 
 CMD ["python", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "7864"]
+
 

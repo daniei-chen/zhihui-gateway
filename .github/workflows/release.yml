@@ -36,7 +36,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 供后面的 installer 作业复用同一个 tag（workflow_dispatch 时 tag 来自输入）
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
@@ -574,7 +574,7 @@ jobs:
   # uv.exe 兜底（首次启动联网准备环境），不阻断出包。
   installer:
     needs: release
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
@@ -634,4 +634,5 @@ jobs:
             windows/launcher/dist/WorkBuddyManagerSetup.exe \
             windows/launcher/dist/WorkBuddyManagerSetup.exe.sha256
           echo "已上传 Windows 安装器（含 .sha256）"
+
 
