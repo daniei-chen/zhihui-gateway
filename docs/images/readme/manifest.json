@@ -108,6 +108,11 @@
       "path": "site/home/preview/stats-desktop.jpg",
       "bytes": 89576,
       "sha256": "169889f6994056ea00f89f58e305d10351b70594701669bf302ebc8a1db04492"
+    },
+    {
+      "path": "docs/images/readme/button-release-v1.2.18.svg",
+      "bytes": 1108,
+      "sha256": "103964b2f4780be0fc631ace139e2a80df96a79b073124b4fc58b751b2449ea6"
     }
   ]
 }

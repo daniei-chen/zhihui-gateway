@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.17 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.18 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,26 +16,27 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.17.svg" width="166" height="44" alt="查看 1.2.17 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.18.svg" width="166" height="44" alt="查看 1.2.18 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1217--账本核对视图与审计准确性) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#1218--受控迁移恢复与账本核对准确性) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.17 · 账本核对视图与审计准确性
+## 1.2.18 · 受控迁移恢复与账本核对准确性
 
-**本次版本：`v1.2.17`**。这一版修正历史上游拒绝记录在人工核对视图中的归档误标，确保“已归档待核对”只表示真正无上游证据的记录；不自动改动额度、扣费或账本状态。
+**本次版本：`v1.2.18`**。这一版把受控迁移恢复前的首次就绪检查纳入有界重试，并修正历史上游拒绝记录在人工核对视图中的归档误标；不自动改动额度、扣费或账本状态。
 
+- **恢复更稳**：候选服务已启动但受保护状态短暂变化时，控制器会在 90 秒窗口内重试，不会立即把事务误判为失败。
 - **核对状态准确**：历史上被写入归档文字的 `upstream_rejected` 仍显示为人工核对项，不会被归入归档待核对桶。
 - **证据边界不变**：供应商拒绝只改善诊断分类，不被推断为零计费，也不会触发自动结清。
-- **回归覆盖**：新增 API/UI 状态一致性测试，锁定历史标记、当前分类和人工核对队列的关系。
+- **验证覆盖**：新增控制器重试契约和 API 状态一致性测试，锁定迁移恢复与人工核对队列的关系。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.17)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.18)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -171,7 +172,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [受控部署](deploy/README.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.17 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.18 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [安全审查报告](docs/SECURITY-AUDIT.md) |
 | 用户文档 | [使用](docs/usage.md) · [功能](docs/features.md) · [截图](docs/screenshots.md) · [开发](docs/DEVELOPMENT.md) · [安全说明](docs/security-notes.md) · [API Token](docs/api-tokens.md) · [账号出口](docs/account-proxy-routes.md) · [审计报告](docs/SECURITY-AUDIT.md) · [发布签名](docs/release-signing.md) |
