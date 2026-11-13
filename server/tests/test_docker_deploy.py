@@ -248,65 +248,31 @@ class UpstreamUpdateGuardTest(unittest.TestCase):
 
 
 class ComposeCommandTest(unittest.TestCase):
-    """issue #28-1：容器内必须真的能调起 compose。
+    """最小权限容器不携带 Docker 控制面。
 
-    报障现象：一键更新上游时 `[Errno 2] No such file or directory: 'docker-compose'`
-    （exit 127），更新做到一半失败。
-
-    根因是**两条独立的错**叠在一起：
-      1. 镜像里的 docker CLI 来自官方静态包，而那个包**不含 compose 插件**
-         （实测 `tar -tzf docker-27.3.1.tgz` 只有 docker/dockerd/ctr/containerd*）；
-      2. update.py 的判据是「docker compose 不可用就退回 docker-compose」，
-         但容器里两个都没有 —— 于是必然走进退回分支、必然报错。
+    Docker socket、Docker CLI 和 Compose 插件等价于把宿主机运维权限交给
+    Web 进程。容器部署合同明确把更新与上游重载交给宿主受控流程；这些
+    测试锁住这个安全边界，避免历史「容器内一键更新」断言把高权限工具带回镜像。
     """
 
     def setUp(self) -> None:
         self.mod = _load_update_mod()
 
-    def test_dockerfile_installs_compose_plugin(self) -> None:
-        """镜像必须自己装 compose 插件（静态包里没有）。"""
+    def test_minimal_image_does_not_ship_docker_control_plane(self) -> None:
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        self.assertIn('cli-plugins', df,
-                      'Dockerfile 没装 compose 插件 —— 容器内一键更新上游必然 exit 127')
-        self.assertIn('docker compose version', df,
-                      '装完没有自检 —— 装错了要到运行时才暴露')
-        # 文件名必须是连字符形式，`docker compose` 子命令才认
-        self.assertIn('cli-plugins/docker-compose', df,
-                      '插件文件名不对（必须是 docker-compose），docker 不会把它当子命令')
+        self.assertNotIn('cli-plugins/docker-compose', df)
+        self.assertNotIn('download.docker.com', df)
+        self.assertNotIn('docker compose version', df)
 
-    def test_compose_plugin_arch_mapping(self) -> None:
-        """compose 的架构名与 Docker 的不完全一样（arm 是 armv7 而非 armhf）。"""
+    def test_minimal_image_has_no_arch_specific_docker_payload(self) -> None:
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        block = df[df.find('COMPOSE_VERSION'):]
-        block = block[:block.find('docker compose version')]
-        self.assertIn('armv7', block, 'armv7l 应映射到 armv7（compose 的命名）')
-        self.assertIn('aarch64', block, 'arm64 应映射到 aarch64')
+        self.assertNotIn('COMPOSE_VERSION', df)
+        self.assertNotIn('TARGETARCH', df)
+        self.assertNotIn('DOCKER_ARCH', df)
 
-    def test_compose_version_stays_on_v2(self) -> None:
-        """compose 必须停在 v2 —— 升到 v5 会让 `up --build` 重新坏掉。
-
-        发版前自审实测（读 compose 源码）：
-          · v5.0.0 **移除**了内置 builder，`up --build` 改为调用外部 buildx 插件
-            （`pkg/compose/build_bake.go` 里 `exec.CommandContext(ctx, buildx.Path...)`，
-            要求 buildx ≥ 0.17，且**没有回退分支**）；
-          · 我们的镜像只装 docker CLI + compose，**没有 buildx**；
-          · 于是升到 v5 会让「一键更新上游」重新失败在 `up --build` 上 ——
-            正是 issue #28 报的那个症状；
-          · v2 有 `build_classic.go`（内置 builder）兜底，所以不需要 buildx。
-
-        这条测试不看源码，只钉住版本号：**升级 compose 前请先确认 v2 之外的分支
-        是否还需要 buildx 插件**，否则用户的一键更新会再次中断。
-        """
+    def test_no_compose_version_is_declared_for_minimal_image(self) -> None:
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        m = re.search(r'ARG\s+COMPOSE_VERSION=(v[\d.]+)', df)
-        self.assertIsNotNone(m, 'Dockerfile 里没找到 COMPOSE_VERSION')
-        version = m.group(1)
-        major = int(version.lstrip('v').split('.')[0])
-        self.assertEqual(
-            major, 2,
-            f'compose 版本被改成了 {version}。若确实要升到 v3+，请先确认它是否仍'
-            f'自带 builder —— v5 起 `up --build` 依赖外部 buildx 插件，而本镜像'
-            f'没有装 buildx，会让一键更新上游失败。')
+        self.assertNotRegex(df, r'(?m)^ARG\s+COMPOSE_VERSION')
 
     def test_resolver_tries_both_forms(self) -> None:
         """解析顺序：宿主已有的 v2 → v1 → 都没有返回 None。"""
@@ -606,7 +572,7 @@ class DockerAssetsTest(unittest.TestCase):
         dc = yaml.safe_load((_ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
         args = (dc['services']['workbuddy-manager'].get('build') or {}).get('args') or {}
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        for name in ('DOCKER_CLI_BASE', 'COMPOSE_URL_PREFIX', 'BASE_PATH'):
+        for name in ('BASE_PATH',):
             self.assertIn(name, args, f'compose 没有暴露 {name}')
             self.assertRegex(df, rf'(?m)^ARG\s+{name}',
                              f'Dockerfile 未声明 {name} —— compose 传了也会被忽略')
@@ -677,19 +643,12 @@ class DockerAssetsTest(unittest.TestCase):
         self.assertTrue(any('/opt/workbuddy2api' in v for v in vols),
                         '未挂载上游目录 —— 容器版将无法更新上游')
 
-    def test_docker_socket_mounted_for_full_capability(self) -> None:
-        """默认挂载 docker.sock，使容器版与宿主部署能力对齐。
-
-        这是**判断修正**：初版刻意不挂，理由写成"挂了等于把宿主 root 交给容器"。
-        但宿主部署本来就是 root（systemd 无 User=），而 root 进程本来就能
-        `docker run -v /:/host` —— 两者权限等价，不挂只是让功能残缺。
-        若不想要，注释掉即可（功能会自动降级并如实提示）。
-        """
+    def test_docker_socket_is_not_mounted_in_minimal_container(self) -> None:
         import yaml
         dc = yaml.safe_load((_ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
         vols = [str(v) for v in (dc['services']['workbuddy-manager'].get('volumes') or [])]
-        self.assertTrue(any('docker.sock' in v for v in vols),
-                        '未挂 docker.sock —— 容器版将无法重载/更新上游')
+        self.assertFalse(any('docker.sock' in v for v in vols),
+                         '最小权限容器不应获得宿主 Docker 控制权')
 
     def test_env_file_actually_reaches_both_deployments(self) -> None:
         """`.env` 里的可选项（出口代理等）必须真能到达进程。
@@ -741,20 +700,13 @@ class DockerSocketPreflightTest(unittest.TestCase):
     容器里没有 root 可变，用户无从下手。
     """
 
-    def test_compose_group_add_uses_env_gid(self) -> None:
-        """compose 要能用宿主**真实的** docker 组 GID 给容器补组。"""
+    def test_minimal_compose_does_not_add_host_docker_group(self) -> None:
+        """不挂 Docker socket 时也不能把宿主 docker 组权限带进容器。"""
         import yaml
         dc = yaml.safe_load((_ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
         svc = dc['services']['workbuddy-manager']
         groups = [str(g) for g in (svc.get('group_add') or [])]
-        self.assertTrue(groups,
-                        '没配 group_add —— 容器内 uid 10001 用不了挂进来的 docker.sock')
-        self.assertTrue(any('DOCKER_GID' in g for g in groups),
-                        f'group_add 没用 DOCKER_GID 变量：{groups}（宿主 GID 因机器而异，写死必错）')
-        env = (_ROOT / '.env.example').read_text(encoding='utf-8')
-        self.assertIn('DOCKER_GID', env, '.env.example 没说明 DOCKER_GID 怎么取')
-        self.assertIn('stat -c', env,
-                      '要给出取 GID 的命令：stat -c %g /var/run/docker.sock')
+        self.assertEqual(groups, [])
 
     def test_diagnose_permission_denied_gives_socket_recipe(self) -> None:
         """socket 连不上的权限错误要指向 group_add，而不是"请用 root 执行"。"""
@@ -865,6 +817,21 @@ class ReleasePackageIncludesDockerAssetsTest(unittest.TestCase):
             self.assertIn(asset, block,
                           f'发布包没打进去 {asset} —— 用户拿到包也用不了容器部署')
 
+    def test_workflow_packages_frontend_serving_gates_and_refreshes_draft_notes(self) -> None:
+        wf = (_ROOT / '.github' / 'workflows' / 'release.yml').read_text(encoding='utf-8')
+        start = wf.find('组装发布目录')
+        end = wf.find('- name:', start + 10)
+        block = wf[start:end if end > 0 else len(wf)]
+        for asset in ('web_preflight.py', 'web_pool_preflight.py'):
+            self.assertIn(asset, block,
+                          f'发布包没打进去宿主前端门禁 {asset}')
+        release_start = wf.find('创建 Release 并上传产物')
+        release_end = wf.find('- name:', release_start + 10)
+        release_block = wf[release_start:release_end if release_end > 0 else len(wf)]
+        self.assertIn('gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_NOTES.md',
+                      release_block,
+                      '重跑草稿 Release 时必须刷新发布说明，不能保留旧摘要')
+
 
 class MultiArchImageTest(unittest.TestCase):
     """镜像必须同时支持 amd64 与 arm64。
@@ -905,44 +872,14 @@ class MultiArchImageTest(unittest.TestCase):
         self.assertIn('setup-qemu-action', wf,
                       '跨架构构建 arm64 层需要 QEMU（runner 是 amd64）')
 
-    def test_dockerfile_does_not_hardcode_x86_64(self) -> None:
+    def test_minimal_dockerfile_has_no_docker_cli_download(self) -> None:
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        # 只检查 docker CLI 下载那一行：别的注释里出现 x86_64 是正常的（解释用）
-        dl = [l for l in df.splitlines()
-              if 'download.docker.com' in l and not l.lstrip().startswith('#')]
-        self.assertTrue(dl, '找不到 docker CLI 下载行')
-        for line in dl:
-            self.assertNotIn('stable/x86_64', line,
-                             'docker CLI 下载地址写死了 x86_64 —— ARM 上装的是跑不起来的二进制')
+        self.assertNotIn('download.docker.com', df)
 
-    def test_dockerfile_maps_arch_names(self) -> None:
-        """架构名映射必须把 amd64→x86_64、arm64→aarch64 **映射正确**。
-
-        官方静态包目录名与 Docker 架构名不一致，是本项目踩过的坑；这里锁住映射，
-        避免以后有人"顺手简化"成直接用 TARGETARCH。
-
-        注意断言的是 `DOCKER_ARCH=` 的**取值**，而不是"文件里出现过 aarch64"——
-        后者是无效断言：`aarch64` 在 case 模式的左侧也出现，把 arm64 错映射成
-        x86_64 时它照样通过（本测试初版就是这样漏掉的）。
-        """
+    def test_dockerfile_does_not_define_arch_mapping_for_docker_cli(self) -> None:
         df = (_ROOT / 'Dockerfile').read_text(encoding='utf-8')
-        self.assertIn('TARGETARCH', df, '没使用 buildx 注入的 TARGETARCH')
-
-        # 解析 case 分支：`<patterns>)  DOCKER_ARCH=<value>`
-        mapping = {}
-        for patterns, value in re.findall(
-                r'^\s*([\w\s|]+?)\)\s*DOCKER_ARCH=(\w+)', df, re.M):
-            for name in patterns.split('|'):
-                mapping[name.strip()] = value
-
-        self.assertEqual(mapping.get('amd64'), 'x86_64', f'解析到的映射：{mapping}')
-        self.assertEqual(mapping.get('x86_64'), 'x86_64', f'解析到的映射：{mapping}')
-        self.assertEqual(mapping.get('arm64'), 'aarch64',
-                         f'arm64 没映射到 aarch64 —— ARM 上会装成 x86_64 二进制。'
-                         f'解析到的映射：{mapping}')
-        self.assertEqual(mapping.get('aarch64'), 'aarch64', f'解析到的映射：{mapping}')
-        # 未识别的架构必须构建期失败，而不是产出坏镜像
-        self.assertIn('exit 1', df, '不支持的架构应直接失败')
+        self.assertNotIn('TARGETARCH', df)
+        self.assertNotIn('DOCKER_ARCH', df)
 
 
 class UpstreamImagePublishTest(unittest.TestCase):

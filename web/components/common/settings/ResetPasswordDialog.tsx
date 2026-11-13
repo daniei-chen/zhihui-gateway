@@ -16,7 +16,7 @@ import {canResetUserPassword} from '@/lib/managed-user-password';
  * 无障碍能力也取决于浏览器，而且它与紧挨着的「删除用户」（走 ConfirmDialog）
  * 风格割裂——同一行里两个按钮，一个像产品的一部分，一个像浏览器的一部分。
  *
- * admin 保留原有强密码规则；其他登录用户至少 8 个 Unicode 字符。
+ * 所有管理端登录用户统一使用至少 12 个 Unicode 字符的强密码规则。
  * 不截断或转换输入；服务端仍是最终校验边界。
  */
 

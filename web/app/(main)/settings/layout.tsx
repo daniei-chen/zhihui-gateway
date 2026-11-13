@@ -38,7 +38,7 @@ import {useAsyncAll} from '@/lib/use-async-data';
 import {UpstreamEndpoints} from '@/components/settings/UpstreamEndpoints';
 import {usePlatform} from '@/lib/platform-context';
 import {scheduleDelayError} from '@/lib/schedule-validation';
-import {isManagedUserPassword} from '@/lib/managed-user-password';
+import {isPanelUserPassword} from '@/lib/managed-user-password';
 import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,
@@ -2123,7 +2123,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                     onChange={(e) => setNewUser({...newUser, password: e.target.value})}
                     placeholder={t('settings.managedPasswordPlaceholder')}
                     aria-describedby="new-user-password-hint"
-                    aria-invalid={newUser.password.length > 0 && !isManagedUserPassword(newUser.password)}
+                    aria-invalid={newUser.password.length > 0 && !isPanelUserPassword(newUser.password)}
                     className="bg-background" />
                 </div>
                 <div className="space-y-1.5">
@@ -2138,13 +2138,13 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                 </div>
                 <Button
                   className="h-9 rounded-full"
-                  disabled={busy || !newUser.username.trim() || !isManagedUserPassword(newUser.password)}
+                      disabled={busy || !newUser.username.trim() || !isPanelUserPassword(newUser.password)}
                   onClick={async () => {
                     if (!newUser.username.trim() || !newUser.password) {
                       notify.err(t('settings.usersRequired'));
                       return;
                     }
-                    if (!isManagedUserPassword(newUser.password)) {
+                    if (!isPanelUserPassword(newUser.password)) {
                       notify.err(t('settings.managedPasswordHint'));
                       return;
                     }

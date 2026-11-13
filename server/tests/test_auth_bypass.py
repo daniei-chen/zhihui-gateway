@@ -371,7 +371,7 @@ class UserAdminHttpTest(unittest.TestCase):
         password_path.write_text('initial-admin-pw\n', encoding='utf-8')
 
         self.assertEqual(self._login('admin', 'http-admin-pw'), 200)
-        r = self.c.patch('/api/users/guest', json={'password': '6842097531'})
+        r = self.c.patch('/api/users/guest', json={'password': '6842097531ab'})
 
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(password_path.exists())
@@ -383,13 +383,13 @@ class UserAdminHttpTest(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
     def test_managed_short_password_and_root_weak_password_are_rejected(self) -> None:
-        """Managed users require eight characters; root keeps its strong policy."""
+        """Management panel users require twelve characters; root keeps its strong policy."""
         self.assertEqual(self._login('admin', 'http-admin-pw'), 200)
 
         r = self.c.post('/api/users', json={
             'username': 'weakling', 'password': 'seven12', 'role': 'account_admin'})
         self.assertEqual(r.status_code, 400)
-        self.assertIn('8', r.json().get('detail', ''))
+        self.assertIn('12', r.json().get('detail', ''))
 
         r = self.c.patch('/api/users/admin', json={'password': 'admin9876543210'})
         self.assertEqual(r.status_code, 400)
