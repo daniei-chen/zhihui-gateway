@@ -7,11 +7,42 @@ import sqlite3
 import time
 
 
+#: 早期用过的上游错误码。保留它只是为了让旧库的离线分析结果不变；
+#: 判断「能不能记」现在靠下面的格式约束，不再靠这张表。
 _KNOWN_CODES = {'11128', '11148', '11140', '11101', '11135', '12153', '14017',
                 'channel_check_rejected', 'upstream_transport_uncertain', 'upstream_error',
                 'client_cancelled', 'first_byte_timeout', 'stream_idle_timeout',
                 'upstream_timeout', 'upstream_rejected', 'protocol_incomplete', 'rate_limit_exceeded',
                 'provider_attempt_budget_exhausted'}
+
+#: `error_code` 的安全形状。
+#:
+#: ## 为什么从白名单改成格式约束
+#:
+#: 2026-11-15 实测：库里实际出现过 23 种错误码，**白名单只认识其中 4 种**，其余 19 种
+#: 全被归成 `other` —— 包括出现次数最多的 `gateway.auth.denied`（6593 次）。
+#:
+#: 也就是说，离线诊断报告的「错误码分布」几乎全是 `other`，**那份报告没有信息量**。
+#:
+#: 根因是白名单永远滞后于命名演进：错误码从早期的数字码与裸名字，扩展成了
+#: `gateway.*` / `portal_*` 命名空间。往后还会有新的。
+#:
+#: ## 格式约束能防什么
+#:
+#: 这个过滤器的本意是**不让任意字符串进报告**（可能带用户输入）。格式约束同样做得到：
+#: 限定字符集、限定长度、限定形态 —— 任何含空格、引号、斜杠、换行的东西仍然进不来。
+#:
+#: 而错误码是我们自己与上游共同产出的**结构化标识**，形状是可枚举的。
+_SAFE_ERROR_CODE = re.compile(
+    r'^(?:'
+    r'gateway\.[a-z][a-z0-9._]{0,48}'      # gateway.auth.denied / gateway.transport.error
+    r'|portal_[a-z][a-z0-9_]{0,40}'        # portal_wallet_pending
+    # 裸名字按「段」拼：每段字母开头、可带下划线与数字，段间单个点。
+    # `client.cancelled` 是这个形状（659 次）；`a..b` 这类连续点号进不来。
+    # 单段上限 40：真实最长的单段码是 `provider_attempt_budget_exhausted`（32 字符）。
+    r'|[a-z][a-z0-9_]{0,40}(?:\.[a-z][a-z0-9_]{0,40}){0,4}'
+    r'|\d{3,6}'                            # 上游数字码：11128 / 10605 / 503
+    r')$')
 _ENUMS = {'terminal_state': {'completed', 'rejected', 'upstream_error', 'transport_error',
                             'protocol_incomplete', 'application_error', 'client_cancelled', 'interrupted'},
           'protocol': {'chat', 'responses', 'messages', 'anthropic', 'openai', 'other'},
@@ -26,7 +57,16 @@ def _metadata(name, value):
     if name in _ENUMS:
         return value if value in _ENUMS[name] else 'other'
     if name == 'error_code':
-        return value if str(value) in _KNOWN_CODES else 'other'
+        # 白名单里的老码一律放行；其余按格式判断 —— 见 `_SAFE_ERROR_CODE` 的说明。
+        # 只认白名单会让 19/23 的真实码变成 `other`，报告就没有信息量了。
+        text = str(value)
+        if text in _KNOWN_CODES:
+            return value
+        # 长度上限单独挡一道：正则里的分段上限组合起来仍可能很长，
+        # 而真实错误码没有超过 40 字符的。这里先挡掉，免得靠正则算总长。
+        if not 3 <= len(text) <= 64:
+            return 'other'
+        return value if _SAFE_ERROR_CODE.fullmatch(text) else 'other'
     if name == 'release_id':
         return value if re.fullmatch(r'v\d{1,3}\.\d{1,3}\.\d{1,3}(?:\+(?:stable|audit|portal)\.\d{8}\.\d{1,4})?', str(value)) else 'other'
     return 'other'
