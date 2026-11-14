@@ -124,6 +124,62 @@ _PYTHON_ENV = {
     'PYTHONPATH': '/opt/workbuddy-manager',
 }
 
+# The host bootstrap starts as root so it can verify the signed release and
+# then drops the application to this fixed identity. Keep the two sensitive
+# bootstrap files in the same ownership contract before the child starts;
+# otherwise a root-side migration or repair can leave a 0600 root-owned
+# users.json that turns every login into an HTTP 500 after the drop.
+SERVICE_UID = 10001
+SERVICE_GID = 10001
+SERVICE_DATA_ROOT = Path('/opt/workbuddy-manager/data')
+SERVICE_DATA_FILES = ('users.json', 'initial-admin-password.txt')
+
+
+def normalize_service_data(root=SERVICE_DATA_ROOT, *, uid=SERVICE_UID, gid=SERVICE_GID):
+    """Repair the small root/app handoff surface before dropping privileges.
+
+    Missing files are valid during first bootstrap. Existing entries must be
+    regular files owned by the runtime identity and private to that identity;
+    symlinks, hard-link surprises, unsafe directories, or failed ownership
+    changes reject startup before the app can serve a request.
+    """
+    root = Path(root)
+    try:
+        info = root.lstat()
+    except OSError as exc:
+        raise Rejected('service data directory unavailable') from exc
+    if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+            or info.st_nlink != 1):
+        raise Rejected('service data directory is unsafe')
+    try:
+        if (info.st_uid, info.st_gid) != (uid, gid):
+            os.chown(root, uid, gid)
+        os.chmod(root, 0o700)
+        checked_root = root.lstat()
+        if ((checked_root.st_uid, checked_root.st_gid) != (uid, gid)
+                or stat.S_IMODE(checked_root.st_mode) != 0o700):
+            raise Rejected('service data directory contract failed')
+        for name in SERVICE_DATA_FILES:
+            path = root / name
+            try:
+                item = path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise Rejected('service data entry unavailable') from exc
+            if (stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode)
+                    or item.st_nlink != 1):
+                raise Rejected('service data entry is unsafe')
+            if (item.st_uid, item.st_gid) != (uid, gid):
+                os.chown(path, uid, gid)
+            os.chmod(path, 0o600)
+            checked = path.lstat()
+            if ((checked.st_uid, checked.st_gid) != (uid, gid)
+                    or stat.S_IMODE(checked.st_mode) != 0o600):
+                raise Rejected('service data ownership contract failed')
+    except OSError as exc:
+        raise Rejected('service data ownership contract failed') from exc
+
 
 def writer_environment(source, release, *, helper=False, reconcile=False):
     if type(helper) is not bool:
@@ -215,6 +271,7 @@ class Launcher:
         # Runtime verification (venv closure and source/static closure) belongs
         # to the supplied trusted verifier, before any executable is admitted.
         self.lock.validate(lease, exclusive=False)
+        normalize_service_data()
         os.chdir(release.root)
         os.set_inheritable(lease.fd, True)
         os.execve(argv[0], argv, env)

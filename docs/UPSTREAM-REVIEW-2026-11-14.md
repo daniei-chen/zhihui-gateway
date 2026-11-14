@@ -1,6 +1,6 @@
 # Current upstream review — 2026-11-14
 
-This is the current-source review for the v1.2.20 workstream. The older
+This is the current-source review for the v1.2.21 workstream. The older
 `UPSTREAM-REVIEW-0.0.4.md` remains a historical decision record; its versions
 are not current production provenance.
 

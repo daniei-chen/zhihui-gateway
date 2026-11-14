@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.20 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.21 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,7 +16,7 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.20.svg" width="166" height="44" alt="查看 1.2.20 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.21.svg" width="166" height="44" alt="查看 1.2.21 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
@@ -27,16 +27,17 @@
 
 <br />
 
-## 1.2.20 · 运维恢复与上游供应链锁定
+## 1.2.21 · 权限交接、启动可靠性与供应链锁定
 
-**本次版本：`v1.2.20`**。这一版在 v1.2.19 的迁移恢复基础上，修复备份 housekeeping 的锁竞争重试，并把随包上游源码改为固定摘要输入；不自动改动额度、扣费或账本状态。
+**本次版本：`v1.2.21`**。这一版在 v1.2.20 的运维恢复和供应链锁定基础上，修复 root 维护流程与 UID 10001 应用之间的敏感数据权限交接，避免 `users.json` 漂移导致登录 500；不自动改动额度、扣费或账本状态。
 
+- **权限交接可靠**：受信启动器在降权前收敛数据目录、`users.json` 和初始密码文件的属主与权限；不安全路径或无法修复时先阻断启动，避免服务带着隐蔽的 500 运行。
 - **运维恢复更稳**：housekeeping 获取备份生产锁时最多等待 180 秒，锁长期不释放仍失败关闭，不绕过备份生产者。
 - **供应链可复核**：release workflow 在解压前核对 upstream-src 的固定 SHA256 与字节数，浮动或被替换的资产直接阻断。
 - **上游状态透明**：记录当前观察到的 WorkBuddy Manager、Qoder Hub、TraeWorkAssistant 提交；上游新版本不会被误写成生产已升级。
 - **证据边界不变**：供应商拒绝只改善诊断分类，不被推断为零计费，也不会触发自动结清。
 
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.20)
+**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.21)
 
 > [!NOTE]
 > 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
@@ -172,7 +173,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [受控部署](deploy/README.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.20 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.21 变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [安全审查报告](docs/SECURITY-AUDIT.md) |
 | 用户文档 | [使用](docs/usage.md) · [功能](docs/features.md) · [截图](docs/screenshots.md) · [开发](docs/DEVELOPMENT.md) · [安全说明](docs/security-notes.md) · [API Token](docs/api-tokens.md) · [账号出口](docs/account-proxy-routes.md) · [审计报告](docs/SECURITY-AUDIT.md) · [发布签名](docs/release-signing.md) |
