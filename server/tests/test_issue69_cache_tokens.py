@@ -297,7 +297,11 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
                     continue
                 fn = node.func
                 name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, 'id', '')
-                if name != '_record':
+                # 两个入口都要看：`_record_async` 只是把参数原样转给 `_record`，
+                # 位置一致。早先这里只匹配 `_record`，于是 gateway 里三个走异步
+                # 入口的调用点被漏掉了 —— 计数掉到 1，守卫却在报「调用点变了」，
+                # 掩盖了它其实没看见那三个的事实。
+                if name not in ('_record', '_record_async'):
                     continue
                 tokens = ast.unparse(node.args[5])
                 if 'usage' not in tokens and tokens not in derived:
