@@ -1112,6 +1112,23 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 数据库体积。**主库 + WAL + SHM 一起算** —— WAL 未 checkpoint 时可能有好几十 MB，
+    # 只看主库会低估「还要多少磁盘」。见 operational.database_size_bytes。
+    try:
+        _dbsize = _operational.database_size_bytes()
+        if _dbsize:
+            _m('workbuddy_db_size_bytes', 'gauge',
+               'Total on-disk size of the manager database, including the WAL and SHM '
+               'sidecars. The WAL is where recent bulk writes pile up before checkpoint, '
+               'so the main file alone understates what the disk still has to hold.',
+               _dbsize['total'])
+            _m('workbuddy_db_wal_size_bytes', 'gauge',
+               'Size of the write-ahead log alone. Persistently large means checkpoints are '
+               'falling behind the write rate, and read performance will start to pay for it.',
+               _dbsize['wal'])
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()

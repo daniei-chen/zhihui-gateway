@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import stat
 import time
 from pathlib import Path
 from . import db, config, ledger
@@ -899,6 +900,59 @@ def nginx_fence_status() -> dict:
             if _NGINX_FENCE_MARKER in text:
                 hits.append(str(path))
     return {'checked': readable > 0, 'fenced': bool(hits), 'files': hits}
+
+
+#: 数据库文件大小。
+#:
+#: ## 为什么要三个文件一起算
+#:
+#: 用的是 WAL 模式，所以「数据库有多大」不是主库一个文件的事：
+#:
+#: | 文件 | 内容 |
+#: | --- | --- |
+#: | `manager.db` | 已写回的主体 |
+#: | `manager.db-wal` | 尚未 checkpoint 的增量 |
+#: | `manager.db-shm` | 共享内存索引 |
+#:
+#: **只看主库会漏掉 WAL**：一次大批量写入之后、checkpoint 之前，WAL 可能有几十 MB，
+#: 而那正是磁盘水位告警最该看到的部分。
+#:
+#: 2026-11-15 实测：库 614 MB、磁盘余量 9.7 GB。没有这条指标，增长只能靠人工 `du`。
+_DB_SIDECAR_SUFFIXES = ('', '-wal', '-shm')
+
+
+def database_size_bytes() -> dict | None:
+    """返回 `{'main': n, 'wal': n, 'shm': n, 'total': n}`；读不到返回 None。
+
+    单个文件缺失按 0 计（`-wal` 在 checkpoint 之后可能不存在），
+    但**一个都统计不到**时返回 None —— 那是「不知道」，不是「零字节」。
+
+    **只统计普通文件**：`Path('')` 会静默变成当前目录，而目录的 `stat()` 也返回大小
+    （4096 之类）。空配置下若不加这一道，量出来的会是工作目录的块大小。
+    """
+    from pathlib import Path
+    raw = getattr(config, 'DB_PATH', '')
+    if not raw:
+        return None
+    base = Path(raw)
+    sizes = {}
+    readable = 0
+    for suffix in _DB_SIDECAR_SUFFIXES:
+        name = {'': 'main', '-wal': 'wal', '-shm': 'shm'}[suffix]
+        try:
+            info = Path(str(base) + suffix).stat()
+        except OSError:
+            sizes[name] = 0
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            sizes[name] = 0
+            continue
+        sizes[name] = info.st_size
+        readable += 1
+    if readable == 0:
+        return None
+    sizes['total'] = sizes['main'] + sizes['wal'] + sizes['shm']
+    return sizes
 
 
 def monitor_stats() -> dict:
