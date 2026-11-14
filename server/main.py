@@ -1054,8 +1054,15 @@ def prometheus_metrics(request: Request):
     _memory = _process_memory_bytes()
     if _memory is not None:
         _resident, _virtual = _memory
+        # 说明里点明口径差异：这个数是进程级 RSS，**不要**和下面那个 cgroup 数值直接相减。
+        # 2026-11-15 实测（同一时刻）：anon 两侧完全一致（124.8 MiB），差的全在 file ——
+        # 进程 RSS 含共享库映射页，cgroup 的 file 只算实际驻留的页缓存，于是进程侧
+        # 143.8 MiB 对 cgroup 侧 138.4 MiB。相差约 5 MiB 属正常，不是泄漏。
         _m('workbuddy_process_resident_bytes', 'gauge',
-           'Resident set size of the gateway process.', _resident)
+           'Resident set size of the gateway process. Process-level accounting: it counts '
+           'shared library mappings that the cgroup figure below does not, so the two will '
+           'differ by a few MiB and must not be subtracted from each other.',
+           _resident)
         _m('workbuddy_process_virtual_bytes', 'gauge',
            'Virtual memory size of the gateway process.', _virtual)
     _m('workbuddy_process_threads', 'gauge',
@@ -1066,7 +1073,9 @@ def prometheus_metrics(request: Request):
     if _peak is not None:
         _m('workbuddy_cgroup_memory_peak_bytes', 'gauge',
            'Peak memory of the service cgroup since boot; never decreases, so a rising '
-           'line alongside a flat resident gauge means a real leak rather than churn.',
+           'line alongside a flat resident gauge means a real leak rather than churn. '
+           'Cgroup-level accounting: excludes shared library mappings the process RSS '
+           'counts, so it reads a few MiB lower than the resident gauge by design.',
            _peak)
 
     try:

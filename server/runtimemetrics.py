@@ -147,7 +147,7 @@ class Metrics:
             suffix = '{' + ','.join(k + '="' + _escape(v) + '"' for k, v in (labels or {}).items()) + '}' if labels else ''
             lines.append(name + suffix + ' ' + str(value))
 
-        emit('workbuddy_requests_total', 'counter', 'Tracked requests since this process started.', counts['requests'])
+        emit('workbuddy_requests_total', 'counter', 'All requests this process has handled, including health probes and admin calls. For real inference volume use workbuddy_request_outcomes_total with traffic="inference"; the two differ whenever a probe lives, and reading this number as business demand overstates it.', counts['requests'])
         emit('workbuddy_errors_total', 'counter', 'Tracked logical failures since this process started; inspect traffic/status groups.', counts['errors'])
         emit('workbuddy_metrics_window_coverage_seconds', 'gauge', 'Window coverage since process start, capped at 24h.', min(86400, max(0, now - self.started)))
         emit('workbuddy_requests_last_hour', 'gauge', 'Observed requests in the last 60 minute buckets.', hour['requests'])
