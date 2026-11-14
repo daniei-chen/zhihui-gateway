@@ -2644,3 +2644,42 @@ async def account_set_disabled(
                else ('；请手动重启上游以生效' if result.get('changed') else ''))
         ),
     }
+
+
+# ── 外部平台（Trae / Qoder）的账号可见性 ────────────────────────────
+#
+# 网关自己的账号管理读 `WB_AUTH_DIR`，那是 **workbuddy** 的目录。Trae 与 Qoder
+# 是各自容器里的引擎，账号在容器内 —— 界面上对它们点"刷新"实际是空操作，因为
+# 网关根本不知道它们存在。2026-11-14 排查确认：这两个平台连续六天零调用
+# （Qoder 64 次、Trae 58 次，都停在 11-08），同期 workbuddy 15 万次。
+#
+# 这两个端点只做两件事：把容器内的账号状态读出来（只读），以及请求容器刷新它
+# 自己的 token。**网关不直接改容器内的 token** —— 容器的刷新逻辑要维护
+# refreshToken / expiresAt / lastError / cooldownUntil 的配对，外部改一个字段
+# 会让它的状态机自相矛盾。
+
+@router.get('/platforms/external')
+def external_platforms(user: dict = Depends(security.current_user)) -> dict:
+    """Trae / Qoder 的账号快照（只读）。
+
+    任一个平台不可用时带着原因返回，**不返回空列表冒充"没有账号"** —— 那会让
+    人以为账号丢了，而实际只是网关读不到。
+    """
+    from .. import externalplatforms
+    return externalplatforms.snapshot()
+
+
+@router.post('/platforms/{platform}/refresh')
+def external_platform_refresh(platform: str,
+                              user: dict = Depends(security.require_admin)) -> dict:
+    """请求外部平台刷新它自己的 token。
+
+    失败时返回具体原因（缺少 panel 会话 / 缺少管理面 API Key），而不是笼统的
+    "刷新失败" —— 前者能指出下一步该做什么。
+    """
+    from .. import externalplatforms
+    if platform not in ('qoder', 'trae'):
+        raise HTTPException(status_code=404, detail='未知平台')
+    result = externalplatforms.refresh(platform)
+    security.audit(user, 'platforms.refresh', platform, str(result.get('ok')))
+    return result
