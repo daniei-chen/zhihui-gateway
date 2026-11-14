@@ -83,7 +83,8 @@ class WriterGuardContractTests(unittest.TestCase):
         self.assertIsNotNone(match)
         maintenance = (Path(__file__).parents[2] / 'ops' /
                        'container-maintenance' / 'maintenance.py').read_bytes()
-        self.assertEqual(match.group(1), hashlib.sha256(maintenance).hexdigest())
+        normalized = maintenance.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+        self.assertEqual(match.group(1), hashlib.sha256(normalized).hexdigest())
 
     def test_rolling_controller_routes_before_drain_and_retires_helper_last(self):
         class Journal:
