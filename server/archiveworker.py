@@ -17,7 +17,14 @@ _wake = threading.Event()
 _thread = None
 _state = {'sampled': False, 'running': False, 'last_at': None, 'ok': None,
           'error': None, 'pending': None, 'deleted_rows': 0}
-DATASETS = ('request_logs', 'request_outcomes')
+#: 后台归档逐个处理的表。
+#:
+#: `retention` 里**已经**为 `budget_reservations` 定义了完整的归档策略
+#: （180 天、只动 `state IN ('settled','released')`、未决与 unknown 永不归档），
+#: 但这里一直只列了两张日志表 —— 于是那条策略从未被接线执行，预算预留表
+#: 只能无限增长（生产上 193k 行 / 27 MB）。策略与执行分开写在两个文件里，
+#: 漏一处不会有任何报错，只会悄悄不生效。
+DATASETS = ('request_logs', 'request_outcomes', 'budget_reservations')
 
 
 def notify():

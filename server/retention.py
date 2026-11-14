@@ -339,6 +339,15 @@ def dataset(name: str) -> Dataset:
         raise KeyError(f'未登记的账本/日志数据集：{name}（先在本文件分类再归档）') from None
 
 
+def datasets() -> tuple:
+    """全部数据集定义（只读枚举）。
+
+    给"策略有没有真的接线"这类检查用：`archiveworker` 只处理它自己清单里的表，
+    而策略在**这个文件**里定义 —— 两边漏一处不会有任何报错，只会悄悄不生效。
+    """
+    return tuple(DATASETS)
+
+
 def policy() -> list[dict]:
     """给文档/界面/健康检查用的分类表（只读，不含 SQL）。"""
     return [{
