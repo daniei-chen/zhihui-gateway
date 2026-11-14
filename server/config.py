@@ -140,6 +140,24 @@ BASE_PATH = f'/{_BASE_PATH_RAW}' if _BASE_PATH_RAW else ''
 
 # 网络
 UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 300)
+#: 按平台的超时覆盖。
+#:
+#: ## 为什么要按平台分
+#:
+#: 2026-11-15 实测：`qoder` 平台只有**一个**上游账号，那次它被上游限流
+#: （403 / 10605）。qoder 的代理不是快速失败，而是**等约 183 秒**才回 502 ——
+#: 那时调用方早已超时，用户只看到「卡住」，看不到任何原因。
+#:
+#: 而 qoder 自己的历史延迟是：近 7 天 43 次请求，平均 **2.2 秒**、最大 **12.8 秒**。
+#: 所以给它 60 秒的窗口完全够用，同时能让「不可用」在**一分钟内**变成可见的错误。
+#:
+#: 其它平台不在此表里，仍沿用 `UPSTREAM_TIMEOUT` —— 不设默认值就不影响它们。
+#:
+#: 为什么不能整体下调 `UPSTREAM_TIMEOUT`：workbuddy 侧实测有 158 次首字节超过
+#: 60 秒（长 prompt 的固有 prefill），最长 186 秒。那是正常业务，切断它才是问题。
+PLATFORM_TIMEOUT = {
+    'qoder': _env_int('WB_QODER_TIMEOUT', 60),
+}
 TENCENT_TIMEOUT = _env_int('WB_TENCENT_TIMEOUT', 15)
 # 「全部签到」的并发上限：太低会拖到前端超时（几十个账号时），
 # 太高又容易触发腾讯风控。5 是保守且够快的取值。

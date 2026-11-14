@@ -2599,7 +2599,12 @@ async def _chat(request: Request, upstream_path: str):
     # 默认值不改变线上行为（见 deadline.Budgets.from_config 的说明）。
     from .. import deadline as deadline_mod
     # U13：三条协议共用同一套预算对象（对照表见 deadline 模块 docstring）。
-    budgets = deadline_mod.request_budgets(config.UPSTREAM_TIMEOUT)
+    # 按平台取超时：qoder 只有单账号，被限流时上游要等约 3 分钟才回错误，
+    # 那时调用方早就超时了。取更短的窗口让「不可用」尽快变成可见错误。
+    # 见 config.PLATFORM_TIMEOUT 的说明（含为什么不能整体下调）。
+    _platform_timeout = config.PLATFORM_TIMEOUT.get(
+        actual_platform or '', config.UPSTREAM_TIMEOUT)
+    budgets = deadline_mod.request_budgets(_platform_timeout)
     request_deadline = deadline_mod.Deadline(budgets)
     _timeouts = deadline_mod.transport_timeouts(budgets)
 
