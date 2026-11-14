@@ -36,8 +36,8 @@ Ubuntu CI 执行完整隔离测试、前端类型与构建检查、依赖审计�
 前端清单签名、后端 managed release 清单重建、Ed25519 签名和两层 preflight：
 
 ```sh
-/opt/workbuddy-manager/releases/v1.2.28/deploy/prepare-managed-stage.sh \
-  /opt/workbuddy-manager/releases/v1.2.28
+/opt/workbuddy-manager/releases/v1.2.29/deploy/prepare-managed-stage.sh \
+  /opt/workbuddy-manager/releases/v1.2.29
 ```
 
 主机部署器可以把 helper 固定安装到受保护路径，但步骤顺序不能拆开。命令成功后才允许执行

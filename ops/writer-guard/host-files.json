@@ -58,7 +58,7 @@
     },
     "systemd_adapter.py": {
       "mode": 420,
-      "sha256": "5fedc138df1458fb7259d27928ca4f0aff5355004f0460e1973c6284ac480070"
+      "sha256": "d131972212ee524073378518e9d8e7bbcc28f2c8408f73afd255ec95eaa1fa65"
     },
     "writer_entry.py": {
       "mode": 420,

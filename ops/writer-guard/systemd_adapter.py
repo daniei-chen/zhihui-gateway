@@ -49,9 +49,15 @@ class Systemd:
     def object_path(self, unit):
         if unit not in UNITS:
             raise Rejected('unknown systemd unit')
+        # A freshly installed inactive unit is visible to ``systemctl show``
+        # but may not yet have a manager object.  ``GetUnit`` only looks up
+        # already loaded objects and therefore rejects the first rolling
+        # handoff before the helper can start.  LoadUnit is bounded to the
+        # fixed allowlist above and returns the same immutable object path
+        # while making the manager load the unit for subsequent reads.
         result = json.loads(self._run(['/usr/bin/busctl', '--system', '--json=short', 'call',
                             'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
-                            'org.freedesktop.systemd1.Manager', 'GetUnit', 's', unit]))
+                            'org.freedesktop.systemd1.Manager', 'LoadUnit', 's', unit]))
         if (result.get('type') != 'o' or type(result.get('data')) is not list or len(result['data']) != 1
                 or type(result['data'][0]) is not str
                 or not re.fullmatch(r'/org/freedesktop/systemd1/unit/[A-Za-z0-9_]+', result['data'][0])):

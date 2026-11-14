@@ -67,6 +67,24 @@ class WriterGuardContractTests(unittest.TestCase):
                        'workbuddy-web-helper.service').read_text(encoding='utf-8')
         self.assertNotIn('Requires=workbuddy-web.service', helper_unit)
 
+    def test_systemd_loads_an_inactive_helper_before_property_reads(self):
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(b'{"type":"o","data":['
+                        b'"/org/freedesktop/systemd1/unit/'
+                        b'workbuddy_2dweb_2dhelper_2eservice"]}'),
+            )
+
+        adapter = systemd_adapter.Systemd(runner=runner)
+        path = adapter.object_path(systemd_adapter.HELPER)
+        self.assertEqual(path, '/org/freedesktop/systemd1/unit/workbuddy_2dweb_2dhelper_2eservice')
+        self.assertIn('LoadUnit', calls[0])
+        self.assertNotIn('GetUnit', calls[0])
+
     def test_maintenance_fence_leaves_exact_relay_roots_available(self):
         maintenance_source = (Path(__file__).parents[2] / 'ops' /
                               'container-maintenance' / 'maintenance.py').read_text(encoding='utf-8')
