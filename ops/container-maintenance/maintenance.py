@@ -41,7 +41,11 @@ SERVICES = {
     'zcode-push': (8788, [('/zpush/healthz', 200), ('/zpush/poll', 401)]),
 }
 MARKER = b'# zh-container-maintenance-v1'
-PUBLIC_RULE = b'if ($uri ~ ^/(api|v1|v2|qoder|trae|wb|workbuddy|zpush)(/|$)) { return 503; }'
+# The exact inference locations are fronted by the loopback rolling relay.  A
+# rolling Manager handoff may fence the control plane while that relay keeps
+# an already healthy helper generation available.  Keep platform/control
+# paths fenced; the relay locations are deliberately outside this expression.
+PUBLIC_RULE = b'if ($uri ~ ^/(api|qoder|trae|wb|workbuddy|zpush)(/|$)) { return 503; }'
 LOCAL_RULE = b'if ($uri !~ ^/(healthz|readyz|api/healthz|api/readyz)/?$) { return 503; }'
 
 
@@ -260,7 +264,9 @@ class Host:
                 raise Failure('old_nginx_workers_alive_no_force_kill')
             time.sleep(.25)
 
-    def listeners(self, primary):
+    def listeners(self, primary, *, allow_helper=False, expected_port=7866):
+        if expected_port not in (7865, 7866):
+            raise Failure('unsupported_manager_listener_port')
         rows = self.command('listeners').splitlines(); live = []
         for row in rows:
             fields = row.split()
@@ -268,9 +274,17 @@ class Host:
                 raise Failure('unrecognized_ss_listener_format')
             port = endpoint_port(fields[3])
             if port == 7865:
-                raise Failure('helper_7865_still_listening')
+                if not allow_helper:
+                    raise Failure('helper_7865_still_listening')
+                if (fields[3] != '127.0.0.1:7865'
+                        or expected_port == 7865
+                        and 'pid=' + str(primary['pid']) + ',' not in row):
+                    raise Failure('helper_listener_not_loopback')
+                live.append(row)
+                continue
             if port == 7866:
-                if fields[3] != '127.0.0.1:7866' or 'pid=' + str(primary['pid']) + ',' not in row:
+                if (expected_port != 7866 or fields[3] != '127.0.0.1:7866'
+                        or 'pid=' + str(primary['pid']) + ',' not in row):
                     raise Failure('primary_listener_identity_mismatch')
                 live.append(row)
         if len(live) != 1:

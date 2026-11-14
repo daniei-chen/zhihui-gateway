@@ -1,5 +1,6 @@
 """The fixed host writer profile must actually expose the drain contract."""
 from pathlib import Path
+from contextlib import contextmanager
 from types import SimpleNamespace
 import sys
 import unittest
@@ -12,6 +13,9 @@ if str(OPS) not in sys.path:
 
 import host_adapter  # noqa: E402
 import launch_guard  # noqa: E402
+import migration  # noqa: E402
+import service_gate  # noqa: E402
+import systemd_adapter  # noqa: E402
 from launch_guard import writer_command, writer_environment  # noqa: E402
 
 
@@ -51,6 +55,99 @@ class WriterGuardContractTests(unittest.TestCase):
         environment = writer_environment({}, release, helper=True)
         self.assertEqual(environment["WB_SHARED_ADMISSION"], "1")
         self.assertEqual(environment["WB_BACKGROUND_JOBS"], "0")
+
+    def test_helper_is_a_real_guarded_systemd_profile(self):
+        self.assertEqual(systemd_adapter.entry_command(systemd_adapter.HELPER)[-1], 'helper')
+        self.assertIn('workbuddy-web-helper.service', service_gate.UNITS)
+        self.assertIn('writer_entry.py helper',
+                      systemd_adapter.launch_dropin(systemd_adapter.HELPER).decode())
+        helper_unit = (Path(__file__).parents[2] / 'deploy' /
+                       'workbuddy-web-helper.service').read_text(encoding='utf-8')
+        self.assertNotIn('Requires=workbuddy-web.service', helper_unit)
+
+    def test_maintenance_fence_leaves_exact_relay_roots_available(self):
+        maintenance_source = (Path(__file__).parents[2] / 'ops' /
+                              'container-maintenance' / 'maintenance.py').read_text(encoding='utf-8')
+        rule = next(line.split('=', 1)[1].strip() for line in maintenance_source.splitlines()
+                    if line.startswith('PUBLIC_RULE = '))
+        self.assertNotIn('|v1|', rule)
+        self.assertIn('(api|qoder|trae', rule)
+        self.assertIn('workbuddy', rule)
+
+    def test_rolling_controller_routes_before_drain_and_retires_helper_last(self):
+        class Journal:
+            def __init__(self):
+                self.record = {'phase': 'prepared', 'mode': 'rolling', 'epoch': 1}
+
+            def save(self, _authority, expected, phase, **_changes):
+                self.assert_same(expected)
+                self.record = {**expected, 'phase': phase, 'epoch': expected['epoch'] + 1}
+                return self.record
+
+            def assert_same(self, value):
+                if value is not self.record:
+                    raise AssertionError('controller lost journal CAS identity')
+
+            def _authorized(self, _authority):
+                return None
+
+            def load(self, _authority):
+                return self.record
+
+        class Lock:
+            @contextmanager
+            def acquire(self, **_kwargs):
+                yield object()
+
+            def validate(self, _permit, **_kwargs):
+                return None
+
+        class Guard:
+            def __init__(self, capability):
+                self.capability = capability
+
+            def observe(self, _permit):
+                return object()
+
+            def load_floor(self):
+                return SimpleNamespace(capabilities=self.capability)
+
+            def require_launch(self, *_args):
+                return None
+
+        class Host:
+            def __init__(self):
+                self.events = []
+
+            def __getattr__(self, name):
+                if name in {'point_rolling', 'start_helper', 'helper_ready',
+                            'route_helper', 'fence', 'drain_old',
+                            'stop_primary_rolling', 'start', 'ready',
+                            'route_main', 'stop_helper', 'resume',
+                            'verify_complete'}:
+                    def effect(*_args):
+                        self.events.append(name)
+                    return effect
+                raise AttributeError(name)
+
+        capability = object()
+        journal = Journal()
+        host = Host()
+        controller = migration.Controller.__new__(migration.Controller)
+        controller.journal = journal
+        controller.lock = Lock()
+        controller.guard = Guard(capability)
+        controller.host = host
+        controller.first_install = None
+        controller._release = lambda _record, _name: SimpleNamespace(capabilities=capability)
+
+        result = controller._run_rolling(object(), journal.record, object())
+        self.assertEqual(result['phase'], 'complete')
+        self.assertEqual(host.events, [
+            'point_rolling', 'start_helper', 'helper_ready', 'route_helper',
+            'fence', 'drain_old', 'stop_primary_rolling', 'start', 'ready',
+            'route_main', 'stop_helper', 'resume', 'verify_complete',
+        ])
 
 
     def test_resume_ready_retries_transient_protected_state_change(self):

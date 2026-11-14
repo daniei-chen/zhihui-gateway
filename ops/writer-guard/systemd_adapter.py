@@ -6,17 +6,20 @@ import subprocess
 from state_guard import Rejected
 
 MAIN = 'workbuddy-web.service'
+HELPER = 'workbuddy-web-helper.service'
 JOB = 'wb-budget-autoreconcile.service'
 TIMER = 'wb-budget-autoreconcile.timer'
-UNITS = (MAIN, JOB, TIMER)
+UNITS = (MAIN, HELPER, JOB, TIMER)
 ENTRY = '/opt/zhihui-release/writer-guard/writer_entry.py'
 PREFIX = ['/usr/bin/python3', '-I', '-S', '-B', '-X',
           'pycache_prefix=/opt/zhihui-release/python-cache', ENTRY]
 
 
 def entry_command(unit):
-    if unit not in (MAIN, JOB):
+    if unit not in (MAIN, HELPER, JOB):
         raise Rejected('unsupported guarded service')
+    if unit == HELPER:
+        return PREFIX + ['helper']
     return PREFIX + ['main' if unit == MAIN else 'reconcile']
 
 
@@ -103,7 +106,7 @@ class Systemd:
         value = self.show(unit)
         if (value['LoadState'] != 'loaded' or value['User'] != 'root' or value['Group'] != 'root'
                 or value['KillMode'] != 'control-group' or value['NeedDaemonReload'] != 'no'
-                or value['Type'] != ('simple' if unit == MAIN else 'oneshot')):
+                or value['Type'] != ('oneshot' if unit == JOB else 'simple')):
             raise Rejected('guarded systemd startup contract differs')
         rows = self.property(unit, 'Service', 'ExecStart', 'a(sasbttttuii)')
         expected = entry_command(unit)
@@ -115,8 +118,9 @@ class Systemd:
                 raise Rejected('unguarded additional startup command')
 
     def command(self, argv):
-        allowed = (['daemon-reload'], ['stop', TIMER], ['stop', MAIN], ['stop', JOB],
-                   ['start', MAIN], ['start', JOB], ['start', TIMER], ['reset-failed', MAIN])
+        allowed = (['daemon-reload'], ['stop', TIMER], ['stop', MAIN], ['stop', HELPER],
+                   ['stop', JOB], ['start', MAIN], ['start', HELPER], ['start', JOB],
+                   ['start', TIMER], ['reset-failed', MAIN], ['reset-failed', HELPER])
         if argv not in allowed:
             raise Rejected('unsupported systemd mutation')
         self._run(['/usr/bin/systemctl', *argv], timeout=105)

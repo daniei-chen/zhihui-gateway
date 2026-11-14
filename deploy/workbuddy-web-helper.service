@@ -1,7 +1,9 @@
 [Unit]
 Description=ZHIHUI Gateway candidate Manager (shared admission, no background jobs)
-After=network.target docker.service workbuddy-web.service
-Requires=workbuddy-web.service
+After=network.target docker.service
+# The helper is the handoff generation.  It must survive the predecessor's
+# stop; a dependency on the predecessor would tear it down at the
+# exact point where it is protecting the public relay.
 ConditionPathExists=!/opt/zhihui-release/writer-state/workbuddy-web.service.start-blocked
 
 [Service]

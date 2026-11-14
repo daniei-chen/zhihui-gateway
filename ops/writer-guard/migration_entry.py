@@ -12,7 +12,7 @@ from types import SimpleNamespace
 INSTALL = Path('/opt/zhihui-release/writer-guard')
 CACHE = Path('/opt/zhihui-release/python-cache')
 MAINTENANCE = Path('/opt/zhihui-release/container-maintenance/maintenance.py')
-MAINTENANCE_SHA = '7e2768235ee872dc6e9501a97254e96abf825355617086696f83d20677f38f72'
+MAINTENANCE_SHA = '7dc9858c59f14a9145d16f95511326420bb7c3b28e004ee64bac5a4ad9518ebf'
 
 
 def arguments(argv):
@@ -56,7 +56,7 @@ def main(argv=None):
     from migration import Controller, Journal
     from first_install import FirstInstall
     from service_gate import ServiceGate
-    from systemd_adapter import Systemd
+    from systemd_adapter import HELPER, Systemd
     from startup import Startup
     from ingress import Ingress
     from writer_inventory import LinuxInventory, Quiescence
@@ -73,7 +73,12 @@ def main(argv=None):
     authority = Coordination(paths)
     with authority.acquire() as permit:
         systemd, inventory = Systemd(), LinuxInventory()
-        gate = ServiceGate(paths, authority, systemd.command)
+        try:
+            helper_state = systemd.show(HELPER)
+            include_helper = helper_state.get('LoadState') == 'loaded'
+        except Exception:
+            include_helper = False
+        gate = ServiceGate(paths, authority, systemd.command, include_helper=include_helper)
         quiet_gate = SimpleNamespace(validate=lambda: gate.verify_blocked(permit, systemd.conditions))
         quiet = Quiescence(inventory, start_gate=quiet_gate)
         lock = RuntimeLock(paths, quiet)

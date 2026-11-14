@@ -13,7 +13,9 @@ class RuntimeIdentity:
                  python=Path('/opt/workbuddy-manager/venv/bin/python')):
         self.proc, self.lock, self.python = Path(proc), Path(lock), Path(python)
 
-    def verify(self, pid, release, *, reconcile=False, expected=None):
+    def verify(self, pid, release, *, helper=False, reconcile=False, expected=None):
+        if helper and reconcile:
+            raise Rejected('writer profile is ambiguous')
         if type(pid) is not int or pid <= 1:
             raise Rejected('live writer PID required')
         before = process_identity(self.proc, pid)
@@ -35,7 +37,7 @@ class RuntimeIdentity:
             if os.readlink(root / 'cwd') != str(release.root):
                 raise Rejected('writer cwd is not immutable verified release')
             command = (root / 'cmdline').read_bytes()
-            expected_argv = writer_command(reconcile=reconcile)
+            expected_argv = writer_command(helper=helper, reconcile=reconcile)
             executable = '/opt/workbuddy-manager/venv/bin/python'
             expected_argv = expected_argv[expected_argv.index(executable):]
             if command != b'\0'.join(x.encode() for x in expected_argv) + b'\0':
@@ -58,13 +60,14 @@ class RuntimeIdentity:
                         'WB_DB': '/opt/workbuddy-manager/data/manager.db',
                         'WB_USERS_FILE': '/opt/workbuddy-manager/data/users.json',
                         'WB_STATIC_DIR': str(release.root / 'web/out'), 'WB_MANAGER_HOST': '127.0.0.1',
-                        'WB_MANAGER_PORT': '7866', 'PYTHONDONTWRITEBYTECODE': '1',
+                        'WB_MANAGER_PORT': '7865' if helper else '7866',
+                        'PYTHONDONTWRITEBYTECODE': '1',
                         'PYTHONNOUSERSITE': '1', 'PYTHONSAFEPATH': '1',
                         'PYTHONPYCACHEPREFIX': '/opt/zhihui-release/python-cache',
                         'WB_SHARED_ADMISSION': '1'}
             if any(env.get(key.encode()) != value.encode() for key, value in selected.items()):
                 raise Rejected('writer data or import binding differs')
-            if reconcile and env.get(b'WB_BACKGROUND_JOBS') != b'0':
+            if (helper or reconcile) and env.get(b'WB_BACKGROUND_JOBS') != b'0':
                 raise Rejected('scheduled writer background jobs must be disabled')
             forbidden = (b'GLIBC_TUNABLES', b'GCONV_PATH', b'OPENSSL_CONF', b'OPENSSL_MODULES')
             if any(key.startswith((b'LD_', b'DYLD_')) or key in forbidden for key in env):
