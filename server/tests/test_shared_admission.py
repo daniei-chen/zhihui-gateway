@@ -140,6 +140,10 @@ class SharedAdmissionTest(unittest.TestCase):
             done.set()
             child.join(10)
             self.assertEqual(child.exitcode, 0)
+            # `_reap` 现在按时间限频（默认十秒一次）：它检测的是"某个 owner 已经
+            # 不在了"，晚十秒发现不会让活着的人被拒。把计时器归零等价于"限频窗口
+            # 已过"，免得为一个纯性能优化在测试里真睡十秒。
+            parent._last_reap = 0.0
             self.assertTrue(parent.key('parent', 41, 1))
             self.assertTrue(parent.reserve('parent', 300, True))
             parent.release('parent')

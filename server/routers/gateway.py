@@ -984,6 +984,9 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
             operational.ledger_spool_failed=True
         logger.exception('请求账本事务失败 request_id=%s（已落回执等待重放）',
                          state.request_id if state else None)
+    # 侧表清理放在事务之外：它原先挂在结算事务里，每两千次结算让账本多跑四条
+    # DELETE（含一条 OFFSET 子查询）。旁路工作不该占用账本的写窗口。
+    db.prune_if_pending()
 
 
 async def _record_async(*args, **kwargs) -> None:

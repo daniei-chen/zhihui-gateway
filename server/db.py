@@ -1344,6 +1344,12 @@ _REQUEST_LOG_RETAIN_DAYS = 90
 # 不必每次写入都查一次。检查本身用索引列 ts，成本可忽略。
 _REQUEST_LOG_CHECK_EVERY = 2000
 _request_log_writes = 0
+#: 侧表清理到期标记。置位由写入方做，真正的 DELETE 交给事务**之外**执行。
+#:
+#: 原先这段清理直接挂在 `add_request_log` 里，而它是在结算事务内被调用的 ——
+#: 于是每两千次结算就有一次账本事务要多跑四条 DELETE（含一条 `OFFSET 20000`
+#: 的子查询）。那是旁路工作，没有理由占用账本的写窗口。
+_prune_pending = False
 
 
 # 侧表保留策略（审计 2026-10-18）：这几张表以前只增不减。
@@ -1391,6 +1397,22 @@ def _prune_request_logs() -> None:
     _prune_side_tables()
 
 
+def prune_if_pending() -> None:
+    """事务**之外**的侧表清理入口。
+
+    写入方只置标记，清理由调用方在账本事务提交后执行。清理本身已经是旁路操作
+    （内部逐条 try/except），所以这里再包一层：它失败绝不能让结算看起来失败。
+    """
+    global _prune_pending
+    if not _prune_pending:
+        return
+    _prune_pending = False
+    try:
+        _prune_request_logs()
+    except Exception:        # noqa: BLE001
+        pass
+
+
 def add_request_log(**fields: object) -> None:
     """落一行请求日志。列由固定元组决定，缺省字段写 NULL。
 
@@ -1422,7 +1444,9 @@ def add_request_log(**fields: object) -> None:
     _request_log_writes += 1
     if _request_log_writes >= _REQUEST_LOG_CHECK_EVERY:
         _request_log_writes=0
-        _prune_request_logs()
+        # 只置标记：真正的清理由 `prune_if_pending()` 在事务提交后执行。
+        global _prune_pending
+        _prune_pending = True
 
 
 # 账号回填的匹配窗口（秒）。
