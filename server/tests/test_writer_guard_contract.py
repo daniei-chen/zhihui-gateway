@@ -1,5 +1,7 @@
 """The fixed host writer profile must actually expose the drain contract."""
 from pathlib import Path
+import hashlib
+import re
 from contextlib import contextmanager
 from types import SimpleNamespace
 import sys
@@ -73,6 +75,15 @@ class WriterGuardContractTests(unittest.TestCase):
         self.assertNotIn('|v1|', rule)
         self.assertIn('(api|qoder|trae', rule)
         self.assertIn('workbuddy', rule)
+
+    def test_migration_entry_binds_the_installed_maintenance_bytes(self):
+        entry = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
+                 'migration_entry.py').read_text(encoding='utf-8')
+        match = re.search(r"MAINTENANCE_SHA = '([0-9a-f]{64})'", entry)
+        self.assertIsNotNone(match)
+        maintenance = (Path(__file__).parents[2] / 'ops' /
+                       'container-maintenance' / 'maintenance.py').read_bytes()
+        self.assertEqual(match.group(1), hashlib.sha256(maintenance).hexdigest())
 
     def test_rolling_controller_routes_before_drain_and_retires_helper_last(self):
         class Journal:

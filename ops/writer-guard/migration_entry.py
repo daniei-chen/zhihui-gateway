@@ -12,7 +12,7 @@ from types import SimpleNamespace
 INSTALL = Path('/opt/zhihui-release/writer-guard')
 CACHE = Path('/opt/zhihui-release/python-cache')
 MAINTENANCE = Path('/opt/zhihui-release/container-maintenance/maintenance.py')
-MAINTENANCE_SHA = '7dc9858c59f14a9145d16f95511326420bb7c3b28e004ee64bac5a4ad9518ebf'
+MAINTENANCE_SHA = '498969ff40de018b04e9dfb87a56afda671e6565d098d36a7e5f12642c99401c'
 
 
 def arguments(argv):
