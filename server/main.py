@@ -1098,6 +1098,20 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001 - 指标取不到不该让整个 /metrics 失败
         pass
 
+    # nginx 配置里是否残留维护围栏。**读不到时不输出** —— 「不知道」不能显示成「没问题」。
+    # 见 `operational.nginx_fence_status` 的说明：围栏生效时管理端全 503，而服务自身
+    # 察觉不到（健康检查不经过 nginx）。
+    try:
+        _fence = _operational.nginx_fence_status()
+        if _fence['checked']:
+            _m('workbuddy_nginx_fence_active', 'gauge',
+               'Whether a maintenance fence marker is still present in nginx config. '
+               'When 1, /api/* is almost certainly answering 503 while /v1/* and '
+               '/healthz stay healthy -- the failure mode that hides itself.',
+               1 if _fence['fenced'] else 0)
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()

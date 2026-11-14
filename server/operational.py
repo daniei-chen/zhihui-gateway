@@ -809,6 +809,67 @@ _MONITOR_STATS = {
 }
 
 
+#: 维护窗口在 nginx 配置里留下的围栏标记。
+#:
+#: ## 为什么网关要看这个
+#:
+#: 2026-11-15 出过一次：迁移失败后，nginx 配置里残留了两行围栏规则 ——
+#:
+#: ```nginx
+#: if ($uri ~ ^/(api|qoder|trae|wb|workbuddy|zpush)(/|$)) { return 503; }
+#: ```
+#:
+#: 结果 `/api/*` 全部 503（管理端、登录、工作台全挂），而 `/v1/*` 与 `/healthz`
+#: **完全正常**。
+#:
+#: **网关自己察觉不到**：健康检查走的是进程内逻辑，不经过 nginx；从服务视角看一切
+#: 都好。而从外面看，管理端已经没了。
+#:
+#: 所以这里直接读 nginx 配置找那个标记。是跨层了，但这一层出了问题会让整个管理端
+#: 消失，值得。
+#:
+#: `checked=False` 表示「读不到」—— 与 `fenced=False`（确认没有围栏）是两件事，
+#: 不能混。读不到时不输出指标，免得把「不知道」显示成「没问题」。
+_NGINX_FENCE_MARKER = '# zh-container-maintenance-v1'
+
+#: 读取围栏状态时要看的配置文件。路径不存在就跳过，不报错。
+_NGINX_CONFIG_PATHS = (
+    '/etc/nginx/sites-enabled',
+    '/etc/nginx/conf.d',
+)
+
+
+def nginx_fence_status() -> dict:
+    """检查 nginx 配置里是否残留维护围栏。
+
+    返回 `{'checked': bool, 'fenced': bool, 'files': [命中的文件]}`。
+
+    * `checked=False` —— 一个配置文件都没读到（路径不存在、权限不足）。
+      **这不等于没有围栏**，调用方必须区分。
+    * `fenced=True` —— 至少一个文件里还有标记，此时 `/api/*` 大概全在返 503。
+    """
+    from pathlib import Path
+    hits: list[str] = []
+    readable = 0
+    for root in _NGINX_CONFIG_PATHS:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        try:
+            candidates = sorted(p for p in base.iterdir() if p.is_file())
+        except OSError:
+            continue
+        for path in candidates:
+            try:
+                text = path.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                continue
+            readable += 1
+            if _NGINX_FENCE_MARKER in text:
+                hits.append(str(path))
+    return {'checked': readable > 0, 'fenced': bool(hits), 'files': hits}
+
+
 def monitor_stats() -> dict:
     """返回监控循环统计的副本（调用方不该直接改内部状态）。"""
     return dict(_MONITOR_STATS)
