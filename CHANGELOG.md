@@ -3,6 +3,21 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.2.26] - 2026-11-14
+
+这是一次受控发布 staging 修复版本。它把前端 web 清单签名、后端 managed release 清单重建、Ed25519 签名和两层 preflight 收成一个 root-only 入口，避免候选包因漏做 host 签名而在切换阶段才被 writer-guard 拒绝。
+
+### 发布流程收口
+
+- 新增 `deploy/prepare-managed-stage.sh`，强制 root、私钥 owner-only 权限、固定 Python 隔离参数和签名步骤顺序。
+- staging 命令在 writer-guard `prepare` 之前验证静态 web 闭包和受信 managed release 闭包；任何失败都保留旧版本。
+- 新增 shell 语法、调用顺序、密钥材料和 systemd 边界合同测试，并补充受控主机发布文档。
+
+### 验证边界
+
+- 线上 v1.2.25 已完成受控恢复迁移并通过 Manager readiness、公开页面和 4 MiB 请求体回归；本版本修复后续 staging 的可重复性。
+- 离机灾备尚未配置；历史 503/502 仍需独立做上游可用性复盘。
+
 ## [1.2.25] - 2026-11-14
 
 这是一次生产 rootless 加固与请求体门禁收口版本。在 v1.2.24 修复 relay 入口 413 的基础上，把 Qoder 生产数据面切到签名 broker 验证后的 v1.9.9，并把启动器、systemd 隔离合同和线上审计证据纳入源码。

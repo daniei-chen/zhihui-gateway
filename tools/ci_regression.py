@@ -39,6 +39,7 @@ MODULES = (
     "server.tests.test_asset_lifecycle",
     "server.tests.test_rolling_relay",
     "server.tests.test_qoder_rootless_contract",
+    "server.tests.test_managed_stage_helper",
     "server.tests.test_audit_release_signer",
     "server.tests.test_audit_restore_evidence",
     "server.tests.test_recovery_retention",
