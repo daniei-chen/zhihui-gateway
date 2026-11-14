@@ -308,8 +308,25 @@ def settle(usage, pt, ct, credit):
     known = (state.terminal_state == 'completed' and measured.complete
              and not measured.malformed and measured.storage_tokens() == (pt, ct))
     if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
-    next_state = ('settled' if known else 'released'
-                  if row['state']=='reserved' and not measured.observed else 'unknown')
+    # 明确的客户端拒绝：上游在参数校验阶段就打回了，没有执行任何推理。
+    #
+    # 此前这类请求会落成 `unknown`，因为释放条件写的是
+    # 「`state == 'reserved'` 且没观察到用量」—— 而请求在**转发前**就已经是
+    # `forwarded` 了，所以那个分支永远走不到。
+    #
+    # 后果是：每一次「用错参数」都在账本里留一条待人工核对的记录。2026-11-15
+    # 实测的那两条就是这么来的（一次传了不存在的模型名、一次请求体不合法）。
+    # 对账的人得逐条去看，最后发现是调用方写错了参数。
+    #
+    # **排除 429**：限流不代表上游没处理过，它可能已经排队或部分执行。
+    # 只认 400/401/403/404/422 这类「看都不看就退回」的状态。
+    client_rejected = (state.terminal_state == 'rejected'
+                       and isinstance(state.http_status, int)
+                       and 400 <= state.http_status < 500
+                       and state.http_status != 429)
+    next_state = ('settled' if known
+                  else 'released' if client_rejected or (row['state'] == 'reserved' and not measured.observed)
+                  else 'unknown')
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
     # 只是"这一行被迁走了"，还没提交。真正置位由 `_record` 在事务提交后做：
