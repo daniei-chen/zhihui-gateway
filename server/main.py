@@ -354,8 +354,14 @@ MAX_API_BODY_BYTES = 16 * 1024 * 1024
 MAX_PACKAGE_BODY_BYTES = 64 * 1024 * 1024
 PACKAGE_UPLOAD_PATHS = ('/api/system/update-package',)
 from .portalregistration import BODY_LIMIT as REGISTRATION_BODY_LIMIT
+# 登录只需要 `{username, password}`（几百字节）。在**未鉴权**的路径上沿用 16 MiB
+# 上限，等于允许匿名请求把 16 MiB × APIBodyGuard 的并发名额（默认 32）≈ 512 MiB
+# 缓冲打满，把整个管理面拖成 503。给登录一个独立的小上限：正常客户端远低于它，
+# 恶意大 body 在声明长度阶段就被 413 拒掉，连缓冲都不进。
+LOGIN_BODY_LIMIT = 64 * 1024
 API_PATH_LIMITS={**{path:MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
-                 '/api/portal/register':REGISTRATION_BODY_LIMIT}
+                 '/api/portal/register':REGISTRATION_BODY_LIMIT,
+                 '/api/login':LOGIN_BODY_LIMIT}
 
 
 app.add_middleware(drain.DrainMiddleware)

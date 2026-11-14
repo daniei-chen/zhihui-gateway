@@ -605,6 +605,20 @@ def _unmirror_fail(kind: str, key: str) -> None:
         pass
 
 
+def log_text(value, limit: int = 128) -> str:
+    """把任意用户输入变成**可安全写入日志的单行文本**。
+
+    登录用户名来自请求体，只做过 `strip()`：内部的 `\\n`、`\\r`、ESC 会原样
+    进 journal 与 `audit_logs`，攻击者因此能伪造出一整行看似正常的审计记录。
+    这里把控制字符替换成 `?`（而不是静默丢弃），让"被清洗过"在日志里看得见。
+
+    只用于**展示与留痕**：认证、锁定键与用户索引一律继续使用原值，
+    否则含控制字符的历史用户名会突然登录失败。
+    """
+    cleaned = ''.join(ch if ch >= ' ' and ch != '\x7f' else '?' for ch in str(value or ''))
+    return cleaned[:limit]
+
+
 def _prune(store: dict[str, list]) -> None:
     """超限时淘汰**已经过了锁定窗口**的条目，绝不整体清空。
 

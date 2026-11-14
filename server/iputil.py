@@ -1,27 +1,50 @@
 """IP 解析与 CIDR 匹配工具。"""
 from __future__ import annotations
 
+import functools
 import ipaddress
+import re
 
 from fastapi import Request
 
 from . import config
 
+#: 允许出现在来源地址里的字符。iputil 的返回值会进 journal、`ip_access_logs`
+#: 与 `audit_logs.detail`；一旦反代把客户端可控的头透传成 X-Real-IP，换行/ESC
+#: 就能在日志里伪造整行记录。这里只放行地址本身可能出现的字符。
+_SAFE_ADDRESS = re.compile(r'[0-9A-Fa-f:.%]{1,64}')
+
 
 def _clean_ip(value: str) -> str:
-    """去掉端口与方括号，兼容 IPv6 形如 [::1]:1234。"""
+    """去掉端口与方括号，兼容 IPv6 形如 [::1]:1234。
+
+    返回空串表示「这个值不可采信」：调用方会回退到 TCP 对端，而不是把一段
+    攻击者可控的文本带进日志或审计表。
+    """
     raw = (value or '').strip()
     if not raw:
         return ''
     if raw.startswith('['):  # [::1]:1234
         end = raw.find(']')
-        return raw[1:end] if end > 0 else raw
+        cleaned = raw[1:end] if end > 0 else raw
     # 纯 IPv6 不处理；IPv4:port 去掉端口
-    if raw.count(':') == 1:
+    elif raw.count(':') == 1:
         host, _, port = raw.partition(':')
-        if port.isdigit():
-            return host
-    return raw
+        cleaned = host if port.isdigit() else raw
+    else:
+        cleaned = raw
+    return cleaned if _SAFE_ADDRESS.fullmatch(cleaned) else ''
+
+
+@functools.lru_cache(maxsize=512)
+def _parse_network(cidr: str):
+    """解析一次 CIDR 并复用。
+
+    `ip_network` 的构造出现在每请求路径上（可信代理判定 + 每条 IP 规则匹配），
+    但 CIDR 是配置项：数量有限、请求量很大。缓存键是原始字符串，非法输入抛出的
+    ValueError 不会被 lru_cache 记忆，因此错误路径的行为与逐次解析完全一致。
+    """
+    return ipaddress.ip_network(cidr, strict=False)
 
 
 def _is_trusted_proxy(peer: str) -> bool:
@@ -38,7 +61,7 @@ def _is_trusted_proxy(peer: str) -> bool:
         return False
     for cidr in config.TRUSTED_PROXY_CIDRS:
         try:
-            if addr in ipaddress.ip_network(cidr, strict=False):
+            if addr in _parse_network(cidr):
                 return True
         except ValueError:
             continue
@@ -99,7 +122,7 @@ def ip_matches(ip: str, cidr: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)
         try:
-            net = ipaddress.ip_network(str(cidr or '').strip(), strict=False)
+            net = _parse_network(str(cidr or '').strip())
         except ValueError:
             return False
         return addr in net

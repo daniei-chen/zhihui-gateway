@@ -698,6 +698,28 @@ def effective_http_proxy() -> str:
     return global_http_proxy()
 
 
+#: 等「池里空闲连接」的最长等待（秒）。
+#:
+#: httpx 的 `Timeout(total, connect=c)` 会把未显式指定的 read/write/**pool**
+#: 全部设成 total。生产里 total 取 `WB_UPSTREAM_TIMEOUT`（300～600s），于是
+#: 传输池被占满时，新请求会在 `pool` 上挂 5～10 分钟，同时一直占着准入名额，
+#: 把网关整体拖成 503。而「还没拿到连接」属于**明确未发送**，PoolTimeout 已在
+#: `deadline.RETRYABLE_ERROR_NAMES` 里，可以安全重试 —— 所以这里给它一个明确
+#: 的短预算，而不是继承总超时。
+_POOL_WAIT_MAX_S = 5.0
+
+
+def _bounded_pool_timeout(tmo):  # noqa: ANN001
+    """把 pool 等待夹到 `_POOL_WAIT_MAX_S`，其余三个字段原样保留。"""
+    import httpx
+
+    pool = tmo.pool
+    if pool is not None and pool <= _POOL_WAIT_MAX_S:
+        return tmo
+    return httpx.Timeout(connect=tmo.connect, read=tmo.read,
+                         write=tmo.write, pool=_POOL_WAIT_MAX_S)
+
+
 def http_client(timeout, *, connect: float | None = None, proxy: str | None = None,
                 lane: str = '', identity: str | None = None, bounded_response: bool = False):
     """统一的 httpx 客户端：默认忽略系统/环境代理，避免内网请求被代理劫持。
@@ -720,11 +742,11 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     import httpx
 
     if isinstance(timeout, httpx.Timeout):
-        tmo = timeout
+        tmo = _bounded_pool_timeout(timeout)
     elif connect is not None:
-        tmo = httpx.Timeout(timeout, connect=connect)
+        tmo = _bounded_pool_timeout(httpx.Timeout(timeout, connect=connect))
     else:
-        tmo = httpx.Timeout(timeout)
+        tmo = _bounded_pool_timeout(httpx.Timeout(timeout))
     selected_proxy = effective_http_proxy() if proxy is None else proxy
 
     try:

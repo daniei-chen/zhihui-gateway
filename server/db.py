@@ -270,6 +270,11 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (day, key_id, model, realm)
 );
 
+-- 主键是 (day, key_id, model, realm)：`WHERE key_id = ? AND day >= ?` 只能走
+-- day 的范围扫描，再逐行过滤 key_id —— `/v1/usage` 与按密钥的用量统计因此
+-- 会扫过全站所有密钥的当日行。这条索引把「某个密钥最近 N 天」变成范围读。
+CREATE INDEX IF NOT EXISTS idx_usage_daily_key_day ON usage_daily(key_id, day);
+
 -- 按小时的用量累计：给「今日」趋势图用（粒度随范围走，见 stats 页）。
 -- 为什么不直接查下面那张业务无关的请求日志：日志会被保留期裁剪、也能被用户
 -- 手动清空（「日志」页有清除入口），而页头卡片来自 usage_daily —— 两处一旦
@@ -939,6 +944,10 @@ def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:
             ''')
             conn.execute('DROP TABLE usage_daily')
             conn.execute('ALTER TABLE usage_daily_new RENAME TO usage_daily')
+            # 重建会带走旧表上的索引：这里补回来，否则「某个密钥最近 N 天」
+            # 的查询要等到下次进程启动重新跑 schema 才重新有索引。
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_usage_daily_key_day '
+                         'ON usage_daily(key_id, day)')
         logger.info('usage_daily 主键已迁移为四列（含 realm），历史数据已保留')
         return True
     except sqlite3.Error as exc:

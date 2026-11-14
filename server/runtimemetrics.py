@@ -57,10 +57,20 @@ class Metrics:
         self.models = set()
         self.histograms = {}
         self.samples = deque(maxlen=20000)
+        # 上次 prune 到的分钟。请求热路径上每来一次就遍历近 1440 个分钟桶是
+        # 固定开销，而同一分钟内重复遍历的结果完全相同 —— 每分钟做一次即可。
+        self._pruned_minute = None
 
     def _prune(self, minute):
+        if self._pruned_minute == minute:
+            return
+        self._pruned_minute = minute
+        self._drop_expired_minutes(minute - 1439)
+
+    def _drop_expired_minutes(self, cutoff):
+        """真正遍历分钟桶的部分；独立成方法便于直接验证"每分钟只跑一次"。"""
         for old in tuple(self.minutes):
-            if old < minute - 1439:
+            if old < cutoff:
                 del self.minutes[old]
 
     def _histogram(self, name, protocol, seconds):
