@@ -350,15 +350,36 @@ def backfill_attempt_billing(limit: int = 200, min_age: int = ATTEMPT_BILLING_MI
 
     只挑**还没落过事实**的请求（LEFT JOIN 为空），按 request_logs.ts 的时间窗
     走索引，单轮有界。返回本轮写入的请求数。
+
+    ## 2026-11-14：筛选用内连接一张已停写的表，导致补齐长期空转
+
+    原实现是：
+
+        JOIN attempt_events a ON a.request_id = l.request_id
+
+    内连接。而 `attempt_events` 在 2026-11-03 之后就不再写入（上游事件开始带
+    `dispatch_id`，`attempt()` 遇到带这个字段的事件直接返回 False，改由
+    `provider_attempt_events_v2` 承载）。于是内连接永远是空集：
+
+      · 事实表最后一次写入停在 2026-11-03；
+      · 11-04 之后有 **59,016 个**请求已有新表的调用证据，却一个都没补上；
+      · 补齐任务照常每轮跑、照常返回 0，日志里看不出异常。
+
+    改成两个 EXISTS：任一表有该请求的调用记录即入选。这不改变推导规则本身 ——
+    `derive_attempt_billing` 早就认识新表（有 v2 证据时如实给 unknown，因为缺
+    供应商费用回执）；缺的只是「把这些请求挑出来」这一步。
     """
     from . import db
     stamp = int(time.time()) if now is None else int(now)
     horizon = stamp - max(0, int(min_age))
     rows = db.query(
         'SELECT DISTINCT l.request_id FROM request_logs l '
-        'JOIN attempt_events a ON a.request_id=l.request_id '
         'LEFT JOIN attempt_billing_facts f ON f.request_id=l.request_id '
-        'WHERE f.request_id IS NULL AND l.ts<=? AND l.ts>=? LIMIT ?',
+        'WHERE f.request_id IS NULL AND l.ts<=? AND l.ts>=? '
+        'AND (EXISTS (SELECT 1 FROM attempt_events a WHERE a.request_id=l.request_id) '
+        '     OR EXISTS (SELECT 1 FROM provider_attempt_events_v2 v '
+        '                WHERE v.request_id=l.request_id)) '
+        'LIMIT ?',
         (horizon, horizon - 7 * 86400, int(limit)))
     filled = 0
     for row in rows:
