@@ -148,8 +148,10 @@ def normalize_service_data(root=SERVICE_DATA_ROOT, *, uid=SERVICE_UID, gid=SERVI
         info = root.lstat()
     except OSError as exc:
         raise Rejected('service data directory unavailable') from exc
+    # A normal directory has at least the `.` and `..` links; unlike a
+    # regular file, its link count is not a hard-link safety contract.
     if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
-            or info.st_nlink != 1):
+            or info.st_nlink < 2):
         raise Rejected('service data directory is unsafe')
     try:
         if (info.st_uid, info.st_gid) != (uid, gid):

@@ -87,8 +87,8 @@
     "server/tests/test_writer_guard_contract.py": "0ba68130f85ed0a5c1516fc9b72c4edf0da4bddf126d4f9c9a3b9f1cef5a2e22",
     "server/writer-capabilities.json": "77bed79955942c6b7228384070d5112bf29bf2cff6c39d29230c545dfe3b3a1c",
     "web/lib/product.ts": "e9943a1d9b806a7f2a18e1d84e38b3e8aa37566822b539d048b9755135a11aaf",
-    "ops/writer-guard/host-files.json": "4afc53105925f9d73758ce9df3f762f37e4ada5650104545efcb76b0a1dc4966",
-    "ops/writer-guard/launch_guard.py": "600de41436debb46ca0a5cac227afe374501ee7cc2e6340028e90afb8f0525ef"
+    "ops/writer-guard/host-files.json": "9ebf217aa3087d5af9afb25495f24eb6aa524baea54a53af0a4cacf209a0cd3f",
+    "ops/writer-guard/launch_guard.py": "c947e1dee7540c0291bf1816a1a237d0836d963fe89ab1b3de044a200fd26fb2"
   },
   "schema": 1,
   "signed": false,
