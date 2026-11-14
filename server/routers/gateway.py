@@ -1802,11 +1802,81 @@ async def list_models(request: Request):
         # Anthropic 客户端（Claude Code 等）也会调这个路径，但期望的结构不同
         if request.headers.get('anthropic-version'):
             payload = _as_anthropic_models(payload)
+        else:
+            # 只在 OpenAI 形状上标注：Anthropic 的转换会重排结构，多出的字段留不住，
+            # 白拉一趟没有意义。
+            payload = await _annotate_other_platforms(payload, key, request_platform)
         return JSONResponse(payload, status_code=resp.status_code)
     except Exception as exc:  # noqa: BLE001
         latency = int((time.time() - started) * 1000)
         await _record_async(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
         return _oai_error_with_blip_body(_public_upstream_error(upstream), 502, exc)
+
+
+async def _annotate_other_platforms(payload: object, key: dict | None,
+                                    current_platform: str) -> object:
+    """在模型清单旁标注「其它平台也能用」的模型。
+
+    ## 为什么要它
+
+    `/v1/models` 一直按**本次请求的上游**返回清单。这对「这个密钥此刻能看到什么」
+    是准确的，但它回答不了另一个问题：**这个密钥到底还能用什么**。
+
+    具体表现：豆包系列在 trae 平台上一直可用（实测文本、流式、推理内容都正常），
+    但持有 workbuddy 入口密钥的人在模型列表里看不到它们 —— 于是这些能力事实上
+    不存在，除非有人专门去读文档。
+
+    ## 怎么标
+
+    只在 `payload` 的**同级**加两个字段，`data` 数组一个字节都不动：
+
+        payload['other_platforms'] = {'trae': ['Doubao-Seed-2.1-Turbo', ...]}
+        payload['other_platforms_hint'] = '调用时加平台前缀…'
+
+    这样「客户端拿 data 当模型选择器」的行为完全不变，而人或智能客户端读一眼就知道
+    还有别的可选。**不把它们混进 data**：混进去会让客户端选中一个需要前缀的模型名，
+    然后收到「不可用」，那比看不到更糟。
+
+    ## 边界
+
+    · 只列**该密钥有权限**的平台（`key.platforms`），不列它调不了的；
+    · 拉不到就跳过（超时 2 秒），**绝不让某个平台不可用拖垮整个模型列表**；
+    · 每个平台最多 80 个，避免异常上游把响应撑大；
+    · `data` 不是列表时原样返回 —— 认不出的结构不动手。
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+        return payload
+    allowed = set((key or {}).get('platforms') or ())
+    others = [name for name in _THREEWAY_SPEC
+              if name != current_platform and name in allowed]
+    if not others:
+        return payload
+    extra: dict[str, list[str]] = {}
+    for platform in others:
+        upstream = _threeway_upstream(platform)
+        if not upstream:
+            continue
+        try:
+            async with config.http_client(2, connect=1) as client:
+                resp = await client.get(f'{upstream["base_url"]}/v1/models',
+                                        headers=await _upstream_headers_async(upstream))
+            if resp.status_code != 200:
+                continue
+            items = (resp.json() or {}).get('data')
+            if not isinstance(items, list):
+                continue
+            ids = [str(item.get('id')) for item in items
+                   if isinstance(item, dict) and item.get('id')]
+            if ids:
+                extra[platform] = ids[:80]
+        except Exception as exc:  # noqa: BLE001 - 标注是附加信息，不能连坐
+            logger.debug('%s 模型清单不可用，跳过标注：%s', platform, exc)
+    if not extra:
+        return payload
+    payload['other_platforms'] = extra
+    payload['other_platforms_hint'] = (
+        '这些模型在其它平台可用；调用时加平台前缀，例如 trae/Doubao-Seed-2.1-Turbo。')
+    return payload
 
 
 def _as_anthropic_models(payload: object) -> object:
