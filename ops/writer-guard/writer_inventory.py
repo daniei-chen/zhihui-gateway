@@ -93,9 +93,24 @@ class LinuxInventory:
         return sorted(ports & {7865, 7866})
 
     def processes(self):
+        # 排除整条**调用链**，不只是自己。
+        #
+        # `sudo`、`bash -c` 或启动脚本的 cmdline/cwd 可能正好落在
+        # `/opt/workbuddy-manager` 或 `releases/` 下 —— 在同一个 shell 里先
+        # `cd` 到发布目录、再跑迁移，就是这个形状。那些是"谁在调用我"，
+        # 不是"另一个并发写者"；把它们算进来会让迁移自锁在这次调用上。
+        ancestors = set()
+        pid = os.getpid()
+        while pid > 1 and pid not in ancestors:
+            ancestors.add(pid)
+            try:
+                raw = (self.proc / str(pid) / 'stat').read_text()
+                pid = int(raw[raw.rfind(')') + 2:].split()[1])
+            except (OSError, IndexError, ValueError):
+                break
         found = []
         for path in self.proc.iterdir():
-            if not path.name.isdigit() or int(path.name) == os.getpid():
+            if not path.name.isdigit() or int(path.name) in ancestors:
                 continue
             before = process_identity(self.proc, int(path.name))
             if before is None:

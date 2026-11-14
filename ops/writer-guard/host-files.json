@@ -66,7 +66,7 @@
     },
     "writer_inventory.py": {
       "mode": 420,
-      "sha256": "5c08c2e83b61341b90e7c74d16d0e7fe3b4c6a8594fbaa621ab115185189cf61"
+      "sha256": "09ba14a825f1dbb649d7284e77f5ae3126b3fe7629a066a7bf8db82d207f6fa3"
     }
   },
   "schema": "zhihui.writer-host-files",

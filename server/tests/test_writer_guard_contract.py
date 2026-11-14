@@ -221,6 +221,20 @@ class WriterGuardContractTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 2)
 
+    def test_writer_scan_excludes_the_whole_call_chain(self):
+        """迁移不能把"谁在调用我"当成并发写者。
+
+        `sudo` / `bash -c` 的 cwd 可能正落在 `releases/` 下（在同一 shell 里先
+        `cd` 到发布目录再跑迁移就是常见操作）。只排除自己的 PID 会让那次迁移
+        自锁 —— 实测表现为 `prepare` 第一次必然失败、原样重试才成功。
+        """
+        source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
+                  'writer_inventory.py').read_text(encoding='utf-8')
+        self.assertIn('ancestors = set()', source)
+        self.assertIn('int(path.name) in ancestors', source)
+        # 旧写法（只排除自己）必须已经不存在
+        self.assertNotIn('int(path.name) == os.getpid()', source)
+
     def test_identical_console_build_may_be_reused_by_a_backend_only_release(self):
         """纯后端发版不该被迫重建前端：同名同内容放行，同名不同内容才拒绝。"""
         source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
