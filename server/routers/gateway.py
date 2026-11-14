@@ -2357,8 +2357,29 @@ async def _prepare_forward_async(key, body, *, request=None):
             # 也不能让一个自称"只要 10 个 token"的请求把预算骗过去。
             output_reserve(declared_output_bytes(body) + FAILURE_ENVELOPE_BYTES)
         except observability.CapacityError:
-            response=_oai_error('响应容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
-            response.headers['Retry-After']='1'
+            # 这是**内存预算**到顶，不是并发数、也不是配额。三者被拒时用户看到的
+            # 都是 503，所以消息必须自己说清是哪一种，否则排障会往错的方向走。
+            #
+            # 2026-11-14 实测：某密钥在 12 分钟内被拒 20 次，全是这一条。它当时的
+            # 并发约 59、单个请求并不大 —— 是「很多长输出同时在途」把预留吃满了。
+            # 原来的文案只说「响应容量已满」，用户无法据此做任何事。
+            #
+            # 加两样东西：
+            #   · `gateway_hint`：告诉调用方这是容量保护、做什么有用；
+            #   · 一行带占用的日志：事后能区分「并发多」还是「单个请求声明得太大」。
+            snap = observability.admission_snapshot() or {}
+            held = snap.get('inflight_body_bytes')
+            ceiling = snap.get('maximum_body_bytes')
+            logger.warning('输出预留被拒 key_id=%s 声明输出=%s 在途字节=%s/%s',
+                           (key or {}).get('id'), declared_output_bytes(body),
+                           held, ceiling)
+            response = _oai_error(
+                '响应容量已满，请稍后重试', 503, 'server_error',
+                'gateway_capacity_exceeded',
+                hint=('in-flight response reservations reached the memory ceiling; '
+                      'this is a capacity guard, not a key, quota or model problem. '
+                      'Retry shortly, or lower the concurrency of long-output requests.'))
+            response.headers['Retry-After'] = '1'
             return response
     cancelled = threading.Event()
     reserved = 0
