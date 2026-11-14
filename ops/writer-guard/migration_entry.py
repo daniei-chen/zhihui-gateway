@@ -115,7 +115,17 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
+    except Exception as error:
+        # 只说「查看私有 journal」没有用：真实的失败常常发生在更早的阶段 —— 闭环
+        # 校验、候选目录、能力下限覆盖、前置检查 —— 而这条兜底消息把它们全盖住了。
+        #
+        # 2026-11-14 有两次 prepare 失败因此查不出原因，只能靠删掉空事务目录再重试
+        # 蒙过去，且无法确认那就是根因。
+        #
+        # 补上异常类型与一行消息。**脱敏**：只保留类型名与前二百字符，压成单行，
+        # 不输出栈、不输出环境变量值。
         print('WRITER-MIGRATION-BLOCKED: inspect retained private journals; no automatic legacy fallback',
               file=sys.stderr)
+        detail = ' '.join(str(f'{type(error).__name__}: {error}').split())[:200]
+        print('WRITER-MIGRATION-DETAIL: ' + detail, file=sys.stderr)
         raise SystemExit(1)
