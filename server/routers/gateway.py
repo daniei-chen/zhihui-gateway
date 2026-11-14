@@ -913,7 +913,12 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         'mapped_model': db._clean(mapped, 128), 'status': status,
         'prompt_tokens': max(0, pt), 'completion_tokens': max(0, ct),
         'latency_ms': latency, 'first_token_ms': first_token,
-        'ua': db._clean(ua, 512), 'error': db._clean(error, 500),
+        'ua': db._clean(ua, 512),
+        # 调用方显式传的原因优先；没传时回退到请求状态里记的那份。
+        # 流中失败（`stream_read`）走的是「发一个错误帧给客户端 + finally 收尾」的
+        # 路径，那里没有人再调用 `_record` 传 error —— 不回落就会丢成空字符串，
+        # 记录里只剩一个 `transport_error` 的壳。
+        'error': db._clean(error or getattr(state, 'error', None), 500),
         'stream': 1 if stream else 0, 'credit': credit, 'realm': realm,
         'cache_hit_tokens': cache_hit, 'cache_miss_tokens': cache_miss,
         'cache_write_tokens': cache_write,

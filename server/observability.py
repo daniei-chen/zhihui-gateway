@@ -177,6 +177,14 @@ class RequestAudit:
     http_status: int = 0
     terminal_state: str | None = None
     error_stage: str | None = None
+    #: 失败原因（可读文本）。**必须落库**：`terminal_state` + `error_stage` 只能说明
+    #: 「哪个阶段失败了」，说明不了「为什么」。
+    #:
+    #: 之前这里没有这个字段，而 `set_stream_state` 收到的 `error` 参数被直接丢弃 ——
+    #: 于是流中失败只留下 `transport_error` / `stream_read`，错误文本虽然发给了
+    #: 客户端，却没有进数据库。2026-11-14 审计时发现 7 天里有 269 条这样的记录，
+    #: 全部无法归因。
+    error: str | None = None
     account: str | None = None
     first_byte_ms: int | None = None
     first_token_ms: int | None = None
@@ -719,10 +727,17 @@ def set_stream_state(observer, error=None, cancelled=False):
         state.terminal_state = ('upstream_error' if observer.error_stage == 'upstream' else
                                 'protocol_incomplete' if observer.error_stage in (None, 'protocol') else 'transport_error')
         state.error_stage = observer.error_stage or 'protocol'
+        # 这个 `error` 是调用方（流读取的 except 分支）合成的可读原因，例如
+        # 「上游流传输或协议异常：ReadTimeout」。它只被 yield 给了客户端，
+        # **没有**任何字段承载 —— 落库时 `error` 列因此是空的，事后无法归因。
+        # 存进 state，让 `_record` 在调用方没显式传 error 时回退到这里。
+        state.error = str(error)[:500]
     elif observer.error:
         state.terminal_state = ("upstream_error" if observer.error_stage == "upstream" else
                                 "protocol_incomplete" if observer.error_stage=='protocol' else "transport_error")
         state.error_stage = observer.error_stage or "stream_read"
+        # 上游 SSE 里的错误文本（已在上游侧截断到 500 字符）。
+        state.error = str(observer.error)[:500]
     elif observer.completed:
         state.terminal_state, state.error_stage = "completed", None
     else:
