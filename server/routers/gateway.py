@@ -935,6 +935,11 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         # （例如鉴权阶段就被拒），**不是** workbuddy —— 对账时单独归类。
         'actual_platform': getattr(state, 'actual_platform', None) if state else None,
         'upstream_ref': getattr(state, 'upstream_ref', None) if state else None,
+        # D-03：入口平台必须在这里定下来。`db.add_request_log` 的兜底读的是
+        # `forced_platform` 这个 ContextVar，而 spool 重放跑在后台线程里，
+        # ContextVar 是空的 —— 结果每条重放都记成 workbuddy，把别的平台的
+        # 调用算到 workbuddy 头上。写进 facts 之后，重放用的是入口那一刻的值。
+        'platform': forced_platform.get() or 'workbuddy',
         # RV01：调用方的关联 ID（X-Request-ID，已校验）。与 request_id
         # （服务端执行 ID）是两个字段：这里记的只是「调用方说自己是
         # 谁」，不参与主键，也不能用来反推执行归属。

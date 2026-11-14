@@ -265,15 +265,36 @@ def ensure_dirs() -> None:
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+#: 上一次读到的 upstream `api_key`，按文件指纹（dev/ino/mtime_ns/size）缓存。
+#:
+#: 推理主路径每个请求都会问一次 `upstream_api_key()`，原来每次都
+#: `read_text` + `json.loads`（30～150 µs，且在事件循环上）。文件被原子替换
+#: 时 inode 或 mtime 一定变，所以指纹命中就等于"内容没变"，不存在"改了没看见"。
+_UPSTREAM_KEY_CACHE: dict[str, object] = {'marker': None, 'value': ''}
+
+
 def upstream_api_key() -> str:
     """优先环境变量，其次读取 workbuddy2api 的 config.json。"""
     if WB2API_KEY:
         return WB2API_KEY
     try:
-        cfg = json.loads(UPSTREAM_CONFIG.read_text(encoding='utf-8'))
-        return str(cfg.get('api_key') or '')
-    except Exception:
+        info = UPSTREAM_CONFIG.stat()
+        marker = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    except OSError:
+        # 文件不在就是没有 key；顺手清掉缓存，免得文件被删后还返回旧值。
+        _UPSTREAM_KEY_CACHE['marker'] = None
+        _UPSTREAM_KEY_CACHE['value'] = ''
         return ''
+    cached = _UPSTREAM_KEY_CACHE
+    if cached['marker'] == marker:
+        return cached['value']  # type: ignore[return-value]
+    try:
+        cfg = json.loads(UPSTREAM_CONFIG.read_text(encoding='utf-8'))
+        value = str(cfg.get('api_key') or '')
+    except Exception:
+        value = ''
+    cached['marker'], cached['value'] = marker, value
+    return value
 
 
 DEFAULT_POOL = {
@@ -534,20 +555,50 @@ def resolve_account_proxy(auth: dict) -> str | None:
     return None
 
 
+#: 全局出口代理的进程内缓存（代际 + TTL）。
+#:
+#: 推理主路径每请求至少问一次（`http_client` → `effective_http_proxy`），而它要
+#: 读 2 条 settings（`global_proxy_enabled` 与 `http_proxy`）—— 两次 SQLite 查询
+#: 全压在事件循环上。代理是"运维改一次、几天不变"的配置，所以：
+#:   * 同一代际内 2 秒复用（同请求内的多次调用直接命中）；
+#:   * `set_setting` 保存这两条时调 `invalidate_global_proxy()`，同进程立刻生效；
+#:   * 另一实例（MAIN 与 helper 是两个进程）最多陈旧 2 秒。
+#: 不做更长 TTL，也不做通用 settings 缓存：`settings` 表里还有协调类键，给它们
+#: 加缓存会把"栅栏刚被别的 owner 拿走"这类判断读成旧值（v1.2.31 试过，被
+#: `test_task_leases` 的 lease 抢占用例当场抓住）。
+_GLOBAL_PROXY_CACHE: dict[str, object] = {'generation': -1, 'at': 0.0, 'value': ''}
+_GLOBAL_PROXY_GENERATION = 0
+_GLOBAL_PROXY_TTL = 2.0
+
+
+def invalidate_global_proxy() -> None:
+    """让下次 `global_http_proxy()` 重新读库（保存代理设置时调用）。"""
+    global _GLOBAL_PROXY_GENERATION
+    _GLOBAL_PROXY_GENERATION += 1
+
+
 def global_http_proxy() -> str:
     """全局上游代理：面板设置里配了且开启时生效，否则回落环境变量 WB_HTTP_PROXY。
 
     位置与参考项目的「Global Proxy」一致：池不可用（关了 / 没有启用中的线路）时的
     兜底出口。
     """
+    generation = _GLOBAL_PROXY_GENERATION
+    cached = _GLOBAL_PROXY_CACHE
+    if (cached['generation'] == generation
+            and time.monotonic() - float(cached['at']) < _GLOBAL_PROXY_TTL):
+        return cached['value']  # type: ignore[return-value]
     try:
         from . import db
         if db.get_setting('global_proxy_enabled', True) is False:
-            return ''
-        stored = str(db.get_setting('http_proxy', '') or '').strip()
+            value = ''
+        else:
+            stored = str(db.get_setting('http_proxy', '') or '').strip()
+            value = stored or HTTP_PROXY
     except Exception:            # noqa: BLE001
-        stored = ''
-    return stored or HTTP_PROXY
+        value = HTTP_PROXY
+    cached['generation'], cached['at'], cached['value'] = generation, time.monotonic(), value
+    return value
 
 
 def account_proxy(auth: dict) -> str | None:

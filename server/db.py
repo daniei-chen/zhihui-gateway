@@ -1031,6 +1031,13 @@ def set_setting(key: str, value: Any) -> None:
         'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
         (key, json.dumps(value, ensure_ascii=False)),
     )
+    # `config.global_http_proxy()` 按代际缓存出口代理；保存这两条时要让它立刻
+    # 重读，否则运维改完代理最多要等 2 秒（跨进程）才生效。
+    if key in ('http_proxy', 'global_proxy_enabled'):
+        try:
+            config.invalidate_global_proxy()
+        except Exception:        # noqa: BLE001 —— 缓存失效失败不该让保存失败
+            pass
 
 
 # ── 用量累计 ─────────────────────────────────────────────
