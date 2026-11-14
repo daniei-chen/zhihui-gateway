@@ -890,6 +890,10 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
     credit = measured.credit
     cache_hit, cache_miss, cache_write = _usage_cache(usage)
     state = observability.current.get()
+    # 上游可能生成得比我们请求的多（实测见 `note_output_over_limit` 的说明）。
+    # 只计数，不改行为、不进账本 —— 网关替上游守不了约，但得能回答「发生过几次」。
+    observability.note_output_over_limit(
+        getattr(state, 'max_tokens_requested', None) if state else None, ct)
     http_status = state.http_status if state and state.http_status else status
     terminal = state.terminal_state if state else None
     if stream and terminal == 'client_cancelled':

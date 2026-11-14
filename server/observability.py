@@ -136,6 +136,46 @@ def record_max_tokens_contract(state, field: object, requested: object,
     state.max_tokens_effective = got
 
 
+#: 统计「上游实际输出超过请求上限」的次数。
+#:
+#: ## 为什么需要它
+#:
+#: 上面对 `record_max_tokens_contract` 的说明只覆盖了**收缩**（我们把请求的上限调小，
+#: 通过响应头告知）。但还有一个方向从未被观测过：**上游生成得比我们请求的多**。
+#:
+#: 2026-11-15 实测（/trae 引擎，绕过网关直连）：
+#:
+#: | 请求 | 实际 completion_tokens |
+#: | --- | --- |
+#: | `max_tokens: 80` | **560** |
+#: | `max_completion_tokens: 80` | **185**，换一次又变 **338** |
+#:
+#: 也就是说那个引擎对这个参数**不守约** —— 而计费按实际 token 算。客户端以为自己
+#: 要了 80 个 token 的回答，实际拿到 3～7 倍，账单和延迟都跟着变。
+#:
+#: 网关无法替上游守约（token 是在上游生成的），但**至少要能回答「发生过多少次」**。
+#: 这里只做计数，不改任何行为。
+_output_over_limit = 0
+
+
+def note_output_over_limit(requested, actual) -> None:
+    """记录一次「实际输出超过请求上限」。热路径调用，只做整数比较与自增。"""
+    global _output_over_limit
+    try:
+        want = _limit_int(requested)
+        got = _limit_int(actual)
+    except (TypeError, ValueError):
+        return
+    if want is None or got is None or want <= 0:
+        return
+    if got > want:
+        _output_over_limit += 1
+
+
+def output_over_limit_count() -> int:
+    return _output_over_limit
+
+
 def _max_tokens_headers(state) -> list[tuple[bytes, bytes]]:
     want = _limit_int(getattr(state, 'max_tokens_requested', None))
     got = _limit_int(getattr(state, 'max_tokens_effective', None))
