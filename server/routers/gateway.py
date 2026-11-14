@@ -965,6 +965,9 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                     db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0),ts=facts['ts'])
         if state:
             state.recorded=True
+            # 事务到这里已经提交：结算真的把预算行迁走了，收尾阶段不必再用一次
+            # 空事务去"兜底"（见 budget.finish 的注释）。
+            state.budget_settled=getattr(state,'budget_settled_pending',False)
     except Exception:
         from .. import operational, ledgerreplay
         operational.ledger_write_healthy=False
@@ -1218,7 +1221,14 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         headers['X-Request-ID'] = state.client_request_id or state.request_id
         headers['X-Manager-Request-ID'] = state.request_id
         dispatch_id = uuid.uuid4().hex
-        db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)', (dispatch_id, state.request_id, int(time.time())))
+        try:
+            db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)',
+                       (dispatch_id, state.request_id, int(time.time())))
+        except Exception:        # noqa: BLE001
+            # 归因证据不是转发的先决条件：dispatch_id 马上就要写进请求头，这一行
+            # 掉了只影响"事后把上游回执对回请求"，不该让整次转发失败。正常情况下
+            # 这条路径不会触发；它挡的是磁盘/锁的瞬时故障把 200 变成 5xx。
+            logger.warning('provider dispatch 记录失败 request_id=%s', state.request_id)
         headers['X-Manager-Dispatch-ID'] = dispatch_id
         headers['X-WB-Compatibility'] = 'manager-scoped-v1'
         platform = getattr(state, 'actual_platform', None) or forced_platform.get() or up.get('name')

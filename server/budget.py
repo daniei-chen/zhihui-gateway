@@ -296,11 +296,21 @@ def settle(usage, pt, ct, credit):
                   if row['state']=='reserved' and not measured.observed else 'unknown')
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
+    # 只是"这一行被迁走了"，还没提交。真正置位由 `_record` 在事务提交后做：
+    # 事务回滚时这个 pending 标记会随对象一起被丢弃（对象复用不会发生，每次请求
+    # 一个 state），`finish` 的兜底路径照旧生效。
+    state.budget_settled_pending = True
 
 def finish(state):
     from . import portalwallet
     portalwallet.finish(state)
     if not state.budget_reserved: return
+    if getattr(state, 'budget_settled', False):
+        # 结算事务已经提交，这一行的状态不再是 `reserved`/`forwarded`。下面的
+        # UPDATE 必然命中 0 行 —— 也就是一次只有 fsync 没有效果的空事务。每请求
+        # 省掉一次磁盘同步，语义不变：真要兜底的时候（结算没跑成、或抛异常回滚）
+        # 这个标记不会置位。
+        return
     db.execute("UPDATE budget_reservations SET state=CASE WHEN state='reserved' THEN 'released' ELSE 'unknown' END,updated_at=? "
                "WHERE request_id=? AND owner=? AND fence=? AND state IN ('reserved','forwarded')", (int(time.time()),state.request_id,budgetowner.identity(),state.budget_fence))
 

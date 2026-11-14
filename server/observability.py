@@ -186,6 +186,14 @@ class RequestAudit:
     key_slot: int | None = None
     key_id: int | None = None
     budget_reserved: bool = False
+    #: 结算事务是否已经把这一行预算预留迁走（`settled`/`released`/`unknown`）。
+    #:
+    #: `budget.finish` 的兜底 UPDATE 只在"结算没跑成"时才有活干。结算一旦提交，
+    #: 它条件里的 `state IN ('reserved','forwarded')` 就再也匹配不到，于是每次
+    #: 请求都多付一个空事务：`BEGIN IMMEDIATE` + 0 行 + commit + fsync。
+    #: 这个标记只在结算事务**提交成功后**才置位（回滚时保持 False），所以兜底
+    #: 语义一点没变。
+    budget_settled: bool = False
     #: 调用方关联 ID（`X-Request-ID`，校验过）；None = 未提供或不合法。
     #: **不参与任何主键**，只是相关性提示；见模块 docstring。
     client_request_id: str | None = None
