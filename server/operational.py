@@ -361,11 +361,23 @@ def budget_unknown_alert(summary: dict) -> tuple[bool, str]:
     判据只有 `needs_human_old`：**已归档待核对**（超过处理期限仍无上游证据）的
     unknown 不再计入，因此不会让这条告警长期 firing；但它们仍在汇总里以
     `archived_pending` 明示，不是「消失」，仍可人工 resolve。
+
+    ## 2026-11-15：文案要说出「去哪儿处理」
+
+    这条告警长期在报「需要人工核对」，但**没有说去哪儿核对**。看到日志的人要么
+    去找代码，要么干脆忽略 —— 后者更常见，一条说「需要人」却不给入口的告警，
+    很快就会被当成背景噪音。
+
+    处理入口其实一直是齐的：列表、证据、核销三个端点都有，核销还强制留痕并要求
+    最近登录。缺的只是把路径写出来。
     """
     buckets = summary.get('review_buckets') or {}
     detail = ('unknown budget needing human review (%d rows older than 1h, '
               'new-1h %d, older-1h %d, older-7d %d, upstream-rejected %d, '
-              'auto-reconcilable %d, archived-pending %d, token bound %d)'
+              'auto-reconcilable %d, archived-pending %d, token bound %d); '
+              'review at GET /api/budgets/review, evidence at '
+              'GET /api/budgets/review/evidence, settle with '
+              'POST /api/budgets/{request_id}/resolve'
               % (summary.get('needs_human_old', 0),
                  buckets.get('new_1h', 0), buckets.get('older_1h', 0),
                  buckets.get('older_7d', 0), buckets.get('upstream_rejected', 0),

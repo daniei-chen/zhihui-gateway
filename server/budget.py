@@ -24,6 +24,22 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
 CREATE INDEX IF NOT EXISTS idx_budget_key_state ON budget_reservations(key_id,state);
 CREATE INDEX IF NOT EXISTS idx_budget_unresolved_scan ON budget_reservations(created_at,request_id)
  WHERE state IN ('reserved','forwarded','unknown');
+-- 待核对列表（GET /api/budgets/review）按 `state='unknown'` 过滤、按
+-- (created_at, request_id) 排序并做游标翻页。
+--
+-- 上面那个部分索引**没能被用上**：它的键序以 created_at 开头、状态条件写在 WHERE
+-- 里。SQLite 对「状态等值 + 按 created_at 排序」这种组合，没有把它选进计划。
+-- 2026-11-15 实测：查询计划是「SCAN + 临时 B 树排序」，即每次翻页都全表扫一遍。
+-- 表当时 19.4 万行、其中 unknown 只有 1474 行 —— 扫了 130 倍的无用数据，而且随着
+-- 每天新增约 5000 行还会继续变差。
+--
+-- 这个索引把状态放进键首位，正好匹配「等值过滤 + 有序翻页」，实测计划变成
+-- `SEARCH ... USING COVERING INDEX`（不用回表）。在 19.4 万行的副本上建它耗时
+-- 0.63 秒，一次性的。
+--
+-- 保留旧索引不动：它服务于别的扫描路径，且多一个索引的写放大远小于这里省下的读。
+CREATE INDEX IF NOT EXISTS idx_budget_state_scan
+    ON budget_reservations(state,created_at,request_id);
 CREATE TABLE IF NOT EXISTS budget_adjustments (
  request_id TEXT PRIMARY KEY, key_id INTEGER NOT NULL, ts INTEGER NOT NULL,
  token_delta INTEGER NOT NULL, credit_delta REAL NOT NULL, actor TEXT NOT NULL,
