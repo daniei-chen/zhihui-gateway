@@ -15,6 +15,7 @@ import socket
 import ssl
 import tempfile
 import time
+import copy
 from pathlib import Path
 
 import httpx
@@ -1582,16 +1583,47 @@ def _update_url_credentials(incoming: str, current: str) -> str:
     return incoming
 
 
+#: 上游配置的进程内缓存：文件指纹 → 白名单视图。
+#:
+#: 推理主路径每请求都要算一次上游配置指纹（账本的 `config_hash`），每次都完整
+#: 读文件、解析 JSON、按白名单重建视图。指纹不变就没有任何理由重做这些。
+_CONFIG_CACHE: dict = {'marker': None, 'value': None}
+
+
 def load_upstream_config() -> dict:
-    """读取 workbuddy2api 的 config.json，敏感字段一律掩码。
+    """读取 workbuddy2api 的 config.json，敏感字段一律掩码（按文件指纹缓存）。
 
-    读不到时返回 available=False 并附带原因，供前端明确提示并禁止保存，
-    避免把空配置写回真实文件。
+    推理主路径每次请求都要算一次上游配置指纹（写进账本的 `config_hash`），原来
+    每次都完整读一遍文件、解析一次 JSON、再按白名单重建一份视图 —— 两百多行的
+    工作压在每个请求上，只为了得到一个哈希。
 
-    注意：不返回原始配置对象。原始配置含上游 API Key、Upstash token 与
-    设备风控 token 的明文，前端并不需要它们，不应通过接口下发。
+    缓存判据是 `(dev, ino, mtime_ns, size)`：运维改配置要么原地改（mtime 变），
+    要么原子替换（ino 变），两种情况都必然让指纹变化，所以"命中即内容未变"。
+    文件消失时连缓存一起清掉，不会在删除之后继续返回旧配置。
+
+    返回值仍然是**每次一份新的深拷贝**：调用方（含面板）会就地改这些 dict，
+    共享同一个对象迟早会互相污染。
     """
     path = config.UPSTREAM_CONFIG
+    try:
+        info = path.stat()
+        marker = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    except OSError:
+        marker = None
+    if marker is not None and _CONFIG_CACHE['marker'] == marker:
+        return copy.deepcopy(_CONFIG_CACHE['value'])
+    value = _load_upstream_config_uncached(path)
+    if marker is None:
+        _CONFIG_CACHE['marker'] = None
+        _CONFIG_CACHE['value'] = None
+    else:
+        _CONFIG_CACHE['marker'] = marker
+        _CONFIG_CACHE['value'] = value
+    return copy.deepcopy(value)
+
+
+def _load_upstream_config_uncached(path) -> dict:
+    """真正的读取与白名单构造。只在指纹变化（或文件不可读）时调用。"""
     cfg: dict | None = None
     error: str | None = None
 

@@ -39,7 +39,11 @@ import hashlib
 import json
 import sqlite3
 import time
+import datetime
 from dataclasses import dataclass, field
+
+#: 与 `db.day_of` 同一个日边界（固定 UTC+8），这里不 import db 以免形成循环。
+_DAY_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 CLASS_LEDGER_EVENT = 'ledger-event'
 CLASS_PROJECTION = 'projection'
@@ -484,7 +488,9 @@ def _retention_where(d: Dataset, cutoff: int) -> tuple[str, tuple]:
     if not d.time_column or not d.retention_days:
         return '', ()
     if d.time_column == 'day':
-        return f'{d.time_column} < ?', (time.strftime('%Y-%m-%d', time.localtime(cutoff)),)
+        # 与 `db.day_of` 同口径（固定 UTC+8），否则保留期在非 +8 机器上会错一天。
+        return f'{d.time_column} < ?', (
+            datetime.datetime.fromtimestamp(cutoff, _DAY_TZ).strftime('%Y-%m-%d'),)
     return f'{d.time_column} < ?', (cutoff,)
 
 

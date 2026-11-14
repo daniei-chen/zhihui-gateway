@@ -209,8 +209,8 @@ def prepare(key, body, *, encoded_body=None):
             now = int(time.time())
             day = db.day_of(now)
             daily = dailyquota.snapshot(key['id'], day)
-            start = int(time.mktime(time.strptime(day, '%Y-%m-%d')))
-            end = int(time.mktime(time.strptime(str(date.fromisoformat(day) + timedelta(days=1)), '%Y-%m-%d')))
+            start = db.day_start_ts(day)
+            end = db.day_start_ts(str(date.fromisoformat(day) + timedelta(days=1)))
             # Recovery/replay updates updated_at, not the accounting day. Active
             # streams still carry over midnight until their terminal facts arrive.
             outstanding = db.query("SELECT b.state,b.reserved_tokens,b.charged_tokens FROM budget_reservations b "

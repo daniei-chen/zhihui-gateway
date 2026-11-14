@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import contextvars
+import datetime
 import sqlite3
 import threading
 import time
@@ -94,23 +95,37 @@ def transaction_stats() -> dict:
     return stats
 
 
+#: 「每日」的唯一口径：固定 UTC+8。
+#:
+#: 原实现用 `time.localtime`，口径跟着进程的 `TZ` 走；而用户账本
+#: （`portalstore`）一直硬编码 UTC+8。生产主机恰好是 Asia/Shanghai，两者一致，
+#: 所以这个分叉从来没有暴露过 —— 但它是**可移植性**隐患：换一台 `TZ` 不同的
+#: 机器，两份账本会在每天的前 8 小时里各自记成不同的「今天」，配额与计费口径
+#: 随之分开。把日边界钉死之后，它不再依赖任何环境变量。
+_DAY_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
 def day_of(ts: int | float | None = None) -> str:
-    """把时间戳换算成「哪一天」，全库统一用本地时区。
+    """把时间戳换算成「哪一天」，全库统一用 **UTC+8**。
 
     必须统一口径：写入用量（bump_usage）与回填用量（backfill_usage_from_logs）
     过去一个用本地日期、一个用 UTC 日期，在 UTC+8 机器上凌晨 00:00-08:00 的调用
-    会被算进两个不同的 day，导致回填把同一次调用重复计数。
-    展示层（stats.py 的 today/_since）也用本地日期，故此处一律取本地。
+    会被算进两个不同的 day，导致回填把同一次调用重复计数。展示层（stats.py 的
+    today/_since）也走这里，故一律取 UTC+8。
+
+    注意：这里**不再**用 `time.localtime` —— 那个口径跟着进程 TZ 变，而用户账本
+    用固定 UTC+8。两者必须同一个时区，哪怕主机配置被改成 UTC 也一样。
     """
     t = time.time() if ts is None else float(ts)
-    return time.strftime('%Y-%m-%d', time.localtime(t))
+    return datetime.datetime.fromtimestamp(t, _DAY_TZ).strftime('%Y-%m-%d')
 
 
 def day_sql(column: str = 'ts') -> str:
     """在 SQL 里按本地时区取日期的表达式（与 day_of 口径一致）。
 
     注意 SQLite 的 date(ts,'unixepoch') 是 UTC，不能直接用它——那正是
-    之前造成口径不一致的原因。这里用 'unixepoch','localtime' 两个修饰符。
+    之前造成口径不一致的原因。这里用 'unixepoch','+8 hours' 两个修饰符：
+    **固定偏移而不是 'localtime'**，理由与 `day_of` 相同（不依赖进程 TZ）。
 
     **当心索引失效**：这个表达式把 `ts` 包在函数里，SQLite 无法再走 `ts` 上的
     索引（查询计划会退化成 SCAN，即全表扫描）。实测 5 万行时一次过滤要 13.8ms，
@@ -120,29 +135,30 @@ def day_sql(column: str = 'ts') -> str:
     `day_start_ts()` 把它换算成时间戳范围（见那里的说明）；只有确实要**按天
     分组聚合**（GROUP BY 日期）时才用它——那种场景没法避免表达式。
     """
-    return f"strftime('%Y-%m-%d', {column}, 'unixepoch', 'localtime')"
+    return f"strftime('%Y-%m-%d', {column}, 'unixepoch', '+8 hours')"
 
 
 def hour_of(ts: float | None = None) -> int:
-    """本地小时（0-23）。与 day_of 同一口径：**本地时区**，不是 UTC。"""
+    """UTC+8 的小时（0-23）。与 `day_of` 同一口径：**固定偏移**，不跟随进程 TZ。"""
     t = time.time() if ts is None else float(ts)
-    return int(time.strftime('%H', time.localtime(t)))
+    return datetime.datetime.fromtimestamp(t, _DAY_TZ).hour
 
 
 def hour_sql(column: str = 'ts') -> str:
-    """在 SQL 里按本地小时分桶（'2026-09-29 09'）——「今日」按小时聚合用。
+    """在 SQL 里按 UTC+8 小时分桶（'2026-09-29 09'）——「今日」按小时聚合用。
 
     与 day_sql 同样的注意事项：表达式包住列就没法走索引，所以过滤条件仍应写成
     `ts >= ?`（用 day_start_ts / hour_start_ts 换算），只有 GROUP BY 才用它。
     """
-    return f"strftime('%Y-%m-%d %H', {column}, 'unixepoch', 'localtime')"
+    return f"strftime('%Y-%m-%d %H', {column}, 'unixepoch', '+8 hours')"
 
 
 def hour_start_ts(day: str | None = None, hour: int = 0) -> int:
-    """某天某小时（本地时区）的**起点时间戳**。day 为 None 时取今天。"""
+    """某天某小时（UTC+8）的**起点时间戳**。day 为 None 时取今天。"""
     d = day or day_of()
     y, m, dd = (int(x) for x in d.split('-'))
-    return int(time.mktime((y, m, dd, max(0, min(23, int(hour))), 0, 0, 0, 0, -1)))
+    return int(datetime.datetime(y, m, dd, max(0, min(23, int(hour))),
+                                 tzinfo=_DAY_TZ).timestamp())
 
 
 def day_start_ts(day: str | None = None) -> int:
@@ -168,7 +184,11 @@ def day_start_ts(day: str | None = None) -> int:
     """
     if day is None:
         day = day_of()
-    return int(time.mktime(time.strptime(day, '%Y-%m-%d')))
+    # 与 `day_sql` 的 `'+8 hours'` 严格同口径：用固定时区而不是 `time.mktime`
+    # （后者按进程 TZ 解释，会把「本地日期 ≥ X」和「ts ≥ X 当地零点」这对本该
+    # 等价的条件在非 +8 机器上拆开）。
+    return int(datetime.datetime.strptime(day, '%Y-%m-%d')
+               .replace(tzinfo=_DAY_TZ).timestamp())
 
 
 SCHEMA = """

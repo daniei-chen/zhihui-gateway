@@ -80,15 +80,20 @@ class UsageTimezone(unittest.TestCase):
         self.assertEqual(db.day_of(ts), time.strftime('%Y-%m-%d', time.localtime(ts)))
 
     def test_day_sql_is_not_naive_utc(self) -> None:
-        """SQL 表达式必须带 localtime 修饰符（这正是当初出错的地方）。"""
-        self.assertIn('localtime', db.day_sql('ts'))
+        """SQL 表达式必须带时区修饰符（这正是当初出错的地方）。
+
+        v1.2.39 起用固定 `+8 hours` 而不是 `localtime`：口径不能再跟着进程 TZ 走，
+        否则换台机器就会和硬编码 UTC+8 的用户账本分家。
+        """
+        self.assertIn('+8 hours', db.day_sql('ts'))
+        self.assertNotIn('localtime', db.day_sql('ts'))
         ts = int(time.time())
         naive_utc = db.query_one(
             f"SELECT date({ts}, 'unixepoch') AS d"
         )['d']
         ours = db.query_one(f'SELECT {db.day_sql(str(ts))} AS d')['d']
-        # 两者可能相等（UTC 时区），但我们的口径必须跟随本地时间
-        self.assertEqual(ours, time.strftime('%Y-%m-%d', time.localtime(ts)))
+        # 与 day_of 同口径（固定 UTC+8），不再跟随本机时区
+        self.assertEqual(ours, db.day_of(ts))
         self.assertIsInstance(naive_utc, str)
 
     # ── 不再重复计数 ────────────────────────────────────
