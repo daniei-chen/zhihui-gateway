@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from . import db, config, ledger
@@ -288,6 +289,36 @@ def evaluate_portal_ledger():
             log.info('portal ledger: 孤儿 owner 已清空')
 
 
+#: 账号文件名里那段 UUID。
+#:
+#: ## 为什么不能直接数 `*.json`
+#:
+#: 2026-11-15 实测：qoder 的账号目录里有三个 json ——
+#:
+#: | 文件 | 是什么 |
+#: | --- | --- |
+#: | `019ee5d2-482e-7924-b38c-329cd5133c4b.json` | **账号** |
+#: | `machine_identity.json` | 机器标识 |
+#: | `settings.json` | 平台配置 |
+#:
+#: 直接数文件会得出 3，而实际只有 1 个账号。冗余度告警的判据是「≤1 即无冗余」——
+#: **那个隐患因此被完全掩盖了**：真出事时没有任何告警。
+#:
+#: workbuddy 那侧是 48 个 `workbuddy-<uuid>.json`，全是账号，所以此前没暴露。
+#:
+#: 判据取「文件名里含 UUID」而不是排除名单：辅助文件的名字是语义化的，而账号名
+#: 一定是 UUID 形状。排除名单会在上游新增一个辅助文件时再次失效 —— 这次的教训
+#: 就是「枚举追不上演进」。
+_ACCOUNT_NAME = re.compile(
+    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+
+
+def _count_account_files(directory) -> int:
+    """数目录里真正是账号的 json 文件（按文件名含 UUID 判断）。"""
+    return sum(1 for path in directory.glob('*.json')
+               if _ACCOUNT_NAME.search(path.name))
+
+
 def collect_account_counts() -> dict:
     """数各平台现有的账号。**读不到的平台直接不返回**，不拿 0 冒充。
 
@@ -316,7 +347,7 @@ def collect_account_counts() -> dict:
         if not directory:
             continue
         try:
-            counts[platform] = sum(1 for _ in Path(directory).glob('*.json'))
+            counts[platform] = _count_account_files(Path(directory))
         except OSError:
             continue
 
