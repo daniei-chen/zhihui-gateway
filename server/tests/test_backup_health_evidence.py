@@ -45,7 +45,15 @@ class BackupHealthEvidenceTest(unittest.TestCase):
         operational.evaluate_backup_health(self.now)
         self.write()
         operational.evaluate_backup_health(self.now)
-        self.assertFalse(operational.alerts)
+        # 一份新鲜的基线报告清掉的是**基线那三条**。
+        #
+        # 这里原本断言 `alerts` 整体为空 —— 那个假设在 v1.2.97 之后不再成立：
+        # 新增的 `recovery_chain_stale` 测的是加密快照整链，**与这份报告无关**，
+        # 所以它继续留着是对的。把断言收窄到真正被这份证据影响的那几条。
+        for name in ('backup_status_unavailable', 'backup_stale', 'backup_publish'):
+            self.assertNotIn(name, operational.alerts)
+        self.assertIn('recovery_chain_stale', operational.alerts,
+                      '基线报告不能替整链作证')
 
     def test_local_backup_does_not_imply_verified_offsite_copy(self):
         self.write(offsite='true')

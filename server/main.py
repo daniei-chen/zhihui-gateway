@@ -1156,6 +1156,23 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 恢复链（加密快照整链）的结论。**第三条指标，回答的是另外两个都没答的问题**：
+    # backup_age_seconds 测基线报告，snapshot_age_seconds 读不到 /root。
+    try:
+        _chain = _operational.recovery_chain_status()
+        if _chain is not None:
+            _m('workbuddy_recovery_chain_age_seconds', 'gauge',
+               'Seconds since the encrypted recovery chain last verified end to end. '
+               'Distinct from backup_age_seconds, which only covers the baseline tar: '
+               'on 2026-11-15 the chain failed repeatedly while the baseline kept '
+               'succeeding, so that alert stayed silent.',
+               _chain['age_seconds'])
+            _m('workbuddy_recovery_chain_bytes', 'gauge',
+               'Size of the verified encrypted snapshot from the last successful chain run.',
+               _chain['snapshot_bytes'])
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()

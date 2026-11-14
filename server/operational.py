@@ -524,6 +524,8 @@ def evaluate_backup_health(now):
         transition('backup_status_unavailable', True, 'backup report missing, unreadable or invalid')
         transition('backup_stale', True, 'no valid backup freshness evidence')
         transition('backup_publish', offsite, 'no verified offsite publication evidence')
+        # 基线坏了不代表整链状态不值得看 —— 恰恰相反，这是最该看的时候。
+        _recovery_chain_alert()
         return
     transition('backup_status_unavailable', False, '')
     transition('backup_stale', age > 26*3600, 'verified backup report older than 26 hours')
@@ -531,6 +533,38 @@ def evaluate_backup_health(now):
                'encrypted offsite publication not verified')
     transition('backup_size', offsite and size > 45*1024**2,
                'backup approaching 50 MiB ciphertext limit')
+
+    # ── 恢复链整链（2026-11-15）──────────────────────────────────────────
+    #
+    # 上面几条测的都是**基线 tar**。而基线备份每次都成功 —— 于是加密快照一份都
+    # 产不出来时，这里仍然一片安静。
+    #
+    # 2026-11-15 实测：完整恢复链连续失败多次（先是超时、再是校验重复解压、
+    # 再是密文超 1 GiB），而 `backup_stale` 从头到尾没有响过。
+    #
+    # **必须在两个分支都调用**：上面那个 except 会提前 return，而「基线报告缺失」
+    # 恰恰是最需要看整链状态的时候 —— 第一次实现把它放在 return 之后，测试当场
+    # 就抓到了（基线一坏，整链告警也跟着哑掉）。
+    _recovery_chain_alert()
+
+
+def _recovery_chain_alert():
+    """单独一条：整条加密恢复链最后一次端到端验证通过是什么时候。
+
+    **与基线报告完全独立。** 基线成功不代表整链成功；基线失败时整链状态
+    也仍然值得看。所以它既不依赖 `backup-status.json` 的内容，也不在它的
+    失败分支里被跳过。
+    """
+    chain = recovery_chain_status()
+    if chain is None:
+        transition('recovery_chain_stale', True,
+                   'no evidence that the encrypted recovery chain ever completed; '
+                   'the baseline report says nothing about this')
+        return
+    # 阈值取 50 小时：日备份留出两次机会，又不至于漏掉一整天。
+    transition('recovery_chain_stale', chain['age_seconds'] > 50*3600,
+               'encrypted recovery chain last verified %d hours ago (%d parts, %d bytes)'
+               % (chain['age_seconds'] // 3600, chain['snapshot_parts'], chain['snapshot_bytes']))
 
 # ── 预算 unknown 的应用内增量对账（2026-10-27 审计 P1-1）─────────────────
 # 定期扫描不是计费证明。零预扣及超期只决定扫描候选；完整上游零回执和
@@ -1003,6 +1037,57 @@ def backup_age_seconds(now=None) -> int | None:
 #: `workbuddy_backup_age_seconds` 测的是那份报告的年龄，**测不到这个**。
 #: 快照目录的最后修改时间才是「v2 恢复点还在不在推进」的直接证据。
 _SNAPSHOT_ROOT = Path('/root/backups/zhihui-v2/snapshots')
+
+
+#: 恢复链（加密快照整链）的结论文件。
+#:
+#: ## 为什么需要第三个文件
+#:
+#: 手上有两份「备份状态」，但它们回答的都不是「恢复链还能不能用」：
+#:
+#: | 文件 | 谁写 | 反映什么 |
+#: | --- | --- | --- |
+#: | `backup-status.json` | 基线备份（`backup_application.py`） | **只有基线 tar** |
+#: | 快照目录（`/root/...`） | 恢复脚本 | 但**网关读不到**（0700 vs uid 10001） |
+#:
+#: 后果是：`backup_stale` 告警测的是基线 tar，而基线备份**每次都成功** ——
+#: 于是加密快照一份都产不出来时，告警仍然一片安静。
+#:
+#: 2026-11-15 实测：完整恢复链连续失败多次，`backup_age_seconds` 始终只有几分钟。
+#:
+#: 恢复脚本现在在整链成功后额外写这个文件（`publish_gateway_status`），
+#: 落在网关可读的目录里。
+_RECOVERY_CHAIN_STATUS = Path('/var/lib/zhihui-gateway/recovery-chain.json')
+
+
+def recovery_chain_status(now=None) -> dict | None:
+    """最近一次**整链**验证通过的时间与规模；读不到返回 None。
+
+    与 `backup_age_seconds` 的区别就是这个模块存在的原因：那个测基线，
+    这个测整链。**它们可以不一致，而那正是 11-15 的现场。**
+    """
+    import json
+    now = int(time.time()) if now is None else int(now)
+    try:
+        data = json.loads(_RECOVERY_CHAIN_STATUS.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get('schema') != 1:
+        return None
+    verified_at = data.get('verified_at')
+    parts = data.get('snapshot_parts')
+    size = data.get('snapshot_bytes')
+    if not (isinstance(verified_at, int) and not isinstance(verified_at, bool)
+            and isinstance(parts, int) and not isinstance(parts, bool) and parts > 0
+            and isinstance(size, int) and not isinstance(size, bool) and size > 0):
+        return None
+    age = now - verified_at
+    if age < -300:
+        # 时间戳在未来太远：时钟错乱或文件不可信，不拿它出指标。
+        return None
+    return {'verified_at': verified_at, 'age_seconds': max(0, age),
+            'snapshot_bytes': size, 'snapshot_parts': parts,
+            'files_verified': (data.get('snapshot_checks') or {}).get('files_verified')}
 
 
 def snapshot_age_seconds(now=None) -> int | None:
