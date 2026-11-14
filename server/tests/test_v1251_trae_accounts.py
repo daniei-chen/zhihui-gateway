@@ -1,18 +1,20 @@
-"""v1.2.51：Trae 账号可见性，并明确指出「需要重新登录」。
+"""v1.2.51/v1.2.52：Trae 账号元数据可见。
 
-## 为什么这条重要
+## 一条必须记录在案的自我修正
 
-2026-11-14 排查 Trae 时，它唯一的账号是这样（宿主数据库实测）：
+v1.2.51 最初在这里给出 `needs_login`，依据是「`jwt` 与 `refresh_token` 都为空」。
+**那个判断是错的。**
 
-    jwt = ""                    refresh_token = null
-    refresh_token_fails = 0     refresh_token_invalid = 0
-    added_at = 2026-10-19       updated_at = 2026-11-14 05:30
+v1.2.52 实测：直接向引擎发一次请求，成功返回 200，同时 —
 
-凭据是空的，而**失败计数和失效标记都是 0** —— 说明「刷新」这条路径根本没被走到过，
-不是「刷新失败」。
+- `api_usage` 记下了这次调用（`{"total":{"requests":2,"ok":2,"errors":0}}`）；
+- `accounts` 表的 `updated_at` 被刷新到调用那一刻；
+- `conf/vault.stronghold`（加密存储）同步更新。
 
-只报「账号存在、未过期」会把人引向限流、路由这些错误方向。真正要做的是重新登录。
-所以视图里单独给出 `needs_login`，把结论直接摆出来。
+**真正的凭据在加密存储里，不在这个表。** 表里的 `jwt` 为空是正常的。
+
+所以服务端不再给「要不要重新登录」的结论，只报事实字段。这些用例跟着改成
+断言「不推断」——而不是断言某个推断值。
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ from server import externalplatforms as ep
 UID = '2385260569699368'
 
 #: 服务器上读到的真实字段结构（值已脱敏）。
-REAL_EMPTY = {
+REAL = {
     'name': '前程如风',
     'UserID': UID,
     'jwt': '',
@@ -62,7 +64,9 @@ def build_db(directory: Path, accounts: list[dict], api_keys: int = 0) -> Path:
     return path
 
 
-class TraeAccountReadingTests(unittest.TestCase):
+class NoLoginInferenceTests(unittest.TestCase):
+    """核心：不能凭「令牌字段为空」推断需要重新登录。"""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -73,57 +77,52 @@ class TraeAccountReadingTests(unittest.TestCase):
         with mock.patch.object(ep, 'TRAE_DB', path):
             return ep.trae_accounts()
 
-    def test_empty_credentials_are_flagged_as_needing_login(self):
-        """这次回归的核心：凭据为空必须被明确标出来。"""
-        result = self._read([REAL_EMPTY])
-        self.assertTrue(result['available'], result)
-        self.assertEqual(result['count'], 1)
-        account = result['accounts'][0]
-        self.assertFalse(account['has_jwt'])
-        self.assertFalse(account['has_refresh_token'])
-        self.assertTrue(account['needs_login'])
-        self.assertEqual(result['needs_login'], 1)
-        self.assertIn('重新登录', result['note'] or '')
+    def test_no_needs_login_field_is_reported(self):
+        result = self._read([REAL])
+        self.assertNotIn('needs_login', result,
+                         '又凭字段空值给出「需要重新登录」的结论了')
+        for account in result['accounts']:
+            self.assertNotIn('needs_login', account)
 
-    def test_the_failure_counters_do_not_imply_a_failed_refresh(self):
-        """失败计数是 0、失效标记是 0 —— 说明刷新路径没被走到，不是刷新失败。"""
-        account = self._read([REAL_EMPTY])['accounts'][0]
+    def test_empty_token_fields_are_reported_as_metadata_only(self):
+        """字段名要说清是「元数据表里的值」，不是「有没有凭据」。"""
+        account = self._read([REAL])['accounts'][0]
+        self.assertIn('jwt_in_metadata', account)
+        self.assertIn('refresh_token_in_metadata', account)
+        self.assertFalse(account['jwt_in_metadata'])
+        self.assertFalse(account['refresh_token_in_metadata'])
+
+    def test_the_note_explains_the_encrypted_store(self):
+        result = self._read([REAL])
+        note = result['note'] or ''
+        self.assertIn('加密存储', note)
+        self.assertIn('不代表', note)
+        self.assertNotIn('重新登录', note, '不要再给重新登录的建议')
+
+    def test_metadata_counters_do_not_imply_a_failed_refresh(self):
+        account = self._read([REAL])['accounts'][0]
         self.assertEqual(account['refresh_token_fails'], 0)
         self.assertFalse(account['refresh_token_invalid'])
 
-    def test_an_account_with_credentials_does_not_need_login(self):
-        payload = dict(REAL_EMPTY, jwt='eyJhbGciOi...', refresh_token='rt-xxx')
-        account = self._read([payload])['accounts'][0]
-        self.assertTrue(account['has_jwt'])
-        self.assertTrue(account['has_refresh_token'])
-        self.assertFalse(account['needs_login'])
-
-    def test_jwt_only_is_enough_to_skip_the_login_hint(self):
-        payload = dict(REAL_EMPTY, jwt='eyJhbGciOi...', refresh_token=None)
-        self.assertFalse(self._read([payload])['accounts'][0]['needs_login'])
-
     def test_tokens_are_never_returned(self):
-        payload = dict(REAL_EMPTY, jwt='JWT-SECRET-VALUE', refresh_token='RT-SECRET-VALUE')
+        payload = dict(REAL, jwt='JWT-SECRET', refresh_token='RT-SECRET')
         blob = json.dumps(self._read([payload]), ensure_ascii=False)
-        self.assertNotIn('JWT-SECRET-VALUE', blob, '响应泄漏了 jwt')
-        self.assertNotIn('RT-SECRET-VALUE', blob, '响应泄漏了 refresh token')
+        self.assertNotIn('JWT-SECRET', blob)
+        self.assertNotIn('RT-SECRET', blob)
 
     def test_invalid_flag_is_mapped_truthfully(self):
-        payload = dict(REAL_EMPTY, refresh_token_invalid=1)
+        payload = dict(REAL, refresh_token_invalid=1)
         self.assertTrue(self._read([payload])['accounts'][0]['refresh_token_invalid'])
 
     def test_metadata_is_preserved(self):
-        account = self._read([REAL_EMPTY])['accounts'][0]
+        account = self._read([REAL])['accounts'][0]
         self.assertEqual(account['nickname'], '前程如风')
         self.assertEqual(account['uid'], UID)
         self.assertEqual(account['added_at'], '2026-10-19T07:51:55')
         self.assertEqual(account['updated_at'], '2026-11-14T05:30:27+08:00')
 
     def test_api_key_count_is_reported(self):
-        """有 API Key 但没有账号凭据，正是这台机器的真实状态。"""
-        result = self._read([REAL_EMPTY], api_keys=2)
-        self.assertEqual(result['api_keys'], 2)
-        self.assertEqual(result['needs_login'], 1)
+        self.assertEqual(self._read([REAL], api_keys=2)['api_keys'], 2)
 
 
 class TraeUnavailableTests(unittest.TestCase):
@@ -144,11 +143,15 @@ class TraeUnavailableTests(unittest.TestCase):
             self.assertIn('reason', result)
 
     def test_it_opens_the_database_read_only(self):
-        """只读打开：不能给容器里的库带来写入风险。"""
         source = (Path(__file__).parents[1] / 'externalplatforms.py').read_text(encoding='utf-8')
         start = source.index('def trae_accounts(')
-        body = source[start:start + 1600]
-        self.assertIn('mode=ro', body)
+        self.assertIn('mode=ro', source[start:start + 1600])
+
+    def test_the_correction_is_documented(self):
+        """把这次判断错误写进代码，避免以后有人又按字段空值下结论。"""
+        source = (Path(__file__).parents[1] / 'externalplatforms.py').read_text(encoding='utf-8')
+        self.assertIn('那个判断是错的', source)
+        self.assertIn('vault.stronghold', source)
 
 
 class SnapshotTests(unittest.TestCase):

@@ -148,9 +148,22 @@ def _docker_exec(container: str, argv: list[str], timeout: float = 30.0) -> tupl
 def _redact_trae(payload: dict, user_id: str) -> dict:
     """Trae 账号的脱敏视图。
 
-    **`needs_login` 是这里最有价值的字段**：它把「凭据为空」这个结论直接摆出来。
-    只报「账号存在、未过期」会误导 —— 用户会去查限流、查路由，而真正的问题是他
-    需要重新登录一次。
+    ## 一个已经改正的判断错误
+
+    最初这里给出 `needs_login`，依据是「`jwt` 与 `refresh_token` 都为空」。
+    **那个判断是错的。**
+
+    2026-11-14 实测：直接向引擎发一次请求，成功返回 200，同时——
+
+    - `api_usage` 记下了这次调用（`{"total":{"requests":2,"ok":2}}`）；
+    - `accounts` 表的 `updated_at` 被刷新到调用那一刻；
+    - `conf/vault.stronghold`（加密存储）同步更新。
+
+    也就是说：**真正的凭据在加密存储里，不在这个表**。表里的 `jwt` 为空是正常的，
+    拿它推断「未登录」会得出与事实相反的结论。
+
+    所以这里只报**事实字段**，不再给结论。是否可用应当看引擎的实际响应，
+    而不是看某个字段是否为空。
     """
     jwt = str(payload.get('jwt') or '').strip()
     refresh = str(payload.get('refresh_token') or '').strip()
@@ -159,11 +172,10 @@ def _redact_trae(payload: dict, user_id: str) -> dict:
     return {
         'uid': str(payload.get('UserID') or user_id or ''),
         'nickname': str(payload.get('name') or ''),
-        'has_jwt': bool(jwt),
-        'has_refresh_token': bool(refresh),
-        # 凭据全空 = 从来没登录成功过，或登录态被清空。不是「刷新失败」：
-        # 失败计数与失效标记都还是 0，说明那两条路径没被走到。
-        'needs_login': not jwt and not refresh,
+        # 这两个只表示「元数据表里是否存了值」。为空**不代表**不可用 ——
+        # 实际凭据在加密存储里，见上面的说明。
+        'jwt_in_metadata': bool(jwt),
+        'refresh_token_in_metadata': bool(refresh),
         'refresh_token_fails': fails if isinstance(fails, int) else 0,
         'refresh_token_invalid': bool(invalid) if invalid is not None else False,
         'added_at': str(payload.get('added_at') or ''),
@@ -181,17 +193,13 @@ def trae_accounts() -> dict:
 
     ## 为什么专门标出「凭据为空」
 
-    2026-11-14 排查时发现这台机器上 Trae 唯一的账号是这样：
+    2026-11-14 实测：直接向引擎发一次请求，成功返回 200，同时账号表的更新时间被
+    刷新到调用那一刻，`conf/vault.stronghold`（加密存储）同步更新。
 
-        jwt = ""            refresh_token = null
-        refresh_token_fails = 0    refresh_token_invalid = 0
-        added_at = 2026-10-19      updated_at = 2026-11-14 05:30
+    **结论：真正的凭据在加密存储里，不在这个表。** 表里的令牌字段为空是正常的。
 
-    也就是说：**它从来没有过可用的凭据**，不是「刷新失败」。失败的计数是 0、
-    失效标记也是 0 —— 那两条路径根本没被走到过。
-
-    这类状态如果只报「账号存在、未过期」，会让人以为是别的问题（比如限流）。
-    所以这里单独给出 `needs_login`，把结论直接摆出来：需要重新登录。
+    所以这里只报事实字段，不给「要不要重新登录」的结论 —— 拿字段是否为空去推断
+    可用性，会得出与事实相反的答案。要看可用性，请看引擎的实际响应。
     """
     path = TRAE_DB
     if not path.is_file():
@@ -222,14 +230,13 @@ def trae_accounts() -> dict:
             continue
         entries.append(_redact_trae(payload, row[0] if not isinstance(row, tuple) else row[0]))
 
-    needing_login = sum(1 for e in entries if e['needs_login'])
     return {
         'available': True, 'platform': 'trae', 'accounts': entries,
         'count': len(entries),
-        'needs_login': needing_login,
         'api_keys': keys['c'] if keys else 0,
-        'note': ('账号凭据为空，需要在 Trae 客户端重新登录' if needing_login
-                 else None),
+        'note': ('这里是元数据表的内容。实际凭据存放在同级 conf 目录的加密存储里，'
+                 '因此本表里令牌字段为空**不代表**未登录 —— 判断可用性请看引擎的'
+                 '实际响应。'),
     }
 
 
