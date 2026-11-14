@@ -667,6 +667,11 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         'older_7d': 0,
         'archived_pending': 0,
         'upstream_rejected': 0,
+        # 真正的 24 小时窗口。必须在这里初始化为 0 —— 这个 dict 是普通 dict
+        # 而不是 Counter，漏掉一个键就会在下面的 `+= 1` 上抛 KeyError。
+        # 2026-11-15 就是这么炸的：加了这个桶却忘了初始化，监控循环每轮都崩，
+        # 整个健康评估停摆。
+        'new_24h': 0,
     }
     total = unknown_total = needs_human = needs_human_old = auto_reconcilable = 0
     archived_pending = archived_pending_tokens = token_lower_bound = 0
