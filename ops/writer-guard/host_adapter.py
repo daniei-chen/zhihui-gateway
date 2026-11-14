@@ -363,7 +363,12 @@ class Host:
             return
         if state['ActiveState'] not in ('inactive', 'failed'):
             raise Rejected('helper is transitioning')
-        self.systemd.command(['reset-failed', HELPER])
+        # `systemctl reset-failed` 对"从未进入 failed"的 unit 会退化为
+        # "Unit … not loaded"（没有 manager object），返回非零并让整次交接
+        # 在 `start` 之前失败。`start` 本身不需要这条清理 —— 只有确实处于
+        # failed 时才需要它把残留状态清掉再启动。
+        if state['ActiveState'] == 'failed':
+            self.systemd.command(['reset-failed', HELPER])
         self.systemd.command(['start', HELPER])
 
     def _helper_ready(self, record, candidate):
