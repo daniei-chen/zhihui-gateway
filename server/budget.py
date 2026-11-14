@@ -715,6 +715,14 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
                 review_buckets['older_7d'] += 1
             if cls == 'upstream_rejected':
                 review_buckets['upstream_rejected'] += 1
+            # 2026-11-15：单独数「最近 24 小时新增」。
+            #
+            # 上面那两个桶的名字容易读错：`new_1h` 其实是「还没到处理期限」，
+            # `older_1h` 是「已超期」—— 与一小时无关，期限由
+            # `WB_BUDGET_REVIEW_DEADLINE_DAYS` 决定。所以这里按真正的 24 小时切一刀，
+            # 给「新增速率是否异常」一个直接可用的数。
+            if age_seconds <= 86400:
+                review_buckets['new_24h'] += 1
             needs_human_old += int(age_seconds > stale_after)
     return {
         'items': items,

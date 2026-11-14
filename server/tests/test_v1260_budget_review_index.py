@@ -45,8 +45,10 @@ SUMMARY = {
 
 class AlertPointsAtTheEntryPointTests(unittest.TestCase):
     def test_detail_names_the_review_endpoint(self):
-        active, detail = operational.budget_unknown_alert(SUMMARY)
-        self.assertTrue(active)
+        # 2026-11-15：判据从「有超期就报」改成「积压失控才报」（见 v1.2.83），
+        # 所以 803 条不再让这条告警 active。本测试关心的是**文案给不给入口**，
+        # 与是否触发无关 —— 触发与否由 test_v1283 单独覆盖。
+        _active, detail = operational.budget_unknown_alert(SUMMARY)
         self.assertIn('/api/budgets/review', detail,
                       '告警又变成只说「需要人」而不给入口了')
 

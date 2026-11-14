@@ -541,35 +541,79 @@ def reconcile_zero_reservation_unknowns(now: int) -> int:
     return settled
 
 
+#: 未决预算「积压失控」的规模阈值。
+#:
+#: ## 为什么需要一条上限，而不是「有一条超期就报」
+#:
+#: 原来的判据是 `needs_human_old > 0` —— **只要有一条超期就永久 firing**。
+#:
+#: 2026-11-15 实测：库里 916 条已超期，而处理方式只有**单条核销**
+#: （`POST /api/budgets/{id}/resolve`，没有批量接口）。九百多条逐条核销不现实，
+#: 于是这条告警从上线起就一直亮着 —— 亮到没人再看它。
+#:
+#: 这是典型的告警疲劳：一条永远为真的告警，等价于没有告警。
+#:
+#: 所以拆成两件不同的事：
+#:
+#: | 关注点 | 判据 | 为什么 |
+#: | --- | --- | --- |
+#: | 积压是否失控 | 超期条数 >= 2000 | 已知积压不该反复叫人；**涨到失控**才叫 |
+#: | 新增是否异常 | 最近 24h 新增 > 100 | 真正的「又出问题了」信号 |
+#:
+#: 当前实测 916 条超期、约 16 条/天新增，两条都安静 —— 与实际情况相符。
+#: 积压规模仍然完整地写在告警文案里，不会因为不报而看不见。
+BUDGET_BACKLOG_LIMIT = 2000
+
+#: 最近 24 小时新增未决预算的告警阈值。实测约 16/天，取 100 留 6 倍余量。
+BUDGET_INFLOW_LIMIT = 100
+
+
 def budget_unknown_alert(summary: dict) -> tuple[bool, str]:
-    """`budget_unknown` 的判据与文案（U02 收尾）。
+    """`budget_unknown` 的判据与文案。
 
-    判据只有 `needs_human_old`：**已归档待核对**（超过处理期限仍无上游证据）的
-    unknown 不再计入，因此不会让这条告警长期 firing；但它们仍在汇总里以
-    `archived_pending` 明示，不是「消失」，仍可人工 resolve。
+    ## 2026-11-15：判据从「有超期就报」改成「积压失控才报」
 
-    ## 2026-11-15：文案要说出「去哪儿处理」
+    原判据 `needs_human_old > 0` 会让这条告警永久 firing —— 见
+    `BUDGET_BACKLOG_LIMIT` 的说明。现在按**规模**判断，并且把完整的按龄分布
+    继续写在文案里：不报不等于看不见。
+
+    ## 2026-11-15（更早）：文案要说出「去哪儿处理」
 
     这条告警长期在报「需要人工核对」，但**没有说去哪儿核对**。看到日志的人要么
-    去找代码，要么干脆忽略 —— 后者更常见，一条说「需要人」却不给入口的告警，
-    很快就会被当成背景噪音。
-
-    处理入口其实一直是齐的：列表、证据、核销三个端点都有，核销还强制留痕并要求
-    最近登录。缺的只是把路径写出来。
+    去找代码，要么干脆忽略 —— 后者更常见。
     """
     buckets = summary.get('review_buckets') or {}
-    detail = ('unknown budget needing human review (%d rows older than 1h, '
-              'new-1h %d, older-1h %d, older-7d %d, upstream-rejected %d, '
-              'auto-reconcilable %d, archived-pending %d, token bound %d); '
+    backlog = int(summary.get('needs_human_old', 0) or 0)
+    detail = ('unknown budget backlog %d past deadline (limit %d): '
+              'new-24h %d, new-1d %d, older-7d %d, upstream-rejected %d, '
+              'auto-reconcilable %d, archived-pending %d, token bound %d; '
               'review at GET /api/budgets/review, evidence at '
               'GET /api/budgets/review/evidence, settle with '
               'POST /api/budgets/{request_id}/resolve'
-              % (summary.get('needs_human_old', 0),
-                 buckets.get('new_1h', 0), buckets.get('older_1h', 0),
+              % (backlog, BUDGET_BACKLOG_LIMIT,
+                 buckets.get('new_24h', 0), buckets.get('new_1h', 0),
                  buckets.get('older_7d', 0), buckets.get('upstream_rejected', 0),
                  summary.get('auto_reconcilable', 0),
                  summary.get('archived_pending', 0), summary.get('token_lower_bound', 0)))
-    return bool(summary.get('needs_human_old', 0)) > 0, detail
+    return backlog >= BUDGET_BACKLOG_LIMIT, detail
+
+
+def budget_unknown_inflow_alert(summary: dict) -> tuple[bool, str]:
+    """`budget_unknown_inflow`：**最近 24 小时新增**过多。
+
+    与上面的积压告警分工明确：积压看**总量是否失控**，这条看**新增是否异常**。
+
+    为什么要分开：积压里绝大部分是历史上的集中事件（限流那几天一次进来上百条），
+    它们不会自己消失；而「今天又新增了一百条」才是需要立刻查的信号。把两者塞进
+    同一条告警，前者会把后者盖住。
+    """
+    buckets = summary.get('review_buckets') or {}
+    new_24h = int(buckets.get('new_24h', 0) or 0)
+    detail = ('unknown budget inflow %d in the last 24h (limit %d); '
+              'a spike here usually means an upstream stopped returning usage; '
+              'inspect GET /api/budgets/review?bucket=unknown'
+              % (new_24h, BUDGET_INFLOW_LIMIT))
+    return new_24h > BUDGET_INFLOW_LIMIT, detail
 
 
 def replay_ledger_receipts(now: int) -> dict:
@@ -655,6 +699,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         _summary = _budget.unresolved_summary(now=now)['summary']
         _active, _detail = budget_unknown_alert(_summary)
         transition('budget_unknown', _active, _detail)
+        # 新增速率单独一条：积压里大部分是历史集中事件，会把「今天又出一批」盖住。
+        _active_in, _detail_in = budget_unknown_inflow_alert(_summary or {})
+        transition('budget_unknown_inflow', _active_in, _detail_in)
         row=db.query_one("SELECT count(*) n,sum(CASE WHEN terminal_state IN ('upstream_error','transport_error','protocol_incomplete','application_error','interrupted') THEN 1 ELSE 0 END) failed FROM request_outcomes WHERE protocol!='http' AND ts>=? AND terminal_state!='rejected'",(now-300,))
         # 判据与文案集中在 `model_completion_alert`：比例要满足，绝对失败数也要满足。
         _active, _detail = model_completion_alert(row['n'], row['failed'])
