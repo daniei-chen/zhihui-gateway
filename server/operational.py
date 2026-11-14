@@ -288,6 +288,42 @@ def evaluate_portal_ledger():
             log.info('portal ledger: 孤儿 owner 已清空')
 
 
+def disk_space_alerts(free_bytes: int | None) -> list[tuple[str, bool, str]]:
+    """磁盘水位分两档返回 [(告警名, 是否触发, 文案)]。
+
+    ## 为什么要两档
+
+    原来只有「可用低于 2 GiB」一档。但实测这条卷的**年增长约 9 GB** —— 数据库每年
+    涨约 855 MB，而多副本备份把它放大到约 9 GB。按这个速度，2 GiB 触发时离写满只剩
+    几周，那时可选项已经很少了。
+
+    所以补一档提前量。两档用**不同的告警名**，因为它们语义不同：
+
+    | 告警名 | 阈值 | 含义 |
+    | --- | --- | --- |
+    | `disk_free` | < 2 GiB | 紧急，马上要写满了 |
+    | `disk_space_trend` | < 5 GiB | 趋势，该做决定了 |
+
+    分成两个名字而不是一个名字两种文案，是因为状态机只在**变化**时通报：如果共用
+    一个名字，从 5 GiB 掉到 2 GiB 不会产生新通报 —— 而那一刻才是最该被看见的。
+
+    取不到时（没有 `statvfs` 的平台）两项都返回未触发，不猜。
+    """
+    if free_bytes is None:
+        return [('disk_free', False, 'disk free space unknown on this platform'),
+                ('disk_space_trend', False, 'disk free space unknown on this platform')]
+    urgent = free_bytes < 2 * 1024**3
+    trending = free_bytes < 5 * 1024**3
+    gib = free_bytes / 1024**3
+    return [
+        ('disk_free', urgent,
+         'application volume free space below 2 GiB (%.1f GiB free)' % gib),
+        ('disk_space_trend', trending,
+         'application volume free space below 5 GiB (%.1f GiB free); '
+         'growth budget in docs/DATA-GROWTH.md' % gib),
+    ]
+
+
 def model_completion_alert(n: int, failed: int) -> tuple[bool, str]:
     """`model_completion` 的判据与文案：比例与绝对失败数**两个都要满足**。
 
@@ -502,7 +538,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         _active, _detail = model_completion_alert(row['n'], row['failed'])
         transition('model_completion', _active, _detail)
         free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
-        transition('disk_free',free is not None and free<2*1024**3,'application volume free space below 2 GiB')
+        # 两档水位，两个告警名（见 `disk_space_alerts` 的说明：名字不能共用）。
+        for _name, _active, _detail in disk_space_alerts(free):
+            transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour
         # freshness guard until operations can install a more frequent job.
         evaluate_backup_health(now)
