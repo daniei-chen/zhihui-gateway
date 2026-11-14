@@ -288,6 +288,34 @@ def evaluate_portal_ledger():
             log.info('portal ledger: 孤儿 owner 已清空')
 
 
+def model_completion_alert(n: int, failed: int) -> tuple[bool, str]:
+    """`model_completion` 的判据与文案：比例与绝对失败数**两个都要满足**。
+
+    ## 为什么不能只看比例
+
+    2026-11-15 实测一次误报：5 分钟窗口 **25 个请求、2 个失败 = 8%**，按「>1%」判据
+    触发。但 25 个样本里 1 个失败就是 4%、2 个就是 8% —— **一两起偶发就够**。
+    那次的两个失败还是边界探测产生的（上游回「没这个模型」），不是真故障。
+
+    低流量下比例判据没有统计意义，所以加绝对下限：
+
+    | 场景 | 判断 |
+    | --- | --- |
+    | 20 个请求 + 3 个失败（15%） | **告警**，值得看一眼 |
+    | 1000 个请求 + 3 个失败（0.3%） | 不告警，本来就不该 |
+    | 1000 个请求 + 30 个失败（3%） | **告警** |
+
+    真实故障通常是批量失败（上游整个不可用会成片出错），不会只掉一两个，
+    所以这个下限不会挡住真问题。
+    """
+    n = int(n or 0)
+    failed = int(failed or 0)
+    ratio = (failed / n) if n else 0.0
+    detail = ('model terminal failures %d/%d (%.1f%%) exceed 1%% / 5 minutes / '
+              '>=20 requests and >=3 failures' % (failed, n, ratio * 100))
+    return (n >= 20 and failed >= 3 and ratio > 0.01), detail
+
+
 def evaluate_backup_health(now):
     """Missing/unreadable/invalid reports are unknown, never a healthy backup."""
     import json
@@ -470,7 +498,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         _active, _detail = budget_unknown_alert(_summary)
         transition('budget_unknown', _active, _detail)
         row=db.query_one("SELECT count(*) n,sum(CASE WHEN terminal_state IN ('upstream_error','transport_error','protocol_incomplete','application_error','interrupted') THEN 1 ELSE 0 END) failed FROM request_outcomes WHERE protocol!='http' AND ts>=? AND terminal_state!='rejected'",(now-300,))
-        transition('model_completion',row['n']>=20 and (row['failed'] or 0)/row['n']>0.01,'model terminal failures exceed 1% / 5 minutes / >=20 requests')
+        # 判据与文案集中在 `model_completion_alert`：比例要满足，绝对失败数也要满足。
+        _active, _detail = model_completion_alert(row['n'], row['failed'])
+        transition('model_completion', _active, _detail)
         free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
         transition('disk_free',free is not None and free<2*1024**3,'application volume free space below 2 GiB')
         # The installed host job is daily. Keep that honest: use a 26-hour
