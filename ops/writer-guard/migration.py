@@ -234,7 +234,12 @@ class Controller:
             if record['phase'] in ('rolling-helper-started', 'rolling-helper-checking'):
                 if record['phase'] == 'rolling-helper-started':
                     record = self.journal.save(authority, record, 'rolling-helper-checking')
-                self._effect(self.host.helper_ready, record, candidate)
+                # `helper_ready` 的成功结果是候选进程身份，不是 None。把它交给
+                # `_effect`（要求 call 返回 None）会在**已经确认就绪之后**抛
+                # "host effects must verify completion or raise"，把一次成功的
+                # 切换判成失败并触发围栏。这里直接校验返回值必须存在。
+                if self.host.helper_ready(record, candidate) is None:
+                    raise Rejected('helper readiness returned no process identity')
                 record = self.journal.save(authority, record, 'rolling-helper-ready')
 
             if record['phase'] in ('rolling-helper-ready', 'rolling-routing-helper'):
