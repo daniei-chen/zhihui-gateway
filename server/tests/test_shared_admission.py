@@ -111,7 +111,10 @@ class SharedAdmissionTest(unittest.TestCase):
                 self.b.reserve('b1', 200, False)
             with self.assertRaises(Unavailable):
                 self.a.release('a1')
-            self.assertLess(time.monotonic() - started, 0.5)
+            # 写锁预算已从 25 ms 提到 500 ms（25 ms 会把瞬时争用误报成"容量已满"）。
+            # 两次调用各等一次预算，合计 1 秒量级；这条断言要验证的是"会失败退出、
+            # 不会永久挂住"，不是"25 毫秒内失败"。
+            self.assertLess(time.monotonic() - started, 3.0)
             self.assertEqual(self.b.snapshot()['active'], 1)
             self.assertFalse(self.b.snapshot()['healthy'])
         finally:

@@ -63,10 +63,17 @@ class Coordinator:
             raise Unavailable('shared_admission_fork_not_supported')
         connection = getattr(self.local, 'connection', None)
         if connection is None:
-            connection = sqlite3.connect(self.path, timeout=0.025, isolation_level=None,
+            # 25 ms 的写锁预算太短：另一个 peer 只要持锁超过 25 ms，`reserve` 就抛
+            # `database is locked`，被上层吞成 `False`，最终报"容量已满" —— 把
+            # "协调器抖了一下"误报成"该扩容了"。500 ms 让瞬时争用走重试而不是报错。
+            connection = sqlite3.connect(self.path, timeout=0.5, isolation_level=None,
                                          check_same_thread=False)
             connection.row_factory = sqlite3.Row
-            connection.execute('PRAGMA synchronous=FULL')
+            # NORMAL 而不是 FULL：这张库里的每一行都是"某个活进程当前占用的租约"，
+            # 判活靠操作系统文件锁（`budgetowner.alive`），不靠磁盘持久性。掉电丢掉
+            # 最后几条写，对应的进程也一起没了，_reap 下次就会回收。用 FULL 意味着
+            # 每个准入事务都要等一次 fsync —— 而准入是每个请求都要走的同步路径。
+            connection.execute('PRAGMA synchronous=NORMAL')
             self.local.connection = connection
             with self.mutex:
                 self.connections.append(connection)

@@ -2241,6 +2241,21 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
     return wire
 
 
+#: 准入字节预留的阶梯。编码器每 64 KiB flush 一次；若每次 flush 都去协调器走一个
+#: 事务，一个 8 MiB 请求就是 128 次事务（每次 `BEGIN IMMEDIATE` + 提交），外加 128
+#: 次跨线程往返。改成只在**跨过阶梯**时真正预留，中间块只更新本地计数：协调器上的
+#: 预留仍然 ≥ 实际字节，最多多留一个阶梯（4 倍），对 384 MiB 的池子可以接受。
+_RESERVE_STEPS = (64 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20)
+
+
+def _reserve_step(size: int) -> int:
+    """覆盖 `size` 的最小阶梯；超过最大阶梯时按实际值预留。"""
+    for step in _RESERVE_STEPS:
+        if step >= size:
+            return step
+    return size
+
+
 async def _prepare_forward_async(key, body, *, request=None):
     """Keep blocking JSON/SQLite work off the loop; admission stays loop-owned."""
     from concurrent.futures import Future
@@ -2273,19 +2288,24 @@ async def _prepare_forward_async(key, body, *, request=None):
         check_cancelled()
         if original_reserve is None or size <= reserved:
             return
+        # 只在跨过阶梯时才真去协调器预留；中间的 64 KiB 块只更新本地计数。
+        target = _reserve_step(size)
+        if target <= reserved:
+            reserved = size
+            return
         # The encoder flushes exact blocks, not one callback per JSON token.
         result = Future()
         def apply():
             try:
                 check_cancelled()
-                original_reserve(size)
+                original_reserve(target)
             except BaseException as error:
                 result.set_exception(error)
             else:
                 result.set_result(None)
         loop.call_soon_threadsafe(apply)
         result.result()
-        reserved = size
+        reserved = target
 
     def work():
         with requestperf.measure('forward_prepare'):
