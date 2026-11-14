@@ -248,8 +248,9 @@ class WriterGuardContractTests(unittest.TestCase):
         """
         source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
                   'writer_inventory.py').read_text(encoding='utf-8')
-        self.assertIn('ancestors = set()', source)
-        self.assertIn('int(path.name) in ancestors', source)
+        self.assertIn('own_chain = set()', source)
+        self.assertIn('_shares_process_tree(self.proc, int(path.name), own_chain)', source)
+        self.assertIn('def _shares_process_tree(', source)
         # 旧写法（只排除自己）必须已经不存在
         self.assertNotIn('int(path.name) == os.getpid()', source)
 

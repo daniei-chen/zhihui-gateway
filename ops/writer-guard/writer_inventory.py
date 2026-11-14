@@ -68,6 +68,31 @@ def _writable_map(line):
     return not _wal_coordination_only(fields[-1])
 
 
+def _parent_of(proc, pid):
+    """`/proc/<pid>/stat` 里的 ppid；读不到返回 None。"""
+    try:
+        raw = (proc / str(pid) / 'stat').read_text()
+        return int(raw[raw.rfind(')') + 2:].split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _shares_process_tree(proc, pid, own_chain):
+    """pid 是否与迁移进程同属一棵进程树（祖先**或**后代）。
+
+    只排除祖先不够：迁移在验证发布时会 fork 辅助进程（`trusted_bootstrap.py`
+    之类），它们的 cwd 就在 `/opt/workbuddy-manager` 下，会被自己的扫描当成
+    "另一个写入者"。从候选进程向上走父链，只要碰到自己的链就是同一棵树的。
+    """
+    seen = set()
+    while pid is not None and pid > 1 and pid not in seen:
+        if pid in own_chain:
+            return True
+        seen.add(pid)
+        pid = _parent_of(proc, pid)
+    return False
+
+
 class LinuxInventory:
     def __init__(self):
         self.proc, self.cgroup = Path('/proc'), Path('/sys/fs/cgroup')
@@ -128,24 +153,24 @@ class LinuxInventory:
         return sorted(ports & {7865, 7866})
 
     def processes(self):
-        # 排除整条**调用链**，不只是自己。
+        # 排除与迁移同属一棵进程树的进程，而不只是自己。
         #
         # `sudo`、`bash -c` 或启动脚本的 cmdline/cwd 可能正好落在
         # `/opt/workbuddy-manager` 或 `releases/` 下 —— 在同一个 shell 里先
-        # `cd` 到发布目录、再跑迁移，就是这个形状。那些是"谁在调用我"，
-        # 不是"另一个并发写者"；把它们算进来会让迁移自锁在这次调用上。
-        ancestors = set()
+        # `cd` 到发布目录、再跑迁移，就是这个形状。反过来，迁移在验证发布时
+        # 还会 fork 辅助进程（`trusted_bootstrap.py` 等），它们同样带着
+        # `/opt/workbuddy-manager` 的 cwd。两边都不是"另一个并发写者"，
+        # 把它们算进来会让迁移拦下自己。
+        own_chain = set()
         pid = os.getpid()
-        while pid > 1 and pid not in ancestors:
-            ancestors.add(pid)
-            try:
-                raw = (self.proc / str(pid) / 'stat').read_text()
-                pid = int(raw[raw.rfind(')') + 2:].split()[1])
-            except (OSError, IndexError, ValueError):
-                break
+        while pid > 1 and pid not in own_chain:
+            own_chain.add(pid)
+            pid = _parent_of(self.proc, pid) or 0
         found = []
         for path in self.proc.iterdir():
-            if not path.name.isdigit() or int(path.name) in ancestors:
+            if not path.name.isdigit():
+                continue
+            if _shares_process_tree(self.proc, int(path.name), own_chain):
                 continue
             before = process_identity(self.proc, int(path.name))
             if before is None:
