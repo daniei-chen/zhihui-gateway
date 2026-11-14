@@ -18,7 +18,7 @@
     },
     "host_adapter.py": {
       "mode": 420,
-      "sha256": "abce3ecd2055f362a8e3df9c3fc80700a72bd35527d68c189d472c75c3798150"
+      "sha256": "e3c95343bc474482eddc9a75291ae2222fab832ff3dcc4a9313c27544de3454d"
     },
     "ingress.py": {
       "mode": 420,
@@ -30,11 +30,11 @@
     },
     "migration.py": {
       "mode": 420,
-      "sha256": "74bbfbbe886926c1c75fde154eb2e27ba47cdf42e53030456e8aaa9ac1047db2"
+      "sha256": "f6b15d693fe2defb0582b29cd624b60be0b3e3a67f6b134ce425777ac283d883"
     },
     "migration_entry.py": {
       "mode": 420,
-      "sha256": "4971c19958486acb35bb2e64f4c308a1c9e25652a9a9ab74212437424d40ec88"
+      "sha256": "1456503ff79190c0fbe1f4aa5544a306e812596b9ce6715ab1f80d7f2163fd2f"
     },
     "retire_legacy.py": {
       "mode": 420,
@@ -42,15 +42,15 @@
     },
     "runtime_identity.py": {
       "mode": 420,
-      "sha256": "526556c3113e945d8fe676406df5205145037803d9c9c1ab22fb4e1e96b9cffa"
+      "sha256": "29cf4bcbd94ccd73150c67b400769da11b0f0bab7e644a5884059d8601db0ebc"
     },
     "service_gate.py": {
       "mode": 420,
-      "sha256": "fde95324ab972944d06975176605ea893ca39c9e1c7aa53e6af39d5a5e281348"
+      "sha256": "ca9d144c6d547620205f41b5016f0e093d757486508bdedc46bf5dc1b0ec141e"
     },
     "startup.py": {
       "mode": 420,
-      "sha256": "daf6ce4f3946bc2e2cd982e1627405b97ee2b01d73ca9c037619c94615ae6ce5"
+      "sha256": "83c30ffdb86b1617b02fb91b57447fe2c21961d30dea7923908241a9ff90e6f2"
     },
     "state_guard.py": {
       "mode": 420,
@@ -58,7 +58,7 @@
     },
     "systemd_adapter.py": {
       "mode": 420,
-      "sha256": "0603307d540289edf5123fb76fe665b38a8b38c51b423c1bbe9e4e01e373681e"
+      "sha256": "5fedc138df1458fb7259d27928ca4f0aff5355004f0460e1973c6284ac480070"
     },
     "writer_entry.py": {
       "mode": 420,
@@ -66,7 +66,7 @@
     },
     "writer_inventory.py": {
       "mode": 420,
-      "sha256": "f8f843a30988e51e6cf9f27dc06c3f6492f124ee7e9850d622eca2ba6e9c8c51"
+      "sha256": "5c08c2e83b61341b90e7c74d16d0e7fe3b4c6a8594fbaa621ab115185189cf61"
     }
   },
   "schema": "zhihui.writer-host-files",
