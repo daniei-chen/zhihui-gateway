@@ -985,6 +985,47 @@ def backup_age_seconds(now=None) -> int | None:
     return max(0, age)
 
 
+#: 加密快照（恢复体系 v2）的根目录。
+#:
+#: ## 为什么网关要看这个目录
+#:
+#: 2026-11-15 发现：`recovery_v3.py` 里调 `backup_application.py` 的超时写的是 300 秒，
+#: 而实际要 4 分钟以上。那一版起它**每次都在 300 秒处放弃**，于是：
+#:
+#: | 产物 | 状态 |
+#: | --- | --- |
+#: | tar 基线备份 | **照常产出**（子进程成了孤儿，继续跑完） |
+#: | 加密快照 | **一份都没有** |
+#:
+#: **而 `backup-status.json` 仍写着 `restore_check: ok`** —— 因为那份报告只校验
+#: 基线 tar 本身。于是「备份正常」这个结论在告警系统里成立，在事实上不成立。
+#:
+#: `workbuddy_backup_age_seconds` 测的是那份报告的年龄，**测不到这个**。
+#: 快照目录的最后修改时间才是「v2 恢复点还在不在推进」的直接证据。
+_SNAPSHOT_ROOT = Path('/root/backups/zhihui-v2/snapshots')
+
+
+def snapshot_age_seconds(now=None) -> int | None:
+    """最新加密快照距今多少秒；读不到或一份都没有时返回 None。
+
+    **一份都没有也返回 None，而不是返回一个**：`None` 表示「没有证据」，
+    而调用方据此不输出指标 —— 让缺失本身是一个显式的信息缺口，而不是一个看起来
+    像「备份很旧」的数字。后者会被误读成「备份在变慢」，而实际是「没做」。
+    """
+    now = int(time.time()) if now is None else int(now)
+    try:
+        snapshots = [p for p in _SNAPSHOT_ROOT.iterdir() if p.is_dir()]
+    except OSError:
+        return None
+    if not snapshots:
+        return None
+    try:
+        newest = max(p.stat().st_mtime for p in snapshots)
+    except OSError:
+        return None
+    return max(0, now - int(newest))
+
+
 def monitor_stats() -> dict:
     """返回监控循环统计的副本（调用方不该直接改内部状态）。"""
     return dict(_MONITOR_STATS)

@@ -1142,6 +1142,20 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 加密快照（恢复体系 v2）的年龄。**与上面那条备份年龄不是一回事**：
+    # 那个测的是基线报告，这个测的是 v2 恢复点本身。
+    # 2026-11-15 的故障里，前者一直 ok，后者断了整整一天。
+    try:
+        _snapshot_age = _operational.snapshot_age_seconds()
+        if _snapshot_age is not None:
+            _m('workbuddy_snapshot_age_seconds', 'gauge',
+               'Seconds since the newest encrypted recovery snapshot. Distinct from '
+               'backup_age_seconds, which reads the baseline report: during the 2026-11-15 '
+               'incident the report stayed ok while no snapshot was produced at all.',
+               _snapshot_age)
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
