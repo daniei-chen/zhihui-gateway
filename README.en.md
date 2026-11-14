@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.21 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.22 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,20 +16,32 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.21.svg" width="166" height="44" alt="Read the 1.2.21 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.22.svg" width="166" height="44" alt="Read the 1.2.22 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1220--controlled-recovery-and-budget-review-truthfulness) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1222--relay-startup-and-cutover-contract) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.21 · Ownership handoff, startup reliability and locked inputs
+## 1.2.22 · Relay startup and cutover contract
 
-**Current product version: `v1.2.21`.** Building on v1.2.20, this release makes the root-to-UID-10001 data handoff explicit before startup, preventing a root-owned `users.json` from turning login into HTTP 500; it does not infer zero billing or mutate budget state.
+**Current product version: `v1.2.22`.** This release fixes the relay systemd contract on hosts that keep UID `10001` numeric without a passwd entry: a trusted launcher performs the one-way handoff, then the application runs as `10001:10001` with zero effective capabilities and `NoNewPrivileges`; Manager data, budgets and ledger state are unchanged.
+
+- **The relay can start on the actual host:** it no longer depends on a passwd user named `10001`.
+- **Cutover stays bounded:** route epochs remain monotonic, accepted streams are never replayed, and only declared loopback backends and inference paths are allowed.
+- **The test is host-shaped:** the unit contract is covered by regression tests and a private domestic-server canary checks identity and route switching.
+
+**Release boundary:** the domestic server does not currently enable the relay systemd unit, and this canary did not receive public traffic. A source release does not claim that production has switched.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.22)
+
+<br />
+
+## 1.2.21 · Ownership handoff, startup reliability and locked inputs (previous release)
+
+**Previous product version: `v1.2.21`.** Building on v1.2.20, this release made the root-to-UID-10001 data handoff explicit before startup, preventing a root-owned `users.json` from turning login into HTTP 500; it did not infer zero billing or mutate budget state.
 
 - **Reliable ownership handoff:** the trusted launcher normalizes the data directory, `users.json` and the initial-password file before dropping to UID/GID 10001; unsafe paths or failed repairs block startup before serving.
 - **Safer operations:** housekeeping waits up to 180 seconds for the backup producer and still fails closed if the lock never clears.
@@ -172,7 +184,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Controlled deployment](deploy/README.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.21 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.22 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Security audit report](docs/SECURITY-AUDIT.md) |
 | User documentation | [Usage](docs/usage.md) · [Features](docs/features.md) · [Screenshots](docs/screenshots.md) · [Development](docs/DEVELOPMENT.md) · [Security notes](docs/security-notes.md) · [API tokens](docs/api-tokens.md) · [Account egress](docs/account-proxy-routes.md) · [Security audit](docs/SECURITY-AUDIT.md) · [Release signing](docs/release-signing.md) |
