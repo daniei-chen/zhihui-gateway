@@ -221,6 +221,20 @@ class WriterGuardContractTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 2)
 
+    def test_every_phase_transition_records_a_timestamp(self):
+        """升级时长必须能从日志答出来。
+
+        事务 journal 只留最后一次快照，systemd 只记服务启停，中间十几个阶段各花
+        多久没有记录 —— 这正是把一次 8 分钟的 release 构建误判成"续接阶段变慢"
+        的原因。计时是诊断信息，写失败不许影响迁移。
+        """
+        source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
+                  'migration.py').read_text(encoding='utf-8')
+        self.assertIn('def _timing(self, phase):', source)
+        self.assertIn("self.paths.floor.parent / 'phase-timing.log'", source)
+        self.assertIn('self._timing(phase)', source)
+        self.assertIn('except OSError:\n            pass  # 计时只是诊断信息', source)
+
     def test_read_only_sqlite_sessions_do_not_block_a_migration(self):
         """只读会话既不写库也不持写锁，不该被当成并发写者。
 
