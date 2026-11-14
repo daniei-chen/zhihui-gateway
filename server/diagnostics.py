@@ -88,6 +88,15 @@ def classify(*, reachable=None, ready=None, http_status=None, error_code=None, t
               'account_availability_changed': None, 'action': 'inspect_bounded_evidence'}
     if http_status in (401, 403):
         result.update(authentication='rejected', action='verify_authentication_source')
+        # 认证失败是**首要**原因：401/403 下不管错误码写的是什么，先让人去查认证。
+        #
+        # 2026-11-15 发现：此前这个判定会被后面的 elif 链覆盖 —— 一个 403 如果恰好
+        # 带着 `invalid_messages`，诊断会建议「改请求体」，把人引到完全错误的方向。
+        #
+        # 保留那个已知特例：上游有时用 403 表达「渠道拒绝」（见下面的分支），
+        # 那不是调用方的认证问题。除它之外，401/403 直接给出结论。
+        if code not in ('channel_check_rejected', 'upstream.channel_check_rejected'):
+            return result
     if code in ('channel_check_rejected', 'upstream.channel_check_rejected'):
         result.update(channel='rejected', account_availability_changed=False, action='review_scoped_protocol_compatibility')
     elif code == '11128':
@@ -96,6 +105,9 @@ def classify(*, reachable=None, ready=None, http_status=None, error_code=None, t
         result.update(action='inspect_bounded_attempt_timeline_without_replay')
     elif code in ('model_not_found', 'unsupported_model'):
         result.update(model_access='rejected', action='verify_model_mapping')
+    elif code in ('invalid_messages', 'invalid_model', 'prompt_too_long'):
+        # 请求体本身不成立 —— 不是认证、配额或上游的问题，改请求就能过。
+        result.update(action='fix_request_body')
     elif code in ('quota_exceeded', 'insufficient_quota'):
         result.update(quota='rejected', action='verify_quota_evidence')
     elif terminal_state in ('protocol_incomplete', 'transport_error', 'client_cancelled'):

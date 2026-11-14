@@ -2557,6 +2557,25 @@ async def _chat(request: Request, upstream_path: str):
         observability.mark_error(exc.code)
         return _oai_error(str(exc), 400, 'invalid_request_error', exc.code)
 
+    # `messages` 必须是非空数组。
+    #
+    # 2026-11-15 实测：空数组会一路透传到上游，返回的是一段英文的模糊提示
+    # （"We're sorry, the param is invalid."），调用方看不出是自己少传了东西。
+    # 本地拒掉能直接指出问题，也省掉一次往返。
+    #
+    # 只在结构明显不对时拒：缺字段、不是数组、空数组。不逐条校验 role/content ——
+    # 各家对内容的宽容度不同，多校验一步就可能拒掉本来能用的请求。
+    #
+    # Anthropic 协议同样用 `messages`，所以这里对三条协议都成立；
+    # Responses API 走自己的路由（`input` 字段），不经过这里。
+    if isinstance(body, dict):
+        _messages = body.get('messages')
+        if _messages is None or not isinstance(_messages, list) or not _messages:
+            observability.mark_error('invalid_messages')
+            return _oai_error(
+                'messages 必须是非空数组，且每条至少包含 role 与 content',
+                400, 'invalid_request_error', 'invalid_messages')
+
     # 越界的 max_tokens 会被上游包装成 503（见 clamp_max_tokens 的说明），
     # 鉴权后、转发前压回上限。
     clamp_max_tokens(body)
