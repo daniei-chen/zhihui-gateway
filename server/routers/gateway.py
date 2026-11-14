@@ -1326,6 +1326,39 @@ def _public_upstream_error(upstream: dict | None) -> str:
     return '上游暂时不可用，请稍后重试' + _upstream_hint(upstream)
 
 
+#: 看起来像平台名、但**不是**的东西。
+#:
+#: 用户写错前缀时（最典型的是把网关自己的名字当平台名），我们目前会把这个字符串
+#: 原样转发给上游，上游回一句 `no such model`，用户看到 503 会以为是模型不存在，
+#: 而真正的错因是前缀写错了。
+#:
+#: **不能泛化判断"含斜杠就是写错"**：真实模型名也有带斜杠的（`meta-llama/Llama-3`
+#: 这类）。所以只对这张明确的清单提示 —— 保守，但覆盖实际踩过的坑。
+_PLATFORM_LIKE_PREFIXES = frozenset({
+    'zhihui', 'wb', 'workbuddy2', 'qtg', 'buddy', 'manager', 'gateway',
+})
+
+
+def _misused_platform_prefix(model: object) -> JSONResponse | None:
+    """模型名带斜杠、且前缀像平台名却不是合法平台时，给一条**能照做**的错误。
+
+    返回 None 表示没问题或无从判断，继续正常路由。
+
+    为什么不往后放：上游那一趟是真实开销，而且它给的错误会把人引向「模型不存在」
+    这个错误方向。能在本地判出来的，就别让它跑一趟。
+    """
+    if not isinstance(model, str) or '/' not in model:
+        return None
+    prefix = model.split('/', 1)[0].lower()
+    if prefix in platformpolicy.PLATFORMS or prefix not in _PLATFORM_LIKE_PREFIXES:
+        return None
+    return _oai_error(
+        f"模型名里的前缀 `{prefix}` 不是可用的平台名。"
+        f"可用的是：{', '.join(platformpolicy.PLATFORMS)}（例如 trae/Doubao-Seed-Code）。"
+        f"如果你想调用的模型名本身带斜杠，请确认它确实是上游提供的完整名称。",
+        400, 'invalid_request_error', 'unknown_platform_prefix')
+
+
 def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
                   ua: str | None) -> tuple[dict | None, JSONResponse | None]:
     """按密钥解析本次请求该走哪个上游；不可用时返回**明确报错**。
@@ -1335,6 +1368,13 @@ def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
     失败同时记一条请求日志（503 + 原因），排障的人第一时间就能看到。
     """
     _fp = forced_platform.get()
+    # 前缀写错就地拒绝：省一趟上游，也避免上游那句 "no such model" 把人带偏。
+    misuse = _misused_platform_prefix(model)
+    if misuse is not None:
+        observability.mark_error('unknown_platform_prefix')
+        _record(key, ip, model, mapped, 400, 0, 0, 0, ua,
+                '模型名前缀不是可用的平台名', False)
+        return None, misuse
     if not _fp and model and "/" in model:
         _cand = model.split("/", 1)[0].lower()
         if _cand in _THREEWAY_SPEC:
