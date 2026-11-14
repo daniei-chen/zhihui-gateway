@@ -288,6 +288,101 @@ def evaluate_portal_ledger():
             log.info('portal ledger: 孤儿 owner 已清空')
 
 
+def collect_account_counts() -> dict:
+    """数各平台现有的账号。**读不到的平台直接不返回**，不拿 0 冒充。
+
+    ## 三条读取路径各不相同
+
+    | 平台 | 形态 |
+    | --- | --- |
+    | workbuddy | 目录下 `*.json` |
+    | qoder | 目录下 `*.json` |
+    | trae | SQLite 的 `accounts` 表 |
+
+    trae 那条用 `mode=ro` 打开 —— **绝不能用读写模式碰生产库**：它由引擎自己维护，
+    这边只是数一行，任何写操作都可能和引擎抢锁。
+
+    任一平台读失败（权限、路径不存在、库被占用）就**跳过它**：跳过意味着「这条告警
+    这次不评估」，而报 0 意味着「这个平台没有账号了」—— 后者是严重误报。
+    """
+    import sqlite3
+    from pathlib import Path
+    from . import config, externalplatforms
+    counts: dict[str, int] = {}
+
+    for platform, directory in (
+            ('workbuddy', getattr(config, 'AUTH_DIR', None)),
+            ('qoder', getattr(externalplatforms, 'QODER_ACCOUNTS_DIR', None))):
+        if not directory:
+            continue
+        try:
+            counts[platform] = sum(1 for _ in Path(directory).glob('*.json'))
+        except OSError:
+            continue
+
+    try:
+        db_path = getattr(externalplatforms, 'TRAE_DB', None)
+        if db_path:
+            conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=2)
+            try:
+                counts['trae'] = int(
+                    conn.execute('SELECT count(*) FROM accounts').fetchone()[0])
+            finally:
+                conn.close()
+    except (sqlite3.Error, OSError, TypeError):
+        pass
+
+    return counts
+
+
+def account_pool_alerts(counts: dict) -> list[tuple[str, bool, str]]:
+    """按平台的账号池冗余度：`[(告警名, 是否触发, 文案)]`，**每个平台一条**。
+
+    ## 为什么需要它
+
+    2026-11-15 实测三个平台的账号池：workbuddy **48**、qoder **3**、trae **1**。
+
+    **trae 只有一个账号** —— 而它承载 26 个模型（含全部豆包）。那个账号一旦被限流
+    或过期，整个平台就没了，而且**除了用户报错之外没有任何信号**。
+
+    这不是代码缺陷（账号是运维资源），但「只有一个」这件事**应该被告知**：
+    冗余度是运行风险，不是使用量。
+
+    ## 判据
+
+    | 账号数 | 状态 |
+    | --- | --- |
+    | 0 | **不可用** —— 该平台此刻必然失败 |
+    | 1 | **单点** —— 没有冗余，一次限流就全断 |
+    | ≥ 2 | 正常 |
+
+    **只报 0 与 1**：两个账号也不算宽裕，但那是「要不要扩容」的判断，
+    不是「现在就有风险」的事实。告警只报事实。
+
+    `counts` 里**没有的平台跳过**（读不到不该被当成 0 报「不可用」）。
+    """
+    alerts = []
+    for platform in sorted(counts):
+        count = counts[platform]
+        if count is None:
+            continue
+        if count <= 0:
+            alerts.append((
+                f'account_pool_{platform}', True,
+                f'{platform} has no usable accounts; every request on this platform '
+                f'will fail until one is added'))
+        elif count == 1:
+            alerts.append((
+                f'account_pool_{platform}', True,
+                f'{platform} has exactly 1 account; there is no redundancy, so a single '
+                f'rate limit or token expiry takes the whole platform down'))
+        else:
+            alerts.append((
+                f'account_pool_{platform}', False,
+                f'{platform} has {count} accounts'))
+    return alerts
+
+
 def disk_space_alerts(free_bytes: int | None) -> list[tuple[str, bool, str]]:
     """磁盘水位分两档返回 [(告警名, 是否触发, 文案)]。
 
@@ -576,6 +671,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
         # 两档水位，两个告警名（见 `disk_space_alerts` 的说明：名字不能共用）。
         for _name, _active, _detail in disk_space_alerts(free):
+            transition(_name, _active, _detail)
+        # 账号池冗余度：单点平台没有冗余，一次限流就全断，而此前完全没有信号。
+        for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour
         # freshness guard until operations can install a more frequent job.
