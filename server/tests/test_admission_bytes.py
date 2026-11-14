@@ -9,7 +9,7 @@ from server import observability as obs
 
 class AdmissionBytesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.patches = [patch.dict(os.environ, {'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES': str(1024**2),
+        self.patches = [patch.dict(os.environ, {'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES': str(1024**2), 'WB_GATEWAY_BODY_PHYSICAL_FACTOR': '1',
             'WB_GATEWAY_MAX_CONCURRENCY': '8', 'WB_GATEWAY_LARGE_MAX_CONCURRENCY': '8'}),
             patch('server.db.execute'), patch('server.budget.finish'),
             # These tests isolate byte/count capacity; real authentication has

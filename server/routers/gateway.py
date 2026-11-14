@@ -490,7 +490,9 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
 
     chunks: list[bytes] = []
     size = 0
-    window = BodyReadWindow()
+    # 复用中间件那遍读取的时间窗口：body 被读两遍，若各自从零开始计时，一次慢速
+    # 上传的实际预算是两份（180 秒 × 2），而它全程占着一个准入名额。
+    window = request.scope.get('wb_body_window') or BodyReadWindow()
     try:
         encoding = content_encoding(request.scope.get('headers', []))
         async for frame in body_frames(request.receive, encoding, limit, window=window):

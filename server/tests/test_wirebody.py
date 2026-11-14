@@ -88,7 +88,7 @@ class ForwardPreparationTests(unittest.TestCase):
 
 class WireCapacityTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_transformed_load_and_cancel_release_both_reservations(self):
-        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1'}
+        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1','WB_GATEWAY_BODY_PHYSICAL_FACTOR':'1'}
         started=asyncio.Event()
         async def app(scope,receive,send):
             await receive()
@@ -116,7 +116,7 @@ class WireCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((middleware.active,middleware.large,middleware.inflight_body_bytes),(0,0,0))
 
     async def test_retained_input_and_output_share_budget_until_stream_finishes(self):
-        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1'}
+        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1','WB_GATEWAY_BODY_PHYSICAL_FACTOR':'1'}
         ready,release=asyncio.Event(),asyncio.Event()
         async def app(scope,receive,send):
             await receive()
@@ -139,7 +139,7 @@ class WireCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(middleware.inflight_body_bytes,0)
 
     async def test_transformed_rejection_releases_all_partial_reservations(self):
-        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1'}
+        env={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'1000','WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1','WB_GATEWAY_BODY_PHYSICAL_FACTOR':'1'}
         async def app(scope,receive,send):
             await receive()
             reserve=observability.current.get().reserve_wire_body

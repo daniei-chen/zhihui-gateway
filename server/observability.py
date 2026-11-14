@@ -835,7 +835,8 @@ class RequestAuditMiddleware:
     def __init__(self, app, shared=None):
         self.app = app
         from .fairadmission import FairGate, wait_seconds
-        self.fair_gate = FairGate()
+        self.fair_gate = FairGate(maximum=max(1, _env_int('WB_GATEWAY_QUEUE_DEPTH', 64)),
+                                  per_key=max(1, _env_int('WB_GATEWAY_QUEUE_PER_KEY', 4)))
         self.queue_wait = wait_seconds(os.environ.get('WB_GATEWAY_QUEUE_WAIT_MS'))
         # One worker: bounded admission before body allocation, no unbounded queue.
         # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
@@ -853,6 +854,17 @@ class RequestAuditMiddleware:
         # Retained raw input plus serialized output stay reserved through response
         # completion. JSON objects/encoder copies still need process memory headroom.
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
+        #: 一个字节的请求体在内存里的实际倍率。
+        #:
+        #: 同一份 body 至少同时存在：中间件缓存的整段（它被重放闭包引用，要陪跑到
+        #: 整条流式响应结束）、读取阶段的第二份、`json.loads` 出来的对象图、以及
+        #: 转发用的序列化副本。容量账原先只按一份记账，于是"384 MiB 在途预算"
+        #: 允许的物理峰值是它的六到十倍 —— 主机 3.7 GB、进程组上限 2 GiB，几个
+        #: 64 MiB 的并发请求就能把整组打进去。
+        #:
+        #: 乘上倍率之后，`WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES` 的含义变成**物理
+        #: 内存预算** —— 这才是它一开始就该是的东西。
+        self.body_physical_factor = max(1, _env_int('WB_GATEWAY_BODY_PHYSICAL_FACTOR', 3))
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
         from . import config
@@ -923,14 +935,14 @@ class RequestAuditMiddleware:
             nonlocal admitted, reserved, large
             if (self.active >= self.maximum
                     or declared > 1024*1024 and self.large >= self.large_maximum
-                    or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+                    or self.inflight_body_bytes + initial_reservation * self.body_physical_factor > self.maximum_body_bytes):
                 return False
             if not shared_reserve(initial_reservation, declared > 1024*1024):
                 return False
             self.active += 1
             admitted = True
             reserved = initial_reservation
-            self.inflight_body_bytes += reserved
+            self.inflight_body_bytes += reserved * self.body_physical_factor
             if declared > 1024*1024:
                 self.large += 1
                 large = True
@@ -948,12 +960,12 @@ class RequestAuditMiddleware:
             needed = max(reserved, inbound_retained + size + output_reserved)
             extra = needed - reserved
             needs_large = size > 1024*1024 and not large
-            if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+            if (self.inflight_body_bytes + extra * self.body_physical_factor > self.maximum_body_bytes
                     or needs_large and self.large >= self.large_maximum
                     or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                 capacity_rejected()
                 raise CapacityError('aggregate transformed-body capacity exceeded')
-            self.inflight_body_bytes += extra
+            self.inflight_body_bytes += extra * self.body_physical_factor
             reserved, wire_reserved = needed, size
             if needs_large:
                 self.large += 1; large=True
@@ -964,11 +976,11 @@ class RequestAuditMiddleware:
                 return
             needed=max(reserved,inbound_retained+wire_reserved+size)
             extra=needed-reserved
-            if (self.inflight_body_bytes+extra>self.maximum_body_bytes
+            if (self.inflight_body_bytes+extra*self.body_physical_factor>self.maximum_body_bytes
                     or extra>0 and not shared_reserve(needed,large)):
                 capacity_rejected()
                 raise CapacityError('aggregate response-body capacity exceeded')
-            self.inflight_body_bytes+=extra
+            self.inflight_body_bytes+=extra*self.body_physical_factor
             reserved,output_reserved=needed,size
         state.reserve_output_body=reserve_output_body
         def reserve_input(size):
@@ -980,12 +992,12 @@ class RequestAuditMiddleware:
                 needs_large = received > 1024*1024 and not large
                 # No await between checking and reserving: atomic within this
                 # ASGI worker, including chunked or understated-length requests.
-                if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+                if (self.inflight_body_bytes + extra * self.body_physical_factor > self.maximum_body_bytes
                         or needs_large and self.large >= self.large_maximum
                         or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                     capacity_rejected()
                     raise CapacityError('aggregate request-body capacity exceeded')
-                self.inflight_body_bytes += extra
+                self.inflight_body_bytes += extra * self.body_physical_factor
                 reserved = needed
                 if needs_large:
                     self.large+=1; large=True
@@ -1102,6 +1114,10 @@ class RequestAuditMiddleware:
                     reading_body=True
                     chunks=[]
                     body_window=BodyReadWindow()
+                    # 下游还会再读一遍 body（`_read_json_body` 从重放流里读）。让它
+                    # 沿用同一个窗口，否则两份窗口各自从零开始计时：一次慢速上传
+                    # 的总预算就从一份变成两份，占着准入名额的窗口也随之翻倍。
+                    scope['wb_body_window'] = body_window
                     encoding=content_encoding(scope.get('headers', []))
                     with requestperf.measure('body_receive'):
                         async for message in body_frames(receive, encoding, per_request_limit,
@@ -1265,7 +1281,7 @@ class RequestAuditMiddleware:
                             log.error('shared admission release deferred; capacity retained')
                     if admitted:
                         self.active-=1
-                        self.inflight_body_bytes -= reserved
+                        self.inflight_body_bytes -= reserved * self.body_physical_factor
                     if large: self.large-=1
                     self.fair_gate.notify()
                     state.reserve_wire_body = None

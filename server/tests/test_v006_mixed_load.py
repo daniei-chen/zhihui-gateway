@@ -54,7 +54,7 @@ class MixedLoad(unittest.IsolatedAsyncioTestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {
                 'WB_GATEWAY_MAX_CONCURRENCY':'3', 'WB_GATEWAY_LARGE_MAX_CONCURRENCY':'1',
-                'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':str(4 * 1024**2),
+                'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':str(4 * 1024**2), 'WB_GATEWAY_BODY_PHYSICAL_FACTOR':'1',
                 'WB_GATEWAY_QUEUE_WAIT_MS':'5000'}))
             for name, value in [('server.routers.gateway.preauthorize_body', authorize),
                                 ('server.observability.ensure_outcome_schema', lambda:True),
