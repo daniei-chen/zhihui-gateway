@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.23 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.24 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,18 +16,30 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.23.svg" width="166" height="44" alt="Read the 1.2.23 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.24.svg" width="166" height="44" alt="Read the 1.2.24 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1223--route-handoff-permissions-and-rootless-acceptance) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1224--relay-entry-and-request-body-admission) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.23 · Route handoff permissions and rootless acceptance
+## 1.2.24 · Relay entry and request-body admission
+
+**Current product version: `v1.2.24`.** This release makes each exact relay inference location inherit the same admission contract as the original `/v1/`, `/qoder/v1/`, and `/trae/v1/` routes, fixing large-context requests that were incorrectly rejected by Nginx's default 1 MB limit with `413 Request Entity Too Large`.
+
+- **Consistent request limits:** relay locations use the 128 MB edge limit, a 60-second request-body timeout, rate/concurrency protection, and the shared error pages; Manager still enforces its own 64 MB forwarding limit.
+- **Streaming remains safe:** relay request buffering stays off and upstream retries stay disabled, so accepted streams are never replayed.
+- **The large-request path is verified:** a 4 MiB request on the domestic server reached authentication through Nginx and relay and returned 401 instead of 413.
+
+**Release boundary:** production Qoder remains on 1.9.8; the persistent 1.9.9 rootless candidate is private on port 8800, and its real route cutover still waits for shared-state and rollback evidence.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.24)
+
+<br />
+
+## 1.2.23 · Route handoff permissions and rootless acceptance (previous release)
 
 **Current product version: `v1.2.23`.** This release hardens the local Qoder/Trae route handoff: only trusted parents are accepted, and root-authored route files are published as `root:10001` with mode `0640`; Qoder Hub 1.9.9 also passed a private rootless start and restart-recovery canary without being declared production.
 
