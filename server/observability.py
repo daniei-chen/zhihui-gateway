@@ -854,16 +854,16 @@ class RequestAuditMiddleware:
         # Retained raw input plus serialized output stay reserved through response
         # completion. JSON objects/encoder copies still need process memory headroom.
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
-        #: 一个字节的请求体在内存里的实际倍率。
+        # 一个字节的请求体在内存里的实际倍率。
         #:
-        #: 同一份 body 至少同时存在：中间件缓存的整段（它被重放闭包引用，要陪跑到
-        #: 整条流式响应结束）、读取阶段的第二份、`json.loads` 出来的对象图、以及
-        #: 转发用的序列化副本。容量账原先只按一份记账，于是"384 MiB 在途预算"
-        #: 允许的物理峰值是它的六到十倍 —— 主机 3.7 GB、进程组上限 2 GiB，几个
-        #: 64 MiB 的并发请求就能把整组打进去。
+        #: 同一份**输入** body 至少同时存在：中间件缓存的整段（它被重放闭包引用，
+        #: 要陪跑到整条流式响应结束）、读取阶段的第二份、`json.loads` 出来的对象图。
+        #: 所以输入体按倍率记账，`WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES` 的含义是
+        #: **物理内存预算**。
         #:
-        #: 乘上倍率之后，`WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES` 的含义变成**物理
-        #: 内存预算** —— 这才是它一开始就该是的东西。
+        #: **输出不乘这个倍率。** 输出是逐步增长的字节缓冲，没有对象图开销；而且
+        #: 它的预留是「承诺上限」而不是「已分配」—— 一次 32 MiB 的承诺乘三倍就是
+        #: 96 MiB，直接把并发从二十几个压到三个（v1.2.43 的回归，17 次 503）。
         self.body_physical_factor = max(1, _env_int('WB_GATEWAY_BODY_PHYSICAL_FACTOR', 3))
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
@@ -914,7 +914,19 @@ class RequestAuditMiddleware:
         from . import requestperf
         if inference:
             state.performance = requestperf.Trace(state.started)
-        admitted=False; large=False; received=0; reserved=0
+        # ── 在途内存记账（两个独立量，语义不同，绝不混算） ──────────────
+        #
+        # `reserved` 是**逻辑预留**（协调器看到的字节数，用于跨进程公平分配），
+        # `charged` 是**本地物理记账**（本进程实际占用的预算）。
+        #
+        # 两者必须分开，因为输入与输出的性质不同：
+        #   · 输入体会被解析成对象图，物理占用是体积的若干倍；
+        #   · 输出缓冲是逐步增长的字节，没有对象图，且它的预留是「承诺上限」而非
+        #     「已分配」—— 把承诺也乘倍率，一次 32 MiB 的承诺就变成 96 MiB，
+        #     并发被从二十几个压到三个（v1.2.43 的真实回归）。
+        #
+        # 释放时按 `charged` 归还，因此加减始终配对。
+        admitted=False; large=False; received=0; reserved=0; charged=0
         inbound_retained=0; wire_reserved=0; output_reserved=0
         reading_body=False
         per_request_limit=None
@@ -932,17 +944,19 @@ class RequestAuditMiddleware:
                 # No local fallback: losing the coordinator must not double limits.
                 return False
         def reserve_capacity():
-            nonlocal admitted, reserved, large
+            nonlocal admitted, reserved, charged, large
+            initial_charge = initial_reservation * self.body_physical_factor
             if (self.active >= self.maximum
                     or declared > 1024*1024 and self.large >= self.large_maximum
-                    or self.inflight_body_bytes + initial_reservation * self.body_physical_factor > self.maximum_body_bytes):
+                    or self.inflight_body_bytes + initial_charge > self.maximum_body_bytes):
                 return False
             if not shared_reserve(initial_reservation, declared > 1024*1024):
                 return False
             self.active += 1
             admitted = True
             reserved = initial_reservation
-            self.inflight_body_bytes += reserved * self.body_physical_factor
+            charged = initial_charge
+            self.inflight_body_bytes += initial_charge
             if declared > 1024*1024:
                 self.large += 1
                 large = True
@@ -952,52 +966,63 @@ class RequestAuditMiddleware:
                 self.capacity_rejections += 1
             state.terminal_state,state.error_stage='rejected','admission'
         def reserve_wire_body(size):
-            nonlocal reserved, large, wire_reserved
+            nonlocal reserved, charged, large, wire_reserved
             if not admitted or not inference:
                 return
             if size <= wire_reserved:
                 return
             needed = max(reserved, inbound_retained + size + output_reserved)
             extra = needed - reserved
+            # 转发体是**输入体的序列化副本**，与输入同性质：它也是一段字节，
+            # 但它的量级与输入同阶，所以按输入倍率记账。
+            extra_charge = extra * self.body_physical_factor
             needs_large = size > 1024*1024 and not large
-            if (self.inflight_body_bytes + extra * self.body_physical_factor > self.maximum_body_bytes
+            if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                     or needs_large and self.large >= self.large_maximum
                     or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                 capacity_rejected()
                 raise CapacityError('aggregate transformed-body capacity exceeded')
-            self.inflight_body_bytes += extra * self.body_physical_factor
+            self.inflight_body_bytes += extra_charge
+            charged += extra_charge
             reserved, wire_reserved = needed, size
             if needs_large:
                 self.large += 1; large=True
         state.reserve_wire_body = reserve_wire_body
         def reserve_output_body(size):
-            nonlocal reserved, output_reserved
+            nonlocal reserved, charged, output_reserved
             if not admitted or not inference or size<=output_reserved:
                 return
             needed=max(reserved,inbound_retained+wire_reserved+size)
             extra=needed-reserved
-            if (self.inflight_body_bytes+extra*self.body_physical_factor>self.maximum_body_bytes
+            # **输出不乘物理倍率。** 它是逐步增长的字节缓冲，没有对象图开销；而且
+            # 这个预留是「承诺上限」而不是「已分配内存」—— 乘上去会让一个 32 MiB
+            # 的承诺占掉 96 MiB 预算，把并发压到个位数（v1.2.43 的回归）。
+            if (self.inflight_body_bytes+extra>self.maximum_body_bytes
                     or extra>0 and not shared_reserve(needed,large)):
                 capacity_rejected()
                 raise CapacityError('aggregate response-body capacity exceeded')
-            self.inflight_body_bytes+=extra*self.body_physical_factor
+            self.inflight_body_bytes+=extra
+            charged+=extra
             reserved,output_reserved=needed,size
         state.reserve_output_body=reserve_output_body
         def reserve_input(size):
-            nonlocal received,large,reserved
+            nonlocal received,large,reserved,charged
             received=size
             if inference:
                 needed = max(reserved, received + output_reserved)
                 extra = needed - reserved
+                # 输入体：按物理倍率记账（它会被解析成对象图）。
+                extra_charge = extra * self.body_physical_factor
                 needs_large = received > 1024*1024 and not large
                 # No await between checking and reserving: atomic within this
                 # ASGI worker, including chunked or understated-length requests.
-                if (self.inflight_body_bytes + extra * self.body_physical_factor > self.maximum_body_bytes
+                if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                         or needs_large and self.large >= self.large_maximum
                         or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                     capacity_rejected()
                     raise CapacityError('aggregate request-body capacity exceeded')
-                self.inflight_body_bytes += extra * self.body_physical_factor
+                self.inflight_body_bytes += extra_charge
+                charged += extra_charge
                 reserved = needed
                 if needs_large:
                     self.large+=1; large=True
@@ -1281,7 +1306,10 @@ class RequestAuditMiddleware:
                             log.error('shared admission release deferred; capacity retained')
                     if admitted:
                         self.active-=1
-                        self.inflight_body_bytes -= reserved * self.body_physical_factor
+                        # 按 `charged` 归还：它与累加时的量严格配对。
+                        # 用 `reserved * factor` 会算错 —— `reserved` 是输入+输出+
+                        # 转发体的逻辑预留，其中输出那部分从未乘过倍率。
+                        self.inflight_body_bytes -= charged
                     if large: self.large-=1
                     self.fair_gate.notify()
                     state.reserve_wire_body = None

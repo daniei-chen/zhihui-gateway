@@ -18,22 +18,22 @@ GATEWAY = (Path(__file__).parents[1] / 'routers' / 'gateway.py').read_text(encod
 
 
 class PhysicalBodyAccountingTests(unittest.TestCase):
-    def test_every_inflight_mutation_applies_the_same_factor(self):
-        """加、减、以及三处比较必须用同一个倍率，否则会漏记或泄漏。"""
-        lines = [line.strip() for line in SOURCE.splitlines()
-                 if 'inflight_body_bytes' in line and ('+=' in line or '-=' in line)]
-        self.assertGreaterEqual(len(lines), 4, f'应当有多处记账，实际 {len(lines)}')
-        for line in lines:
-            self.assertIn('body_physical_factor', line,
-                          f'这处记账没有乘物理倍率，会导致配额与释放不匹配：{line}')
+    """v1.2.46 起不变量变了：**输入**乘倍率、**输出**不乘、释放按 charged 配对。
 
-    def test_comparisons_also_apply_the_factor(self):
-        comparisons = [line.strip() for line in SOURCE.splitlines()
-                       if 'maximum_body_bytes' in line and 'inflight_body_bytes' in line]
-        self.assertTrue(comparisons)
-        for line in comparisons:
-            self.assertIn('body_physical_factor', line,
-                          f'这处比较没有乘物理倍率，会比实际宽松：{line}')
+    原先这里断言"每处都乘同一个倍率" —— 那正是 v1.2.43 的回归本身：把「承诺上限」
+    当成「已分配内存」乘了上去，小请求也能占掉 96 MiB。
+    正确的不变量见 `test_v1246_output_commit.py`。
+    """
+
+    def test_charge_system_is_used_everywhere(self):
+        for name in ('reserve_capacity', 'reserve_wire_body',
+                     'reserve_output_body', 'reserve_input'):
+            start = SOURCE.index(f'def {name}(')
+            tail = SOURCE[start + 1:]
+            nxt = tail.find('\n        def ')
+            body = SOURCE[start:start + 1 + (nxt if nxt != -1 else 1400)]
+            self.assertIn('charged', body,
+                          f'{name} 记了在途字节却没有维护 charged，加减会对不上')
 
     def test_factor_defaults_above_one_and_is_configurable(self):
         self.assertIn("WB_GATEWAY_BODY_PHYSICAL_FACTOR", SOURCE)
