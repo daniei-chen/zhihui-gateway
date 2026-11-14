@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.22 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.23 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,18 +16,30 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.22.svg" width="166" height="44" alt="查看 1.2.22 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.23.svg" width="166" height="44" alt="查看 1.2.23 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1222--relay-启动与切流合同修复) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#1223--路由交接权限与-rootless-验收) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.22 · Relay 启动与切流合同修复
+## 1.2.23 · 路由交接权限与 rootless 验收
+
+**本次版本：`v1.2.23`**。这一版收紧 Qoder/Trae 本机路由交接：只允许受信父目录，root 写入的路由文件固定为 `root:10001`、`0640`，并完成 Qoder Hub v1.9.9 的私有 rootless 启动与重启恢复验收；不把候选引擎误报成生产升级。
+
+- **路由权限可验证**：原子替换后同步文件和目录，rootless 数据面可读，其他本机用户不可读写。
+- **候选启动更接近生产**：Qoder 1.9.9 在只读 release、外置状态与外置日志下以 `10001:10001`、零 capability、`NoNewPrivileges=1`、seccomp 2 运行。
+- **升级边界明确**：生产仍保持 Qoder 1.9.8；持久化 unit、真实路由切换/回退及认证数据面还要由受控发布器完成后才提升。
+
+**发布边界如实列出。** 本版 Qoder rootless canary 未接入公网流量，源码版本不能替代国内服务器的独立受控验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.23)
+
+<br />
+
+## 1.2.22 · Relay 启动与切流合同修复（历史版本）
 
 **本次版本：`v1.2.22`**。这一版修正推理 relay 在固定数字 UID 宿主上的 systemd 启动合同：先由受信入口完成一次性身份交接，再让实际应用以 `10001:10001`、零有效 capability 和 `NoNewPrivileges` 运行；不改变现网 Manager 的用户、额度或账本状态。
 

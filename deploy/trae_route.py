@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 
 DEFAULT_ROUTE_FILE = '/opt/workbuddy-manager/engine/var/trae_gateway_base'
+ROUTE_GID = 10001
 
 
 def validate_endpoint(value: str) -> str:
@@ -32,11 +33,53 @@ def validate_endpoint(value: str) -> str:
     return f'http://{host}:{port}'
 
 
+def _trusted_parent(target: Path) -> None:
+    """Require an operator-controlled, non-writable route directory."""
+    if os.name != 'posix':
+        return
+    if not target.is_absolute():
+        raise ValueError('route file must be absolute')
+    parent = target.parent
+    try:
+        info = parent.lstat()
+    except OSError as exc:
+        raise ValueError('route parent is unavailable') from exc
+    if (not parent.is_dir() or parent.is_symlink()
+            or info.st_uid not in (0, os.geteuid(), ROUTE_GID)
+            or info.st_mode & 0o022):
+        raise ValueError('unsafe route parent')
+
+
+def _prepare_route_file(target: Path) -> None:
+    """Make root-authored handoff readable only by the fixed runtime UID."""
+    if os.name != 'posix':
+        return
+    try:
+        if os.geteuid() == 0:
+            os.chown(target, 0, ROUTE_GID)
+            os.chmod(target, 0o640)
+        else:
+            # Local development/tests may run without root; retain a private
+            # handoff rather than pretending to provide the host group contract.
+            os.chmod(target, 0o600)
+        with target.open('rb') as stream:
+            os.fsync(stream.fileno())
+        directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ValueError('route permission contract failed') from exc
+
+
 def write_route(path: str | os.PathLike[str], endpoint: str) -> str:
     target = Path(path)
+    _trusted_parent(target)
     if target.is_symlink():
         raise ValueError('route file must not be a symlink')
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.parent.is_dir():
+        raise ValueError('route parent must already exist')
     temporary = target.with_name(f'.{target.name}.{os.getpid()}.tmp')
     if temporary.exists() or temporary.is_symlink():
         raise ValueError('route temporary file already exists')
@@ -54,12 +97,7 @@ def write_route(path: str | os.PathLike[str], endpoint: str) -> str:
         finally:
             os.close(fd)
         os.replace(temporary, target)
-        if os.name == 'posix':
-            directory_fd = os.open(target.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+        _prepare_route_file(target)
     except BaseException:
         try:
             temporary.unlink(missing_ok=True)

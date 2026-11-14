@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.22 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.23 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,18 +16,30 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.22.svg" width="166" height="44" alt="Read the 1.2.22 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.23.svg" width="166" height="44" alt="Read the 1.2.23 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1222--relay-startup-and-cutover-contract) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1223--route-handoff-permissions-and-rootless-acceptance) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.22 · Relay startup and cutover contract
+## 1.2.23 · Route handoff permissions and rootless acceptance
+
+**Current product version: `v1.2.23`.** This release hardens the local Qoder/Trae route handoff: only trusted parents are accepted, and root-authored route files are published as `root:10001` with mode `0640`; Qoder Hub 1.9.9 also passed a private rootless start and restart-recovery canary without being declared production.
+
+- **Route permissions are explicit:** atomic replacement is followed by file and directory sync, so the rootless data plane can read the handoff while other local users cannot.
+- **The candidate is host-shaped:** Qoder 1.9.9 ran from a read-only release with external state and logs as `10001:10001`, zero effective capabilities, `NoNewPrivileges=1`, and seccomp mode 2.
+- **The upgrade boundary remains honest:** production stays on Qoder 1.9.8 until the persistent unit, real route switch/rollback, and authenticated data-plane acceptance are controlled by the release publisher.
+
+**Release boundary:** the Qoder rootless canary received no public traffic, and a source release does not claim that the engine has been upgraded in production.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.23)
+
+<br />
+
+## 1.2.22 · Relay startup and cutover contract (previous release)
 
 **Current product version: `v1.2.22`.** This release fixes the relay systemd contract on hosts that keep UID `10001` numeric without a passwd entry: a trusted launcher performs the one-way handoff, then the application runs as `10001:10001` with zero effective capabilities and `NoNewPrivileges`; Manager data, budgets and ledger state are unchanged.
 
