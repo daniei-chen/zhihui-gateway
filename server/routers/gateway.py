@@ -2269,11 +2269,18 @@ async def _prepare_forward_async(key, body, *, request=None):
     original_reserve = getattr(state, 'reserve_wire_body', None)
     output_reserve=getattr(state,'reserve_output_body',None)
     if output_reserve is not None:
-        from ..outputlimits import maximum_bytes, FAILURE_ENVELOPE_BYTES
+        from ..outputlimits import maximum_bytes, FAILURE_ENVELOPE_BYTES, declared_output_bytes
         try:
-            # Reserve decoded input plus translated output BEFORE provider spend.
-            # It shares local/cohort capacity and the middleware's final release.
-            output_reserve(2*maximum_bytes()+FAILURE_ENVELOPE_BYTES)
+            # 输出承诺按**这个请求实际能产出多少**来算，而不是一律按上限。
+            #
+            # 原先每个请求都预留 `2 × 最大输出 + 信封`（本机 32 MiB）。那对一次
+            # 一万六千 token 的长回答是合理的，但对 `max_tokens: 100` 的短问答
+            # 就是三十多兆的空占 —— 而它决定并发：384 MiB ÷ 32 MiB = 12 个。
+            # 按声明值算之后，短请求只占几百 KB，并发回到由连接数决定。
+            #
+            # 声明值不可信时（缺省、非法、超上限）退回上限值 —— 宁可少放几个，
+            # 也不能让一个自称"只要 10 个 token"的请求把预算骗过去。
+            output_reserve(declared_output_bytes(body) + FAILURE_ENVELOPE_BYTES)
         except observability.CapacityError:
             response=_oai_error('响应容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
             response.headers['Retry-After']='1'
