@@ -1005,6 +1005,21 @@ def execute(sql: str, args: Iterable[Any] = ()) -> int:
         return int(cur.lastrowid or 0)
 
 
+def execute_count(sql: str, args: Iterable[Any] = ()) -> int:
+    """执行写语句并返回**受影响行数**。
+
+    `INSERT OR IGNORE` 撞唯一索引时返回 0 —— 调用方据此判断"这一行本来就存在"，
+    不必先做一次 `SELECT ... WHERE 唯一键=?` 再插入。
+    """
+    with _lock:
+        conn = connect()
+        cur = conn.execute(sql, tuple(args))
+        changed = int(cur.rowcount)
+        if not getattr(_atomic_state, "depth", 0):
+            conn.commit()
+        return changed
+
+
 def executemany(sql: str, seq: Iterable[Iterable[Any]]) -> None:
     with _lock:
         conn = connect()
@@ -1082,40 +1097,42 @@ def bump_usage(
     ch, cm = cache if cache else (0, 0)
     from .ledger import units, SCALE
     amount = units(credit or 0)
+    # 一次 UPSERT 写完整行：`credit` 是由 `credit_units` 派生的展示值，两者在
+    # 同一条语句里一起落，不再"先加浮点、再更新整数、再用整数反推浮点"三趟。
+    #
+    # SQLite 的 `DO UPDATE SET` 右侧表达式按**旧值**求值，所以下面两个赋值都
+    # 读取"冲突发生前"的 `credit_units` —— 这正是"先加整数、再按新整数算浮点"
+    # 想要的顺序。`excluded.credit_units` 是本次要加的量。
     execute(
-        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) '
-        'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?) '
+        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, '
+        'completion_tokens, credit, credit_units, realm, cache_hit_tokens, cache_miss_tokens) '
+        'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) '
         'ON CONFLICT(day, key_id, model, realm) DO UPDATE SET '
         '  requests = requests + 1, '
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
-        '  credit = credit + excluded.credit, '
+        '  credit_units = coalesce(credit_units, 0) + excluded.credit_units, '
+        '  credit = (coalesce(credit_units, 0) + excluded.credit_units) * 1.0 / ?, '
         '  cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens, '
         '  cache_miss_tokens = cache_miss_tokens + excluded.cache_miss_tokens',
-        (day, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r, ch, cm),
+        (day, key_id, model, prompt_tokens, completion_tokens,
+         amount * 1.0 / SCALE, amount, r, ch, cm, SCALE),
     )
     # 同一份数据的**小时**维度，给「今日」趋势图用。两处必须一起写：只写一处
     # 就会出现「卡片有数、小时图没有」或反过来的分歧（口径一致性见建表注释）。
     execute(
-        'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm) '
-        'VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?) '
+        'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, '
+        'completion_tokens, credit, credit_units, realm) '
+        'VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?, ?) '
         'ON CONFLICT(day, hour, key_id, model, realm) DO UPDATE SET '
         '  requests = requests + 1, '
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
-        '  credit = credit + excluded.credit',
-        (day, hour, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
+        '  credit_units = coalesce(credit_units, 0) + excluded.credit_units, '
+        '  credit = (coalesce(credit_units, 0) + excluded.credit_units) * 1.0 / ?',
+        (day, hour, key_id, model, prompt_tokens, completion_tokens,
+         amount * 1.0 / SCALE, amount, r, SCALE),
     )
-    # Integer totals are updated without adding binary floats. Legacy REAL fields
-    # are refreshed as presentation values in the caller's same transaction.
-    execute('UPDATE usage_daily SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND key_id=? AND model=? AND realm=?',
-            (amount,day,key_id,model,r))
-    execute('UPDATE usage_daily SET credit=credit_units*1.0/? WHERE day=? AND key_id=? AND model=? AND realm=?',
-            (SCALE,day,key_id,model,r))
-    execute('UPDATE usage_hourly SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (amount,day,hour,key_id,model,r))
-    execute('UPDATE usage_hourly SET credit=credit_units*1.0/? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (SCALE,day,hour,key_id,model,r))
 
 
 def realm_of_model(model: str | None) -> str:
@@ -1413,8 +1430,10 @@ def prune_if_pending() -> None:
         pass
 
 
-def add_request_log(**fields: object) -> None:
-    """落一行请求日志。列由固定元组决定，缺省字段写 NULL。
+def add_request_log(**fields: object) -> int:
+    """落一行请求日志。返回受影响行数（0 = 这一行本来就存在，幂等命中）。
+
+    列由固定元组决定，缺省字段写 NULL。
 
     `client_request_id`（RV01）：调用方自带的 `X-Request-ID`，已由
     `observability.client_request_id_from_headers` 校验过。它可以缺省（None）——
@@ -1439,14 +1458,18 @@ def add_request_log(**fields: object) -> None:
             fields['platform'] = _gw.forced_platform.get() or 'workbuddy'
         except Exception:  # noqa: BLE001
             pass
-    execute('INSERT INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
-            tuple(fields.get(c) for c in columns))
+    # `OR IGNORE` 撞 `idx_request_logs_request_id` 时返回 0 行 —— 幂等由唯一索引
+    # 直接提供，调用方不必先 `SELECT ... WHERE request_id=?` 再插入。
+    inserted = execute_count(
+        'INSERT OR IGNORE INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
+        tuple(fields.get(c) for c in columns))
     _request_log_writes += 1
     if _request_log_writes >= _REQUEST_LOG_CHECK_EVERY:
         _request_log_writes=0
         # 只置标记：真正的清理由 `prune_if_pending()` 在事务提交后执行。
         global _prune_pending
         _prune_pending = True
+    return inserted
 
 
 # 账号回填的匹配窗口（秒）。

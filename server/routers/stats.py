@@ -55,12 +55,14 @@ def _since(days: int) -> str:
     趋势图、按模型、按密钥三处与时段选择器因此天然同一口径（issue #53）。
     """
     d = _clamp_days(days, 30)
-    return time.strftime('%Y-%m-%d', time.localtime(time.time() - (d - 1) * 86400))
+    # 与 `db.day_of` 同口径（固定 UTC+8）。原先这里用 `time.localtime`，口径跟着
+    # 进程时区走，与账本的 UTC+8 不是同一个时钟。
+    return db.day_of(time.time() - (d - 1) * 86400)
 
 
 def _epoch_since(days: int) -> int:
-    """与 `_since` 同一口径（本地时区、含今天）的起始时刻（epoch 秒）。"""
-    return int(time.mktime(time.strptime(_since(days), '%Y-%m-%d')))
+    """与 `_since` 同一口径（UTC+8、含今天）的起始时刻（epoch 秒）。"""
+    return db.day_start_ts(_since(days))
 
 
 def _throughput_by_dimension(days: int, realm: str | None, dimension: str) -> dict:

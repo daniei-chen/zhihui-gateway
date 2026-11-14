@@ -947,9 +947,12 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
     }
     try:
         with db.transaction():
-            if state and db.query_one('SELECT id FROM request_logs WHERE request_id=?', (state.request_id,)):
+            # 幂等由 `request_logs` 的唯一索引直接提供：插入命中冲突时返回 0 行，
+            # 说明这条请求已经记过账，直接收工。原先这里先 `SELECT ... WHERE
+            # request_id=?` 再插入，等于每个请求多一次同表定位。
+            inserted = db.add_request_log(**facts)
+            if state and not inserted:
                 return
-            db.add_request_log(**facts)
             from .. import budget
             budget.settle(usage,pt,ct,credit)
             from .. import ledger
