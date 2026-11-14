@@ -161,3 +161,15 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(operation, return_exceptions=True)
         self.assertEqual(self.relay.snapshot()['active']['old'], 0)
         self.assertEqual(len(self.calls), 1)
+
+
+class RelayUnitContractTest(unittest.TestCase):
+    def test_service_uses_fixed_uid_handoff_for_numeric_host_identity(self):
+        unit = (Path(__file__).parents[2] / 'deploy' / 'rolling-relay.service').read_text()
+        self.assertIn('User=root', unit)
+        self.assertIn('Group=root', unit)
+        self.assertIn('/usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups', unit)
+        self.assertIn('--no-new-privs --inh-caps=-all --ambient-caps=-all', unit)
+        self.assertIn('CapabilityBoundingSet=CAP_SETUID CAP_SETGID', unit)
+        self.assertNotIn('User=10001', unit)
+        self.assertNotIn('NoNewPrivileges=yes', unit)

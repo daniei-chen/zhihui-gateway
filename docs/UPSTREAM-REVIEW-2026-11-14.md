@@ -1,6 +1,6 @@
 # Current upstream review — 2026-11-14
 
-This is the current-source review for the v1.2.21 workstream. The older
+This is the current-source review for the v1.2.22 workstream. The older
 `UPSTREAM-REVIEW-0.0.4.md` remains a historical decision record; its versions
 are not current production provenance.
 
@@ -16,6 +16,13 @@ are not current production provenance.
 The three public repositories were queried on 2026-11-14. A tag or release
 being newer does not prove that the local binary, container, or provider route
 has been replaced. The production server must keep a separate runtime receipt.
+
+The v1.2.22 host review exercised the Qoder v1.9.9 candidate on a private
+8800 listener with a copied state set. The candidate returned its own health
+version and ran as UID/GID `10001:10001`, with `CapEff=0`, `NoNewPrivs=1`, and
+seccomp mode 2. This closes the process-level canary only; the persistent
+rootless service, reboot recovery, route rollback and authenticated data-plane
+acceptance are still required before changing production from v1.9.8.
 
 ## Release input rule
 
