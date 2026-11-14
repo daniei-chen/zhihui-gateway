@@ -467,6 +467,27 @@ def public_ready():
     return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
 
 
+@app.get('/api/readyz/detail', include_in_schema=False)
+def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
+    """完整就绪诊断（需面板读者身份）。
+
+    ## 为什么 `/readyz` 之外还要一个
+
+    `/readyz` 只回一个布尔值，那是对的 —— 探针可能每秒打很多次，不能每次都去
+    碰数据库（见 `public_readiness` 的说明，它读的是监控循环每 30 秒刷新一次的缓存）。
+
+    但**不就绪时只看到一个 false，排障无从下手**：到底是数据库不可写、账本通道
+    降级、回执有积压、还是正在排空？这四种情况的处置完全不同。
+
+    这里跑一次完整的判定，把每一项判据都带出来。
+
+    **只该在需要排障时调用**：它会真的去探数据库可写性、读回执通道状态，
+    不是读缓存 —— 放在探测探针里会把健康检查变成写压力。
+    """
+    from . import operational
+    return operational.readiness()
+
+
 app.include_router(gateway.router)
 # Anthropic Messages API 兼容层（/v1/messages）——给只认该协议的客户端用
 app.include_router(anthropic.router)
