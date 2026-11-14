@@ -952,6 +952,58 @@ app.add_middleware(PlatformRoutingMiddleware, base_path=config.BASE_PATH)
 # ── Prometheus 指标（2026-10-23 审计补充：manager 之前完全没有 /metrics）──────
 # Application authentication is mandatory even behind a proxy or static fallback.
 # Collectors use an independent credential; normal readonly/keys tokens do not qualify.
+def _cgroup_memory_peak_bytes() -> int | None:
+    """本服务 cgroup 的内存峰值字节数；取不到返回 None。
+
+    ## 为什么峰值比当前值更有用
+
+    `workbuddy_process_resident_bytes` 是**此刻**的常驻内存，它会来回波动 ——
+    一次大请求把内存顶上去、请求结束又落回来，曲线看不出异常。
+
+    **峰值只会涨，不会落。** 所以：
+
+    | 观察 | 含义 |
+    | --- | --- |
+    | 峰值与当前值同步缓慢上涨 | 可能是泄漏 |
+    | 峰值远高于当前值且不再变化 | 曾经有过一个大尖峰（大 body / 长上下文） |
+    | 两者一起回落 | 不可能 —— 峰值不回落，回落的是当前值 |
+
+    有了这两条曲线，「有没有在慢慢胀」才成为一个能看图回答的问题，而不是靠几天后
+    发现 OOM。
+
+    ## 为什么读 cgroup 而不是自己记账
+
+    `memory.peak` 由内核维护，包含进程的匿名页、页缓存和内核开销 —— 那正是
+    OOM killer 看的口径。自己记账只会漏掉一部分。
+
+    需要 cgroup v2 与内核 5.19+；取不到（老内核、容器内没有该文件）时返回 None，
+    指标不输出，不报假的 0。
+    """
+    try:
+        import os
+        with open(f'/sys/fs/cgroup{_cgroup_scope()}/memory.peak', encoding='ascii') as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _cgroup_scope() -> str:
+    """当前进程所在 cgroup 的相对路径（形如 `/system.slice/xxx.service`）。
+
+    取不到就返回空串，让调用方拼出 `/sys/fs/cgroup/memory.peak` —— 那在容器里
+    往往是对的（cgroup 命名空间已经把根指向本容器）。
+    """
+    try:
+        with open('/proc/self/cgroup', encoding='ascii') as handle:
+            for line in handle:
+                parts = line.strip().split(':', 2)
+                if len(parts) == 3 and parts[0] == '0':
+                    return parts[2].rstrip('/')
+    except OSError:
+        pass
+    return ''
+
+
 def _process_memory_bytes() -> tuple[int, int] | None:
     """(常驻内存, 虚拟内存) 字节数；取不到返回 None。
 
@@ -1008,6 +1060,14 @@ def prometheus_metrics(request: Request):
            'Virtual memory size of the gateway process.', _virtual)
     _m('workbuddy_process_threads', 'gauge',
        'Live OS threads in the gateway process.', threading.active_count())
+    # cgroup 的内存峰值：它只涨不落，和常驻内存两条线一起看才知道有没有在慢慢胀。
+    # 见 `_cgroup_memory_peak_bytes` 的说明。
+    _peak = _cgroup_memory_peak_bytes()
+    if _peak is not None:
+        _m('workbuddy_cgroup_memory_peak_bytes', 'gauge',
+           'Peak memory of the service cgroup since boot; never decreases, so a rising '
+           'line alongside a flat resident gauge means a real leak rather than churn.',
+           _peak)
 
     try:
         from . import observability as _obs
