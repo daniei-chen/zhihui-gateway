@@ -33,6 +33,41 @@ def process_identity(proc, pid):
     return {'pid': int(pid), 'starttime': int(fields[19])}
 
 
+def _writable_fd(proc_path, fd_name):
+    """该 fd 是否以可写方式打开（`O_ACCMODE != O_RDONLY`）。
+
+    读不到 `fdinfo` 时保守地当成可写：迁移宁可多等一次，也不能在真的有人写库
+    时放行。
+    """
+    try:
+        for line in (proc_path / 'fdinfo' / fd_name).read_text().splitlines():
+            if line.startswith('flags:'):
+                return bool(int(line.split()[1], 8) & 0o3)
+    except (OSError, IndexError, ValueError):
+        return True
+    return True
+
+
+def _wal_coordination_only(target):
+    """`-shm` 是 WAL 的协调段：**只读连接也会打开它**，它本身不写库。
+
+    把它算作"在写"会让运维一条只读的 `sqlite3 db "PRAGMA quick_check"` 拦住
+    整次迁移。`-wal` 不在此列：里面有尚未合并进主库的页，必须算写者。
+    """
+    return target.endswith('-shm')
+
+
+def _writable_map(line):
+    """`/proc/<pid>/maps` 的一行是否是可写的 data 映射。"""
+    fields = line.split()
+    if len(fields) < 6 or not DATA + '/' in line:
+        return False
+    perms = fields[1]
+    if 'w' not in perms:
+        return False  # 只读 mmap（只读 SQLite 会话就是这样读主库的）
+    return not _wal_coordination_only(fields[-1])
+
+
 class LinuxInventory:
     def __init__(self):
         self.proc, self.cgroup = Path('/proc'), Path('/sys/fs/cgroup')
@@ -129,18 +164,28 @@ class LinuxInventory:
                         reasons.add('manager-working-directory')
                 except FileNotFoundError:
                     pass  # Kernel threads and exited processes have no cwd.
+                # 判据是"以可写方式打开"，不是"打开过"：只读的 SQLite 会话
+                # （运维的 `sqlite3 db "PRAGMA quick_check"`、临时检查脚本）
+                # 既不写库也不持写锁，却会打开主库与 `-shm`。把它们算成写者
+                # 会让迁移偶发地失败一次 —— 实测在 v1.2.31/v1.2.32 的升级里
+                # 连续踩到三次。
                 for fd in (path / 'fd').iterdir():
                     try:
                         target = os.readlink(fd)
                     except FileNotFoundError:
                         continue
-                    if target == DATA or target.startswith(DATA + '/'):
+                    if not (target == DATA or target.startswith(DATA + '/')):
+                        continue
+                    if _wal_coordination_only(target):
+                        continue
+                    if _writable_fd(path, fd.name):
                         reasons.add('open-shared-data')
                         break
                 # A process can mmap a SQLite file then close its descriptor.
-                maps = (path / 'maps').read_text()
-                if DATA + '/' in maps:
-                    reasons.add('mapped-shared-data')
+                for line in (path / 'maps').read_text().splitlines():
+                    if _writable_map(line):
+                        reasons.add('mapped-shared-data')
+                        break
                 after = process_identity(self.proc, int(path.name))
             except FileNotFoundError:
                 if process_identity(self.proc, int(path.name)) is not None:

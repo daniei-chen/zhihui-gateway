@@ -221,6 +221,24 @@ class WriterGuardContractTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 2)
 
+    def test_read_only_sqlite_sessions_do_not_block_a_migration(self):
+        """只读会话既不写库也不持写锁，不该被当成并发写者。
+
+        判据必须是"以可写方式打开/映射"，而不是"打开过"。`-shm` 是 WAL 的协调段，
+        只读连接也会打开它，所以单独排除；`-wal` 里有未合并的页，必须算写者。
+        """
+        source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
+                  'writer_inventory.py').read_text(encoding='utf-8')
+        self.assertIn('def _writable_fd(', source)
+        self.assertIn("return bool(int(line.split()[1], 8) & 0o3)", source)
+        self.assertIn('def _wal_coordination_only(', source)
+        self.assertIn("return target.endswith('-shm')", source)
+        self.assertIn("if 'w' not in perms:", source)
+        # 打开判定必须走可写性检查，且 -shm 必须在判定前被跳过
+        self.assertIn('if _writable_fd(path, fd.name):', source)
+        self.assertIn('if _wal_coordination_only(target):', source)
+        self.assertIn('if _writable_map(line):', source)
+
     def test_writer_scan_excludes_the_whole_call_chain(self):
         """迁移不能把"谁在调用我"当成并发写者。
 
