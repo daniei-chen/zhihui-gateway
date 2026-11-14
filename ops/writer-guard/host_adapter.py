@@ -393,7 +393,10 @@ class Host:
         return identity
 
     def helper_ready(self, record, candidate):
-        self._retry_helper_ready(record, candidate, 'helper-ready')
+        # 返回值是候选进程身份：`_run_rolling` 用它判断"就绪已被确认"。
+        # 丢掉它会让控制器在 helper 已就绪之后报 "returned no process identity"
+        # 并围栏 —— 第一次真正的 rolling 就是这样失败的。
+        return self._retry_helper_ready(record, candidate, 'helper-ready')
 
     def _retry_helper_ready(self, record, candidate, label):
         deadline = time.monotonic() + 90
