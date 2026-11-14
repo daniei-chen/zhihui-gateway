@@ -324,6 +324,33 @@ def disk_space_alerts(free_bytes: int | None) -> list[tuple[str, bool, str]]:
     ]
 
 
+def budget_rejected_unknown_alert(count) -> tuple[bool, str]:
+    """`budget_rejected_unknown`：被拒却留着未决预留的条数。
+
+    ## 为什么单独看这一项
+
+    `budget_unknown` 的判据是「积压超过处理期限」，它汇总了各种成因
+    （客户端断开、上游报错、传输中断……）—— 那些是机制固有的不确定性，可以接受。
+
+    但有一类不该存在：**请求被拒绝（400/429），预算却留在未决状态**。
+    拒绝意味着什么都没发生，预留应当归还应而不是挂着。出现这种行说明
+    预留与归还之间断了链。
+
+    实测 2026-11-15：库里有 156 条这种残留，集中在 11-03（112 条）与
+    11-10、11-12，形态都是 `prompt_too_long` 的 400 却预留了上千万 token。
+    **11-13 之后为 0** —— 说明链路已被修好，但没有专门的告警盯着它，
+    若将来回归只能靠人工翻数据发现。
+
+    所以这条告警只看**最近 24 小时**：历史残留不该让它长期 firing，
+    但**新出现一条就说明有回归**。
+    """
+    count = int(count or 0)
+    return (count > 0,
+            'rejected requests left unsettled budget reservations in the last 24h: %d '
+            '(a rejection must release its reservation; see docs/LEDGER-RECONCILIATION.md)'
+            % count)
+
+
 def model_completion_alert(n: int, failed: int) -> tuple[bool, str]:
     """`model_completion` 的判据与文案：比例与绝对失败数**两个都要满足**。
 
@@ -537,6 +564,15 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # 判据与文案集中在 `model_completion_alert`：比例要满足，绝对失败数也要满足。
         _active, _detail = model_completion_alert(row['n'], row['failed'])
         transition('model_completion', _active, _detail)
+        # 被拒却留着未决预留 —— 不该存在，出现即回归（见函数说明）。
+        _rejected_unknown = db.query_one(
+            "SELECT count(*) n FROM budget_reservations b "
+            "JOIN request_logs l ON l.request_id=b.request_id "
+            "WHERE b.state='unknown' AND l.terminal_state='rejected' "
+            "AND b.created_at>=?", (now - 86400,))
+        _active, _detail = budget_rejected_unknown_alert(
+            _rejected_unknown['n'] if _rejected_unknown else 0)
+        transition('budget_rejected_unknown', _active, _detail)
         free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
         # 两档水位，两个告警名（见 `disk_space_alerts` 的说明：名字不能共用）。
         for _name, _active, _detail in disk_space_alerts(free):
