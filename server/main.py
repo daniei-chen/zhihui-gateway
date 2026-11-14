@@ -289,6 +289,34 @@ async def lifespan(app: FastAPI):
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
         await config.close_clients()
+        # 在清理末尾装一个**可用的**新执行器，让收尾阶段仍有地方提交阻塞工作。
+        #
+        # ## 为什么必须这么做
+        #
+        # asyncio 的默认执行器是**懒创建**的。如果整个 lifespan 从没排过阻塞任务，
+        # 它就从未被创建，于是「循环关闭时关闭默认执行器」这一步是空操作 —— 之后
+        # 收尾再提交时会新建一个，一切正常。这就是引入自定义池之前的行为。
+        #
+        # 从引入自定义池那一版（1.2.44）起，lifespan 一开始就把默认执行器换成了我们的池：
+        # 它必然存在，于是收尾时被关闭；之后任何提交都抛「已关闭后仍要提交」。
+        # 那个失败又打断归档线程的收尾，让后续检查连带报「归档线程已在运行」。
+        #
+        # 2026-11-14 审计：按版本二分确认，同一组检查在引入自定义池之前全部通过、
+        # 之后固定七处失败；去掉那一行即恢复正常。
+        #
+        # ## 为什么是小池、且不显式关闭
+        #
+        # 这个阶段之后进程很快就退出了，线程由操作系统回收。它存在的窗口只有毫秒
+        # 级，用途仅仅是让收尾提交有去处 —— 那里的阻塞工作本来就是一次性的。
+        #
+        # 不用 `set_default_executor(None)`：CPython 要求参数是 ThreadPoolExecutor
+        # 实例，传 None 会抛 TypeError，反而让收尾多一处异常。
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            asyncio.get_running_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=2, thread_name_prefix='wb-final'))
+        except (RuntimeError, ImportError):
+            pass
         if pending_shutdown_cancel is not None:
             raise pending_shutdown_cancel
 
