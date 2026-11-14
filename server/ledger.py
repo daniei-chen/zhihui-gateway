@@ -235,7 +235,20 @@ PER_ATTEMPT_BILLING_REQUIREMENTS = (
 
 
 def _attempt_phases(request_id: str) -> dict:
-    """{attempt: [phase, ...]}；只读 attempt_events，不做时间推断。"""
+    """{attempt: [phase, ...]}；只读 attempt_events，不做时间推断。
+
+    ## 这张表从 2026-11-03 起就不再写入
+
+    上游事件后来开始携带调度标识，`attempt()` 见到那个字段会直接返回 False，
+    调用证据改由 `provider_attempt_events_v2` 承载。所以这里的返回值只对
+    **那之前**的请求有意义。
+
+    `derive_attempt_billing` 已经优先看新表：有 v2 证据时如实给出 unknown
+    （缺供应商的每次调用费用回执），只有在完全没有新证据时才走到这里。
+
+    保留这段查询是为了让历史请求仍可回溯 —— 不要因为「表停写了」就把它当成
+    死代码删掉，它承载的是旧数据的解释能力。
+    """
     from . import db
     out: dict[int, list[str]] = {}
     for row in db.query('SELECT attempt,phase FROM attempt_events WHERE request_id=? '
