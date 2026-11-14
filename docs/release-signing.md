@@ -28,4 +28,20 @@ Ubuntu CI 执行完整隔离测试、前端类型与构建检查、依赖审计�
 
 生产私钥只在服务器受保护签名流程中使用，不进入仓库、CI 日志或公开 Release。签名证明输入身份和未授权漂移，不保证业务正确，也不抵御掌握本机 root/Docker 控制权的攻击者。
 
+## 受控主机 staging 的单一入口
+
+公开 Release 包不携带生产私钥，也不预先携带绑定某台主机信任锚的
+`web/out/manifest.sha256`、`manifest.sig`、`deploy/managed-release.json` 和
+`managed-release.sig`。把包解压到受控主机后，必须用 root-owned helper 一次完成
+前端清单签名、后端 managed release 清单重建、Ed25519 签名和两层 preflight：
+
+```sh
+/opt/workbuddy-manager/releases/v1.2.26/deploy/prepare-managed-stage.sh \
+  /opt/workbuddy-manager/releases/v1.2.26
+```
+
+主机部署器可以把 helper 固定安装到受保护路径，但步骤顺序不能拆开。命令成功后才允许执行
+writer-guard 的 `migration_entry.py prepare`；任何 host 签名、闭包或权限校验失败
+都必须保留旧版本继续服务。不要把生产私钥复制进 Release、暂存目录备份或 CI 日志。
+
 健康探针只证明短窗口可用，不等于外部互联网 SLO、真实供应商推理验收或离机恢复验证。

@@ -8,7 +8,7 @@
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": false,
-  "release_id": "v1.2.25",
+  "release_id": "v1.2.26",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "27707d05ebfa7bdbe2da405e3c555a9c558fe3913365bd37d671334d668c6084",
@@ -94,14 +94,17 @@
     "docs/images/readme/button-release-v1.2.24.svg": "980af6dc34c980247af673e3864848a39ad9df6a07c3eefdf8a324c1d08a4535",
     "deploy/qoder-rootless-production.py": "c90a742985f281d928706755781cef17c27c50eb202cbdb9ce79977211d1b23c",
     "deploy/qoder2-engine-rootless.conf": "7bf3821322e0a123147246f2a101444a1ace7e60c4861a419af4f5c99f13af3a",
+    "deploy/prepare-managed-stage.sh": "453a7ada3fadca9d4b0be30f4644f16cbb64346649c102a5cd3bf7cee81221c5",
     "docs/PRODUCTION-AUDIT-2026-11-14.md": "d07f900148e8023d6392720ce7460cc06c124fd5a1a69454e61e851a3f39eb65",
+    "docs/release-signing.md": "36c5468cc8aba60e9897ba41028790ab2446f21b008eb2edb42775969715685e",
     "docs/images/readme/button-release-v1.2.25.svg": "d81ccaaffac1d8edc6118a4354221271dd4f3eaad0b91bee5637700f6b7b42a4",
-    "server/tests/test_qoder_rootless_contract.py": "fec8993c1c63bb62453a2bc05e56640c94758156f9d62bbba24a09327c99ed27"
+    "server/tests/test_qoder_rootless_contract.py": "fec8993c1c63bb62453a2bc05e56640c94758156f9d62bbba24a09327c99ed27",
+    "server/tests/test_managed_stage_helper.py": "07f57f66fb895d54dc2b009ee48abe5a424b0a1603edfbcce1bdcd3fa1fe0c78"
   },
   "schema": 1,
   "signed": false,
   "source_commit": "",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
-  "version": "1.2.25"
+  "version": "1.2.26"
 }
