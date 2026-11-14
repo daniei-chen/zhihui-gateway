@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.20 · one controlled route for WorkBuddy, Qoder and Trae." />
+    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.21 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,7 +16,7 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.20.svg" width="166" height="44" alt="Read the 1.2.20 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.21.svg" width="166" height="44" alt="Read the 1.2.21 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
@@ -27,16 +27,17 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 
 <br />
 
-## 1.2.20 · Operational recovery and locked upstream inputs
+## 1.2.21 · Ownership handoff, startup reliability and locked inputs
 
-**Current product version: `v1.2.20`.** Building on the v1.2.19 migration recovery work, this release makes backup housekeeping wait for a bounded producer lock and pins the bundled upstream source by size and SHA256 before extraction; it does not infer zero billing or mutate budget state.
+**Current product version: `v1.2.21`.** Building on v1.2.20, this release makes the root-to-UID-10001 data handoff explicit before startup, preventing a root-owned `users.json` from turning login into HTTP 500; it does not infer zero billing or mutate budget state.
 
+- **Reliable ownership handoff:** the trusted launcher normalizes the data directory, `users.json` and the initial-password file before dropping to UID/GID 10001; unsafe paths or failed repairs block startup before serving.
 - **Safer operations:** housekeeping waits up to 180 seconds for the backup producer and still fails closed if the lock never clears.
 - **Locked supply chain:** the release workflow checks the upstream source archive size and SHA256 before unpacking it.
 - **Transparent upstream state:** current WorkBuddy Manager, Qoder Hub and TraeWorkAssistant observations are recorded separately from production runtime provenance.
 - **Evidence boundary:** supplier rejection remains diagnostic evidence only; it is not treated as a zero-usage receipt.
 
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.20)
+**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.21)
 
 > [!NOTE]
 > Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
@@ -171,7 +172,7 @@ cd zhihui-gateway
 | Goal | Start here |
 | :--- | :--- |
 | Run, modify or contribute | [Development guide](docs/DEVELOPMENT.md) · [Controlled deployment](deploy/README.md) · [Console source](web/) · [Gateway service](server/) |
-| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.20 changelog](CHANGELOG.md) |
+| Understand versions and rollback | [Release and signing boundary](docs/release-signing.md) · [1.2.21 changelog](CHANGELOG.md) |
 | Inspect homepage and visual implementation | [Homepage source](site/home/index.html) · [Integration guide](site/home-source/INTEGRATION.md) |
 | Trace implementation and open work | [Full changelog](CHANGELOG.md) · [Security audit report](docs/SECURITY-AUDIT.md) |
 | User documentation | [Usage](docs/usage.md) · [Features](docs/features.md) · [Screenshots](docs/screenshots.md) · [Development](docs/DEVELOPMENT.md) · [Security notes](docs/security-notes.md) · [API tokens](docs/api-tokens.md) · [Account egress](docs/account-proxy-routes.md) · [Security audit](docs/SECURITY-AUDIT.md) · [Release signing](docs/release-signing.md) |

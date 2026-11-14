@@ -11,6 +11,7 @@ if str(OPS) not in sys.path:
     sys.path.insert(0, str(OPS))
 
 import host_adapter  # noqa: E402
+import launch_guard  # noqa: E402
 from launch_guard import writer_command, writer_environment  # noqa: E402
 
 
@@ -22,6 +23,25 @@ class WriterGuardContractTests(unittest.TestCase):
         self.assertIn("--timeout-graceful-shutdown", command)
         environment = writer_environment({}, release)
         self.assertEqual(environment["WB_SHARED_ADMISSION"], "1")
+
+    @unittest.skipUnless(hasattr(launch_guard.os, 'chown'), 'POSIX ownership contract only')
+    def test_service_data_contract_normalizes_private_handoff_files(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            users = root / 'users.json'
+            password = root / 'initial-admin-password.txt'
+            users.write_text('{}', encoding='utf-8')
+            password.write_text('secret', encoding='utf-8')
+            users.chmod(0o644)
+            password.chmod(0o644)
+            root.chmod(0o755)
+            launch_guard.normalize_service_data(
+                root, uid=launch_guard.os.getuid(), gid=launch_guard.os.getgid())
+            self.assertEqual(launch_guard.stat.S_IMODE(root.stat().st_mode), 0o700)
+            self.assertEqual(launch_guard.stat.S_IMODE(users.stat().st_mode), 0o600)
+            self.assertEqual(launch_guard.stat.S_IMODE(password.stat().st_mode), 0o600)
 
 
     def test_helper_keeps_shared_admission_but_disables_background_jobs(self):
