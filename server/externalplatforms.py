@@ -51,6 +51,11 @@ QODER_PANEL_SECRET = Path(os.environ.get('WB_QODER_PANEL_SECRET',
 #: 容器名 → 平台名。刷新时用 `docker exec` 调容器内的刷新入口。
 CONTAINERS = {'qoder': 'zhihui-qoder', 'trae': 'zhihui-trae'}
 
+#: Trae 的数据库。容器卷 `/opt/trae-work/data` 映射到容器的 `/app/data`，
+#: 所以宿主机可以直接读，不需要 `docker exec`，也不需要容器内有 sqlite3。
+TRAE_DB = Path(os.environ.get('WB_TRAE_DB',
+                              '/opt/trae-work/data/data/aiwork.sqlite'))
+
 #: 过期告警阈值：剩余天数低于它就标红。
 EXPIRY_WARN_DAYS = 7
 
@@ -140,27 +145,92 @@ def _docker_exec(container: str, argv: list[str], timeout: float = 30.0) -> tupl
     return done.returncode, (output + error).strip()
 
 
+def _redact_trae(payload: dict, user_id: str) -> dict:
+    """Trae 账号的脱敏视图。
+
+    **`needs_login` 是这里最有价值的字段**：它把「凭据为空」这个结论直接摆出来。
+    只报「账号存在、未过期」会误导 —— 用户会去查限流、查路由，而真正的问题是他
+    需要重新登录一次。
+    """
+    jwt = str(payload.get('jwt') or '').strip()
+    refresh = str(payload.get('refresh_token') or '').strip()
+    fails = payload.get('refresh_token_fails')
+    invalid = payload.get('refresh_token_invalid')
+    return {
+        'uid': str(payload.get('UserID') or user_id or ''),
+        'nickname': str(payload.get('name') or ''),
+        'has_jwt': bool(jwt),
+        'has_refresh_token': bool(refresh),
+        # 凭据全空 = 从来没登录成功过，或登录态被清空。不是「刷新失败」：
+        # 失败计数与失效标记都还是 0，说明那两条路径没被走到。
+        'needs_login': not jwt and not refresh,
+        'refresh_token_fails': fails if isinstance(fails, int) else 0,
+        'refresh_token_invalid': bool(invalid) if invalid is not None else False,
+        'added_at': str(payload.get('added_at') or ''),
+        'updated_at': str(payload.get('updated_at') or ''),
+        'auth_saved_at': str(payload.get('auth_saved_at') or ''),
+    }
+
+
 def trae_accounts() -> dict:
     """读取 Trae 账号（只读）。
 
-    Trae 的账号在容器内 sqlite 里，且管理面需要独立的 API Key —— 网关没有那条
-    凭据，所以这里用容器内的只读查询。读不到时如实报告，不返回空列表冒充。
+    Trae 的数据库通过容器卷映射到宿主机（`/opt/trae-work/data/data/aiwork.sqlite`），
+    所以不需要 `docker exec`，也不需要容器内有 sqlite3 —— 用 Python 自带的 sqlite3
+    直接读。
+
+    ## 为什么专门标出「凭据为空」
+
+    2026-11-14 排查时发现这台机器上 Trae 唯一的账号是这样：
+
+        jwt = ""            refresh_token = null
+        refresh_token_fails = 0    refresh_token_invalid = 0
+        added_at = 2026-10-19      updated_at = 2026-11-14 05:30
+
+    也就是说：**它从来没有过可用的凭据**，不是「刷新失败」。失败的计数是 0、
+    失效标记也是 0 —— 那两条路径根本没被走到过。
+
+    这类状态如果只报「账号存在、未过期」，会让人以为是别的问题（比如限流）。
+    所以这里单独给出 `needs_login`，把结论直接摆出来：需要重新登录。
     """
-    container = CONTAINERS['trae']
-    code, output = _docker_exec(container, [
-        'sh', '-c',
-        'sqlite3 /app/data/data/aiwork.sqlite '
-        '"SELECT name FROM sqlite_master WHERE type=\'table\';" 2>/dev/null || echo NO_SQLITE',
-    ])
-    if code == 127 or 'docker 命令不存在' in output:
+    path = TRAE_DB
+    if not path.is_file():
         return {'available': False, 'platform': 'trae',
-                'reason': '宿主机没有 docker 命令，无法读取容器内账号', 'accounts': []}
-    if 'NO_SQLITE' in output or not output:
+                'reason': f'数据库不存在：{path}', 'accounts': []}
+    try:
+        import sqlite3
+        # 只读打开，且用 timeout 避免和容器里的写入撞上（WAL 下读不会被写阻塞，
+        # 但元数据锁仍需等待）。
+        handle = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5.0)
+        try:
+            handle.row_factory = sqlite3.Row
+            rows = handle.execute('SELECT user_id, data FROM accounts').fetchall()
+            keys = handle.execute('SELECT count(*) AS c FROM api_keys').fetchone()
+        finally:
+            handle.close()
+    except Exception as exc:             # noqa: BLE001
         return {'available': False, 'platform': 'trae',
-                'reason': '容器内没有 sqlite3，或数据库不可读', 'accounts': []}
-    return {'available': True, 'platform': 'trae', 'accounts': [],
-            'count': 0, 'tables': output.splitlines()[:20],
-            'note': 'Trae 的账号结构尚未映射，这里只确认容器可读；未做推测性解析。'}
+                'reason': f'读取失败：{type(exc).__name__}: {exc}', 'accounts': []}
+
+    entries = []
+    for row in rows:
+        try:
+            payload = json.loads(row['data'] if not isinstance(row, tuple) else row[1])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        entries.append(_redact_trae(payload, row[0] if not isinstance(row, tuple) else row[0]))
+
+    needing_login = sum(1 for e in entries if e['needs_login'])
+    return {
+        'available': True, 'platform': 'trae', 'accounts': entries,
+        'count': len(entries),
+        'needs_login': needing_login,
+        'api_keys': keys['c'] if keys else 0,
+        'note': ('账号凭据为空，需要在 Trae 客户端重新登录' if needing_login
+                 else None),
+    }
 
 
 def snapshot() -> dict:

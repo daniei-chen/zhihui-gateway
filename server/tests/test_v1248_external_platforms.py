@@ -101,16 +101,26 @@ class QoderReadingTests(unittest.TestCase):
 
 
 class TraeReadingTests(unittest.TestCase):
-    def test_missing_docker_is_reported_not_faked(self):
-        with mock.patch.object(ep, '_docker_exec', return_value=(127, 'docker 命令不存在')):
+    """v1.2.51 起实现改了：直接读宿主目录下的数据库，不再走 `docker exec`。
+
+    原先这两个用例断言的是「docker 不可用时报 docker」「容器无 sqlite3 时报那个」——
+    它们锁的是旧实现。现在容器卷映射到宿主机，Python 自带 sqlite3 就能读，
+    所以改成断言「数据库不存在/读不了时如实报告」。
+    """
+
+    def test_missing_database_is_reported_not_faked(self):
+        with mock.patch.object(ep, 'TRAE_DB', Path('/nonexistent/aiwork.sqlite')):
             result = ep.trae_accounts()
         self.assertFalse(result['available'])
-        self.assertIn('docker', result['reason'])
+        self.assertIn('不存在', result['reason'])
         self.assertEqual(result['accounts'], [])
 
     def test_unreadable_database_is_reported(self):
-        with mock.patch.object(ep, '_docker_exec', return_value=(0, 'NO_SQLITE')):
-            result = ep.trae_accounts()
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / 'aiwork.sqlite'
+            broken.write_bytes(b'not a database')
+            with mock.patch.object(ep, 'TRAE_DB', broken):
+                result = ep.trae_accounts()
         self.assertFalse(result['available'])
         self.assertIn('reason', result)
 
