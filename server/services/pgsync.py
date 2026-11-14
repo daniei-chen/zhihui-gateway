@@ -594,12 +594,17 @@ def export_to_pg(cfg: dict, reporter: _Reporter) -> dict:
     snapshot = _snapshot_path()
     if snapshot.exists():
         snapshot.unlink()
-    with db._lock:
-        # VACUUM INTO 必须在没有活动事务时执行；db.execute 每次都 commit，
-        # 正常路径下连接是空闲的。这里加锁是为了挡住并发的写入。
-        # 取连接也放在锁内：恢复换库时会在锁内关掉并重开连接，锁外拿到的
-        # 可能是即将被关闭的旧句柄。
-        db.connect().execute('VACUUM INTO ?', (str(snapshot),))
+    # `VACUUM INTO` 只把源库复制到一个新文件，不修改源库。WAL 模式下它取的是一份
+    # 一致性快照，**可以在其他连接继续写入期间执行**。
+    #
+    # 原先它在进程级写锁里跑：一次导出要几秒到几十秒，期间**所有** DB 访问 ——
+    # 包括事件循环上每个请求的读和结算 —— 都排在它后面。导出是低频运维动作，
+    # 没有理由让它冻结在线服务。这里改用独立句柄，只依赖 SQLite 自己的快照语义。
+    handle = sqlite3.connect(str(config.DB_PATH), timeout=30.0)
+    try:
+        handle.execute('VACUUM INTO ?', (str(snapshot),))
+    finally:
+        handle.close()
     reporter.log(f'已生成一致性快照（{snapshot.stat().st_size // 1024} KB）')
     src = _SqliteSource(snapshot)
     try:

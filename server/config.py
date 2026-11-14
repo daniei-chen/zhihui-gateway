@@ -621,11 +621,17 @@ def new_secret() -> str:
 # 复用会炸（同步路由里 `asyncio.run` 另起循环那条路就是例子，见
 # `modelcatalog.fetch_ids_blocking`）。不同循环各建一个，互不干扰。
 _CLIENTS: dict = {}
-_CLIENTS_MAX = max(1, _env_int('WB_HTTP_MAX_POOLS', 24))
+# 24 个桶时，租户数一旦超过它，**每个新密钥的首次请求**都要"退役一个空闲 transport
+# → `await` 关闭 → 新建 TLS/TCP"。门户场景密钥数 ≈ 用户数，这条会常态触发。
+# 提到 32 只是缓解；真正的倍增来自每桶的连接上限，见下。
+_CLIENTS_MAX = max(1, _env_int('WB_HTTP_MAX_POOLS', 32))
 _HTTP_POOL = None
 _HTTP_POOL_INIT_LOCK = threading.RLock()
-HTTP_POOL_CONNECTIONS = max(1, _env_int('WB_HTTP_POOL_CONNECTIONS', 8))
-HTTP_POOL_KEEPALIVE = min(HTTP_POOL_CONNECTIONS, max(0, _env_int('WB_HTTP_POOL_KEEPALIVE', 4)))
+# 每桶 8 条连接与并发上限（默认 8、生产 64）不成比例：某个密钥被并发打满时，
+# 多出来的请求只能等池超时 —— 而池超时是"总超时"语义，最长能挂几分钟。16 条
+# 让单桶能覆盖常见的突发，同时把空闲连接总量控制在 32 × 8 = 256 以内。
+HTTP_POOL_CONNECTIONS = max(1, _env_int('WB_HTTP_POOL_CONNECTIONS', 16))
+HTTP_POOL_KEEPALIVE = min(HTTP_POOL_CONNECTIONS, max(0, _env_int('WB_HTTP_POOL_KEEPALIVE', 8)))
 
 
 def _transport_pool():

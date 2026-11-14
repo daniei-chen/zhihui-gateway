@@ -1918,13 +1918,23 @@ def rebuild_usage_from_logs() -> dict:
     conn = connect()
     with _lock:
         try:
+            from . import ledger
+            # `credit_units` 与规范化的 `credit` 在**插入时**就一起算好。原先先插入
+            # 原始浮点、再逐行 `SELECT rowid` + `UPDATE` 反推 —— 那是一次 N+1，
+            # 上万行时在写锁里跑几秒，而这段时间全站的 DB 访问都在排队。
+            def _amounts(value):
+                units = ledger.units(value or 0) or 0
+                return units, units / ledger.SCALE
+
             conn.execute('BEGIN')
             conn.execute('DELETE FROM usage_daily')
             conn.executemany(
                 'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, '
-                'completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'completion_tokens, credit, credit_units, realm, cache_hit_tokens, '
+                'cache_miss_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(row['day'], row['key_id'], row['model'], int(row['requests']),
-                  int(row['pt']), int(row['ct']), float(row['cr'] or 0),
+                  int(row['pt']), int(row['ct']), _amounts(row['cr'])[1],
+                  _amounts(row['cr'])[0],
                   str(row['realm'] or 'cn'),
                   int(row['ch'] or 0), int(row['cm'] or 0)) for row in expected],
             )
@@ -1933,19 +1943,15 @@ def rebuild_usage_from_logs() -> dict:
             conn.execute('DELETE FROM usage_hourly')
             hourly_rows = _usage_expected_rows(hour_sql('ts'))
             conn.executemany(
-                'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, '
-                'completion_tokens, credit, realm) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO usage_hourly(day, hour, key_id, model, requests, '
+                'prompt_tokens, completion_tokens, credit, credit_units, realm) '
+                'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(str(row['bucket'])[:10], int(str(row['bucket'])[11:13]), row['key_id'],
                   row['model'], int(row['requests']), int(row['pt']), int(row['ct']),
-                  float(row['cr'] or 0), str(row['realm'] or 'cn'))
+                  _amounts(row['cr'])[1], _amounts(row['cr'])[0],
+                  str(row['realm'] or 'cn'))
                  for row in hourly_rows if len(str(row['bucket'] or '')) >= 13],
             )
-            from . import ledger
-            for table in ('usage_daily', 'usage_hourly'):
-                for row in conn.execute('SELECT rowid,credit FROM '+table).fetchall():
-                    amount = ledger.units(row['credit']) or 0
-                    conn.execute('UPDATE '+table+' SET credit_units=?,credit=? WHERE rowid=?',
-                                 (amount, amount / ledger.SCALE, row['rowid']))
             conn.commit()
         except Exception:
             conn.rollback()
