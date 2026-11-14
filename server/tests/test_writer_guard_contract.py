@@ -221,6 +221,18 @@ class WriterGuardContractTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 2)
 
+    def test_identical_console_build_may_be_reused_by_a_backend_only_release(self):
+        """纯后端发版不该被迫重建前端：同名同内容放行，同名不同内容才拒绝。"""
+        source = (Path(__file__).parents[2] / 'ops' / 'writer-guard' /
+                  'frontend_adapter.py').read_text(encoding='utf-8')
+        self.assertIn('if build == current.name:', source)
+        guard = "if self.auth.tree(candidate.root / 'web/out') != self.auth.tree(current):"
+        self.assertIn(guard, source)
+        # 守卫必须紧跟在同名分支里，且仍然保留原来的拒绝信息
+        block = source[source.index(guard):]
+        self.assertIn("raise Rejected('new console build must not overwrite existing build')",
+                      block[:400])
+
     def test_rolling_helper_readiness_is_not_treated_as_a_none_effect(self):
         """`helper_ready` 的成功结果是候选进程身份，不是 None。
 

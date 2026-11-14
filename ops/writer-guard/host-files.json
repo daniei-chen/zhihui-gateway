@@ -10,7 +10,7 @@
     },
     "frontend_adapter.py": {
       "mode": 420,
-      "sha256": "7d6b60712a0ad4bc675b4f8aea2a71c972a92fa90d7a7b2dc06e981a78fd0ca4"
+      "sha256": "2aeb184dc060c7807a542eb173da33bab65e67e03969cf048bcff3fafee09b83"
     },
     "frontend_library.py": {
       "mode": 420,
@@ -18,7 +18,7 @@
     },
     "host_adapter.py": {
       "mode": 420,
-      "sha256": "5b7ae924c5ecbbe24dce299fba02cf4ea920211b573238eb54db4d7c50e5e883"
+      "sha256": "b4780a882ea9540414a39291e485cadb07960d7019403465841c971da0aa0f59"
     },
     "ingress.py": {
       "mode": 420,
