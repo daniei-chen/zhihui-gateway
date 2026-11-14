@@ -143,6 +143,11 @@
       "path": "docs/images/readme/button-release-v1.2.24.svg",
       "bytes": 1108,
       "sha256": "980af6dc34c980247af673e3864848a39ad9df6a07c3eefdf8a324c1d08a4535"
+    },
+    {
+      "path": "docs/images/readme/button-release-v1.2.25.svg",
+      "bytes": 1098,
+      "sha256": "d81ccaaffac1d8edc6118a4354221271dd4f3eaad0b91bee5637700f6b7b42a4"
     }
   ]
 }

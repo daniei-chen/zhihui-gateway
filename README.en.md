@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.24 · one controlled route for WorkBuddy, Qoder and Trae." />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.25 · one controlled route for WorkBuddy, Qoder and Trae." />
   </picture>
 </a>
 
@@ -16,26 +16,28 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.24.svg" width="166" height="44" alt="Read the 1.2.24 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.25.svg" width="166" height="44" alt="Read the 1.2.25 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1224--relay-entry-and-request-body-admission) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#1225--rootless-upstreams-and-request-body-admission) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.24 · Relay entry and request-body admission
+## 1.2.25 · Rootless upstreams and request-body admission
 
-**Current product version: `v1.2.24`.** This release makes each exact relay inference location inherit the same admission contract as the original `/v1/`, `/qoder/v1/`, and `/trae/v1/` routes, fixing large-context requests that were incorrectly rejected by Nginx's default 1 MB limit with `413 Request Entity Too Large`.
+**Current product version: `v1.2.25`.** This release keeps the relay admission fix and moves the production Qoder data plane to the signed `1.9.9` rootless unit, with the launcher, systemd isolation contract and production audit receipt in source control.
 
 - **Consistent request limits:** relay locations use the 128 MB edge limit, a 60-second request-body timeout, rate/concurrency protection, and the shared error pages; Manager still enforces its own 64 MB forwarding limit.
 - **Streaming remains safe:** relay request buffering stays off and upstream retries stay disabled, so accepted streams are never replayed.
-- **The large-request path is verified:** a 4 MiB request on the domestic server reached authentication through Nginx and relay and returned 401 instead of 413.
+- **The large-request path is verified:** a 4 MiB request on the domestic server reached authentication through Nginx and relay and returned 401 instead of 413; the post-fix observation window added zero 413 responses.
+- **Qoder runs rootless:** production `1.9.9` serves on `127.0.0.1:8799` as `10001:10001` with `CapEff=0`, `NoNewPrivileges=1` and seccomp mode 2; the signed broker still owns release verification, atomic activation and rollback.
+- **Runtime evidence is recorded:** SQLite integrity checks passed, and the Manager, relay, Qoder and Trae boundary evidence is captured in the [production audit](docs/PRODUCTION-AUDIT-2026-11-14.md).
 
-**Release boundary:** production Qoder remains on 1.9.8; the persistent 1.9.9 rootless candidate is private on port 8800, and its real route cutover still waits for shared-state and rollback evidence.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.24)
+**Release boundary:** this release covers the request-body fix and Qoder rootless data-plane cutover; off-host disaster recovery is still unconfigured, and the historical 503/502 events need a separate upstream-availability review.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [Production audit](docs/PRODUCTION-AUDIT-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.25)
 
 <br />
 
