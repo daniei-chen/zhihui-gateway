@@ -31,6 +31,41 @@
 
 **注意**：模型声明「支持图片」与实际能否传图是两件事。实测带图请求失败，原因码见下节。
 
+### 2.1 在网关的模型清单里怎么发现它们
+
+`GET /v1/models` 的 `data` 按**本次请求的上游**返回，所以走默认入口时看到的是那一侧的
+模型。豆包位于另一个平台，因此另有一组同级字段把它们列出来：
+
+```json
+{
+  "data": [ "…本次上游的模型…" ],
+  "other_platforms": {
+    "trae": ["Doubao-Seed-2.1-Pro", "Doubao-Seed-2.1-Turbo", "Doubao-Seed-Code", "Doubao-Seed-Evolving"],
+    "qoder": [ "…" ]
+  },
+  "other_platforms_hint": "这些模型在其它平台可用；调用时加平台前缀，例如 trae/Doubao-Seed-2.1-Turbo。"
+}
+```
+
+**它们刻意不混进 `data`**：客户端普遍把 `data` 当模型选择器，混进去会让它选中一个
+**需要前缀**的名字，然后收到「不可用」——那比看不到更糟。
+
+只列**该密钥有权限**的平台；某个平台拉不到就跳过，不会影响整份清单。
+
+2026-11-14 用默认入口密钥实测：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `data` 模型数 | 17 |
+| `other_platforms` | 正确列出 trae 与 qoder 两个平台 |
+| 四个豆包模型在列 | 是 |
+| **经网关调用 `trae/Doubao-Seed-Code`** | **200**，回复「可用」 |
+| 推理内容 | 正常透传（`reasoning_content` 有内容） |
+| 网关侧记录 | `model=trae/Doubao-Seed-Code` → `mapped_model=Doubao-Seed-Code` → `platform=trae` → 200 |
+
+**「列出来」和「调得通」是两件事，上表两件都验了。** 前缀剥离、平台归属、推理内容
+透传都按预期工作。
+
 ---
 
 ## 三、怎么调用
