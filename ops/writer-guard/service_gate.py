@@ -12,7 +12,8 @@ import subprocess
 from launch_guard import protected
 from state_guard import Rejected
 
-UNITS = ('workbuddy-web.service', 'wb-budget-autoreconcile.service')
+UNITS = ('workbuddy-web.service', 'workbuddy-web-helper.service',
+         'wb-budget-autoreconcile.service')
 SUFFIX = 'zzzzz-writer-migration-gate.conf'
 
 
@@ -21,13 +22,15 @@ def gate_bytes(marker):
 
 
 class ServiceGate:
-    def __init__(self, paths, authority, command=None):
+    def __init__(self, paths, authority, command=None, *, include_helper=True):
         self.paths, self.authority = paths, authority
         self.command = command or self._systemctl
         self.state = paths.floor.parent
+        self.units = (UNITS if include_helper else
+                      ('workbuddy-web.service', 'wb-budget-autoreconcile.service'))
 
     def marker(self, unit):
-        if unit not in UNITS:
+        if unit not in self.units:
             raise Rejected('unknown writer gate unit')
         return self.state / (unit + '.start-blocked')
 
@@ -38,7 +41,8 @@ class ServiceGate:
     @staticmethod
     def _systemctl(argv):
         allowed = (['daemon-reload'], ['stop', 'wb-budget-autoreconcile.timer'],
-                   ['stop', 'workbuddy-web.service'], ['stop', 'wb-budget-autoreconcile.service'])
+                   ['stop', 'workbuddy-web.service'], ['stop', 'workbuddy-web-helper.service'],
+                   ['stop', 'wb-budget-autoreconcile.service'])
         if argv not in allowed:
             raise Rejected('unsupported gate service operation')
         result = subprocess.run(['/usr/bin/systemctl', *argv], capture_output=True, timeout=100,
@@ -80,7 +84,7 @@ class ServiceGate:
         self._authorized(permit)
         protected(self.paths.root / 'etc/systemd/system', self.paths, directory=True)
         protected(self.state, self.paths, directory=True)
-        for unit in UNITS:
+        for unit in self.units:
             path = self.dropin(unit)
             if not path.parent.exists():
                 path.parent.mkdir(mode=0o755)
@@ -90,7 +94,7 @@ class ServiceGate:
 
     def block(self, permit):
         self._authorized(permit)
-        for unit in UNITS:
+        for unit in self.units:
             path = self.dropin(unit)
             protected(path, self.paths)
             if path.read_bytes() != gate_bytes(self.marker(unit)):
@@ -103,7 +107,7 @@ class ServiceGate:
 
     def verify_blocked(self, permit, conditions):
         self._authorized(permit)
-        for unit in UNITS:
+        for unit in self.units:
             path, marker = self.dropin(unit), self.marker(unit)
             protected(path, self.paths)
             protected(marker, self.paths)

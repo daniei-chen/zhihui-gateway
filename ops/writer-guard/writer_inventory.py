@@ -10,7 +10,8 @@ import subprocess
 
 from state_guard import Rejected
 
-UNITS = ('workbuddy-web.service', 'wb-budget-autoreconcile.service')
+UNITS = ('workbuddy-web.service', 'workbuddy-web-helper.service',
+         'wb-budget-autoreconcile.service')
 TIMER = 'wb-budget-autoreconcile.timer'
 PROPERTIES = ('Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup',
               'KillMode', 'UnitFileState')

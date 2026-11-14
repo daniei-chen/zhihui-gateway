@@ -19,7 +19,15 @@ _LABEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z')
 _SHA = re.compile(r'[a-f0-9]{64}\Z')
 PHASES = {'prepared', 'fencing', 'fenced', 'draining', 'drained', 'stopping',
           'stopped', 'floor-pending', 'floor-persisted', 'pointing', 'pointed',
-          'starting', 'started', 'checking-ready', 'ready', 'resuming', 'complete', 'failed'}
+          'starting', 'started', 'checking-ready', 'ready', 'resuming', 'complete', 'failed',
+          'rolling-floor-pending', 'rolling-floor-persisted', 'rolling-pointing',
+          'rolling-pointed', 'rolling-helper-starting', 'rolling-helper-started',
+          'rolling-helper-checking', 'rolling-helper-ready', 'rolling-routing-helper',
+          'rolling-routed-helper', 'rolling-fencing', 'rolling-fenced',
+          'rolling-draining', 'rolling-drained', 'rolling-stopping-primary',
+          'rolling-stopped-primary', 'rolling-main-starting', 'rolling-main-started',
+          'rolling-main-checking', 'rolling-main-ready', 'rolling-routing-main',
+          'rolling-routed-main', 'rolling-helper-stopping', 'rolling-helper-stopped'}
 
 
 def canonical(value):
@@ -81,9 +89,10 @@ class Journal:
         required = {'schema', 'version', 'transaction', 'epoch', 'phase', 'candidate',
                     'candidate_sha256', 'predecessor', 'predecessor_sha256', 'failure',
                     'compensation_confirmed'}
-        if (type(value) is not dict or set(value) != required
+        valid_keys = (required, required | {'mode'})
+        if (type(value) is not dict or set(value) not in valid_keys
                 or value['schema'] != 'zhihui.writer-migration' or type(value['version']) is not int
-                or value['version'] != 1 or type(value['epoch']) is not int or value['epoch'] < 1
+                or value['version'] not in (1, 2) or type(value['epoch']) is not int or value['epoch'] < 1
                 or value['phase'] not in PHASES or type(value['compensation_confirmed']) is not bool
                 or value['failure'] not in (None, 'effect-or-persistence-unconfirmed')
                 or any(type(value[k]) is not str or not _LABEL.fullmatch(value[k])
@@ -91,11 +100,15 @@ class Journal:
                 or any(type(value[k]) is not str or not _SHA.fullmatch(value[k])
                        for k in ('candidate_sha256', 'predecessor_sha256'))):
             raise Rejected('invalid migration journal contract')
+        if value['version'] == 1 and 'mode' in value:
+            raise Rejected('legacy migration journal has unexpected mode')
+        if value['version'] == 2 and (value.get('mode') not in ('fenced', 'rolling')):
+            raise Rejected('invalid migration mode')
         if witness != {'schema': 'zhihui.migration-initialized', 'transaction': value['transaction']}:
             raise Rejected('migration initialization identity mismatch')
         return value
 
-    def create(self, permit, transaction, candidate, predecessor):
+    def create(self, permit, transaction, candidate, predecessor, *, mode='fenced'):
         self._authorized(permit)
         if type(transaction) is not str or not _LABEL.fullmatch(transaction):
             raise Rejected('invalid migration transaction')
@@ -117,11 +130,13 @@ class Journal:
             handle.write(canonical({'schema': 'zhihui.migration-initialized', 'transaction': transaction}))
             handle.flush()
             os.fsync(handle.fileno())
-        value = {'schema': 'zhihui.writer-migration', 'version': 1, 'transaction': transaction,
+        if mode not in ('fenced', 'rolling'):
+            raise Rejected('invalid migration mode')
+        value = {'schema': 'zhihui.writer-migration', 'version': 2, 'transaction': transaction,
                  'epoch': 1, 'phase': 'prepared', 'candidate': candidate.release_id,
                  'candidate_sha256': candidate.manifest_sha256, 'predecessor': predecessor.release_id,
                  'predecessor_sha256': predecessor.manifest_sha256,
-                 'failure': None, 'compensation_confirmed': False}
+                 'failure': None, 'compensation_confirmed': False, 'mode': mode}
         self._atomic(self.path, canonical(value))
         return self.load(permit)
 
@@ -167,7 +182,133 @@ class Controller:
         self._effect(self.host.preflight, candidate, predecessor)
         if self.first_install is not None:
             self.first_install.prepare(authority, transaction, candidate, predecessor)
-        return self.journal.create(authority, transaction, candidate, predecessor)
+        mode = self.host.migration_mode() if self.first_install is None else 'fenced'
+        return self.journal.create(authority, transaction, candidate, predecessor, mode=mode)
+
+    def _run_rolling(self, authority, record, candidate):
+        """Run a helper-backed handoff with the relay kept available.
+
+        The predecessor remains on 7866 until the candidate helper is ready
+        and the relay route has moved to 7865.  Only then is the predecessor
+        fenced and drained.  The final primary starts on 7866, the route moves
+        back, and the helper is retired.  Each externally visible step has its
+        own durable phase so a crash resumes from an inspected state instead
+        of blindly repeating an accepted request.
+        """
+        try:
+            if record['phase'] in ('prepared', 'rolling-floor-pending'):
+                if record['phase'] == 'prepared':
+                    record = self.journal.save(authority, record, 'rolling-floor-pending')
+                # The old primary retains the shared runtime lease while its
+                # code is serving.  Rolling mode only admits exact capability
+                # matches, so the persisted floor is already sufficient and
+                # does not need an exclusive advance here.
+                with self.lock.acquire() as permit:
+                    self.journal._authorized(authority)
+                    candidate = self._release(record, 'candidate')
+                    observed = self.guard.observe(permit)
+                    floor = self.guard.load_floor()
+                    self.guard.require_launch(candidate, observed, floor)
+                    if candidate.capabilities != floor.capabilities:
+                        raise Rejected('rolling migration requires exact writer capabilities')
+                    record = self.journal.save(authority, record, 'rolling-floor-persisted')
+                    record = self.journal.save(authority, record, 'rolling-pointing')
+                    self._effect(self.host.point_rolling, record, candidate)
+                    self.lock.validate(permit, exclusive=False)
+                    record = self.journal.save(authority, record, 'rolling-pointed')
+
+            if record['phase'] in ('rolling-floor-persisted', 'rolling-pointing'):
+                if record['phase'] == 'rolling-floor-persisted':
+                    record = self.journal.save(authority, record, 'rolling-pointing')
+                with self.lock.acquire() as permit:
+                    self._effect(self.host.point_rolling, record, candidate)
+                    self.lock.validate(permit, exclusive=False)
+                    record = self.journal.save(authority, record, 'rolling-pointed')
+
+            if record['phase'] in ('rolling-pointed', 'rolling-helper-starting'):
+                if record['phase'] == 'rolling-pointed':
+                    record = self.journal.save(authority, record, 'rolling-helper-starting')
+                self._effect(self.host.start_helper, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-helper-started')
+
+            if record['phase'] in ('rolling-helper-started', 'rolling-helper-checking'):
+                if record['phase'] == 'rolling-helper-started':
+                    record = self.journal.save(authority, record, 'rolling-helper-checking')
+                self._effect(self.host.helper_ready, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-helper-ready')
+
+            if record['phase'] in ('rolling-helper-ready', 'rolling-routing-helper'):
+                if record['phase'] == 'rolling-helper-ready':
+                    record = self.journal.save(authority, record, 'rolling-routing-helper')
+                self._effect(self.host.route_helper, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-routed-helper')
+
+            if record['phase'] in ('rolling-routed-helper', 'rolling-fencing'):
+                if record['phase'] == 'rolling-routed-helper':
+                    record = self.journal.save(authority, record, 'rolling-fencing')
+                self._effect(self.host.fence, record)
+                record = self.journal.save(authority, record, 'rolling-fenced')
+
+            if record['phase'] in ('rolling-fenced', 'rolling-draining'):
+                if record['phase'] == 'rolling-fenced':
+                    record = self.journal.save(authority, record, 'rolling-draining')
+                self._effect(self.host.drain_old, record)
+                record = self.journal.save(authority, record, 'rolling-drained')
+
+            if record['phase'] in ('rolling-drained', 'rolling-stopping-primary'):
+                if record['phase'] == 'rolling-drained':
+                    record = self.journal.save(authority, record, 'rolling-stopping-primary')
+                self._effect(self.host.stop_primary_rolling, record)
+                record = self.journal.save(authority, record, 'rolling-stopped-primary')
+
+            if record['phase'] in ('rolling-stopped-primary', 'rolling-main-starting'):
+                if record['phase'] == 'rolling-stopped-primary':
+                    record = self.journal.save(authority, record, 'rolling-main-starting')
+                self._effect(self.host.start, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-main-started')
+
+            if record['phase'] in ('rolling-main-started', 'rolling-main-checking'):
+                if record['phase'] == 'rolling-main-started':
+                    record = self.journal.save(authority, record, 'rolling-main-checking')
+                self._effect(self.host.ready, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-main-ready')
+
+            if record['phase'] in ('rolling-main-ready', 'rolling-routing-main'):
+                if record['phase'] == 'rolling-main-ready':
+                    record = self.journal.save(authority, record, 'rolling-routing-main')
+                self._effect(self.host.route_main, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-routed-main')
+
+            if record['phase'] in ('rolling-routed-main', 'rolling-helper-stopping'):
+                if record['phase'] == 'rolling-routed-main':
+                    record = self.journal.save(authority, record, 'rolling-helper-stopping')
+                self._effect(self.host.stop_helper, record, candidate)
+                record = self.journal.save(authority, record, 'rolling-helper-stopped')
+
+            record = self.journal.save(authority, record, 'resuming')
+            self._effect(self.host.resume, record, candidate)
+            self._effect(self.host.verify_complete, record, candidate)
+            return self.journal.save(authority, record, 'complete', failure=None,
+                                     compensation_confirmed=False)
+        except BaseException:
+            confirmed = False
+            try:
+                self.journal._authorized(authority)
+                # Fail closed at the public fence.  If the helper is already
+                # the only live generation, the retained transaction records
+                # that fact for an operator instead of starting old code.
+                self._effect(self.host.fence, record)
+                confirmed = True
+            except BaseException:
+                pass
+            try:
+                latest = self.journal.load(authority)
+                self.journal.save(authority, latest, 'failed',
+                                  failure='effect-or-persistence-unconfirmed',
+                                  compensation_confirmed=confirmed)
+            except BaseException:
+                pass
+            raise
 
     def run(self, authority):
         record = self.journal.load(authority)
@@ -178,6 +319,8 @@ class Controller:
         if self.host.current_release() not in (
                 candidate.root, self.guard.paths.releases / record['predecessor']):
             raise Rejected('release pointer changed outside migration')
+        if record.get('mode', 'fenced') == 'rolling':
+            return self._run_rolling(authority, record, candidate)
         try:
             # On recovery restart from fencing, not a possibly stale persisted
             # phase. Every effect must be idempotent against its bound intent.

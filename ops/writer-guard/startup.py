@@ -7,7 +7,7 @@ import stat
 
 from launch_guard import protected
 from state_guard import Rejected, _json
-from systemd_adapter import MAIN, JOB, launch_dropin
+from systemd_adapter import HELPER, MAIN, JOB, launch_dropin
 
 SUFFIX = 'zzzzzz-writer-start.conf'
 
@@ -17,6 +17,10 @@ class Startup:
         self.paths, self.authority, self.gate, self.systemd = paths, authority, gate, systemd
         self.install_root = paths.root / 'opt/zhihui-release/writer-guard'
         self.manifest = self.install_root / 'host-files.json'
+
+    @property
+    def units(self):
+        return (MAIN, HELPER, JOB) if HELPER in self.gate.units else (MAIN, JOB)
 
     def verify_tools(self):
         protected(self.manifest, self.paths)
@@ -51,20 +55,32 @@ class Startup:
                 raise Rejected('installed host tool content or mode drift')
 
     def path(self, unit):
-        if unit not in (MAIN, JOB):
+        if unit not in (MAIN, HELPER, JOB):
             raise Rejected('unsupported guarded startup unit')
         return self.paths.root / 'etc/systemd/system' / (unit + '.d') / SUFFIX
 
-    def install(self, permit):
+    def _install_dropins(self, permit):
         if self.authority.validate(permit) is not None:
             raise Rejected('startup installation ownership required')
         self.verify_tools()
-        self.gate.verify_blocked(permit, self.systemd.conditions)
-        for unit in (MAIN, JOB):
+        for unit in self.units:
             self.gate._exclusive(self.path(unit), launch_dropin(unit), 0o644)
         self.systemd.command(['daemon-reload'])
-        for unit in (MAIN, JOB):
+        for unit in self.units:
             self.verify(unit)
+
+    def prepare(self, permit):
+        """Install the fixed launch closure before a rolling helper starts.
+
+        The persistent gate is still open at this point: the existing serving
+        generation must remain available while the candidate helper is checked.
+        The subsequent migration fence calls ``install`` after blocking starts.
+        """
+        self._install_dropins(permit)
+
+    def install(self, permit):
+        self.gate.verify_blocked(permit, self.systemd.conditions)
+        self._install_dropins(permit)
 
     def verify(self, unit):
         self.verify_tools()
