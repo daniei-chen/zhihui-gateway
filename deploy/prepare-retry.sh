@@ -38,19 +38,48 @@ CANDIDATE="${1:?usage: prepare-retry.sh <candidate-version> <transaction-name>}"
 TRANSACTION="${2:?usage: prepare-retry.sh <candidate-version> <transaction-name>}"
 MAX_ATTEMPTS=4
 
-# 等看门狗这一轮结束（它一结束，进程列表里就只剩主服务）。
+# 等看门狗这一轮结束，以及它拉起的预检进程退出。
+#
+# ## 为什么要查三种东西
+#
+# 看门狗的服务本身只跑约 3 秒，但它**内部**会拉起一个完整性预检进程跑约 15 秒，
+# 合计约 18 秒。只查服务状态会漏掉后半段 —— 2026-11-14 实测：只查服务状态时，
+# 脚本连续重试三次都撞在预检进程上，第四次才过。
+#
+# 所以要同时看：
+#   · systemd 说这个服务在不在活动状态；
+#   · 看门狗自己的进程还在不在（状态切换的间隙）；
+#   · 它拉起的预检进程还在不在（这才是占满 18 秒窗口的那个）。
+#
+# 匹配预检进程时用变量拼出模式串，避免本脚本自己的命令行里出现完整字面量而匹配到
+# 自身（`grep -v grep` 挡不住 `bash -c` 里的同一串）。
+watchdog_running() {
+    systemctl is-active --quiet "$WATCHDOG" 2>/dev/null && return 0
+    local base='trusted_bootstrap'
+    ps -eo args= 2>/dev/null | grep -F "$base.py --root" | grep -qv 'grep' && return 0
+    local guard='steward_watchdog'
+    ps -eo args= 2>/dev/null | grep -F "$guard.py" | grep -qv 'grep' && return 0
+    return 1
+}
+
 wait_for_watchdog() {
     local waited=0
-    local limit=60
+    local limit=90
+    local was_busy=0
     while [ "$waited" -lt "$limit" ]; do
-        if ! systemctl is-active --quiet "$WATCHDOG" 2>/dev/null; then
-            [ "$waited" -gt 0 ] && echo "    看门狗已结束（ waited ${waited}s ）"
-            return 0
+        if ! watchdog_running; then
+            # 再确认一次：进程刚退出的瞬间 systemd 可能还没更新状态。
+            sleep 1
+            if ! watchdog_running; then
+                [ "$was_busy" -eq 1 ] && echo "    看门狗与预检进程都已退出（ waited ${waited}s ）"
+                return 0
+            fi
         fi
+        was_busy=1
         sleep 1
         waited=$((waited + 1))
     done
-    echo "    看门狗仍在运行超过 ${limit}s，继续尝试" >&2
+    echo "    等待超过 ${limit}s 仍在运行，继续尝试" >&2
     return 0
 }
 

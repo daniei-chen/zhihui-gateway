@@ -729,35 +729,20 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
     }
 
 
-#: 「attempt 到达过上游」的阶段集合（N05）。
+#: 曾经有一个「attempt 是否到达过上游」的诊断函数，查 `attempt_events`。
 #:
-#: **与 `ledger.py::_REACHED_PHASES` 同源** —— 那张表是 `ledger.attempt()` 写的，
-#: 阶段取值由它定义。这里 import 私有名而不是抄一份字面量，避免两处漂移
-#: （`test_late_usage_race.py` 里有一条断言两者相等）。
-_UPSTREAM_PHASES = tuple(getattr(ledger, '_REACHED_PHASES', ()) or ())
-
-
-def _reached_upstream(request_id: str) -> bool:
-    """该请求是否有 attempt 到达过上游（N05 的证据加强）。
-
-    为什么错误字符串不够：`error` 里出现 `no_healthy_account` 只证明**至少有一次**
-    上游拒绝（或选号失败），不证明"所有 attempt 都没被处理"。池侧有重试/换号时，
-    attempt 2 可能已经打到上游并产生部分计费，而最终错误仍然是 attempt 3 的
-    `no_healthy_account`。所以结清前必须再确认：`attempt_events` 里**没有任何**
-    到达上游的阶段。
-
-    局限（写清楚，不夸大）：`attempt_events` 由上游日志轮询异步采集（约 15 秒一轮）。
-    **没有事件**只是"没有证据表明到达过上游"，不是"证明没到达"。
-    此函数仅供诊断，自动结清不再把事件缺失当作零用量证据。
-    """
-    if not _UPSTREAM_PHASES:
-        return False
-    placeholders = ','.join('?' * len(_UPSTREAM_PHASES))
-    row = db.query_one(
-        'SELECT 1 FROM attempt_events WHERE request_id=? AND phase IN (%s) LIMIT 1'
-        % placeholders, (request_id, *_UPSTREAM_PHASES))
-    return row is not None
-
+#: 2026-11-14 审计时确认两点，于是把它删了：
+#:
+#: 1. **它没有任何调用方** —— 结清路径早就不用它了（结清只认 `request_logs` 里
+#:    完整的用量回执，见 `_zero_usage_proof`）；
+#: 2. 它查的那张表在 2026-11-03 之后就不再写入（上游事件开始携带调度标识，
+#:    采集函数见到就跳过，证据改由 `provider_attempt_events_v2` 承载）。
+#:
+#: 留着它的坏处很具体：读代码的人会以为「到达过上游」这个判断还在生效，
+#: 而它其实永远返回「未到达」—— 一个永远为假的守卫比没有守卫更危险。
+#:
+#: 这里保留这段说明而不是留一个空行，是因为下次有人想加回类似判断时，
+#: 应该先看到这两个事实，而不是重新踩一遍。
 
 def reconcile_evidenced_unknowns(now: int, min_age: int = 3600) -> int:
     """Settle only complete, immutable request-level zero-usage evidence."""

@@ -251,9 +251,6 @@ class ReconcileEvidenceTest(_RaceFixture):
         self.assertEqual(int(row['charged_tokens']), 50)
         self.assertEqual(float(row['charged_credit']), 1.0)
 
-    def test_upstream_phase_constant_matches_ledger(self) -> None:
-        """阶段集合与 attempt_events 的写入方同源，不许各写一份。"""
-        self.assertEqual(tuple(budget._UPSTREAM_PHASES), tuple(ledger._REACHED_PHASES))
 
 
 class ThreeWayInterleaveTest(_RaceFixture):
