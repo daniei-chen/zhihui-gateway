@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 import tarfile
 import tempfile
 import unittest
@@ -143,6 +144,30 @@ class LegacyUpdaterBoundaryTest(unittest.TestCase):
         for requirement in ('sha256', 'Ed25519', '完整隔离测试',
                             '签名或回执时阻断', 'root-owned', '业务数据库'):
             self.assertIn(requirement, doc, '文档缺少当前受控发布要求: ' + requirement)
+
+
+class UpstreamSourceLockTest(unittest.TestCase):
+    """The release workflow must reject a changed floating upstream asset."""
+
+    def test_lock_has_one_fixed_release_asset_and_workflow_checks_it(self) -> None:
+        lock = (_ROOT / 'dev' / 'upstream-source.lock').read_text(encoding='utf-8')
+        values = dict(line.split('=', 1) for line in lock.splitlines()
+                      if line and not line.startswith('#'))
+        self.assertEqual(values['release'], 'upstream-src')
+        self.assertEqual(values['asset'], 'workbuddy2api-src.tar.gz')
+        self.assertRegex(values['sha256'], r'^[0-9a-f]{64}$')
+        self.assertRegex(values['bytes'], r'^[1-9][0-9]*$')
+        workflow = (_ROOT / '.github' / 'workflows' / 'release.yml').read_text(encoding='utf-8')
+        for token in ('dev/upstream-source.lock', 'EXPECTED_UPSTREAM_SHA',
+                      'sha256sum /tmp/upstream-src.tar.gz',
+                      'stat -c \'%s\' /tmp/upstream-src.tar.gz'):
+            self.assertIn(token, workflow, 'Release workflow 缺少上游锁定检查: ' + token)
+
+    def test_current_upstream_notice_and_review_are_shipped(self) -> None:
+        workflow = (_ROOT / '.github' / 'workflows' / 'release.yml').read_text(encoding='utf-8')
+        self.assertIn('UPSTREAM-NOTICES.md', workflow)
+        self.assertTrue((_ROOT / 'UPSTREAM-NOTICES.md').is_file())
+        self.assertTrue((_ROOT / 'docs' / 'UPSTREAM-REVIEW-2026-11-14.md').is_file())
 
 
 class ReadmeVisualAssetContractTest(unittest.TestCase):
