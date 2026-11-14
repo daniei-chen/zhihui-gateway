@@ -41,6 +41,7 @@ import logging
 import re
 import os
 import sys
+from collections import Counter
 import time
 import uuid
 import anyio
@@ -156,6 +157,40 @@ def record_max_tokens_contract(state, field: object, requested: object,
 #: 网关无法替上游守约（token 是在上游生成的），但**至少要能回答「发生过多少次」**。
 #: 这里只做计数，不改任何行为。
 _output_over_limit = 0
+
+
+#: 请求体读取超时的分类计数。
+#:
+#: ## 为什么要分开数
+#:
+#: 2026-11-15 查历史记录时看到 8 次 `body_read_timeout`，耗时分布在 60 秒到 180 秒之间。
+#: 一开始以为其中 5 次是误分类 —— 后来才想明白：超时有两种。
+#:
+#: | 类型 | 含义 | 用户该做什么 |
+#: | --- | --- | --- |
+#: | `idle` | 连续若干秒**一个字节都没收到** | 查上传链路 |
+#: | `total` | 累计上传时间超过上限 | 精简上下文或换链路 |
+#:
+#: 两种的处置完全不同，但历史上它们在同一个错误码下面，从指标上分不出来。
+#:
+#: 用 `Counter` 而不是普通字典：**漏初始化的键会在自增时抛**，v1.2.83 就是这么崩的。
+_body_timeouts = Counter()
+
+
+def note_body_timeout(reason) -> None:
+    """记一次请求体读取超时。
+
+    `reason` 只认 `idle` 与 `total` —— 那是超时对象自己带的分类。**别的值不计入**：
+    猜一个桶（比如默认算 idle）会让指标说谎，而这条指标存在的意义正是区分两种成因。
+    """
+    if reason not in ('idle', 'total'):
+        return
+    _body_timeouts[reason] += 1
+
+
+def body_timeout_counts() -> dict:
+    """返回 `{'idle': n, 'total': n}`，两个键始终存在。"""
+    return {'idle': _body_timeouts['idle'], 'total': _body_timeouts['total']}
 
 
 def note_output_over_limit(requested, actual) -> None:
@@ -1267,6 +1302,8 @@ class RequestAuditMiddleware:
                 raise
             state.terminal_state,state.error_stage='rejected','request_body'
             state.error_code,state.error_source='body_read_timeout',ERROR_SOURCE_GATEWAY
+            # 两种超时的处置不同（查链路 vs 精简上下文），指标上要能分开看。
+            note_body_timeout(getattr(exc, 'reason', None))
             await reject_response(gateway._oai_error(exc.message,408,'invalid_request_error','body_read_timeout'))
         except CapacityError:
             if state.http_status:

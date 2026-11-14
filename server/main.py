@@ -1143,6 +1143,17 @@ def prometheus_metrics(request: Request):
                'Non-zero here means the upstream ignores max_tokens; '
                'see docs/UPSTREAM-CAPABILITIES.md.',
                _obs.output_over_limit_count())
+            # 请求体读取超时按类型分开数：两者的处置完全不同
+            # （空闲 → 查上传链路；累计 → 精简上下文）。见 observability.note_body_timeout。
+            _body_timeouts = _obs.body_timeout_counts()
+            _m('workbuddy_body_timeout_idle_total', 'counter',
+               'Uploads dropped after a stretch with no bytes at all. The link stalled; '
+               'ask the caller to check connectivity, not to shrink the request.',
+               _body_timeouts['idle'])
+            _m('workbuddy_body_timeout_total_total', 'counter',
+               'Uploads that were still trickling past the cumulative time limit. The link '
+               'works but is too slow for this payload; shrinking the request helps.',
+               _body_timeouts['total'])
     except Exception as exc:                                    # noqa: BLE001
         logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
 
