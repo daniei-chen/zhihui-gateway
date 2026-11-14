@@ -983,6 +983,19 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                          state.request_id if state else None)
 
 
+async def _record_async(*args, **kwargs) -> None:
+    """在线程里跑 `_record`：它是 1 个事务 + 5～7 条语句 + 至少一次 fsync。
+
+    直接在事件循环上跑会把所有在途 SSE 流一起卡住（`db` 是同步 SQLite）。
+    `asyncio.to_thread` 会复制 contextvars，所以 `_record` 里读的
+    `observability.current` 与 `forced_platform` 仍然是**这个请求**的。
+
+    流式响应的 `finally` 不走这里：那里 await 会在取消/关闭时丢掉结算，
+    丢一行账比阻塞一会儿更糟。
+    """
+    await asyncio.to_thread(_record, *args, **kwargs)
+
+
 def _global_ip_blocked(ip: str) -> bool:
     """全局入站 IP 规则是否拦截该来源（未启用安全策略时恒为放行）。
 
@@ -1680,7 +1693,7 @@ async def usage_v1(request: Request):
     if _global_ip_blocked(ip):
         _log_ip(ip, request.url.path, True, ua, 'ip_blocked')
         observability.mark_error('ip_blocked')
-        _record(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        await _record_async(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
         return _oai_error('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
     if not key['enabled']:
         return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
@@ -1742,10 +1755,10 @@ async def list_models(request: Request):
                 catalog = None
             if (resp.status_code != 200 or not isinstance(catalog, dict) or catalog.get('error')
                     or not isinstance(catalog.get('data'), list)):
-                _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), '用户模型目录上游不可用', False)
+                await _record_async(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), '用户模型目录上游不可用', False)
                 return _oai_error('上游模型目录暂不可用，请联系管理员检查公共池连接；不是用户密钥无效',
                                   502, 'api_error', 'portal_model_catalog_unavailable')
-        _record(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
+        await _record_async(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
         request_platform = forced_platform.get() or 'workbuddy'
         payload = _scope_models(resp.json(), key, platform=request_platform)
         # 目录收缩（issue #239）：上游模型表可能仍列着腾讯已经下架的 id，
@@ -1769,7 +1782,7 @@ async def list_models(request: Request):
         return JSONResponse(payload, status_code=resp.status_code)
     except Exception as exc:  # noqa: BLE001
         latency = int((time.time() - started) * 1000)
-        _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
+        await _record_async(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
         return _oai_error_with_blip_body(_public_upstream_error(upstream), 502, exc)
 
 
@@ -2465,7 +2478,7 @@ async def _chat(request: Request, upstream_path: str):
                     converted = JSONResponse(data, status_code=resp.status_code)
                 except Exception as exc:
                     _mark_invalid_response()
-                    _record(key, ip, requested_model or '', mapped or '', 502, pt, ct,
+                    await _record_async(key, ip, requested_model or '', mapped or '', 502, pt, ct,
                             latency, ua, str(exc), False, usage=usage,
                             effort=effort, session_key=session_key)
                     return _oai_error('上游返回了无法解析的响应', 502, 'api_error', 'upstream_invalid_body')
@@ -2478,7 +2491,7 @@ async def _chat(request: Request, upstream_path: str):
                     upstream_code = data['error'].get('code')
                 if upstream_code is not None:
                     observability.mark_error(upstream_code, observability.ERROR_SOURCE_UPSTREAM)
-            _record(
+            await _record_async(
                 key, ip, requested_model or '', mapped or '', resp.status_code, pt, ct,
                 latency, ua, error, False, usage=usage, effort=effort, session_key=session_key,
             )
@@ -2490,20 +2503,20 @@ async def _chat(request: Request, upstream_path: str):
         except OutputLimitExceeded:
             _mark_output_limit_failure()
             message = 'Upstream output exceeds the configured byte limit'
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                     int((time.time() - started) * 1000), ua, message, False,
                     effort=effort, session_key=session_key)
             return _oai_error(message, 502, 'api_error', 'upstream_output_limit')
         except deadline_mod.BudgetExceeded as exc:
             _mark_pre_stream_failure(exc)
             failure = deadline_mod.classify_budget_exceeded(exc)
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                     int((time.time() - started) * 1000), ua, failure.message, False,
                     effort=effort, session_key=session_key)
             return _oai_error(failure.message, 502, 'api_error', 'upstream_timeout')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
             return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)
 
     # 流式转发
@@ -2542,7 +2555,7 @@ async def _chat(request: Request, upstream_path: str):
             state = observability.current.get()
             if state:
                 state.account = resp.headers.get('x-wb-account-uid')
-            _record(key, ip, requested_model or '', mapped or '', resp.status_code,
+            await _record_async(key, ip, requested_model or '', mapped or '', resp.status_code,
                     observability.usage_int(usage.get('prompt_tokens')),
                     observability.usage_int(usage.get('completion_tokens')),
                     int((time.time() - started) * 1000), ua, text[:500], True,
@@ -2551,20 +2564,20 @@ async def _chat(request: Request, upstream_path: str):
                             media_type=resp.headers.get('content-type', 'application/json'))
     except (asyncio.CancelledError, GeneratorExit) as exc:
         _mark_pre_stream_failure(exc)
-        _record(key, ip, requested_model or '', mapped or '', 499, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 499, 0, 0,
                 int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
                 effort=effort, session_key=session_key)
         raise
     except deadline_mod.BudgetExceeded as exc:
         _mark_pre_stream_failure(exc)
         failure = deadline_mod.classify_budget_exceeded(exc)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                 int((time.time() - started) * 1000), ua, failure.message, True,
                 effort=effort, session_key=session_key)
         return _oai_error(failure.message, 502, 'api_error', 'upstream_timeout')
     except Exception as exc:
         _mark_pre_stream_failure(exc)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                 int((time.time() - started) * 1000), ua, str(exc), True,
                 effort=effort, session_key=session_key)
         return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)
