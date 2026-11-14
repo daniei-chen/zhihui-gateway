@@ -173,3 +173,15 @@ class RelayUnitContractTest(unittest.TestCase):
         self.assertIn('CapabilityBoundingSet=CAP_SETUID CAP_SETGID', unit)
         self.assertNotIn('User=10001', unit)
         self.assertNotIn('NoNewPrivileges=yes', unit)
+
+    def test_nginx_relay_locations_inherit_gateway_admission_contract(self):
+        config = (Path(__file__).parents[2] / 'deploy' / 'rolling-relay-nginx.conf').read_text()
+        paths = ('/v1/chat/completions', '/v2/chat/completions', '/v1/responses',
+                 '/responses', '/v1/messages', '/v1/messages/count_tokens', '/v1/models')
+        for path in paths:
+            with self.subTest(path=path):
+                start = config.index(f'location = {path} {{')
+                end = config.find('\nlocation = ', start + 1)
+                block = config[start:] if end < 0 else config[start:end]
+                self.assertIn('include /etc/nginx/snippets/zhihui-gateway-admission.location.conf;', block)
+                self.assertNotIn('proxy_request_buffering off;', block)
