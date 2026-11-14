@@ -931,6 +931,34 @@ app.add_middleware(PlatformRoutingMiddleware, base_path=config.BASE_PATH)
 # ── Prometheus 指标（2026-10-23 审计补充：manager 之前完全没有 /metrics）──────
 # Application authentication is mandatory even behind a proxy or static fallback.
 # Collectors use an independent credential; normal readonly/keys tokens do not qualify.
+def _process_memory_bytes() -> tuple[int, int] | None:
+    """(常驻内存, 虚拟内存) 字节数；取不到返回 None。
+
+    ## 为什么需要它
+
+    网关是常驻进程，跑几天会不会慢慢胀、有没有泄漏，**没有任何指标能看出来**。
+    `/metrics` 此前只有「在不在服务」和「跑了多久」两个进程级指标 —— 也就是说
+    只有崩了才发现，中间那段缓升完全不可见。
+
+    加趋势指标比加告警更有用：先能看见曲线，才谈得上判断哪段斜率不正常。
+
+    ## 为什么读 /proc 而不是引入依赖
+
+    只需要两个数字。`/proc/self/statm` 是每页计数，乘页面大小即可；不引 `psutil`
+    这类依赖，避免为两行数据增加一个包。取不到（非 Linux、或 /proc 不可读）时返回
+    None，指标干脆不输出 —— 总比报一个假的 0 强。
+    """
+    try:
+        with open('/proc/self/statm', encoding='ascii') as handle:
+            fields = handle.read().split()
+        page_size = os.sysconf('SC_PAGE_SIZE')
+        virtual_pages = int(fields[0])
+        resident_pages = int(fields[1])
+        return resident_pages * page_size, virtual_pages * page_size
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
 @app.get('/metrics')
 def prometheus_metrics(request: Request):
     from .metricsauth import require_metrics
@@ -949,6 +977,16 @@ def prometheus_metrics(request: Request):
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
     _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
        int(time.time() - _PROCESS_STARTED_AT))
+    # 进程自身占用：长期跑下去会不会胀，只能靠趋势看（见 `_process_memory_bytes`）。
+    _memory = _process_memory_bytes()
+    if _memory is not None:
+        _resident, _virtual = _memory
+        _m('workbuddy_process_resident_bytes', 'gauge',
+           'Resident set size of the gateway process.', _resident)
+        _m('workbuddy_process_virtual_bytes', 'gauge',
+           'Virtual memory size of the gateway process.', _virtual)
+    _m('workbuddy_process_threads', 'gauge',
+       'Live OS threads in the gateway process.', threading.active_count())
 
     try:
         from . import observability as _obs
