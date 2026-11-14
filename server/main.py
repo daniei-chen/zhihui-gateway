@@ -92,6 +92,12 @@ def _recover_primary_state():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 在第一次 `to_thread` 之前替换默认执行器。CPython 在 2 vCPU 上把它定成
+    # `min(32, cpu+4) = 6` 个线程，而推理主路径一个请求要占 6 次线程跳转 ——
+    # 队列一积压，排在后面的实例心跳就会超时，租约失守后进程只能重启。
+    # 分池的理由见 `threadpools` 的模块文档。
+    from . import threadpools
+    asyncio.get_running_loop().set_default_executor(threadpools.blocking_pool())
     # Fail before creating directories, opening the ledger, or starting jobs.
     from .configcontract import validate_environment
     app.state.configuration_snapshot = validate_environment()
@@ -105,7 +111,10 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(10)
             try:
-                await joined_thread(budget.heartbeat)
+                # 心跳走专用池：它的失败代价是"停止准入且不自愈"，不能排在任何
+                # 业务请求后面。
+                await asyncio.get_running_loop().run_in_executor(
+                    threadpools.heartbeat_pool(), budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())

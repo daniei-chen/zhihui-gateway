@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import logging
 import math
 import time
 
-from . import drain, instancelease
-from .services.asyncwork import joined_thread
+from . import drain, instancelease, threadpools
+from .services.asyncwork import joined_task, joined_thread
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +74,17 @@ class InstanceRuntime:
                 # The shared SQLite writer lock can wait for seconds. Never
                 # hold up ASGI while renewing; cancellation joins this owned
                 # operation before close() can release the same lease.
-                renewed = await joined_thread(instancelease.heartbeat,
-                    self.identity['instance_id'], self.fence,
-                    owner=self.identity['owner'], ttl_seconds=self.ttl)
+                #
+                # 走专用心跳池而不是默认执行器：这条 SQL 只要排在几十个业务阻塞
+                # 任务后面就会超时，而它超时的后果是「停止准入且不自愈」——
+                # 全站 503 只能靠重启恢复。`joined_task` 保留"取消也要等它做完"
+                # 的语义，否则 close() 可能在续期半路释放同一个租约。
+                renewed = await joined_task(asyncio.ensure_future(
+                    asyncio.get_running_loop().run_in_executor(
+                        threadpools.heartbeat_pool(), functools.partial(
+                            instancelease.heartbeat,
+                            self.identity['instance_id'], self.fence,
+                            owner=self.identity['owner'], ttl_seconds=self.ttl))))
             except Exception as exc:
                 # 存储瞬时故障 != 真正失权：本地租约预算还有余量时重试下一个周期，
                 # 耗尽才停止新准入。否则一次 SQLite busy/IO 抖动会让实例永久停机。
