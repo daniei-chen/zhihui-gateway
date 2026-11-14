@@ -276,17 +276,28 @@ class Host:
             if port == 7865:
                 if not allow_helper:
                     raise Failure('helper_7865_still_listening')
-                if (fields[3] != '127.0.0.1:7865'
-                        or expected_port == 7865
-                        and 'pid=' + str(primary['pid']) + ',' not in row):
+                if fields[3] != '127.0.0.1:7865':
                     raise Failure('helper_listener_not_loopback')
-                live.append(row)
+                if expected_port == 7865:
+                    if 'pid=' + str(primary['pid']) + ',' not in row:
+                        raise Failure('helper_listener_identity_mismatch')
+                    live.append(row)
                 continue
             if port == 7866:
-                if (expected_port != 7866 or fields[3] != '127.0.0.1:7866'
-                        or 'pid=' + str(primary['pid']) + ',' not in row):
-                    raise Failure('primary_listener_identity_mismatch')
-                live.append(row)
+                if fields[3] != '127.0.0.1:7866':
+                    raise Failure('primary_listener_not_loopback')
+                if expected_port == 7866:
+                    if 'pid=' + str(primary['pid']) + ',' not in row:
+                        raise Failure('primary_listener_identity_mismatch')
+                    live.append(row)
+                else:
+                    # rolling 交接检查 helper 时，旧 primary 仍占着 7866 正常服务：
+                    # 这是设计状态，不是冲突。只要求它是 loopback 且不是 helper
+                    # 自己（helper 必须只在 7865 上）。旧实现把它当成错误，导致
+                    # helper readiness 永远无法通过。
+                    if 'pid=' + str(primary['pid']) + ',' in row:
+                        raise Failure('primary_listener_identity_mismatch')
+                continue
         if len(live) != 1:
             raise Failure('primary_listener_not_unique')
 
