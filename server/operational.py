@@ -566,6 +566,45 @@ def _recovery_chain_alert():
                'encrypted recovery chain last verified %d hours ago (%d parts, %d bytes)'
                % (chain['age_seconds'] // 3600, chain['snapshot_parts'], chain['snapshot_bytes']))
 
+
+def _archive_worker_alert():
+    """归档线程是唯一会主动删数据的后台任务，它停摆不能是静默的。
+
+    ## 为什么单列一条
+
+    2026-11-15 排查「磁盘一直涨」时，我看到 `archive_runs` 是空的，就断言
+    归档从没跑过。**实际它在跑** —— 保留期 90 天，而这批数据只有 41 天，
+    没有到期行，所以从未产生过归档记录。
+
+    有这条告警，那种推断就不必靠猜：线程活着、周期在推进，一眼可见。
+
+    ## 阈值
+
+    归档周期是 300 秒，这里放到 30 分钟 —— 一次慢周期或短暂卡顿不该报警，
+    但连续半小时没完成一次就该有人看。
+    """
+    try:
+        from . import archiveworker
+        status = archiveworker.status()
+    except Exception:      # noqa: BLE001
+        # 拿不到状态时不报警：这条告警的价值在于「线程该在却不在」，
+        # 而不是在导入期问题上制造噪音。
+        return
+    if not status.get('enabled'):
+        # 明确关掉了，不是故障。
+        transition('archive_worker_stalled', False, '')
+        return
+    if not status.get('worker_alive'):
+        transition('archive_worker_stalled', True, 'archive worker thread is not running')
+        return
+    age = status.get('age_seconds')
+    if not isinstance(age, int) or isinstance(age, bool):
+        # 还没跑过第一轮（启动后 30 秒内）。给它时间。
+        transition('archive_worker_stalled', False, '')
+        return
+    transition('archive_worker_stalled', age > 30*60,
+               'archive worker last completed a cycle %d minutes ago' % (age // 60))
+
 # ── 预算 unknown 的应用内增量对账（2026-10-27 审计 P1-1）─────────────────
 # 定期扫描不是计费证明。零预扣及超期只决定扫描候选；完整上游零回执和
 # 不可变用量事件必须一致，并在 resolve 的写事务内重读。缺少证据继续 unknown。
@@ -792,6 +831,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # freshness guard until operations can install a more frequent job.
         evaluate_backup_health(now)
         evaluate_portal_ledger()
+        # 归档线程是唯一会主动删数据的后台任务。它停摆时数据库只会变大，
+        # 而此前没有任何信号能说出来（见 `_archive_worker_alert` 的说明）。
+        _archive_worker_alert()
     except Exception:
         log.exception('operational health evaluation failed')
     # P1-1：应用内增量对账。首轮立即跑（消化存量），之后按间隔。

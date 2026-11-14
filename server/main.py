@@ -1173,6 +1173,45 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 归档线程的健康度。
+    #
+    # ## 为什么需要
+    #
+    # 归档是唯一会主动**删数据**的后台任务，它的状态此前只能通过管理端 API
+    # 人工查看 —— 没有指标、没有告警。也就是说：它停了、卡了、或者开始出错，
+    # 监控侧一片安静，只是数据库悄悄地一直变大。
+    #
+    # 2026-11-15 排查「磁盘一直涨」时，我在这一点上判断错过一次：看到
+    # `archive_runs` 是空的就断言归档从没跑过。实际它在跑，只是保留期 90 天
+    # 而数据只有 41 天，没有到期行 —— **有指标就不必靠猜**。
+    try:
+        from . import archiveworker as _arch
+        _arch_status = _arch.status()
+        _m('workbuddy_archive_worker_alive', 'gauge',
+           'Whether the archive worker thread is running. This is the only background '
+           'task that deletes rows, so its silence is not benign.',
+           1 if _arch_status.get('worker_alive') else 0)
+        _m('workbuddy_archive_enabled', 'gauge',
+           'Archive worker enabled (config switch and background jobs both on).',
+           1 if _arch_status.get('enabled') else 0)
+        _arch_age = _arch_status.get('age_seconds')
+        if isinstance(_arch_age, int) and not isinstance(_arch_age, bool):
+            _m('workbuddy_archive_last_cycle_age_seconds', 'gauge',
+               'Seconds since the archive worker last completed a cycle. It cycles every '
+               'few minutes even with nothing to archive, so a large value means the '
+               'thread is stuck rather than idle.',
+               _arch_age)
+        _arch_pending = _arch_status.get('pending')
+        if isinstance(_arch_pending, dict):
+            _m('workbuddy_archive_pending_datasets', 'gauge',
+               'Datasets with rows past their retention window waiting to be archived.',
+               sum(1 for value in _arch_pending.values() if value))
+        _m('workbuddy_archive_last_cycle_failed', 'gauge',
+           'Last archive cycle raised. Rows stay protected; nothing is deleted on failure.',
+           0 if _arch_status.get('ok') is not False else 1)
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
