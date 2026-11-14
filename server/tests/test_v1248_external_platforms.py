@@ -126,12 +126,35 @@ class RefreshNeverTouchesContainerTokensTests(unittest.TestCase):
             self.assertFalse(result['ok'], f'{platform} 谎报刷新成功')
             self.assertIn('reason', result)
 
-    def test_module_never_writes_into_the_accounts_directory(self):
-        """只读：模块里不能出现写入账号文件的调用。"""
+    def test_reading_never_writes_into_the_accounts_directory(self):
+        """读取路径必须保持只读。
+
+        v1.2.49 起模块**故意**有了一个写入口（刷新后的原子写回），所以这里不再
+        笼统断言"整个模块不写文件"——那会锁住一个已经不再成立的约束。改成精确的：
+        **只有刷新相关的那两个函数**可以写，读取函数一律不许。
+        """
         source = (Path(__file__).parents[1] / 'externalplatforms.py').read_text(encoding='utf-8')
-        for forbidden in ('write_text(', 'open(', 'unlink(', 'rmdir('):
-            self.assertNotIn(forbidden, source,
-                             f'外部平台模块不应写文件，发现 {forbidden}')
+
+        def body_of(name: str) -> str:
+            start = source.index(f'def {name}(')
+            tail = source[start + 1:]
+            nxt = tail.find('\ndef ')
+            return source[start:start + 1 + (nxt if nxt != -1 else 4000)]
+
+        for reader in ('qoder_accounts', 'trae_accounts', 'snapshot', '_redact', '_days_left'):
+            body = body_of(reader)
+            for forbidden in ('write_text(', 'write_bytes(', 'os.replace(', 'os.unlink('):
+                self.assertNotIn(forbidden, body,
+                                 f'读取函数 {reader} 里出现了写入调用 {forbidden}')
+
+    def test_only_the_refresh_path_may_write(self):
+        source = (Path(__file__).parents[1] / 'externalplatforms.py').read_text(encoding='utf-8')
+        writers = [name for name in ('_write_account_atomically', 'refresh_qoder_account')
+                   if f'def {name}(' in source]
+        self.assertEqual(len(writers), 2, '写入口应当恰好是刷新相关的两个函数')
+        # 写入口本身必须带备份
+        start = source.index('def refresh_qoder_account(')
+        self.assertIn('backup', source[start:start + 4000])
 
 
 class SnapshotShapeTests(unittest.TestCase):

@@ -2683,3 +2683,22 @@ def external_platform_refresh(platform: str,
     result = externalplatforms.refresh(platform)
     security.audit(user, 'platforms.refresh', platform, str(result.get('ok')))
     return result
+
+@router.post('/platforms/qoder/accounts/{uid}/refresh')
+def qoder_account_refresh(uid: str,
+                          user: dict = Depends(security.require_admin)) -> dict:
+    """刷新单个 Qoder 账号并原子写回。
+
+    不走容器的面板接口：它的面板密码是 scrypt 哈希，网关拿不到明文。但刷新本身
+    不需要面板会话 —— 账号文件里有 refresh token（只读可拿），上游刷新端点可直接
+    调用，返回的新令牌再原子写回文件（先备份、保留属主与权限、临时文件替换）。
+
+    **生效时机要说清**：容器把账号装在内存里，写回文件不会立即改变它的内存状态。
+    容器自身的定时保活每天会重载一次；想立即生效需要重启容器。这一点写进返回。
+    """
+    from .. import externalplatforms
+    if not uid or '/' in uid or '\\' in uid or uid.startswith('.'):
+        raise HTTPException(status_code=400, detail='账号标识不合法')
+    result = externalplatforms.refresh_qoder_account(uid)
+    security.audit(user, 'platforms.qoder.refresh', uid, str(result.get('ok')))
+    return result

@@ -184,8 +184,6 @@ def refresh(platform: str) -> dict:
         return {'ok': False, 'reason': f'未知平台：{platform}'}
     container = CONTAINERS[platform]
     if platform == 'qoder':
-        # Qoder 容器内没有暴露可用的刷新 HTTP 端点（panel 密码与 API key 是两套
-        # 鉴权，网关手里没有 panel 会话）。改用容器内的刷新脚本。
         code, output = _docker_exec(container, [
             'sh', '-c',
             'cd /app && python3 -c "'
@@ -198,3 +196,141 @@ def refresh(platform: str) -> dict:
                 'probe': output[:300]}
     return {'ok': False, 'platform': platform, 'container': container,
             'reason': 'Trae 的刷新入口需要管理面 API Key，网关尚未持有'}
+
+
+# ── Qoder：网关侧刷新 ────────────────────────────────────────────────
+#
+# 容器的 panel 密码是 scrypt 哈希，网关拿不到明文，因此走不通它的
+# `/panel/login`。但刷新这件事本身不需要面板会话：
+#
+#   refresh_token（文件里，root 可读） → 上游 deviceToken/refresh → 新令牌
+#
+# 这条上游端点经实测可用（2026-11-14 返回 200 并给出新令牌），且旧 refresh token
+# **可重复使用**（服务端不轮换）。所以网关可以自己完成刷新，再把结果原子写回。
+#
+# 写回必须谨慎：
+#   · 先备份原文件（同目录 `.bak-<时间戳>`）；
+#   · 只改三个字段，其它字段原样保留；
+#   · 临时文件 + `os.replace` 原子替换，避免容器读到半个文件；
+#   · 保留原文件的属主与权限（容器以 10001 运行，改成 root 会让它读不到）。
+
+QODER_REFRESH_URL = os.environ.get('WB_QODER_REFRESH_URL',
+                                  'https://openapi.qoder.com.cn/api/v1/deviceToken/refresh')
+
+
+def _write_account_atomically(path: Path, payload: dict) -> dict:
+    """原子写回账号文件，保持属主与权限不变。"""
+    import tempfile
+    import urllib.request
+
+    original = path.stat()
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + '\n'
+
+    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix='.refresh-', suffix='.tmp')
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+            stream.write(text)
+        os.chmod(temp_name, original.st_mode & 0o7777)
+        try:
+            os.chown(temp_name, original.st_uid, original.st_gid)
+        except (AttributeError, PermissionError, OSError):
+            # 非 root 时无法改属主：保持临时文件的默认属主，但仍要能读到
+            pass
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+    return {'mode': oct(original.st_mode & 0o7777), 'uid': original.st_uid,
+            'gid': original.st_gid, 'bytes': len(text)}
+
+
+def refresh_qoder_account(uid: str) -> dict:
+    """刷新单个 Qoder 账号并写回。返回结果里**不含令牌**。"""
+    import urllib.error
+    import urllib.request
+
+    directory = QODER_ACCOUNTS_DIR
+    path = directory / f'{uid}.json'
+    if not path.is_file():
+        return {'ok': False, 'reason': f'账号文件不存在：{path.name}'}
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        return {'ok': False, 'reason': f'账号文件不可解析：{type(exc).__name__}: {exc}'}
+    if not isinstance(payload, dict):
+        return {'ok': False, 'reason': '账号文件结构不是对象'}
+
+    token = str(payload.get('refreshToken') or '').strip()
+    if not token:
+        return {'ok': False, 'reason': '该账号没有 refreshToken，只能重新登录'}
+
+    body = json.dumps({'refresh_token': token}).encode('utf-8')
+    request = urllib.request.Request(
+        QODER_REFRESH_URL, data=body, method='POST',
+        headers={'Content-Type': 'application/json', 'Accept': 'application/json',
+                 'User-Agent': 'zhihui-gateway/refresh'})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode('utf-8', 'replace')
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        detail = ''
+        try:
+            detail = exc.read().decode('utf-8', 'replace')[:200]
+        except Exception:                # noqa: BLE001
+            pass
+        return {'ok': False, 'reason': f'上游拒绝：HTTP {exc.code} {detail}'}
+    except Exception as exc:             # noqa: BLE001
+        return {'ok': False, 'reason': f'上游不可达：{type(exc).__name__}: {exc}'}
+
+    try:
+        fresh = json.loads(raw)
+    except ValueError:
+        return {'ok': False, 'reason': f'上游返回非 JSON（HTTP {status}）'}
+    if not isinstance(fresh, dict):
+        return {'ok': False, 'reason': '上游返回结构异常'}
+
+    access = str(fresh.get('device_token') or fresh.get('access_token') or '').strip()
+    renew = str(fresh.get('refresh_token') or '').strip()
+    expires = fresh.get('expires_at')
+    if not access:
+        return {'ok': False, 'reason': '上游没有返回新的访问令牌'}
+
+    # 只改这三个字段，其余原样保留（容器可能依赖 plan / credits / lastCheckin 等）
+    backup = path.with_name(path.name + '.bak-' + time.strftime('%Y%m%d-%H%M%S'))
+    try:
+        backup.write_bytes(path.read_bytes())
+    except OSError as exc:
+        return {'ok': False, 'reason': f'备份失败，已放弃写入：{exc}'}
+
+    payload['accessToken'] = access
+    if renew:
+        payload['refreshToken'] = renew
+    # 上游给的是 ISO 时间串；账号文件里存的是 epoch 秒
+    if isinstance(expires, str) and expires:
+        try:
+            import datetime
+            payload['expiresAt'] = int(datetime.datetime.strptime(
+                expires.replace('Z', '+0000'), '%Y-%m-%dT%H:%M:%S%z').timestamp())
+        except (ValueError, TypeError):
+            pass
+    elif isinstance(expires, (int, float)) and expires > 0:
+        payload['expiresAt'] = int(expires)
+
+    try:
+        written = _write_account_atomically(path, payload)
+    except Exception as exc:             # noqa: BLE001
+        return {'ok': False, 'reason': f'写回失败：{type(exc).__name__}: {exc}',
+                'backup': str(backup)}
+
+    days = _days_left(payload.get('expiresAt'))
+    return {
+        'ok': True, 'uid': uid, 'backup': str(backup), 'written': written,
+        'expires_at': payload.get('expiresAt'),
+        'days_left': None if days is None else round(days, 1),
+        'note': ('账号文件已更新。容器把账号装在内存里，**新令牌要等它重载后才生效**'
+                 '（容器自身的定时保活每天会重载一次）。重启容器可立即生效。'),
+    }
