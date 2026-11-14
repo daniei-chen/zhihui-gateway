@@ -786,6 +786,44 @@ def public_readiness(now=None):
                 and cached['ok'] and not drain.is_draining())
 
 
+#: 监控循环的累计统计。
+#:
+#: ## 为什么需要它
+#:
+#: 2026-11-15 出过一次这样的事：加了一个统计桶却忘了初始化，`unresolved_summary`
+#: 在特定数据状态下抛键错误。**那一整轮健康评估的剩余部分就不跑了** ——
+#: 磁盘水位、账号池、备份检查都在崩溃点之后。
+#:
+#: 从外部**完全看不出来**：请求正常、健康检查 200、完整性闭包 ok。因为它**只在那
+#: 一轮失败**，下一轮可能又成功 —— `/readyz` 读的是「最近一次结果」，闪断看不见。
+#:
+#: 所以这里累计成功与失败次数，并由 `/metrics` 暴露。**偶发失败要从计数上看出来，
+#: 不能只看此刻是否健康。**
+#:
+#: 三个键全部显式初始化：这次事故的教训就是「漏一个键会抛」。
+_MONITOR_STATS = {
+    'successes': 0,
+    'failures': 0,
+    # 最近一次成功时的单调时钟读数；0.0 表示「本进程还没成功过」。
+    'last_success': 0.0,
+}
+
+
+def monitor_stats() -> dict:
+    """返回监控循环统计的副本（调用方不该直接改内部状态）。"""
+    return dict(_MONITOR_STATS)
+
+
+def note_monitor_result(ok: bool, now: float | None = None) -> None:
+    """记一次监控轮次的结果。热路径之外的轻量更新。"""
+    import time as _time
+    if ok:
+        _MONITOR_STATS['successes'] += 1
+        _MONITOR_STATS['last_success'] = _time.monotonic() if now is None else now
+    else:
+        _MONITOR_STATS['failures'] += 1
+
+
 async def monitor():
     global _cached_readiness
     from .services.asyncwork import joined_task
@@ -796,12 +834,15 @@ async def monitor():
         try:
             failures, next_reconcile, next_replay, status = await joined_task(tick)
             _cached_readiness = {'at': time.monotonic(), 'ok': bool(status['ok'])}
+            # 累计成功次数：偶发失败只能从计数看出来（见 `_MONITOR_STATS` 的说明）。
+            note_monitor_result(True)
         except asyncio.CancelledError:
             # joined_task retains ownership through repeated cancellation until
             # blocking work ends, before lifespan can close its DB/worker lease.
             raise
         except Exception:
             _cached_readiness = None
+            note_monitor_result(False)
             log.exception('operational monitor tick failed; readiness unavailable')
         await asyncio.sleep(30)
 

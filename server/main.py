@@ -1078,6 +1078,26 @@ def prometheus_metrics(request: Request):
            'counts, so it reads a few MiB lower than the resident gauge by design.',
            _peak)
 
+    # 监控循环的累计成败。偶发失败只能从计数看出来 —— 出过的那次事故里，
+    # 只有部分轮次崩，`/readyz` 读的是「最近一次结果」，闪断完全看不见。
+    # 见 `operational._MONITOR_STATS` 的说明。
+    try:
+        from . import operational as _operational
+        _monitor = _operational.monitor_stats()
+        _m('workbuddy_monitor_successes_total', 'counter',
+           'Successful monitor ticks since process start.', _monitor['successes'])
+        _m('workbuddy_monitor_failures_total', 'counter',
+           'Failed monitor ticks. Non-zero means a whole health-evaluation round was '
+           'skipped: every alert after the failure point went un-evaluated.',
+           _monitor['failures'])
+        if _monitor['last_success']:
+            _m('workbuddy_monitor_last_success_age_seconds', 'gauge',
+               'Seconds since the last successful monitor tick. Grows without bound if '
+               'the loop is stalled, which readiness alone cannot tell you.',
+               max(0.0, time.monotonic() - _monitor['last_success']))
+    except Exception:      # noqa: BLE001 - 指标取不到不该让整个 /metrics 失败
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
