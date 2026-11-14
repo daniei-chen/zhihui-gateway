@@ -955,6 +955,36 @@ def database_size_bytes() -> dict | None:
     return sizes
 
 
+def backup_age_seconds(now=None) -> int | None:
+    """最近一次成功备份距今多少秒；读不到返回 None。
+
+    告警只在超过 26 小时时报。**但「还差多久会报」看不到** —— 备份时间如果一天天
+    往后漂（比如从 04:30 漂到 05:20），告警不会响，而它已经在变慢。
+
+    这条指标给出趋势本身。
+
+    `None` 表示「拿不到证据」：文件不存在、不可读、或报告不合法。那是未知，
+    不是「零秒前刚备份过」。
+    """
+    import json
+    latest = getattr(config, 'BACKUP_STATUS_FILE', None)
+    if latest is None:
+        return None
+    now = int(time.time()) if now is None else int(now)
+    try:
+        data = json.loads(Path(latest).read_text())
+        age = now - Path(latest).stat().st_mtime
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    # 与 `evaluate_backup_health` 用同一套有效性判据，避免两处结论不一致。
+    size = data.get('bytes') if isinstance(data, dict) else None
+    if not (isinstance(data, dict) and data.get('restore_check') == 'ok'
+            and isinstance(size, int) and not isinstance(size, bool) and size > 0
+            and age >= -300):
+        return None
+    return max(0, age)
+
+
 def monitor_stats() -> dict:
     """返回监控循环统计的副本（调用方不该直接改内部状态）。"""
     return dict(_MONITOR_STATS)

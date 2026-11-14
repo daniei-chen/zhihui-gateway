@@ -1129,6 +1129,19 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 最近一次成功备份距今多久。告警只在超过 26 小时时报，这条能看到「还差多久」，
+    # 也就能看出备份时间是否在一天天往后漂。见 operational.backup_age_seconds。
+    try:
+        _backup_age = _operational.backup_age_seconds()
+        if _backup_age is not None:
+            _m('workbuddy_backup_age_seconds', 'gauge',
+               'Seconds since the newest verified backup report. The stale alert only fires '
+               'past 26 hours; this shows the drift before it does, so a backup creeping '
+               'later each day is visible while it is still healthy.',
+               _backup_age)
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
