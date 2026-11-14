@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-    <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.24 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.25 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,26 +16,28 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.24.svg" width="166" height="44" alt="查看 1.2.24 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.25.svg" width="166" height="44" alt="查看 1.2.25 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1224--relay-入口与请求体门禁) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#1225--rootless-上游与请求体门禁) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.24 · relay 入口与请求体门禁
+## 1.2.25 · rootless 上游与请求体门禁
 
-**本次版本：`v1.2.24`**。这一版让 relay 的精确推理入口继承原 `/v1/`、`/qoder/v1/`、`/trae/v1/` 相同的 admission 合同，修复大上下文请求被 Nginx 默认 1 MB 上限误报为 `413 Request Entity Too Large` 的问题。
+**本次版本：`v1.2.25`**。这一版在修复 413 请求体门禁的基础上，把 Qoder 生产数据面切到签名 broker 验证后的 `1.9.9` rootless unit，并把 rootless 启动器、systemd 隔离合同和线上审计证据纳入源码。
 
 - **请求体边界一致**：relay 入口使用 128 MB 边缘上限、60 秒请求体超时、限流/并发保护和统一错误页；Manager 自身继续执行 64 MB 转发上限。
 - **流式行为保留**：relay 仍关闭请求体缓冲、禁止失败重试，已接受的流不会被重复发送。
-- **真实大请求已回归**：国内服务器 4 MiB 请求已穿过 Nginx 和 relay 到达鉴权层，返回 401 而不是 413。
+- **真实大请求已回归**：国内服务器 4 MiB 请求已穿过 Nginx 和 relay 到达鉴权层，返回 401 而不是 413；修复后观测窗口新增 413 为 0。
+- **Qoder 数据面已降权**：生产 `1.9.9` 在 `127.0.0.1:8799` 运行，实际 UID/GID 为 `10001:10001`，`CapEff=0`、`NoNewPrivileges=1`、seccomp 2；签名 broker 仍负责 release 校验、原子激活和失败回滚。
+- **数据库与运行时已复核**：SQLite 完整性检查通过，Manager、relay、Qoder 和 Trae 的边界证据写入[线上审计报告](docs/PRODUCTION-AUDIT-2026-11-14.md)。
 
-**发布边界如实列出。** Qoder 生产仍保持 1.9.8；1.9.9 rootless 候选已持久化在私有 8800 端口，真实 Qoder 路由切换继续等待共享状态与回退证据完整。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.24)
+**发布边界如实列出。** 这次完成的是网关请求体修复和 Qoder rootless 数据面切换；离机灾备仍未配置，历史 503/502 仍需单独做上游可用性复盘。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [线上审计](docs/PRODUCTION-AUDIT-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.25)
 
 <br />
 

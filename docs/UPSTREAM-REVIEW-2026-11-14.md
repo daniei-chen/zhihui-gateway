@@ -1,6 +1,6 @@
 # Current upstream review — 2026-11-14
 
-This is the current-source review for the v1.2.22 workstream. The older
+This is the current-source review for the v1.2.25 workstream. The older
 `UPSTREAM-REVIEW-0.0.4.md` remains a historical decision record; its versions
 are not current production provenance.
 
@@ -10,19 +10,25 @@ are not current production provenance.
 | --- | --- | --- | --- |
 | WorkBuddy Manager | `ithtelab/workbuddy-manager` v2.11.14 | commit `8b5a4df412b86d29b92c4740d0c9adc1f6750b99` | The gateway is a customized product line; the public upstream is reviewed, not silently substituted into production. |
 | WorkBuddy engine source | `daniei-chen/zhihui-gateway` `upstream-src` asset | asset SHA256 `2f9f619e29094b963161e5e42c82ae20660b7f68125026d0e4960c4986c6c614`, 7,435,373 bytes; snapshot id `6118aa0a8e861046f9e9dc76ba09b0bfefe73cbedcf5f7ebbedf4609b9a10663` | Bundled source is sanitized, patched, and locked by `dev/upstream-source.lock`; no floating download is accepted by the release workflow. |
-| Qoder Hub | v1.9.9 | commit `d0f4837c8f38c090f6d76baadc3da2c09f5c66c0` | v1.9.9 is the reviewed candidate; production remains v1.9.8 until a persistent rootless service, restart recovery, route rollback, and data-plane acceptance are independently proven. |
+| Qoder Hub | v1.9.9 | commit `d0f4837c8f38c090f6d76baadc3da2c09f5c66c0` | v1.9.9 is the reviewed and activated production release; the serving process is rootless on `127.0.0.1:8799`, while the root-owned broker retains signed activation and rollback control. |
 | Trae WorkAssistant | v3.9.3 | commit `a50d65f7a2f0d3dd3b0b8ae4179199276bd93466` | The newest public release is recorded for review. No automatic desktop/client upgrade is inferred from the server adapter. |
 
 The three public repositories were queried on 2026-11-14. A tag or release
 being newer does not prove that the local binary, container, or provider route
 has been replaced. The production server must keep a separate runtime receipt.
 
-The v1.2.22 host review exercised the Qoder v1.9.9 candidate on a private
-8800 listener with a copied state set. The candidate returned its own health
-version and ran as UID/GID `10001:10001`, with `CapEff=0`, `NoNewPrivs=1`, and
-seccomp mode 2. This closes the process-level canary only; the persistent
-rootless service, reboot recovery, route rollback and authenticated data-plane
-acceptance are still required before changing production from v1.9.8.
+The v1.2.25 host review first exercised the Qoder v1.9.9 candidate on a
+private 8800 listener with a copied state set. It then snapshotted the
+production state, normalized the serving directories to UID/GID `10001:10001`,
+activated the signed broker journal, and restarted the production service on
+the existing 8799 route. The serving process returned version 1.9.9 and ran as
+UID/GID `10001:10001`, with `CapEff=0`, `NoNewPrivs=1`, and seccomp mode 2.
+An authenticated `/v1/models` request returned 13 models, and Manager health
+and readiness remained healthy after the cutover. The private canary was
+stopped after this production acceptance.
+
+The current host receipt and remaining backup/network items are recorded in
+`PRODUCTION-AUDIT-2026-11-14.md`.
 
 ## Release input rule
 
