@@ -1,0 +1,6 @@
+# The upstream-src asset is a release input, not a floating download.
+# Update this file only after reviewing the new snapshot and its patch set.
+release=upstream-src
+asset=workbuddy2api-src.tar.gz
+sha256=2f9f619e29094b963161e5e42c82ae20660b7f68125026d0e4960c4986c6c614
+bytes=7435373

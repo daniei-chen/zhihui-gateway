@@ -146,7 +146,7 @@ jobs:
           # server/tests/test_docs_packaging.py 双向守着（README 链到的必须
           # 在名单里；名单里不许有 README 链不到的）。
           # docs-pack:begin
-          DOCS_LIST="usage.md features.md screenshots.md DEVELOPMENT.md security-notes.md api-tokens.md account-proxy-routes.md SECURITY-AUDIT.md release-signing.md"
+          DOCS_LIST="usage.md features.md screenshots.md DEVELOPMENT.md security-notes.md api-tokens.md account-proxy-routes.md SECURITY-AUDIT.md release-signing.md UPSTREAM-REVIEW-2026-11-14.md"
           mkdir -p "$STAGE/docs"
           for f in $DOCS_LIST; do
             cp "docs/$f" "$STAGE/docs/" || { echo "::error::发布包缺少用户文档 docs/$f"; exit 1; }
@@ -161,7 +161,7 @@ jobs:
             esac
           done
           # docs-pack:end
-          cp .env.example README.md README.en.md CHANGELOG.md LICENSE "$STAGE/"
+          cp .env.example README.md README.en.md CHANGELOG.md LICENSE UPSTREAM-NOTICES.md "$STAGE/"
           # The documented opt-in upload helper is part of the release
           # contract; users should not need to return to the source checkout
           # to obtain it.
@@ -182,15 +182,26 @@ jobs:
           # 上游已由本项目维护，管理端 Release 是唯一更新源：取不到源码或缺少
           # `.upstream-id` 时必须让发布失败，不能发出一个用户无法更新上游的包。
           UPSTREAM_SRC_URL="${UPSTREAM_SRC_URL:-https://github.com/${{ github.repository }}/releases/download/upstream-src/workbuddy2api-src.tar.gz}"
+          UPSTREAM_LOCK=dev/upstream-source.lock
+          EXPECTED_UPSTREAM_SHA="$(sed -n 's/^sha256=//p' "$UPSTREAM_LOCK")"
+          EXPECTED_UPSTREAM_BYTES="$(sed -n 's/^bytes=//p' "$UPSTREAM_LOCK")"
+          if ! printf '%s' "$EXPECTED_UPSTREAM_SHA" | grep -qE '^[0-9a-f]{64}$' \
+             || ! printf '%s' "$EXPECTED_UPSTREAM_BYTES" | grep -qE '^[1-9][0-9]*$'; then
+            echo "::error::上游锁文件缺少合法 sha256/bytes：$UPSTREAM_LOCK"
+            exit 1
+          fi
           mkdir -p "$STAGE/upstream"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
                  "$UPSTREAM_SRC_URL" -o /tmp/upstream-src.tar.gz \
+             && [ "$(sha256sum /tmp/upstream-src.tar.gz | awk '{print $1}')" = "$EXPECTED_UPSTREAM_SHA" ] \
+             && [ "$(stat -c '%s' /tmp/upstream-src.tar.gz)" = "$EXPECTED_UPSTREAM_BYTES" ] \
              && tar -xzf /tmp/upstream-src.tar.gz -C "$STAGE/upstream" --strip-components=1 \
              && [ -f "$STAGE/upstream/docker-compose.yml" ]; then
             echo "已内嵌上游源码：$(find "$STAGE/upstream" -type f | wc -l) 个文件"
+            echo "上游源码锁定摘要：$EXPECTED_UPSTREAM_SHA ($EXPECTED_UPSTREAM_BYTES bytes)"
             echo "has_upstream=1" >> $GITHUB_OUTPUT
           else
-            echo "::error::取不到上游源码包（$UPSTREAM_SRC_URL）。上游已由本项目维护，不能再发布不含 upstream/ 的包。"
+            echo "::error::上游源码下载或锁定摘要校验失败（$UPSTREAM_SRC_URL）。请先审计并更新 dev/upstream-source.lock。"
             exit 1
           fi
           if [ ! -s "$STAGE/upstream/.upstream-id" ]; then
@@ -666,6 +677,3 @@ jobs:
             windows/launcher/dist/WorkBuddyManagerSetup.exe \
             windows/launcher/dist/WorkBuddyManagerSetup.exe.sha256
           echo "已上传 Windows 安装器（含 .sha256）"
-
-
-
