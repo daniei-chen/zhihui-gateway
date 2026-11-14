@@ -2626,6 +2626,11 @@ async def _chat(request: Request, upstream_path: str):
                             and _is_not_processed_rejection(resp.status_code,
                                                             _response_text(resp))):
                         attempt += 1
+                        # 让转发留痕反映真实尝试序号（原因见 ledger.forwarding 的说明：
+                        # 那里曾把 attempt 硬编码成 1，重试记录会被唯一约束静默丢弃）。
+                        _retry_state = observability.current.get()
+                        if _retry_state is not None:
+                            _retry_state.forwarding_attempt = attempt
                         logger.warning('上游明确拒绝且未处理 status=%s，重试 attempt=%s/%s',
                                        resp.status_code, attempt, rejection_limit)
                         await deadline_mod.await_total(asyncio.sleep(_REJECTION_RETRY_DELAY_S), request_deadline)
@@ -2641,6 +2646,10 @@ async def _chat(request: Request, upstream_path: str):
                     if not decision.retry:
                         raise
                     attempt = decision.next_attempt
+                    # 连接阶段的重试同样要反映到转发留痕（同上）。
+                    _retry_state = observability.current.get()
+                    if _retry_state is not None:
+                        _retry_state.forwarding_attempt = attempt
                     logger.warning('连接或连接池获取失败，重试 attempt=%s/%s error=%s',
                                    attempt, policy.max_attempts, type(exc).__name__)
                     await deadline_mod.await_total(asyncio.sleep(decision.delay_s), request_deadline)

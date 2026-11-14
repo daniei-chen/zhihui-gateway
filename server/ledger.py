@@ -151,9 +151,32 @@ def attempt(value):
     return True
 
 def forwarding(state, phase, outcome=None):
+    """记一条转发阶段留痕。
+
+    ## 2026-11-15：`attempt` 曾硬编码为 1
+
+    原先是 `VALUES(..., 1, phase, ...)`。而这张表的唯一约束是
+    `(request_id, attempt, phase)` —— 于是**重试时同一个 phase 的第二条会被
+    `INSERT OR IGNORE` 静默丢掉**。
+
+    后果：`attempt` 这个字段存在，但永远说「只试了一次」。想知道某个请求重试了几次，
+    从这张表里查不到；而本该记录真实次数的 `attempt_events` 从 2026-11-03 起就没人
+    写了（见 `_attempt_phases` 的说明）。
+
+    **两个来源都没有真实次数，等于这个维度完全不可观测。**
+
+    现在优先从 state 读调用方设好的当前尝试序号，读不到退回 1 ——
+    与改动前行为一致，不会因为字段缺失而多写或漏写。
+    """
     from . import db
+    try:
+        attempt = int(getattr(state, 'forwarding_attempt', 1) or 1)
+    except (TypeError, ValueError):
+        attempt = 1
+    if not 1 <= attempt <= 32:
+        attempt = 1
     db.execute('INSERT OR IGNORE INTO forwarding_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-               (state.request_id,1,phase,int(time.time()),getattr(state,'upstream_id','default'),
+               (state.request_id, attempt, phase, int(time.time()), getattr(state,'upstream_id','default'),
                 getattr(state,'requested_model',None),getattr(state,'resolved_model',None),
                 getattr(state,'realm',None),state.protocol,getattr(state,'transform',None),
                 getattr(state,'config_hash',None),outcome))

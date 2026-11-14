@@ -14,6 +14,12 @@
   3. **重试策略不存在**：全仓没有对上游的自动重试（`grep retry` 只命中错误文案
      与 `Retry-After`）。这既是好事（不会重放已开始的生成），也是风险：将来谁
      加一次「顺手重试」都没有拦截点。本模块把「哪些阶段可以重试」写成策略 + 测试。
+
+> **上面三条是 2026-10 的现状描述，不是现在的样子。**
+> 现在上游确实有重试，但被限制得很紧：只在**连接阶段**与「上游明确拒绝且未处理」
+> 时触发，默认 `WB_SAFE_RETRY_MAX=1` 即不重试，一旦拿到响应就不再重放
+> （见 `RETRYABLE_ERROR_NAMES`、`SAFE_RETRY_PHASES` 与 `gateway` 里的有界循环）。
+> 读这段时别以为「没有重试」，去看 `RetryPolicy` 和那两处调用。
 * 取消链是有的：`observability.close_stream` 用
   `anyio.move_on_after(5, shield=True)` 做有界关闭；`gateway._record` 在
   `client_cancelled` 时把状态写成 499，`budget.settle/finish` 把未决预留置
