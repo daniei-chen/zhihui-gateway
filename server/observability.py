@@ -442,21 +442,48 @@ def ensure_outcome_schema() -> bool:
 
 
 def admission_snapshot(*, probe=False) -> dict | None:
-    """当前全局/大请求准入占用（in-flight）；未启动时返回 None。"""
+    """当前全局/大请求准入占用（in-flight）；未启动时返回 None。
+
+    ## 2026-11-15：两个分支的键集不一致，害得三个指标静默消失
+
+    共享准入开启时（生产就是）走上面那个分支，它从协调库拿到
+    `leases/active/large/body_bytes/preauth/queued`，再补几个进程内计数。
+    但**漏了 `key_slots`、`queue_timeouts`、`queue_overflows`** —— 而没开共享时
+    的分支是齐的。
+
+    于是 `/metrics` 里 `snap['queue_timeouts']` 抛 `KeyError`，被外层宽泛的
+    `except` 吞掉，只打一行 `Metrics admission snapshot unavailable (KeyError)`。
+    结果是：**排队超时、排队溢出、键槽占用三个指标一直没输出**，而它们恰恰是
+    回答「为什么 503」时最该看的数字。
+
+    这类问题的共同点是「少一个键 → 整段静默」：异常被捕获、服务照常、日志一行
+    警告容易被忽略。所以除了补齐键，`main.py` 那侧也改成了逐项容错。
+
+    两个分支现在返回**同一组键**，缺数据时给 0 而不是干脆不返回。
+    """
     inst = _middleware_ref
     if inst is None:
         return None
+    # 三个计数在两条分支里都要有；此处一次算好，避免两处各写一遍而漂移。
+    fair = getattr(inst, 'fair_gate', None)
+    queue_keys = {
+        'key_slots': len(_key_slots),
+        'queue_timeouts': int(getattr(fair, 'timeouts', 0)),
+        'queue_overflows': int(getattr(fair, 'overflows', 0)),
+    }
     if getattr(inst, 'shared', None) is not None:
         try:
             result = inst.shared.probe() if probe else inst.shared.snapshot()
-            return {**result, 'maximum': inst.maximum, 'large_maximum': inst.large_maximum,
+            return {**result, **queue_keys,
+                    'maximum': inst.maximum, 'large_maximum': inst.large_maximum,
                     'process_active': inst.active, 'process_preauth': inst.preauth_active,
                     'inflight_body_bytes': result['body_bytes'],
                     'maximum_body_bytes': inst.maximum_body_bytes,
                     'capacity_rejections': inst.capacity_rejections}
         except Exception:
             return {'scope': 'same_host_shared', 'healthy': False, 'active': None,
-                    'inflight_body_bytes': None, 'reason': 'coordination_unavailable'}
+                    'inflight_body_bytes': None, 'reason': 'coordination_unavailable',
+                    **queue_keys}
     return {'active': int(getattr(inst, 'active', 0)),
             'preauth_active': int(getattr(inst, 'preauth_active', 0)),
             'large': int(getattr(inst, 'large', 0)),
@@ -465,10 +492,8 @@ def admission_snapshot(*, probe=False) -> dict | None:
             'inflight_body_bytes': int(getattr(inst, 'inflight_body_bytes', 0)),
             'maximum_body_bytes': int(getattr(inst, 'maximum_body_bytes', 0)),
             'capacity_rejections': int(getattr(inst, 'capacity_rejections', 0)),
-            'key_slots': len(_key_slots),
-            'queued': int(getattr(getattr(inst, 'fair_gate', None), 'pending', 0)),
-            'queue_timeouts': int(getattr(getattr(inst, 'fair_gate', None), 'timeouts', 0)),
-            'queue_overflows': int(getattr(getattr(inst, 'fair_gate', None), 'overflows', 0))}
+            'queued': int(getattr(fair, 'pending', 0)),
+            **queue_keys}
 
 class CapacityError(Exception): pass
 class BodyLimitError(Exception): pass

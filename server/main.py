@@ -954,16 +954,27 @@ def prometheus_metrics(request: Request):
         from . import observability as _obs
         snap = _obs.admission_snapshot()
         if snap is not None:
-            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', snap['active'])
-            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', snap['large'])
-            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', snap['maximum'])
-            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', snap['inflight_body_bytes'])
-            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', snap['maximum_body_bytes'])
-            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', snap['capacity_rejections'])
-            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', snap['key_slots'])
-            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', snap['queued'])
-            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', snap['queue_timeouts'])
-            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', snap['queue_overflows'])
+            # 逐项取，缺一项不打掉整段。
+            #
+            # 2026-11-15 审计：这里的下标访问配合外层一个宽泛的 `except`，让「快照少
+            # 一个键」变成了「后面所有指标一起消失」—— 共享准入开启时恰好少了三个
+            # 键，于是排队超时、排队溢出、键槽占用三个指标长期没有输出，日志里只有
+            # 一行容易被忽略的警告。
+            #
+            # 数据源已补齐；这里再用 `.get()` 兜一层：以后任何一侧再漂移，最多是
+            # 某一个指标缺，而不是整段静默。
+            def _g(name):
+                return snap.get(name, 0) if isinstance(snap, dict) else 0
+            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', _g('active'))
+            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', _g('large'))
+            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', _g('maximum'))
+            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', _g('inflight_body_bytes'))
+            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', _g('maximum_body_bytes'))
+            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', _g('capacity_rejections'))
+            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', _g('key_slots'))
+            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', _g('queued'))
+            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', _g('queue_timeouts'))
+            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', _g('queue_overflows'))
     except Exception as exc:                                    # noqa: BLE001
         logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
 
