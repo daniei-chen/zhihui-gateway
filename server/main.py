@@ -1015,7 +1015,9 @@ def prometheus_metrics(request: Request):
             _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', _g('queue_overflows'))
             # 上游生成超过请求上限的次数（见 observability.note_output_over_limit）。
             _m('workbuddy_output_over_limit_total', 'counter',
-               'Responses whose completion_tokens exceeded the requested cap.',
+               'Responses whose completion_tokens exceeded the requested cap. '
+               'Non-zero here means the upstream ignores max_tokens; '
+               'see docs/UPSTREAM-CAPABILITIES.md.',
                _obs.output_over_limit_count())
     except Exception as exc:                                    # noqa: BLE001
         logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
