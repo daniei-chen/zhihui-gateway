@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,11 +42,22 @@ class TraeRouteTest(unittest.TestCase):
     def test_write_is_atomic_and_replaces_previous_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'var' / 'trae_gateway_base'
+            path.parent.mkdir()
             route.write_route(path, route.validate_endpoint('http://127.0.0.1:7867'))
             self.assertEqual(path.read_text(encoding='ascii'), 'http://127.0.0.1:7867\n')
             route.write_route(path, route.validate_endpoint('http://127.0.0.1:7868'))
             self.assertEqual(path.read_text(encoding='ascii'), 'http://127.0.0.1:7868\n')
             self.assertFalse(any(path.parent.glob('.*.tmp')))
+            if os.name == 'posix':
+                mode = path.stat().st_mode & 0o777
+                expected = 0o640 if os.geteuid() == 0 else 0o600
+                self.assertEqual(mode, expected)
+
+    def test_parent_must_exist_and_be_trusted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'missing' / 'route'
+            with self.assertRaises(ValueError):
+                route.write_route(path, 'http://127.0.0.1:7867')
 
     def test_symlink_destination_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
