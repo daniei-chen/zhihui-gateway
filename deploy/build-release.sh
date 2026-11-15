@@ -50,6 +50,9 @@ DST="$RELEASES/$VERSION"
 OUT="$CACHE/out-$VERSION"
 REPO_URL=${ZHIHUI_REPO_URL:-https://github.com/daniei-chen/zhihui-gateway}
 BRANCH=${ZHIHUI_REPO_BRANCH:-v1.2.30-hardening}
+# 接口回退时要用到的 owner/repo 段，从 URL 推导，避免再维护第二处配置。
+REPO_SLUG=${ZHIHUI_REPO_SLUG:-${REPO_URL#https://github.com/}}
+REPO_SLUG=${REPO_SLUG%.git}
 
 if [ -e "$DST" ]; then
     echo "REFUSE: 目标已存在: $DST" >&2
@@ -99,6 +102,26 @@ if [ "$HEAD_SHA" != "$COMMIT" ]; then
     fi
 fi
 
+# 取文件：默认走 git 对象，克隆不通时退回接口。
+#
+# 这两条路都真实用过。克隆走 git 协议、不占请求额度，但**在中国到 GitHub 的链路上
+# 会卡住** —— 2026-11-15 有两次卡到八十多秒无进展，缓存目录只有 1 MB。
+# 而接口按请求计数（一小时六十次），够构建一次（七八个文件），但连续构建几次就会耗尽，
+# **耗尽后下载会静默返回错误页**（那正是上一步判污染要拦的东西）。
+#
+# 所以：**先试不占额度的那条，卡住就换计数的这条**，两条都要过同样三道校验。
+fetch_one() {
+    local rel=$1 out=$2
+    if git cat-file blob "HEAD:$rel" > "$out" 2>/dev/null && [ -s "$out" ]; then
+        return 0
+    fi
+    local api="https://api.github.com/repos/${REPO_SLUG}/contents/$rel?ref=$COMMIT"
+    local code
+    code=$(curl -sS -m 45 -o "$out" -w '%{http_code}' \
+                -H 'Accept: application/vnd.github.raw' "$api" 2>/dev/null || echo 000)
+    [ "$code" = "200" ] && [ -s "$out" ]
+}
+
 rm -rf "$OUT"; mkdir -p "$OUT"
 fail=0
 count=0
@@ -111,7 +134,7 @@ while IFS= read -r line; do
     count=$((count + 1))
 
     mkdir -p "$OUT/$(dirname "$rel")"
-    if ! git cat-file blob "HEAD:$rel" > "$OUT/$rel" 2>/dev/null || [ ! -s "$OUT/$rel" ]; then
+    if ! fetch_one "$rel" "$OUT/$rel"; then
         echo "  FETCH-FAIL   $rel"
         fail=$((fail + 1)); continue
     fi

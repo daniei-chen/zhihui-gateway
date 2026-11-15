@@ -55,7 +55,11 @@ class ItExistsAndIsSafeTests(unittest.TestCase):
 
 class ItChecksThreeLayersTests(unittest.TestCase):
     def test_layer_one_non_empty(self):
-        self.assertIn('[ ! -s "$OUT/$rel" ]', SCRIPT)
+        """非空检查在取文件那个函数里（重构之后位置变了，语义没变）。"""
+        idx = SCRIPT.find('fetch_one()')
+        self.assertGreater(idx, 0)
+        window = SCRIPT[idx:idx + 900]
+        self.assertIn('[ -s "$out" ]', window)
 
     def test_layer_two_shape(self):
         self.assertIn('POLLUTED', SCRIPT)
@@ -210,6 +214,39 @@ class PermissionsUseAGlobNotAListTests(unittest.TestCase):
     def test_backup_application_stays_executable(self):
         """它是部署时被直接执行的入口。"""
         self.assertIn('backup_application.py) chmod 755', SCRIPT)
+
+
+class ItFallsBackToTheApiTests(unittest.TestCase):
+    """克隆走 git 协议不占额度，但在中国到 GitHub 的链路上会卡住。
+
+    2026-11-15 两次卡到八十多秒无进展，缓存目录只有 1 MB。
+    而接口按请求计数，够构建一次，但连续构建几次会耗尽 ——
+    **耗尽后下载会静默返回错误页**，那正是判污染要拦的东西。
+
+    所以两条路都要有，而且都要过同样三道校验。
+    """
+
+    def test_fetch_helper_exists(self):
+        self.assertIn('fetch_one()', SCRIPT)
+
+    def test_it_prefers_git_object(self):
+        idx = SCRIPT.find('fetch_one()')
+        window = SCRIPT[idx:idx + 600]
+        self.assertIn('git cat-file blob', window, '没有先试不占额度的那条')
+
+    def test_it_falls_back_to_the_api(self):
+        idx = SCRIPT.find('fetch_one()')
+        window = SCRIPT[idx:idx + 900]
+        self.assertIn('api.github.com', window)
+
+    def test_fetch_uses_the_helper(self):
+        self.assertIn('fetch_one "$rel"', SCRIPT)
+        self.assertNotIn('git cat-file blob "HEAD:$rel" > "$OUT/$rel" 2>/dev/null', SCRIPT)
+
+    def test_repo_slug_is_derived_not_duplicated(self):
+        """再维护第二处仓库地址，就会出现两处不一致。"""
+        self.assertIn('REPO_SLUG=', SCRIPT)
+        self.assertIn('${REPO_URL#https://github.com/}', SCRIPT)
 
 
 if __name__ == '__main__':
