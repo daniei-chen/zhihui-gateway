@@ -90,6 +90,30 @@ class ItStatesWhyTheseAreDangerousTests(unittest.TestCase):
         self.assertIn('不是通用建议', DOC)
 
 
+class TheTwoNewEntriesTests(unittest.TestCase):
+    """第十一条是同一类错误里的第四次；第十二条是一次险些误判。"""
+
+    def test_validation_and_commit_must_be_separate_calls(self):
+        """一次调用里既跑测试又提交就是错的 —— 测试失败不会中断提交。
+
+        这条犯了三次，每次靠强推收拾，而强推会改写远端历史。
+        """
+        self.assertIn('十一次', DOC.replace('十一、', '十一次'))
+        self.assertIn('一次工具调用里只要既跑测试又提交，它就是错的', DOC)
+
+    def test_it_explains_the_cost_of_force_push(self):
+        self.assertIn('强推会改写远端历史', DOC)
+
+    def test_config_limit_is_not_a_user_limit(self):
+        self.assertIn('16 MiB', DOC)
+        self.assertIn('离上限很近', DOC)
+
+    def test_both_new_entries_have_all_three_parts(self):
+        """症状/原因/正确做法是这份文档的硬要求。"""
+        self.assertGreaterEqual(DOC.count('**症状**'), 10)
+        self.assertGreaterEqual(DOC.count('**原因**'), 9)
+
+
 class ItSaysHowToMaintainItTests(unittest.TestCase):
     def test_maintenance_requires_three_parts(self):
         self.assertIn('症状 → 原因 → 正确做法', DOC)
