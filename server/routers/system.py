@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from pydantic import BaseModel, Field
 
 from .. import config, drain, security, productupdates
+from .. import edgeidentity
 from ..iputil import client_ip
 from ..services import changelog, updater, wb2api
 
@@ -465,12 +466,34 @@ def internal_session_verify(request: Request,
     peer = request.client.host if request.client else ''
     if peer not in ('127.0.0.1', '::1'):
         raise HTTPException(status_code=403, detail='仅允许本机调用')
+    # 读密钥走 `edgeidentity` 的那套校验，而不是裸 `open().read()`。
+    #
+    # ## 为什么
+    #
+    # 这里原来是一行 `open(...).read()`。它和 `edgeidentity._secret()` 读的是
+    # **同一个文件**，但只做了「能读出来」这一件事，缺了那一套里全部六项校验：
+    #
+    #   · 拒绝符号链接（`O_NOFOLLOW` 关掉 POSIX 竞态）
+    #   · 必须是常规文件
+    #   · 大小上限 4096
+    #   · **权限位 `0o077` 必须为空** —— 组或其他可读就拒
+    #   · 有界读取（`os.read(fd, 4097)`）
+    #   · 内容长度下限 32 且无空白字符
+    #   · 显式 `close`（不是靠引用计数回收）
+    #
+    # 这个端点是 nginx `auth_request` 的目标，`location /api/` 的每个请求都会经过它。
+    # 用裸 `open()` 意味着：密钥文件权限配错时**照样签发断言**，而这正是
+    # `test_missing_short_or_public_secret_fails_closed_without_path_leak` 在那个
+    # 姐妹实现上要挡的情形。
+    #
+    # 复用同一个函数而不是再写一遍：两份实现读同一个密钥，校验必须一致 ——
+    # 否则「哪个入口更宽松」本身就是攻击面。
     try:
-        secret = open('/opt/workbuddy-manager/engine/secrets/identity_signing.key', encoding='utf-8').read().strip()
-    except OSError:
-        raise HTTPException(status_code=503, detail='身份签名密钥不可用')
+        secret = edgeidentity._secret()
+    except (OSError, UnicodeError):
+        raise HTTPException(status_code=503, detail='身份签名密钥不可用') from None
     if not secret:
-        raise HTTPException(status_code=503, detail='身份签名密钥为空')
+        raise HTTPException(status_code=503, detail='身份签名密钥未就绪')
     import base64 as _b64
     import hmac as _hmac
     import json as _json
