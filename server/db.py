@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import contextvars
+import datetime
 import sqlite3
 import threading
 import time
@@ -94,23 +95,37 @@ def transaction_stats() -> dict:
     return stats
 
 
+#: 「每日」的唯一口径：固定 UTC+8。
+#:
+#: 原实现用 `time.localtime`，口径跟着进程的 `TZ` 走；而用户账本
+#: （`portalstore`）一直硬编码 UTC+8。生产主机恰好是 Asia/Shanghai，两者一致，
+#: 所以这个分叉从来没有暴露过 —— 但它是**可移植性**隐患：换一台 `TZ` 不同的
+#: 机器，两份账本会在每天的前 8 小时里各自记成不同的「今天」，配额与计费口径
+#: 随之分开。把日边界钉死之后，它不再依赖任何环境变量。
+_DAY_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
 def day_of(ts: int | float | None = None) -> str:
-    """把时间戳换算成「哪一天」，全库统一用本地时区。
+    """把时间戳换算成「哪一天」，全库统一用 **UTC+8**。
 
     必须统一口径：写入用量（bump_usage）与回填用量（backfill_usage_from_logs）
     过去一个用本地日期、一个用 UTC 日期，在 UTC+8 机器上凌晨 00:00-08:00 的调用
-    会被算进两个不同的 day，导致回填把同一次调用重复计数。
-    展示层（stats.py 的 today/_since）也用本地日期，故此处一律取本地。
+    会被算进两个不同的 day，导致回填把同一次调用重复计数。展示层（stats.py 的
+    today/_since）也走这里，故一律取 UTC+8。
+
+    注意：这里**不再**用 `time.localtime` —— 那个口径跟着进程 TZ 变，而用户账本
+    用固定 UTC+8。两者必须同一个时区，哪怕主机配置被改成 UTC 也一样。
     """
     t = time.time() if ts is None else float(ts)
-    return time.strftime('%Y-%m-%d', time.localtime(t))
+    return datetime.datetime.fromtimestamp(t, _DAY_TZ).strftime('%Y-%m-%d')
 
 
 def day_sql(column: str = 'ts') -> str:
     """在 SQL 里按本地时区取日期的表达式（与 day_of 口径一致）。
 
     注意 SQLite 的 date(ts,'unixepoch') 是 UTC，不能直接用它——那正是
-    之前造成口径不一致的原因。这里用 'unixepoch','localtime' 两个修饰符。
+    之前造成口径不一致的原因。这里用 'unixepoch','+8 hours' 两个修饰符：
+    **固定偏移而不是 'localtime'**，理由与 `day_of` 相同（不依赖进程 TZ）。
 
     **当心索引失效**：这个表达式把 `ts` 包在函数里，SQLite 无法再走 `ts` 上的
     索引（查询计划会退化成 SCAN，即全表扫描）。实测 5 万行时一次过滤要 13.8ms，
@@ -120,29 +135,30 @@ def day_sql(column: str = 'ts') -> str:
     `day_start_ts()` 把它换算成时间戳范围（见那里的说明）；只有确实要**按天
     分组聚合**（GROUP BY 日期）时才用它——那种场景没法避免表达式。
     """
-    return f"strftime('%Y-%m-%d', {column}, 'unixepoch', 'localtime')"
+    return f"strftime('%Y-%m-%d', {column}, 'unixepoch', '+8 hours')"
 
 
 def hour_of(ts: float | None = None) -> int:
-    """本地小时（0-23）。与 day_of 同一口径：**本地时区**，不是 UTC。"""
+    """UTC+8 的小时（0-23）。与 `day_of` 同一口径：**固定偏移**，不跟随进程 TZ。"""
     t = time.time() if ts is None else float(ts)
-    return int(time.strftime('%H', time.localtime(t)))
+    return datetime.datetime.fromtimestamp(t, _DAY_TZ).hour
 
 
 def hour_sql(column: str = 'ts') -> str:
-    """在 SQL 里按本地小时分桶（'2026-09-29 09'）——「今日」按小时聚合用。
+    """在 SQL 里按 UTC+8 小时分桶（'2026-09-29 09'）——「今日」按小时聚合用。
 
     与 day_sql 同样的注意事项：表达式包住列就没法走索引，所以过滤条件仍应写成
     `ts >= ?`（用 day_start_ts / hour_start_ts 换算），只有 GROUP BY 才用它。
     """
-    return f"strftime('%Y-%m-%d %H', {column}, 'unixepoch', 'localtime')"
+    return f"strftime('%Y-%m-%d %H', {column}, 'unixepoch', '+8 hours')"
 
 
 def hour_start_ts(day: str | None = None, hour: int = 0) -> int:
-    """某天某小时（本地时区）的**起点时间戳**。day 为 None 时取今天。"""
+    """某天某小时（UTC+8）的**起点时间戳**。day 为 None 时取今天。"""
     d = day or day_of()
     y, m, dd = (int(x) for x in d.split('-'))
-    return int(time.mktime((y, m, dd, max(0, min(23, int(hour))), 0, 0, 0, 0, -1)))
+    return int(datetime.datetime(y, m, dd, max(0, min(23, int(hour))),
+                                 tzinfo=_DAY_TZ).timestamp())
 
 
 def day_start_ts(day: str | None = None) -> int:
@@ -168,7 +184,11 @@ def day_start_ts(day: str | None = None) -> int:
     """
     if day is None:
         day = day_of()
-    return int(time.mktime(time.strptime(day, '%Y-%m-%d')))
+    # 与 `day_sql` 的 `'+8 hours'` 严格同口径：用固定时区而不是 `time.mktime`
+    # （后者按进程 TZ 解释，会把「本地日期 ≥ X」和「ts ≥ X 当地零点」这对本该
+    # 等价的条件在非 +8 机器上拆开）。
+    return int(datetime.datetime.strptime(day, '%Y-%m-%d')
+               .replace(tzinfo=_DAY_TZ).timestamp())
 
 
 SCHEMA = """
@@ -269,6 +289,11 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   realm             TEXT    NOT NULL DEFAULT 'cn',
   PRIMARY KEY (day, key_id, model, realm)
 );
+
+-- 主键是 (day, key_id, model, realm)：`WHERE key_id = ? AND day >= ?` 只能走
+-- day 的范围扫描，再逐行过滤 key_id —— `/v1/usage` 与按密钥的用量统计因此
+-- 会扫过全站所有密钥的当日行。这条索引把「某个密钥最近 N 天」变成范围读。
+CREATE INDEX IF NOT EXISTS idx_usage_daily_key_day ON usage_daily(key_id, day);
 
 -- 按小时的用量累计：给「今日」趋势图用（粒度随范围走，见 stats 页）。
 -- 为什么不直接查下面那张业务无关的请求日志：日志会被保留期裁剪、也能被用户
@@ -939,6 +964,10 @@ def _rebuild_usage_daily_pk(conn: sqlite3.Connection) -> bool:
             ''')
             conn.execute('DROP TABLE usage_daily')
             conn.execute('ALTER TABLE usage_daily_new RENAME TO usage_daily')
+            # 重建会带走旧表上的索引：这里补回来，否则「某个密钥最近 N 天」
+            # 的查询要等到下次进程启动重新跑 schema 才重新有索引。
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_usage_daily_key_day '
+                         'ON usage_daily(key_id, day)')
         logger.info('usage_daily 主键已迁移为四列（含 realm），历史数据已保留')
         return True
     except sqlite3.Error as exc:
@@ -974,6 +1003,21 @@ def execute(sql: str, args: Iterable[Any] = ()) -> int:
         if not getattr(_atomic_state, "depth", 0):
             conn.commit()
         return int(cur.lastrowid or 0)
+
+
+def execute_count(sql: str, args: Iterable[Any] = ()) -> int:
+    """执行写语句并返回**受影响行数**。
+
+    `INSERT OR IGNORE` 撞唯一索引时返回 0 —— 调用方据此判断"这一行本来就存在"，
+    不必先做一次 `SELECT ... WHERE 唯一键=?` 再插入。
+    """
+    with _lock:
+        conn = connect()
+        cur = conn.execute(sql, tuple(args))
+        changed = int(cur.rowcount)
+        if not getattr(_atomic_state, "depth", 0):
+            conn.commit()
+        return changed
 
 
 def executemany(sql: str, seq: Iterable[Iterable[Any]]) -> None:
@@ -1022,6 +1066,13 @@ def set_setting(key: str, value: Any) -> None:
         'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
         (key, json.dumps(value, ensure_ascii=False)),
     )
+    # `config.global_http_proxy()` 按代际缓存出口代理；保存这两条时要让它立刻
+    # 重读，否则运维改完代理最多要等 2 秒（跨进程）才生效。
+    if key in ('http_proxy', 'global_proxy_enabled'):
+        try:
+            config.invalidate_global_proxy()
+        except Exception:        # noqa: BLE001 —— 缓存失效失败不该让保存失败
+            pass
 
 
 # ── 用量累计 ─────────────────────────────────────────────
@@ -1046,40 +1097,42 @@ def bump_usage(
     ch, cm = cache if cache else (0, 0)
     from .ledger import units, SCALE
     amount = units(credit or 0)
+    # 一次 UPSERT 写完整行：`credit` 是由 `credit_units` 派生的展示值，两者在
+    # 同一条语句里一起落，不再"先加浮点、再更新整数、再用整数反推浮点"三趟。
+    #
+    # SQLite 的 `DO UPDATE SET` 右侧表达式按**旧值**求值，所以下面两个赋值都
+    # 读取"冲突发生前"的 `credit_units` —— 这正是"先加整数、再按新整数算浮点"
+    # 想要的顺序。`excluded.credit_units` 是本次要加的量。
     execute(
-        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) '
-        'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?) '
+        'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, '
+        'completion_tokens, credit, credit_units, realm, cache_hit_tokens, cache_miss_tokens) '
+        'VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) '
         'ON CONFLICT(day, key_id, model, realm) DO UPDATE SET '
         '  requests = requests + 1, '
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
-        '  credit = credit + excluded.credit, '
+        '  credit_units = coalesce(credit_units, 0) + excluded.credit_units, '
+        '  credit = (coalesce(credit_units, 0) + excluded.credit_units) * 1.0 / ?, '
         '  cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens, '
         '  cache_miss_tokens = cache_miss_tokens + excluded.cache_miss_tokens',
-        (day, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r, ch, cm),
+        (day, key_id, model, prompt_tokens, completion_tokens,
+         amount * 1.0 / SCALE, amount, r, ch, cm, SCALE),
     )
     # 同一份数据的**小时**维度，给「今日」趋势图用。两处必须一起写：只写一处
     # 就会出现「卡片有数、小时图没有」或反过来的分歧（口径一致性见建表注释）。
     execute(
-        'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, completion_tokens, credit, realm) '
-        'VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?) '
+        'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, '
+        'completion_tokens, credit, credit_units, realm) '
+        'VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?, ?) '
         'ON CONFLICT(day, hour, key_id, model, realm) DO UPDATE SET '
         '  requests = requests + 1, '
         '  prompt_tokens = prompt_tokens + excluded.prompt_tokens, '
         '  completion_tokens = completion_tokens + excluded.completion_tokens, '
-        '  credit = credit + excluded.credit',
-        (day, hour, key_id, model, prompt_tokens, completion_tokens, float(credit or 0), r),
+        '  credit_units = coalesce(credit_units, 0) + excluded.credit_units, '
+        '  credit = (coalesce(credit_units, 0) + excluded.credit_units) * 1.0 / ?',
+        (day, hour, key_id, model, prompt_tokens, completion_tokens,
+         amount * 1.0 / SCALE, amount, r, SCALE),
     )
-    # Integer totals are updated without adding binary floats. Legacy REAL fields
-    # are refreshed as presentation values in the caller's same transaction.
-    execute('UPDATE usage_daily SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND key_id=? AND model=? AND realm=?',
-            (amount,day,key_id,model,r))
-    execute('UPDATE usage_daily SET credit=credit_units*1.0/? WHERE day=? AND key_id=? AND model=? AND realm=?',
-            (SCALE,day,key_id,model,r))
-    execute('UPDATE usage_hourly SET credit_units=coalesce(credit_units,0)+? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (amount,day,hour,key_id,model,r))
-    execute('UPDATE usage_hourly SET credit=credit_units*1.0/? WHERE day=? AND hour=? AND key_id=? AND model=? AND realm=?',
-            (SCALE,day,hour,key_id,model,r))
 
 
 def realm_of_model(model: str | None) -> str:
@@ -1308,6 +1361,12 @@ _REQUEST_LOG_RETAIN_DAYS = 90
 # 不必每次写入都查一次。检查本身用索引列 ts，成本可忽略。
 _REQUEST_LOG_CHECK_EVERY = 2000
 _request_log_writes = 0
+#: 侧表清理到期标记。置位由写入方做，真正的 DELETE 交给事务**之外**执行。
+#:
+#: 原先这段清理直接挂在 `add_request_log` 里，而它是在结算事务内被调用的 ——
+#: 于是每两千次结算就有一次账本事务要多跑四条 DELETE（含一条 `OFFSET 20000`
+#: 的子查询）。那是旁路工作，没有理由占用账本的写窗口。
+_prune_pending = False
 
 
 # 侧表保留策略（审计 2026-10-18）：这几张表以前只增不减。
@@ -1355,8 +1414,26 @@ def _prune_request_logs() -> None:
     _prune_side_tables()
 
 
-def add_request_log(**fields: object) -> None:
-    """落一行请求日志。列由固定元组决定，缺省字段写 NULL。
+def prune_if_pending() -> None:
+    """事务**之外**的侧表清理入口。
+
+    写入方只置标记，清理由调用方在账本事务提交后执行。清理本身已经是旁路操作
+    （内部逐条 try/except），所以这里再包一层：它失败绝不能让结算看起来失败。
+    """
+    global _prune_pending
+    if not _prune_pending:
+        return
+    _prune_pending = False
+    try:
+        _prune_request_logs()
+    except Exception:        # noqa: BLE001
+        pass
+
+
+def add_request_log(**fields: object) -> int:
+    """落一行请求日志。返回受影响行数（0 = 这一行本来就存在，幂等命中）。
+
+    列由固定元组决定，缺省字段写 NULL。
 
     `client_request_id`（RV01）：调用方自带的 `X-Request-ID`，已由
     `observability.client_request_id_from_headers` 校验过。它可以缺省（None）——
@@ -1381,12 +1458,18 @@ def add_request_log(**fields: object) -> None:
             fields['platform'] = _gw.forced_platform.get() or 'workbuddy'
         except Exception:  # noqa: BLE001
             pass
-    execute('INSERT INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
-            tuple(fields.get(c) for c in columns))
+    # `OR IGNORE` 撞 `idx_request_logs_request_id` 时返回 0 行 —— 幂等由唯一索引
+    # 直接提供，调用方不必先 `SELECT ... WHERE request_id=?` 再插入。
+    inserted = execute_count(
+        'INSERT OR IGNORE INTO request_logs('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',
+        tuple(fields.get(c) for c in columns))
     _request_log_writes += 1
     if _request_log_writes >= _REQUEST_LOG_CHECK_EVERY:
         _request_log_writes=0
-        _prune_request_logs()
+        # 只置标记：真正的清理由 `prune_if_pending()` 在事务提交后执行。
+        global _prune_pending
+        _prune_pending = True
+    return inserted
 
 
 # 账号回填的匹配窗口（秒）。
@@ -1835,13 +1918,23 @@ def rebuild_usage_from_logs() -> dict:
     conn = connect()
     with _lock:
         try:
+            from . import ledger
+            # `credit_units` 与规范化的 `credit` 在**插入时**就一起算好。原先先插入
+            # 原始浮点、再逐行 `SELECT rowid` + `UPDATE` 反推 —— 那是一次 N+1，
+            # 上万行时在写锁里跑几秒，而这段时间全站的 DB 访问都在排队。
+            def _amounts(value):
+                units = ledger.units(value or 0) or 0
+                return units, units / ledger.SCALE
+
             conn.execute('BEGIN')
             conn.execute('DELETE FROM usage_daily')
             conn.executemany(
                 'INSERT INTO usage_daily(day, key_id, model, requests, prompt_tokens, '
-                'completion_tokens, credit, realm, cache_hit_tokens, cache_miss_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'completion_tokens, credit, credit_units, realm, cache_hit_tokens, '
+                'cache_miss_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(row['day'], row['key_id'], row['model'], int(row['requests']),
-                  int(row['pt']), int(row['ct']), float(row['cr'] or 0),
+                  int(row['pt']), int(row['ct']), _amounts(row['cr'])[1],
+                  _amounts(row['cr'])[0],
                   str(row['realm'] or 'cn'),
                   int(row['ch'] or 0), int(row['cm'] or 0)) for row in expected],
             )
@@ -1850,19 +1943,15 @@ def rebuild_usage_from_logs() -> dict:
             conn.execute('DELETE FROM usage_hourly')
             hourly_rows = _usage_expected_rows(hour_sql('ts'))
             conn.executemany(
-                'INSERT INTO usage_hourly(day, hour, key_id, model, requests, prompt_tokens, '
-                'completion_tokens, credit, realm) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO usage_hourly(day, hour, key_id, model, requests, '
+                'prompt_tokens, completion_tokens, credit, credit_units, realm) '
+                'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(str(row['bucket'])[:10], int(str(row['bucket'])[11:13]), row['key_id'],
                   row['model'], int(row['requests']), int(row['pt']), int(row['ct']),
-                  float(row['cr'] or 0), str(row['realm'] or 'cn'))
+                  _amounts(row['cr'])[1], _amounts(row['cr'])[0],
+                  str(row['realm'] or 'cn'))
                  for row in hourly_rows if len(str(row['bucket'] or '')) >= 13],
             )
-            from . import ledger
-            for table in ('usage_daily', 'usage_hourly'):
-                for row in conn.execute('SELECT rowid,credit FROM '+table).fetchall():
-                    amount = ledger.units(row['credit']) or 0
-                    conn.execute('UPDATE '+table+' SET credit_units=?,credit=? WHERE rowid=?',
-                                 (amount, amount / ledger.SCALE, row['rowid']))
             conn.commit()
         except Exception:
             conn.rollback()

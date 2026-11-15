@@ -67,6 +67,19 @@ def main() -> int:
     cfg['secret'] = secrets.token_urlsafe(48)
     changed.append(f'secret 已轮换（旧值长度 {len(old_secret)}）')
 
+    # 1b) 同时清除过渡期密钥。
+    #
+    # `server/security.py` 在轮换时允许 `secret_previous` 作为过渡继续接受
+    # （见该文件 `_sign`/`_unsign` 附近「会话密钥轮换的过渡窗口」注释）。
+    # 因此只换 `secret` 而不清 `secret_previous`，**旧 cookie 依然能验签** ——
+    # 这与本脚本开头承诺的「生成新的 secret → 立即吊销所有既有 cookie
+    # （含攻击者伪造的）」直接矛盾。
+    #
+    # 应急响应脚本给出的错误承诺代价最高：它会让人以为已经止血而停止排查。
+    previous = cfg.pop('secret_previous', None)
+    if previous is not None:
+        changed.append(f'secret_previous 已删除（过渡期旧密钥不再被接受，长度 {len(str(previous))}）')
+
     # 2) 清空 legacy api_keys（曾用于换管理端权限）
     if old_keys:
         cfg['api_keys'] = []

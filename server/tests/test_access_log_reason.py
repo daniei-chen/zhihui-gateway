@@ -349,10 +349,44 @@ class RequestLogRetentionTest(unittest.TestCase):
             db._prune_request_logs()   # 不该抛
 
     def test_check_counter_triggers_prune(self) -> None:
-        """按写入次数触发清理（而非每次写入都查一次，那是一趟全表扫描）。"""
+        """按写入次数触发清理（而非每次写入都查一次，那是一趟全表扫描）。
+
+        ## 这个用例 2026-11-14 才跟上实现
+
+        原来的断言是「写入达到间隔后 `_prune_request_logs` 被直接调用一次」。
+        实现后来改成了**延迟执行**：写入路径只置一个待清理标记，真正的清理由
+        `prune_if_pending()` 在账本事务提交之后做（写入路径上不做全表扫描）。
+        断言还停在旧行为上，于是从引入延迟清理那一版起就一直红着。
+
+        现在锁的是新的契约，分两段：
+          · 达到间隔 → 置标记 + 计数器归零；
+          · 有人调用 `prune_if_pending()` → 真正清理 + 清标记。
+        """
         with mock.patch.object(db, '_prune_request_logs') as prune:
-            db._request_log_writes = 0
-            for _ in range(db._REQUEST_LOG_CHECK_EVERY):
-                self._add(int(time.time()))
-            self.assertEqual(prune.call_count, 1, '写入达到间隔后没有触发清理')
-            self.assertEqual(db._request_log_writes, 0, '计数器没有重置')
+            with mock.patch.object(db, '_prune_pending', False):
+                db._request_log_writes = 0
+                for _ in range(db._REQUEST_LOG_CHECK_EVERY):
+                    self._add(int(time.time()))
+                self.assertTrue(db._prune_pending, '写入达到间隔后没有置待清理标记')
+                self.assertEqual(db._request_log_writes, 0, '计数器没有重置')
+                self.assertEqual(prune.call_count, 0,
+                                 '写入路径不该直接清理（那是事务内的全表扫描）')
+
+                db.prune_if_pending()
+                self.assertEqual(prune.call_count, 1, '待清理标记没有被兑现')
+                self.assertFalse(db._prune_pending, '清理后标记应当清掉')
+
+    def test_prune_if_pending_is_a_noop_without_a_marker(self) -> None:
+        """没有待清理标记时不该白跑一趟。"""
+        with mock.patch.object(db, '_prune_request_logs') as prune:
+            with mock.patch.object(db, '_prune_pending', False):
+                db.prune_if_pending()
+            self.assertEqual(prune.call_count, 0)
+
+    def test_prune_if_pending_swallows_failures(self) -> None:
+        """清理是旁路操作，失败绝不能让结算看起来失败。"""
+        with mock.patch.object(db, '_prune_request_logs',
+                               side_effect=RuntimeError('boom')):
+            with mock.patch.object(db, '_prune_pending', True):
+                db.prune_if_pending()   # 不该抛
+            self.assertFalse(db._prune_pending, '失败也要清标记，避免反复重试')

@@ -6,6 +6,15 @@
     "WB2API_"
   ],
   "settings": {
+    "WB_BLOCKING_THREADS": {"type":"integer","sensitive":false,"default":16,"minimum":4,"maximum":64,"unit":"threads","consumers":["server/threadpools.py"],"description":"Worker threads for blocking work; clamped to 4-64. Too few starves SQLite/JSON work, too many wastes memory."},
+    "WB_GATEWAY_BODY_PHYSICAL_FACTOR": {"type":"integer","sensitive":false,"default":3,"minimum":1,"maximum":8,"unit":"x logical bytes","consumers":["server/observability.py"],"description":"Memory multiplier applied to INPUT bodies when accounting the admission budget: the raw buffer, the second read copy and the parsed object graph coexist. Output buffers are NOT multiplied."},
+    "WB_GATEWAY_QUEUE_DEPTH": {"type":"integer","sensitive":false,"default":64,"minimum":1,"unit":"tickets","consumers":["server/observability.py"],"description":"Maximum waiting tickets before request-body allocation. Bounded on purpose: an unbounded queue turns overload into memory growth instead of a fast rejection."},
+    "WB_GATEWAY_QUEUE_PER_KEY": {"type":"integer","sensitive":false,"default":4,"minimum":1,"unit":"tickets","consumers":["server/observability.py"],"description":"Per-key waiting-ticket cap; keeps one busy key from occupying the whole queue."},
+    "WB_QODER_ACCOUNTS_DIR": {"type":"string","sensitive":false,"default":"/opt/qoder-hub/accounts","consumers":["server/externalplatforms.py"],"description":"Directory holding the Qoder account JSON files."},
+    "WB_QODER_PANEL_SECRET": {"type":"string","sensitive":true,"default":"/opt/qoder-hub/secrets/panel_password","consumers":["server/externalplatforms.py"],"description":"Path to the Qoder panel password file. Sensitive because the file content is a credential, not the path itself."},
+    "WB_QODER_REFRESH_URL": {"type":"string","sensitive":false,"default":"https://openapi.qoder.com.cn/api/v1/deviceToken/refresh","consumers":["server/externalplatforms.py"],"description":"Token refresh endpoint used for Qoder accounts."},
+    "WB_QODER_TIMEOUT": {"type":"integer","sensitive":false,"default":60,"exclusive_minimum":0,"unit":"seconds","consumers":["server/config.py"],"description":"Per-platform timeout for Qoder. Its proxy can take ~183s to return 502 when the single upstream account is rate limited, by which time callers have given up. Historical latency is 2.2s average and 12.8s max, so 60s is ample. Other platforms keep WB_UPSTREAM_TIMEOUT because WorkBuddy genuinely has slow first bytes on very long prompts."},
+    "WB_TRAE_DB": {"type":"string","sensitive":false,"default":"/opt/trae-work/data/data/aiwork.sqlite","consumers":["server/externalplatforms.py"],"description":"SQLite database the Trae engine uses for account state."},
     "WB_MAX_OUTPUT_BYTES": {"type":"integer","sensitive":false,"default":4194304,"minimum":65536,"maximum":16777216,"unit":"decoded bytes per request","consumers":["server/outputlimits.py","server/deadline.py"],"description":"Bound successful response bodies, stream output and retained translator state; errors are additionally capped at 64 KiB."},
     "WB_AUTH_SHARED_GID": {"type":"string","sensitive":false,"default":"","consumers":["server/services/tencent.py"],"description":"Optional shared credential-reader group ID; both Manager and engine must belong to this group and credential directories must permit group traversal."},
     "WB_SHARED_ADMISSION": {"type": "boolean", "sensitive": false, "default": false, "consumers": ["server/config.py"], "description": "Opt-in same-host cross-generation resource coordination; does not authorize parallel writers or background jobs."},
@@ -522,7 +531,7 @@
       "consumers": [
         "manager/server/config.py:535"
       ],
-      "default": 24,
+      "default": 32,
       "unit": "count",
       "exclusive_minimum": 0
     },
@@ -532,7 +541,7 @@
       "consumers": [
         "manager/server/config.py:538"
       ],
-      "default": 8,
+      "default": 16,
       "unit": "count",
       "exclusive_minimum": 0
     },
@@ -542,7 +551,7 @@
       "consumers": [
         "manager/server/config.py:539"
       ],
-      "default": 4,
+      "default": 8,
       "unit": "count",
       "minimum": 0
     },

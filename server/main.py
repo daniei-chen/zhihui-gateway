@@ -92,6 +92,12 @@ def _recover_primary_state():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 在第一次 `to_thread` 之前替换默认执行器。CPython 在 2 vCPU 上把它定成
+    # `min(32, cpu+4) = 6` 个线程，而推理主路径一个请求要占 6 次线程跳转 ——
+    # 队列一积压，排在后面的实例心跳就会超时，租约失守后进程只能重启。
+    # 分池的理由见 `threadpools` 的模块文档。
+    from . import threadpools
+    asyncio.get_running_loop().set_default_executor(threadpools.blocking_pool())
     # Fail before creating directories, opening the ledger, or starting jobs.
     from .configcontract import validate_environment
     app.state.configuration_snapshot = validate_environment()
@@ -105,7 +111,10 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(10)
             try:
-                await joined_thread(budget.heartbeat)
+                # 心跳走专用池：它的失败代价是"停止准入且不自愈"，不能排在任何
+                # 业务请求后面。
+                await asyncio.get_running_loop().run_in_executor(
+                    threadpools.heartbeat_pool(), budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
@@ -172,6 +181,42 @@ async def lifespan(app: FastAPI):
         app.state.rt = _qtg_rt
         if _qtg_rt is not None:
             logger.info('qoder/trae control plane merged in (qtgcore started)')
+
+        # 身份签名密钥的启动自检。
+        #
+        # ## 为什么需要
+        #
+        # 2026-11-15：管理员密码正确、登录接口返回 200，然后 nginx 的鉴权子请求
+        # 读不到密钥返回 503，于是**登录成功也进不去面板**，三小时 19 次。
+        #
+        # 根因是那条路径的来源被换成了一个**部署里从未设置过的配置项**。
+        # 这件事从代码上看完全正常，从测试上看也全绿 ——
+        # **它只在真实登录时以「进不去」的形式暴露。**
+        #
+        # 现在路径解析已经有兜底（配置为空时回落默认位置），所以默认情况下
+        # 不会再把这条链路弄断。但**兜底也读不到**的情形仍然存在（文件没部署、
+        # 权限被改），而那种情况下依然是同一句「登录进不去」。
+        #
+        # 所以启动时读一次，把结论写进启动日志：
+        # 正常情况下只有一行 INFO，异常时是一行 WARNING 并点名后果。
+        #
+        # 只记日志、不阻断启动：密钥读不到时面板仍可浏览，只是登录流程走不完，
+        # 而把它变成启动失败会让一次配置错误升级成一次宕机。
+        try:
+            from . import edgeidentity as _edge
+            _secret_path = _edge.identity_secret_path()
+            if _edge._secret():
+                logger.info('identity signing key ready (%s)', _secret_path)
+            else:
+                logger.warning(
+                    'identity signing key UNREADABLE at %s — admin login will succeed '
+                    'but the shell cannot pass nginx auth_request (503). '
+                    'Check the file exists, is a regular file, mode 0600, '
+                    'size <= 4096, and contains no whitespace.',
+                    _secret_path)
+        except Exception:      # noqa: BLE001
+            logger.warning('identity signing key check failed', exc_info=True)
+
         # D-008 修复（2026-10-27 审计 S1）：qtg 合并时**漏了这一步接线**。
         # `checkin_scheduler.start()` 的 docstring 明确写着「在 lifespan 里调用」，
         # 但全仓没有任何调用方，于是 qoder/trae 的每日随机签到静默停摆：
@@ -280,6 +325,34 @@ async def lifespan(app: FastAPI):
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
         await config.close_clients()
+        # 在清理末尾装一个**可用的**新执行器，让收尾阶段仍有地方提交阻塞工作。
+        #
+        # ## 为什么必须这么做
+        #
+        # asyncio 的默认执行器是**懒创建**的。如果整个 lifespan 从没排过阻塞任务，
+        # 它就从未被创建，于是「循环关闭时关闭默认执行器」这一步是空操作 —— 之后
+        # 收尾再提交时会新建一个，一切正常。这就是引入自定义池之前的行为。
+        #
+        # 从引入自定义池那一版（1.2.44）起，lifespan 一开始就把默认执行器换成了我们的池：
+        # 它必然存在，于是收尾时被关闭；之后任何提交都抛「已关闭后仍要提交」。
+        # 那个失败又打断归档线程的收尾，让后续检查连带报「归档线程已在运行」。
+        #
+        # 2026-11-14 审计：按版本二分确认，同一组检查在引入自定义池之前全部通过、
+        # 之后固定七处失败；去掉那一行即恢复正常。
+        #
+        # ## 为什么是小池、且不显式关闭
+        #
+        # 这个阶段之后进程很快就退出了，线程由操作系统回收。它存在的窗口只有毫秒
+        # 级，用途仅仅是让收尾提交有去处 —— 那里的阻塞工作本来就是一次性的。
+        #
+        # 不用 `set_default_executor(None)`：CPython 要求参数是 ThreadPoolExecutor
+        # 实例，传 None 会抛 TypeError，反而让收尾多一处异常。
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            asyncio.get_running_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=2, thread_name_prefix='wb-final'))
+        except (RuntimeError, ImportError):
+            pass
         if pending_shutdown_cancel is not None:
             raise pending_shutdown_cancel
 
@@ -354,8 +427,14 @@ MAX_API_BODY_BYTES = 16 * 1024 * 1024
 MAX_PACKAGE_BODY_BYTES = 64 * 1024 * 1024
 PACKAGE_UPLOAD_PATHS = ('/api/system/update-package',)
 from .portalregistration import BODY_LIMIT as REGISTRATION_BODY_LIMIT
+# 登录只需要 `{username, password}`（几百字节）。在**未鉴权**的路径上沿用 16 MiB
+# 上限，等于允许匿名请求把 16 MiB × APIBodyGuard 的并发名额（默认 32）≈ 512 MiB
+# 缓冲打满，把整个管理面拖成 503。给登录一个独立的小上限：正常客户端远低于它，
+# 恶意大 body 在声明长度阶段就被 413 拒掉，连缓冲都不进。
+LOGIN_BODY_LIMIT = 64 * 1024
 API_PATH_LIMITS={**{path:MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
-                 '/api/portal/register':REGISTRATION_BODY_LIMIT}
+                 '/api/portal/register':REGISTRATION_BODY_LIMIT,
+                 '/api/login':LOGIN_BODY_LIMIT}
 
 
 app.add_middleware(drain.DrainMiddleware)
@@ -422,6 +501,27 @@ def public_ready():
     from . import operational
     ready = operational.public_readiness()
     return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
+
+
+@app.get('/api/readyz/detail', include_in_schema=False)
+def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
+    """完整就绪诊断（需面板读者身份）。
+
+    ## 为什么 `/readyz` 之外还要一个
+
+    `/readyz` 只回一个布尔值，那是对的 —— 探针可能每秒打很多次，不能每次都去
+    碰数据库（见 `public_readiness` 的说明，它读的是监控循环每 30 秒刷新一次的缓存）。
+
+    但**不就绪时只看到一个 false，排障无从下手**：到底是数据库不可写、账本通道
+    降级、回执有积压、还是正在排空？这四种情况的处置完全不同。
+
+    这里跑一次完整的判定，把每一项判据都带出来。
+
+    **只该在需要排障时调用**：它会真的去探数据库可写性、读回执通道状态，
+    不是读缓存 —— 放在探测探针里会把健康检查变成写压力。
+    """
+    from . import operational
+    return operational.readiness()
 
 
 app.include_router(gateway.router)
@@ -888,6 +988,194 @@ app.add_middleware(PlatformRoutingMiddleware, base_path=config.BASE_PATH)
 # ── Prometheus 指标（2026-10-23 审计补充：manager 之前完全没有 /metrics）──────
 # Application authentication is mandatory even behind a proxy or static fallback.
 # Collectors use an independent credential; normal readonly/keys tokens do not qualify.
+def _cgroup_memory_peak_bytes() -> int | None:
+    """本服务 cgroup 的内存峰值字节数；取不到返回 None。
+
+    ## 为什么峰值比当前值更有用
+
+    `workbuddy_process_resident_bytes` 是**此刻**的常驻内存，它会来回波动 ——
+    一次大请求把内存顶上去、请求结束又落回来，曲线看不出异常。
+
+    **峰值只会涨，不会落。** 所以：
+
+    | 观察 | 含义 |
+    | --- | --- |
+    | 峰值与当前值同步缓慢上涨 | 可能是泄漏 |
+    | 峰值远高于当前值且不再变化 | 曾经有过一个大尖峰（大 body / 长上下文） |
+    | 两者一起回落 | 不可能 —— 峰值不回落，回落的是当前值 |
+
+    有了这两条曲线，「有没有在慢慢胀」才成为一个能看图回答的问题，而不是靠几天后
+    发现 OOM。
+
+    ## 为什么读 cgroup 而不是自己记账
+
+    `memory.peak` 由内核维护，包含进程的匿名页、页缓存和内核开销 —— 那正是
+    OOM killer 看的口径。自己记账只会漏掉一部分。
+
+    需要 cgroup v2 与内核 5.19+；取不到（老内核、容器内没有该文件）时返回 None，
+    指标不输出，不报假的 0。
+    """
+    try:
+        import os
+        with open(f'/sys/fs/cgroup{_cgroup_scope()}/memory.peak', encoding='ascii') as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _cgroup_scope() -> str:
+    """当前进程所在 cgroup 的相对路径（形如 `/system.slice/xxx.service`）。
+
+    取不到就返回空串，让调用方拼出 `/sys/fs/cgroup/memory.peak` —— 那在容器里
+    往往是对的（cgroup 命名空间已经把根指向本容器）。
+    """
+    try:
+        with open('/proc/self/cgroup', encoding='ascii') as handle:
+            for line in handle:
+                parts = line.strip().split(':', 2)
+                if len(parts) == 3 and parts[0] == '0':
+                    return parts[2].rstrip('/')
+    except OSError:
+        pass
+    return ''
+
+
+def _process_memory_bytes() -> tuple[int, int] | None:
+    """(常驻内存, 虚拟内存) 字节数；取不到返回 None。
+
+    ## 为什么需要它
+
+    网关是常驻进程，跑几天会不会慢慢胀、有没有泄漏，**没有任何指标能看出来**。
+    `/metrics` 此前只有「在不在服务」和「跑了多久」两个进程级指标 —— 也就是说
+    只有崩了才发现，中间那段缓升完全不可见。
+
+    加趋势指标比加告警更有用：先能看见曲线，才谈得上判断哪段斜率不正常。
+
+    ## 为什么读 /proc 而不是引入依赖
+
+    只需要两个数字。`/proc/self/statm` 是每页计数，乘页面大小即可；不引 `psutil`
+    这类依赖，避免为两行数据增加一个包。取不到（非 Linux、或 /proc 不可读）时返回
+    None，指标干脆不输出 —— 总比报一个假的 0 强。
+    """
+    try:
+        with open('/proc/self/statm', encoding='ascii') as handle:
+            fields = handle.read().split()
+        page_size = os.sysconf('SC_PAGE_SIZE')
+        virtual_pages = int(fields[0])
+        resident_pages = int(fields[1])
+        return resident_pages * page_size, virtual_pages * page_size
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+#: 分位数查询的缓存槽（按列名分开）。
+#:
+#: 查询本身很便宜（时间字段有索引，实测个位数毫秒），
+#: 缓存不是为了省查询，是**避免并发抓取时把同一份数据算很多遍** ——
+#: 监控系统常见行为是多个实例同时抓同一个端点。
+_COLUMN_CACHES: dict[str, dict] = {}
+
+
+def _column_quantiles(column: str, window_seconds: int = 3600) -> dict | None:
+    """某个数值列在窗口内的分位数，带 30 秒缓存。
+
+    ## 为什么抽成一个函数
+
+    首字延迟和上下文长度需要**完全一样**的查询形状（窗口内排序取分位、
+    样本不足不报、失败返回空）。复制一份等于以后要改两处，
+    而这两处一定会有人只改一处。
+
+    ## 列名必须白名单
+
+    `column` 会被**拼进 SQL**（列名不能用占位符参数化），
+    所以它只能是下面这几个内部常量，**绝不接受任何外部输入**。
+    不在名单里就直接返回空 —— 拼错的列名会让整条指标消失，
+    而不是让端点报错，那样更难发现。
+
+    ## 样本不足时不报分位值
+
+    少于 20 个样本时只报样本数，**分位值留空**。
+
+    10 个样本算出来的 p99 是那 10 个里最大的一个，把它当分位数展示
+    会让人以为看到了长尾，实际上只是看了最小值集。
+    **宁可空着，也不要给一个看起来像结论的数字。**
+    """
+    #: 列名 → 缓存槽。新增列必须登记在这里，否则查不了。
+    allowed = {'first_token_ms': 'ttft', 'prompt_tokens': 'context'}
+    slot = allowed.get(column)
+    if slot is None:
+        return None
+    cache = _COLUMN_CACHES.setdefault(slot, {'at': 0.0, 'value': None})
+    now = time.monotonic()
+    cached = cache['value']
+    if cached is not None and 0 <= now - cache['at'] <= 30:
+        return cached
+    try:
+        rows = db.query(
+            'SELECT %s AS v FROM request_logs WHERE ts > ? AND %s IS NOT NULL '
+            'ORDER BY %s' % (column, column, column),
+            (int(time.time()) - window_seconds,))
+        values = [int(row['v']) for row in rows]
+    except Exception:      # noqa: BLE001
+        # 读不到就报不了，不能让指标端点因此 500。
+        cache.update(at=now, value=None)
+        return None
+    result = {'samples': len(values), 'p50': None, 'p95': None, 'p99': None, 'max': None}
+    if len(values) >= 20:
+        def _pick(q: float) -> int:
+            return values[min(len(values) - 1, int(len(values) * q))]
+        result.update(p50=_pick(0.50), p95=_pick(0.95), p99=_pick(0.99),
+                      max=values[-1])
+    cache.update(at=now, value=result)
+    return result
+
+
+def _ttft_quantiles(window_seconds: int = 3600) -> dict | None:
+    """最近窗口内的首字延迟分位数。
+
+    ## 为什么需要
+
+    2026-11-15 查性能时发现：平均首字延迟 7.3 秒、p99 57 秒，
+    而**这些数字当时只存在于数据库里** —— 看板看不见，也就没有人会盯。
+
+    两个账号的首字延迟接近 40 秒（其他 6–13 秒），差距六倍，
+    **直接把 p99 拉高**。这类「少数账号拖垮长尾」的问题，
+    不上趋势图就只能等用户来投诉。
+
+    实现在 `_column_quantiles`，这里只固定列名。
+    """
+    return _column_quantiles('first_token_ms', window_seconds)
+
+
+def _context_quantiles(window_seconds: int = 3600) -> dict | None:
+    """最近窗口内的上下文长度（prompt tokens）分位数。
+
+    ## 为什么需要
+
+    2026-11-15 有反馈说长对话跑到后面会开始重复同一段内容。
+    查下去网关侧三项都排除了（不裁剪历史、不注入系统消息、不丢推理内容），
+    但数据面看到一个强信号：
+
+        近三小时平均 prompt_tokens 31 万，**最大 50 万**，
+        还有一个请求输出了 2 万 token / 93 秒。
+
+    **正常回答不会有两万字。** 那几乎可以确定是在重复。
+
+    问题在于：**这个数字当时没有任何地方能看到**。要发现「对话在膨胀」，
+    只能去翻数据库。等到它表现为循环，已经晚了。
+
+    这个指标的作用是让膨胀**先于故障可见** —— 上下文一路上涨时，
+    趋势图会先抬头，而不是等对话崩掉。
+
+    ## 为什么不设「太大」的阈值
+
+    不同模型的上下文上限不同，而且上游随时会调。
+    写死一个阈值，要么太松没意义、要么太紧天天误报。
+    **只报分位数和最大值，让看的人按自己的模型判断。**
+    """
+    return _column_quantiles('prompt_tokens', window_seconds)
+
+
 @app.get('/metrics')
 def prometheus_metrics(request: Request):
     from .metricsauth import require_metrics
@@ -904,24 +1192,468 @@ def prometheus_metrics(request: Request):
         lines.append('%s %s' % (name, value))
 
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
+    # 首字延迟分位数。
+    #
+    # 必须带标签（Prometheus 的分位数惯例），而 `_m` 不支持标签，
+    # 所以这三条手工写，HELP/TYPE 只写一次。
+    _ttft = _ttft_quantiles()
+    if _ttft is not None:
+        _m('workbuddy_ttft_samples', 'gauge',
+           'Requests with a first-token measurement in the last hour. Below 20 the '
+           'quantiles are withheld on purpose: a p99 over that few samples is just '
+           'the largest of them, not a tail.', _ttft['samples'])
+        if _ttft['p50'] is not None:
+            if not any(x.startswith('# HELP workbuddy_ttft_ms ') for x in lines):
+                lines.append('# HELP workbuddy_ttft_ms Time to first token in milliseconds '
+                             'over the last hour, by quantile. This is what a user waits '
+                             'through before any text appears; end-to-end latency hides '
+                             'it behind the generation time.')
+                lines.append('# TYPE workbuddy_ttft_ms gauge')
+            for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
+                lines.append('workbuddy_ttft_ms{quantile="%s"} %d' % (_q, _ttft[_key]))
+    # 上下文长度（prompt tokens）分位数。
+    #
+    # 同一套查询，换一个列。**不设「太大」的阈值** ——
+    # 各模型上限不同且上游随时会调，写死阈值要么没用要么天天误报。
+    # 只报分位数和最大值，让看的人按自己的模型判断。
+    _ctx = _context_quantiles()
+    if _ctx is not None:
+        _m('workbuddy_context_samples', 'gauge',
+           'Requests with a prompt-token measurement in the last hour. Below 20 '
+           'the quantiles are withheld, for the same reason as the first-token '
+           'metric: a p99 over a handful of samples is just the largest of them.',
+           _ctx['samples'])
+        if _ctx['p50'] is not None:
+            if not any(x.startswith('# HELP workbuddy_context_tokens ') for x in lines):
+                lines.append('# HELP workbuddy_context_tokens Prompt tokens per request '
+                             'over the last hour, by quantile, plus the largest seen. '
+                             'No threshold is applied: model limits differ and change, '
+                             'so the number is for whoever knows their own limit. A '
+                             'dialogue that keeps growing shows here before it starts '
+                             'repeating itself.')
+                lines.append('# TYPE workbuddy_context_tokens gauge')
+            for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
+                lines.append('workbuddy_context_tokens{quantile="%s"} %d'
+                             % (_q, _ctx[_key]))
+            _m('workbuddy_context_max_tokens', 'gauge',
+               'Largest prompt-token count in the last hour. Grows steadily in a '
+               'long dialogue; that is the signal worth watching.', _ctx['max'])
+    # 上游等待时间的转发次数。
+    #
+    # 这个能力依赖外部条件 —— 上游得先限流。实现当天查了两次日志都是零，
+    # 那不是坏了，是上游一直没限流。只靠翻日志答不出「它跑过几次」，
+    # 计数器能直接回答。进程重启归零，语义是「本次运行里发生过吗」。
+    from .routers import gateway as _gateway_router
+    _m('workbuddy_retry_after_forwarded', 'counter',
+       'Times the gateway forwarded a Retry-After taken from upstream. Zero means '
+       'the capability has not had a chance to run, not that it is broken: it only '
+       'fires when upstream itself returns a wait time.',
+       _gateway_router._RETRY_AFTER_FORWARDED['count'])
+    # 当前实际选中的数据面引擎。
+    #
+    # ## 为什么值得单独暴露
+    #
+    # qoder 和 trae 各有两代适配器，由 `QTG_QODER_ENGINE` / `QTG_TRAE_ENGINE`
+    # 或 `/opt/workbuddy-manager/engine/var/` 下的一个文件决定。
+    #
+    # **文件缺失时会回落到 `bff`** —— 而那个引擎的源码已经丢失，只用于回滚。
+    # 也就是说：一次误删、一次恢复备份没带上那个文件，服务会**静默**切到一个
+    # 再也升不了级的实现上。启动日志里有一行，但那需要有人去翻日志。
+    #
+    # 2026-11-15 查引擎时确认：日志有记录（`qtg 启动：qoder=qoder2(...)`），
+    # 但 `/metrics` 里一个引擎相关的序列都没有。**监控看不到，告警自然也配不了。**
+    #
+    # 三个平台各一条，取值是「当前引擎名」，用 `engine` 标签区分。
+    _qtg_rt = getattr(getattr(request.app, 'state', None), 'rt', None)
+    if _qtg_rt is not None:
+        # HELP/TYPE 只在循环外写一次。写在循环里会给每个平台各来一份，
+        # 而 Prometheus 对同一个名字重复的 HELP 是明确报错的
+        # （`duplicate HELP line`），采集直接失败 —— 而这条指标本来就是为了
+        # 让监控看得见，采集挂掉等于白做。
+        _engine_lines = []
+        for _platform, _adapter in (('qoder', 'qoder'), ('trae', 'trae')):
+            _obj = getattr(_qtg_rt, _adapter, None)
+            _name = type(_obj).__name__ if _obj is not None else 'absent'
+            # 适配器类名形如 Qoder2Adapter / QoderAdapter —— 归一成引擎名，
+            # 与配置文件里能写的值（qoder2 / bff、aiwork / bff）对得上。
+            _engine = {'Qoder2Adapter': 'qoder2', 'QoderAdapter': 'bff',
+                       'Trae2Adapter': 'aiwork', 'TraeAdapter': 'bff'}.get(_name, _name)
+            if _engine not in ('qoder2', 'aiwork', 'bff', 'absent'):
+                _engine = 'unknown'
+            _engine_lines.append(
+                'workbuddy_engine_active{platform="%s",engine="%s"} 1' % (_platform, _engine))
+        _wb = getattr(_qtg_rt, 'wb', None)
+        _wb_engine = 'workbuddy' if _wb is not None else 'off'
+        _engine_lines.append(
+            'workbuddy_engine_active{platform="workbuddy",engine="%s"} 1' % _wb_engine)
+        lines.append('# HELP workbuddy_engine_active The data-plane engine currently '
+                     'selected per platform. On bff the upstream source is no longer '
+                     'available, so a silent fallback there means the service can never '
+                     'be upgraded.')
+        lines.append('# TYPE workbuddy_engine_active gauge')
+        lines.extend(_engine_lines)
     _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
        int(time.time() - _PROCESS_STARTED_AT))
+    # 进程自身占用：长期跑下去会不会胀，只能靠趋势看（见 `_process_memory_bytes`）。
+    _memory = _process_memory_bytes()
+    if _memory is not None:
+        _resident, _virtual = _memory
+        # 说明里点明口径差异：这个数是进程级 RSS，**不要**和下面那个 cgroup 数值直接相减。
+        # 2026-11-15 实测（同一时刻）：anon 两侧完全一致（124.8 MiB），差的全在 file ——
+        # 进程 RSS 含共享库映射页，cgroup 的 file 只算实际驻留的页缓存，于是进程侧
+        # 143.8 MiB 对 cgroup 侧 138.4 MiB。相差约 5 MiB 属正常，不是泄漏。
+        _m('workbuddy_process_resident_bytes', 'gauge',
+           'Resident set size of the gateway process. Process-level accounting: it counts '
+           'shared library mappings that the cgroup figure below does not, so the two will '
+           'differ by a few MiB and must not be subtracted from each other.',
+           _resident)
+        _m('workbuddy_process_virtual_bytes', 'gauge',
+           'Virtual memory size of the gateway process.', _virtual)
+    _m('workbuddy_process_threads', 'gauge',
+       'Live OS threads in the gateway process.', threading.active_count())
+    # cgroup 的内存峰值：它只涨不落，和常驻内存两条线一起看才知道有没有在慢慢胀。
+    # 见 `_cgroup_memory_peak_bytes` 的说明。
+    _peak = _cgroup_memory_peak_bytes()
+    if _peak is not None:
+        _m('workbuddy_cgroup_memory_peak_bytes', 'gauge',
+           'Peak memory of the service cgroup since boot; never decreases, so a rising '
+           'line alongside a flat resident gauge means a real leak rather than churn. '
+           'Cgroup-level accounting: excludes shared library mappings the process RSS '
+           'counts, so it reads a few MiB lower than the resident gauge by design.',
+           _peak)
+
+    # 监控循环的累计成败。偶发失败只能从计数看出来 —— 出过的那次事故里，
+    # 只有部分轮次崩，`/readyz` 读的是「最近一次结果」，闪断完全看不见。
+    # 见 `operational._MONITOR_STATS` 的说明。
+    try:
+        from . import operational as _operational
+        _monitor = _operational.monitor_stats()
+        _m('workbuddy_monitor_successes_total', 'counter',
+           'Successful monitor ticks since process start.', _monitor['successes'])
+        _m('workbuddy_monitor_failures_total', 'counter',
+           'Failed monitor ticks. Non-zero means a whole health-evaluation round was '
+           'skipped: every alert after the failure point went un-evaluated.',
+           _monitor['failures'])
+        if _monitor['last_success']:
+            _m('workbuddy_monitor_last_success_age_seconds', 'gauge',
+               'Seconds since the last successful monitor tick. Grows without bound if '
+               'the loop is stalled, which readiness alone cannot tell you.',
+               max(0.0, time.monotonic() - _monitor['last_success']))
+    except Exception:      # noqa: BLE001 - 指标取不到不该让整个 /metrics 失败
+        pass
+
+    # nginx 配置里是否残留维护围栏。**读不到时不输出** —— 「不知道」不能显示成「没问题」。
+    # 见 `operational.nginx_fence_status` 的说明：围栏生效时管理端全 503，而服务自身
+    # 察觉不到（健康检查不经过 nginx）。
+    try:
+        _fence = _operational.nginx_fence_status()
+        if _fence['checked']:
+            _m('workbuddy_nginx_fence_active', 'gauge',
+               'Whether a maintenance fence marker is still present in nginx config. '
+               'When 1, /api/* is almost certainly answering 503 while /v1/* and '
+               '/healthz stay healthy -- the failure mode that hides itself.',
+               1 if _fence['fenced'] else 0)
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 数据库体积。**主库 + WAL + SHM 一起算** —— WAL 未 checkpoint 时可能有好几十 MB，
+    # 只看主库会低估「还要多少磁盘」。见 operational.database_size_bytes。
+    try:
+        _dbsize = _operational.database_size_bytes()
+        if _dbsize:
+            _m('workbuddy_db_size_bytes', 'gauge',
+               'Total on-disk size of the manager database, including the WAL and SHM '
+               'sidecars. The WAL is where recent bulk writes pile up before checkpoint, '
+               'so the main file alone understates what the disk still has to hold.',
+               _dbsize['total'])
+            _m('workbuddy_db_wal_size_bytes', 'gauge',
+               'Size of the write-ahead log alone. Persistently large means checkpoints are '
+               'falling behind the write rate, and read performance will start to pay for it.',
+               _dbsize['wal'])
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 最近一次成功备份距今多久。告警只在超过 26 小时时报，这条能看到「还差多久」，
+    # 也就能看出备份时间是否在一天天往后漂。见 operational.backup_age_seconds。
+    #
+    # 2026-11-15 补充：与下面那条快照年龄一样，改成「总是输出」。
+    # 原来读不到年龄时整条序列消失 —— 而「从来没备份过」正是最该报警的状态。
+    try:
+        _backup_age = _operational.backup_age_seconds()
+        _m('workbuddy_backup_age_seconds', 'gauge',
+           'Seconds since the newest verified backup report; -1 means no report exists, '
+           'which is itself the state worth alerting on. The stale alert only fires past '
+           '26 hours; this shows the drift before it does, so a backup creeping later '
+           'each day is visible while it is still healthy.',
+           -1 if _backup_age is None else _backup_age)
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 加密快照（恢复体系 v2）的年龄。**与上面那条备份年龄不是一回事**：
+    # 那个测的是基线报告，这个测的是 v2 恢复点本身。
+    # 2026-11-15 的故障里，前者一直 ok，后者断了整整一天。
+    #
+    # 2026-11-15 补充：原来只有「拿到年龄」时才输出这一条，
+    # 于是「从未产出过快照」和「这个指标坏了」在监控上长得一模一样 ——
+    # 都是「这条序列不存在」。**而前者恰恰是最该报警的状态。**
+    #
+    # 现在总是输出：没有快照时报 -1。
+    # 这样告警可以直接写「值 > 86400 或值 == -1」，不用再赌序列是否存在。
+    try:
+        _snapshot_age = _operational.snapshot_age_seconds()
+        _m('workbuddy_snapshot_age_seconds', 'gauge',
+           'Seconds since the newest encrypted recovery snapshot; -1 means unreadable, '
+           'not absent. The snapshot root lives under /root, which the service user cannot '
+           'traverse, so -1 is the expected value in normal operation -- cross-check '
+           'recovery_chain_age_seconds, which reads a state file the service can reach, '
+           'for the real reading. Distinct from backup_age_seconds, which covers the '
+           'baseline report: on 2026-11-15 that report stayed ok while no snapshot was '
+           'produced at all, and the two only diverged because both were being looked at.',
+           -1 if _snapshot_age is None else _snapshot_age)
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 恢复链（加密快照整链）的结论。**第三条指标，回答的是另外两个都没答的问题**：
+    # backup_age_seconds 测基线报告，snapshot_age_seconds 读不到 /root。
+    try:
+        _chain = _operational.recovery_chain_status()
+        # 同样是「总是输出」：链断了不能被伪装成「没有数据」。
+        # 2026-11-15 那天这条链反复失败而基线一直成功，所以相关告警全程沉默 ——
+        # 那种沉默不该再靠人眼发现。
+        _m('workbuddy_recovery_chain_age_seconds', 'gauge',
+           'Seconds since the encrypted recovery chain last verified end to end; '
+           '-1 means the chain state is unavailable, which is itself worth alerting on. '
+           'Distinct from backup_age_seconds, which only covers the baseline tar: '
+           'on 2026-11-15 the chain failed repeatedly while the baseline kept '
+           'succeeding, so that alert stayed silent.',
+           -1 if _chain is None else _chain['age_seconds'])
+        # 这一条同样不能条件性输出 —— 缺失也报 0，配合上一条的 -1 一起看。
+        _m('workbuddy_recovery_chain_bytes', 'gauge',
+           'Size of the verified encrypted snapshot from the last successful chain run; '
+           '0 when the chain state is unavailable (cross-check the age gauge, which '
+           'reports -1 in that same situation).',
+           0 if _chain is None else _chain['snapshot_bytes'])
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 归档线程的健康度。
+    #
+    # ## 为什么需要
+    #
+    # 归档是唯一会主动**删数据**的后台任务，它的状态此前只能通过管理端 API
+    # 人工查看 —— 没有指标、没有告警。也就是说：它停了、卡了、或者开始出错，
+    # 监控侧一片安静，只是数据库悄悄地一直变大。
+    #
+    # 2026-11-15 排查「磁盘一直涨」时，我在这一点上判断错过一次：看到
+    # `archive_runs` 是空的就断言归档从没跑过。实际它在跑，只是保留期 90 天
+    # 而数据只有 41 天，没有到期行 —— **有指标就不必靠猜**。
+    try:
+        from . import archiveworker as _arch
+        _arch_status = _arch.status()
+        _m('workbuddy_archive_worker_alive', 'gauge',
+           'Whether the archive worker thread is running. This is the only background '
+           'task that deletes rows, so its silence is not benign.',
+           1 if _arch_status.get('worker_alive') else 0)
+        _m('workbuddy_archive_enabled', 'gauge',
+           'Archive worker enabled (config switch and background jobs both on).',
+           1 if _arch_status.get('enabled') else 0)
+        _arch_age = _arch_status.get('age_seconds')
+        if isinstance(_arch_age, int) and not isinstance(_arch_age, bool):
+            _m('workbuddy_archive_last_cycle_age_seconds', 'gauge',
+               'Seconds since the archive worker last completed a cycle. It cycles every '
+               'few minutes even with nothing to archive, so a large value means the '
+               'thread is stuck rather than idle.',
+               _arch_age)
+        _arch_pending = _arch_status.get('pending')
+        if isinstance(_arch_pending, dict):
+            _m('workbuddy_archive_pending_datasets', 'gauge',
+               'Datasets with rows past their retention window waiting to be archived.',
+               sum(1 for value in _arch_pending.values() if value))
+        _m('workbuddy_archive_last_cycle_failed', 'gauge',
+           'Last archive cycle raised. Rows stay protected; nothing is deleted on failure.',
+           0 if _arch_status.get('ok') is not False else 1)
+        # 审计链完整性。
+        #
+        # `ledger.verify_chain()` 一直存在，但**生产里从来没被调用过** ——
+        # 它只挂在归档流程上，而归档按 90 天阈值触发，库里最老的数据还没到那个年龄。
+        # 也就是说「审计链有没有被篡改」这件事，上线至今一次都没验证过。
+        #
+        # 现在归档周期（默认 300 秒）顺手校验一次，成本实测 0.02 秒 / 25993 行。
+        #
+        # 三态要分清：**没跑过**（`-1`）、**链是好的**（`1`）、**链断了**（`0`）。
+        # 把「没跑过」也报成 0 会和「真的断了」混在一起，那是最糟的一种歧义 ——
+        # 一个从没验证过的系统看起来和刚验过且完好的系统一模一样。
+        _chain_intact = _arch_status.get('chain_intact')
+        _m('workbuddy_audit_chain_intact', 'gauge',
+           '1 when the admin_events hash chain verifies end to end, 0 when it is '
+           'broken, -1 before the first check has run. A broken chain means audit '
+           'history was modified; -1 means nobody has looked yet, which is a '
+           'different kind of problem.',
+           1 if _chain_intact is True else (0 if _chain_intact is False else -1))
+        _chain_events = _arch_status.get('chain_events')
+        if isinstance(_chain_events, int) and not isinstance(_chain_events, bool):
+            _m('workbuddy_audit_chain_events', 'gauge',
+               'Rows in admin_events at the last chain verification.', _chain_events)
+        _chain_error = _arch_status.get('chain_error')
+        _m('workbuddy_audit_chain_check_failed', 'gauge',
+           '1 when the last chain verification could not run at all (database '
+           'unreadable, permissions), which is not the same as a broken chain and '
+           'must not be read as one.',
+           0 if not _chain_error else 1)
+    except Exception:      # noqa: BLE001
+        pass
+
+    # 应用卷的剩余空间。
+    #
+    # ## 为什么需要
+    #
+    # 磁盘水位只在**告警日志**里出现过（`disk_space_trend` 每轮监控打一行），
+    # 没有指标。后果是：想画一条「空间还剩多少」的趋势，只能去 grep 日志。
+    #
+    # 2026-11-15 实测就是这种情况：告警连着触发了 19 次，而从 3.8 GiB 降到
+    # 3.4 GiB 这个过程，只有把日志按时间排序才看得出来。指标本身就能画出来。
+    #
+    # 阈值口径与 `operational.disk_space_alerts` 保持一致：
+    # 低于 5 GiB 是趋势线，低于 2 GiB 是紧急线。
+    try:
+        import os as _os
+        if hasattr(_os, 'statvfs'):
+            _stat = _os.statvfs(config.DATA_DIR)
+            _free = _stat.f_bavail * _stat.f_frsize
+            _m('workbuddy_disk_free_bytes', 'gauge',
+               'Free bytes on the volume holding the application data directory. '
+               'Below 5 GiB raises disk_space_trend; below 2 GiB raises disk_free.',
+               _free)
+            _total = _stat.f_blocks * _stat.f_frsize
+            if _total > 0:
+                _m('workbuddy_disk_used_ratio', 'gauge',
+                   'Fraction of the application volume in use (0-1).',
+                   round(1 - _free / _total, 4))
+    except Exception:      # noqa: BLE001
+        pass
 
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
         if snap is not None:
-            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', snap['active'])
-            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', snap['large'])
-            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', snap['maximum'])
-            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', snap['inflight_body_bytes'])
-            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', snap['maximum_body_bytes'])
-            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', snap['capacity_rejections'])
-            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', snap['key_slots'])
-            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', snap['queued'])
-            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', snap['queue_timeouts'])
-            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', snap['queue_overflows'])
+            # 逐项取，缺一项不打掉整段。
+            #
+            # 2026-11-15 审计：这里的下标访问配合外层一个宽泛的 `except`，让「快照少
+            # 一个键」变成了「后面所有指标一起消失」—— 共享准入开启时恰好少了三个
+            # 键，于是排队超时、排队溢出、键槽占用三个指标长期没有输出，日志里只有
+            # 一行容易被忽略的警告。
+            #
+            # 数据源已补齐；这里再用 `.get()` 兜一层：以后任何一侧再漂移，最多是
+            # 某一个指标缺，而不是整段静默。
+            def _g(name):
+                return snap.get(name, 0) if isinstance(snap, dict) else 0
+            _m('workbuddy_gateway_inflight', 'gauge', 'Requests currently inside the gateway.', _g('active'))
+            _m('workbuddy_gateway_inflight_large', 'gauge', 'Large-body (>1MB) requests in flight.', _g('large'))
+            _m('workbuddy_gateway_inflight_max', 'gauge', 'Admission ceiling (WB_GATEWAY_MAX_CONCURRENCY).', _g('maximum'))
+            _m('workbuddy_gateway_inflight_body_bytes', 'gauge', 'Reserved raw request-body bytes until response completion.', _g('inflight_body_bytes'))
+            _m('workbuddy_gateway_inflight_body_bytes_max', 'gauge', 'Per-worker raw body reservation ceiling.', _g('maximum_body_bytes'))
+            _m('workbuddy_gateway_capacity_rejections_total', 'counter', 'Requests rejected by count or byte admission.', _g('capacity_rejections'))
+            _m('workbuddy_gateway_key_slots', 'gauge', 'Keys currently holding a per-key slot.', _g('key_slots'))
+            _m('workbuddy_gateway_queued', 'gauge', 'Waiting tickets before request-body allocation.', _g('queued'))
+            _m('workbuddy_gateway_queue_timeouts_total', 'counter', 'Tickets exceeding the bounded capacity wait.', _g('queue_timeouts'))
+            _m('workbuddy_gateway_queue_overflows_total', 'counter', 'Tickets rejected by global or per-key queue bounds.', _g('queue_overflows'))
+            # 上游生成超过请求上限的次数（见 observability.note_output_over_limit）。
+            _m('workbuddy_output_over_limit_total', 'counter',
+               'Responses whose completion_tokens exceeded the requested cap. '
+               'Non-zero here means the upstream ignores max_tokens; '
+               'see docs/UPSTREAM-CAPABILITIES.md.',
+               _obs.output_over_limit_count())
+            # 请求体读取超时按类型分开数：两者的处置完全不同
+            # （空闲 → 查上传链路；累计 → 精简上下文）。见 observability.note_body_timeout。
+            _body_timeouts = _obs.body_timeout_counts()
+            _m('workbuddy_body_timeout_idle_total', 'counter',
+               'Uploads dropped after a stretch with no bytes at all. The link stalled; '
+               'ask the caller to check connectivity, not to shrink the request.',
+               _body_timeouts['idle'])
+            _m('workbuddy_body_timeout_total_total', 'counter',
+               'Uploads that were still trickling past the cumulative time limit. The link '
+               'works but is too slow for this payload; shrinking the request helps.',
+               _body_timeouts['total'])
+
+        # ── 账号池集中度 ────────────────────────────────────────────────
+        #
+        # ## 为什么加
+        #
+        # 2026-11-15 的审计发现：96 个账号文件里只有 48 个在产生流量，
+        # 用量最高与最低相差 **228 倍**，而其中一个余额比第一名还多的账号
+        # 只被调用了 3 次。
+        #
+        # 上游（另一个仓库）的配置写着「按空闲时间加权，上限 2 倍」，
+        # 二进制里也确实有加权选择和最小选择间隔两个机制 ——
+        # **但实测行为与配置完全不符**。
+        #
+        # 那件事是上游的，不在这个仓库能修的范围内。**但「它不均衡」这件事
+        # 本身应该是一个能被监控看到的数字，而不是一次人工排查才发现的结论。**
+        #
+        # 所以这里把集中度暴露成指标：以后它继续恶化，`/metrics` 会先报警，
+        # 而不是等到有人注意到一半账号闲置。
+        #
+        # ## 口径
+        #
+        # 窗口取**最近一小时**而不是 24 小时 —— 这是一个 gauge，每次抓取都算，
+        # 长窗口会让它对「刚刚开始倾斜」无感。
+        #
+        # 只统计带账号标记的对话请求：模型目录、拒绝类请求不落到具体账号上，
+        # 把它们算进来会稀释比例。
+        #
+        # 指标含义：
+        #
+        # - `accounts`   窗口内有流量的账号数
+        # - `requests`   窗口内这些账号上的请求数
+        # - `top_share`  最忙那个账号占的比例（0~1）。1.0 表示全压在一个账号上
+        #
+        # 单独包一层 try：这一个取数源出问题，不该连带把上面那些指标一起弄没。
+        try:
+            from . import db as _db
+            import time as _time
+            _since = int(_time.time()) - 3600
+            _row = _db.query_one(
+                'WITH c AS ('
+                '  SELECT account, count(*) AS n FROM request_logs'
+                "  WHERE ts > ? AND account != '' AND endpoint LIKE '%chat%'"
+                '  GROUP BY account)'
+                ' SELECT count(*) AS accounts,'
+                '        COALESCE(sum(n), 0) AS total,'
+                '        COALESCE(max(n), 0) AS top_n FROM c',
+                (_since,))
+            _accounts = int(_row['accounts'] or 0) if _row is not None else 0
+            _total = int(_row['total'] or 0) if _row is not None else 0
+            _top = int(_row['top_n'] or 0) if _row is not None else 0
+            _share = (_top / _total) if _total else 0.0
+            _m('workbuddy_account_pool_accounts', 'gauge',
+               'Accounts that served at least one chat request in the last hour.',
+               _accounts)
+            _m('workbuddy_account_pool_requests', 'gauge',
+               'Chat requests attributed to an account in the last hour.', _total)
+            _m('workbuddy_account_pool_top_share', 'gauge',
+               'Share of the last hour handled by the busiest single account (0..1). '
+               'A value near 1.0 means the pool is not spreading load; '
+               'see docs/ACCOUNT-SCHEDULER-FINDINGS-2026-11-15.md.',
+               round(_share, 4))
+        except Exception:       # noqa: BLE001
+            # 这个取数源坏了只影响这三个指标，不影响上面那一整段。
+            logger.warning('account pool metrics unavailable', exc_info=True)
     except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
+        # 这里刻意保留「不中断 /metrics」：一个取数源坏掉，不该让整个端点 500。
+        #
+        # 但**必须留下能诊断的痕迹**。原来只打异常类型：
+        #
+        #     logger.warning('... unavailable (%s)', type(exc).__name__)
+        #
+        # 2026-11-15 的实测说明了这个代价：日志里连着出现
+        # `Metrics admission snapshot unavailable (KeyError)`，
+        # **只知道是 KeyError，不知道哪个键、哪一行** —— 而同一个函数的文档里
+        # 正写着「少一个键 → 整段静默，日志一行警告容易被忽略」。
+        #
+        # 结论就是：把异常类型换成了 `exc_info=True`，把栈打出来。
+        # 类型那一行仍然在，只是后面多了栈 —— 习惯看简短警告的人不会觉得变吵，
+        # 真要查的人第一次就能看到位置。
+        logger.warning('Metrics admission snapshot unavailable (%s)',
+                       type(exc).__name__, exc_info=True)
 
     return PlainTextResponse('\n'.join(lines) + '\n', media_type='text/plain; version=0.0.4')

@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS admin_events (
  actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, outcome TEXT NOT NULL,
  status INTEGER, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL
 );
+-- 2026-11-15：**这张表已停止写入**，由 provider_attempt_events_v2 取代。
+--
+-- 上游从 2026-11-03 起在每次派发的事件里带上 dispatch_id（见 ledger.attempt 的
+-- 第一道判断：带 dispatch_id 的直接交给 v2 表）。而本表主键是
+-- (request_id, attempt, phase) —— 同一个 request_id 多次派发时，
+-- 同一个 phase 的第二条会被主键冲突吞掉，**留下一个「只试过一次」的假象**。
+-- 新表把 dispatch_id / rotation / provider_attempt 纳入主键才能区分。
+--
+-- **保留而不删**：11-03 之前的历史在这里，且不可变（下面的触发器阻止 UPDATE/DELETE）。
+-- 删表等于销毁审计记录。
+--
+-- **要查「最近试了几次」请查 v2 表。** 当天有人按本表名查到空结果，
+-- 差点据此判断「采集停了十二天」—— 实际是 v2 表在收。写在这里，省下一次误判。
 CREATE TABLE IF NOT EXISTS attempt_events (
  request_id TEXT NOT NULL, attempt INTEGER NOT NULL, phase TEXT NOT NULL,
  ts INTEGER NOT NULL, account_uid TEXT NOT NULL, resolved_model TEXT NOT NULL,
@@ -151,9 +164,32 @@ def attempt(value):
     return True
 
 def forwarding(state, phase, outcome=None):
+    """记一条转发阶段留痕。
+
+    ## 2026-11-15：`attempt` 曾硬编码为 1
+
+    原先是 `VALUES(..., 1, phase, ...)`。而这张表的唯一约束是
+    `(request_id, attempt, phase)` —— 于是**重试时同一个 phase 的第二条会被
+    `INSERT OR IGNORE` 静默丢掉**。
+
+    后果：`attempt` 这个字段存在，但永远说「只试了一次」。想知道某个请求重试了几次，
+    从这张表里查不到；而本该记录真实次数的 `attempt_events` 从 2026-11-03 起就没人
+    写了（见 `_attempt_phases` 的说明）。
+
+    **两个来源都没有真实次数，等于这个维度完全不可观测。**
+
+    现在优先从 state 读调用方设好的当前尝试序号，读不到退回 1 ——
+    与改动前行为一致，不会因为字段缺失而多写或漏写。
+    """
     from . import db
+    try:
+        attempt = int(getattr(state, 'forwarding_attempt', 1) or 1)
+    except (TypeError, ValueError):
+        attempt = 1
+    if not 1 <= attempt <= 32:
+        attempt = 1
     db.execute('INSERT OR IGNORE INTO forwarding_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-               (state.request_id,1,phase,int(time.time()),getattr(state,'upstream_id','default'),
+               (state.request_id, attempt, phase, int(time.time()), getattr(state,'upstream_id','default'),
                 getattr(state,'requested_model',None),getattr(state,'resolved_model',None),
                 getattr(state,'realm',None),state.protocol,getattr(state,'transform',None),
                 getattr(state,'config_hash',None),outcome))
@@ -235,7 +271,20 @@ PER_ATTEMPT_BILLING_REQUIREMENTS = (
 
 
 def _attempt_phases(request_id: str) -> dict:
-    """{attempt: [phase, ...]}；只读 attempt_events，不做时间推断。"""
+    """{attempt: [phase, ...]}；只读 attempt_events，不做时间推断。
+
+    ## 这张表从 2026-11-03 起就不再写入
+
+    上游事件后来开始携带调度标识，`attempt()` 见到那个字段会直接返回 False，
+    调用证据改由 `provider_attempt_events_v2` 承载。所以这里的返回值只对
+    **那之前**的请求有意义。
+
+    `derive_attempt_billing` 已经优先看新表：有 v2 证据时如实给出 unknown
+    （缺供应商的每次调用费用回执），只有在完全没有新证据时才走到这里。
+
+    保留这段查询是为了让历史请求仍可回溯 —— 不要因为「表停写了」就把它当成
+    死代码删掉，它承载的是旧数据的解释能力。
+    """
     from . import db
     out: dict[int, list[str]] = {}
     for row in db.query('SELECT attempt,phase FROM attempt_events WHERE request_id=? '
@@ -350,15 +399,36 @@ def backfill_attempt_billing(limit: int = 200, min_age: int = ATTEMPT_BILLING_MI
 
     只挑**还没落过事实**的请求（LEFT JOIN 为空），按 request_logs.ts 的时间窗
     走索引，单轮有界。返回本轮写入的请求数。
+
+    ## 2026-11-14：筛选用内连接一张已停写的表，导致补齐长期空转
+
+    原实现是：
+
+        JOIN attempt_events a ON a.request_id = l.request_id
+
+    内连接。而 `attempt_events` 在 2026-11-03 之后就不再写入（上游事件开始带
+    `dispatch_id`，`attempt()` 遇到带这个字段的事件直接返回 False，改由
+    `provider_attempt_events_v2` 承载）。于是内连接永远是空集：
+
+      · 事实表最后一次写入停在 2026-11-03；
+      · 11-04 之后有 **59,016 个**请求已有新表的调用证据，却一个都没补上；
+      · 补齐任务照常每轮跑、照常返回 0，日志里看不出异常。
+
+    改成两个 EXISTS：任一表有该请求的调用记录即入选。这不改变推导规则本身 ——
+    `derive_attempt_billing` 早就认识新表（有 v2 证据时如实给 unknown，因为缺
+    供应商费用回执）；缺的只是「把这些请求挑出来」这一步。
     """
     from . import db
     stamp = int(time.time()) if now is None else int(now)
     horizon = stamp - max(0, int(min_age))
     rows = db.query(
         'SELECT DISTINCT l.request_id FROM request_logs l '
-        'JOIN attempt_events a ON a.request_id=l.request_id '
         'LEFT JOIN attempt_billing_facts f ON f.request_id=l.request_id '
-        'WHERE f.request_id IS NULL AND l.ts<=? AND l.ts>=? LIMIT ?',
+        'WHERE f.request_id IS NULL AND l.ts<=? AND l.ts>=? '
+        'AND (EXISTS (SELECT 1 FROM attempt_events a WHERE a.request_id=l.request_id) '
+        '     OR EXISTS (SELECT 1 FROM provider_attempt_events_v2 v '
+        '                WHERE v.request_id=l.request_id)) '
+        'LIMIT ?',
         (horizon, horizon - 7 * 86400, int(limit)))
     filled = 0
     for row in rows:

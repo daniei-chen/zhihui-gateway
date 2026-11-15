@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from pathlib import Path
-import fcntl,hashlib,io,json,os,sqlite3,stat,tarfile,tempfile,time,subprocess
+import fcntl,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 # Recovery invokes this file directly with Python's isolated mode (-I), which
 # intentionally omits the script directory from import search.  Keep the
@@ -178,7 +178,45 @@ def verify_release_archive(archive):
     # 本地清单（sign_release.py 生成）用的是 version 字段；旧清单曾叫 release_id。
     # 两者都认，缺失时回落到空串——备份不该因一个展示用字段而整体失败。
     release_id=manifest.get('release_id') or manifest.get('version') or ''
-    return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
+    # 再记一份「当前正在服务的版本」，用来和归档里那份对比。
+    #
+    # ## 为什么
+    #
+    # 2026-11-15 查一个灾备快照时发现它记着 `v1.2.96`，而当时线上是 `v1.2.14x`
+    # ——差了几十个版本。**追这条链花了十几步，结论写在这里，省下一次重追：**
+    #
+    #   灾备快照（`zhihui-recovery.service` → `/opt/zhihui-release/recovery/recovery_v3.py`）
+    #     └─ 从快照里取出**内层的** `application.tar.gz`
+    #          └─ 用本模块的 `verify_release_archive` 校验它内部的清单
+    #               └─ **那个清单写着 v1.2.96**
+    #
+    # 几个容易走错的岔路，都已经排除：
+    #
+    #   - `/opt/workbuddy-manager/server` 和 `/deploy` **都是符号链接**，
+    #     指向 `releases/current/...`，**不是**陈旧的安装根副本
+    #   - `recovery_v3.py` 用固定路径导入本模块，但那个路径经符号链接解析后
+    #     就是当前发布，**不是**旧代码
+    #   - 本模块和 `offsitebackup.py` **都不产** `release_check` 字段
+    #     （后者加密方式是 AES-256-GCM，而那份快照是 age-X25519）
+    #
+    # **所以 `v1.2.96` 是那个内层 tar 自带的值** —— 它是什么时候、由什么产的
+    # 那一版 tar，没能在机器上确定。**这是既定事实，本模块改变不了它。**
+    #
+    # 本模块能做的是把「当前运行版本」也记下来，让两者不一致时**当场可见**，
+    # 而不是等到有人翻旧备份才疑惑。
+    #
+    # 读不到当前版本不算错误（布局可能不同），但**必须记成「无法确认」**，
+    # 不能默认成一致 —— 一个默认成一致的自检等于没有自检。
+    current_version=''
+    try:
+        current_version=(MANAGER/'releases/current/.version').read_text().strip()
+    except OSError:
+        current_version=''
+    def _bare(value):
+        return value[1:] if isinstance(value,str) and value.startswith('v') else value
+    return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed,
+            'current_version':current_version,
+            'version_consistent':bool(current_version) and _bare(current_version)==_bare(release_id)}
 
 
 def verify_paired_archive(archive, destination, receipt):
@@ -209,6 +247,25 @@ def main():
     lock=(BASE/'backup.lock').open('a')
     try:fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise RuntimeError('backup already running')
+    # 清理上一次被中断留下的临时工作区。
+    #
+    # `TemporaryDirectory` 只在正常退出时删除自己；被 SIGKILL、OOM 或
+    # 宿主重启打断时，`snapshot-*` 会原样留下 —— 而它里面有一份完整
+    # 的 manager.db，一份就是一点几 GB。
+    #
+    # 2026-11-15 实测：两次中断累积了 2.6 GB，在磁盘涨到 94% 时才被发现。
+    # 当时是手工删的；这段让下一次不必再手工。
+    #
+    # 只在**拿到独占锁之后**动它：那时可以确定没有别的备份在跑，
+    # 留下的这些必然是死的。仍然按「早于本次启动」判断，避免误删。
+    for stale in BASE.glob('snapshot-*'):
+        if not stale.is_dir() or stale.is_symlink():
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError:
+            # 删不掉不该阻断一次正常备份；下次启动再试。
+            pass
     stamp=time.strftime('%Y%m%d-%H%M%S')
     output=BASE/('recovery-'+stamp+'.tar.gz')
     managed=managed_sources(MANAGER)
@@ -255,6 +312,19 @@ def main():
                     archive.add(path,arcname=family+'/'+relative.as_posix())
             for relative,raw,mode in managed:
                 add_release_bytes(archive,'manager/'+relative,raw,mode)
+            # 恢复点里必须能分清两个「版本」。
+            #
+            # `manager/.version` 打包的是**安装根**的那一份（`/opt/workbuddy-manager/.version`），
+            # 它记录的是安装根自己什么时候被铺开过，**不等于正在服务的发布版本**。
+            # 2026-11-15 实测：安装根那份是 `v1.2.2+audit.20261112.1`，
+            # 而 `releases/current` 是 `v1.2.143` —— 恢复时若只看前者会误判。
+            #
+            # 两者都不是坏数据，混在一起才是问题。这里把发布版本单独落一份，
+            # 名字直接说清它是发布版本。
+            release_version=MANAGER/'releases'/'current'/'.version'
+            if release_version.is_file() and not release_version.is_symlink():
+                add_bytes(archive,'manager/release-version.txt',
+                          release_version.read_bytes(),uid=0,gid=0)
             add_bytes(archive,'snapshot.json',json.dumps({'ts':int(time.time()),'request_rows':count,'database_quick_check':'ok','auth_consistency':'per-file stable reads'}).encode())
             for path in (Path('/etc/nginx/sites-available/zhihui.kaogong.art'),Path('/etc/nginx/conf.d/workbuddy-audit.conf')):
                 if path.is_file() and not path.is_symlink():

@@ -105,7 +105,7 @@ class GzipAdmissionTests(unittest.IsolatedAsyncioTestCase):
         scope={'type':'http','method':'POST','path':'/v1/chat/completions',
                'headers':[(b'content-encoding',encoding),(b'content-length',str(len(raw)).encode())]}
         self.auth.return_value=auth
-        with patch.dict(os.environ,{'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':str(capacity),
+        with patch.dict(os.environ,{'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':str(capacity),'WB_GATEWAY_BODY_PHYSICAL_FACTOR':'1',
                 'WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'1'}),patch.object(gateway,'max_body_bytes',return_value=limit):
             middleware=observability.RequestAuditMiddleware(app)
             await middleware(scope,receive,send)

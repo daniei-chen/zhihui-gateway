@@ -334,7 +334,31 @@ class Qoder2Adapter(BaseAdapter):
 
     async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
         body: Dict[str, Any] = {} if not uid else {"uid": uid}
-        return await self._json("POST", "/accounts/refresh", json_body=body) or {}
+        res = await self._json("POST", "/accounts/refresh", json_body=body) or {}
+        # 上游返回的形状是 {"results": [{"uid": ..., "ok": true, "error": ""}], "skipped": []}
+        #
+        # **顶层没有 `ok`**，而调用方的成功判定只看顶层（它要求 `ok` 或 `success`
+        # 存在且为 True）。于是：**刷新真的成功了，界面却显示「刷新结果未确认」**。
+        #
+        # 2026-11-15：这个不一致让一次成功的凭据刷新看起来像失败，
+        # 用户会反复点，而每次实际上都成功了。
+        #
+        # 这里把结果归一到顶层，**同时保留原始 payload**（`results` / `skipped`
+        # 原样带回，调用方若想看细节仍能看）。归一只在形状符合预期时发生，
+        # 形状不认识就原样返回 —— 不猜。
+        results = res.get('results')
+        if isinstance(results, list) and results:
+            rows = [r for r in results if isinstance(r, dict)]
+            if rows:
+                chosen = next((r for r in rows if uid and r.get('uid') == uid), rows[0])
+                merged = dict(res)
+                merged['ok'] = chosen.get('ok') is True
+                if not merged['ok']:
+                    errors = [str(r.get('error')) for r in rows if r.get('error')]
+                    if errors:
+                        merged.setdefault('error', '; '.join(errors))
+                return merged
+        return res
 
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
         return await self._json(

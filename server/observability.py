@@ -41,6 +41,7 @@ import logging
 import re
 import os
 import sys
+from collections import Counter
 import time
 import uuid
 import anyio
@@ -136,6 +137,80 @@ def record_max_tokens_contract(state, field: object, requested: object,
     state.max_tokens_effective = got
 
 
+#: 统计「上游实际输出超过请求上限」的次数。
+#:
+#: ## 为什么需要它
+#:
+#: 上面对 `record_max_tokens_contract` 的说明只覆盖了**收缩**（我们把请求的上限调小，
+#: 通过响应头告知）。但还有一个方向从未被观测过：**上游生成得比我们请求的多**。
+#:
+#: 2026-11-15 实测（/trae 引擎，绕过网关直连）：
+#:
+#: | 请求 | 实际 completion_tokens |
+#: | --- | --- |
+#: | `max_tokens: 80` | **560** |
+#: | `max_completion_tokens: 80` | **185**，换一次又变 **338** |
+#:
+#: 也就是说那个引擎对这个参数**不守约** —— 而计费按实际 token 算。客户端以为自己
+#: 要了 80 个 token 的回答，实际拿到 3～7 倍，账单和延迟都跟着变。
+#:
+#: 网关无法替上游守约（token 是在上游生成的），但**至少要能回答「发生过多少次」**。
+#: 这里只做计数，不改任何行为。
+_output_over_limit = 0
+
+
+#: 请求体读取超时的分类计数。
+#:
+#: ## 为什么要分开数
+#:
+#: 2026-11-15 查历史记录时看到 8 次 `body_read_timeout`，耗时分布在 60 秒到 180 秒之间。
+#: 一开始以为其中 5 次是误分类 —— 后来才想明白：超时有两种。
+#:
+#: | 类型 | 含义 | 用户该做什么 |
+#: | --- | --- | --- |
+#: | `idle` | 连续若干秒**一个字节都没收到** | 查上传链路 |
+#: | `total` | 累计上传时间超过上限 | 精简上下文或换链路 |
+#:
+#: 两种的处置完全不同，但历史上它们在同一个错误码下面，从指标上分不出来。
+#:
+#: 用 `Counter` 而不是普通字典：**漏初始化的键会在自增时抛**，v1.2.83 就是这么崩的。
+_body_timeouts = Counter()
+
+
+def note_body_timeout(reason) -> None:
+    """记一次请求体读取超时。
+
+    `reason` 只认 `idle` 与 `total` —— 那是超时对象自己带的分类。**别的值不计入**：
+    猜一个桶（比如默认算 idle）会让指标说谎，而这条指标存在的意义正是区分两种成因。
+    """
+    if reason not in ('idle', 'total'):
+        return
+    _body_timeouts[reason] += 1
+
+
+def body_timeout_counts() -> dict:
+    """返回 `{'idle': n, 'total': n}`，两个键始终存在。"""
+    return {'idle': _body_timeouts['idle'], 'total': _body_timeouts['total']}
+
+
+def note_output_over_limit(requested, actual) -> None:
+    """记录一次「实际输出超过请求上限」。热路径调用，只做整数比较与自增。"""
+    global _output_over_limit
+    try:
+        want = _limit_int(requested)
+        got = _limit_int(actual)
+    except (TypeError, ValueError):
+        return
+    if want is None or got is None or want <= 0:
+        return
+    if got > want:
+        _output_over_limit += 1
+
+
+def output_over_limit_count() -> int:
+    return _output_over_limit
+
+
 def _max_tokens_headers(state) -> list[tuple[bytes, bytes]]:
     want = _limit_int(getattr(state, 'max_tokens_requested', None))
     got = _limit_int(getattr(state, 'max_tokens_effective', None))
@@ -177,6 +252,14 @@ class RequestAudit:
     http_status: int = 0
     terminal_state: str | None = None
     error_stage: str | None = None
+    #: 失败原因（可读文本）。**必须落库**：`terminal_state` + `error_stage` 只能说明
+    #: 「哪个阶段失败了」，说明不了「为什么」。
+    #:
+    #: 之前这里没有这个字段，而 `set_stream_state` 收到的 `error` 参数被直接丢弃 ——
+    #: 于是流中失败只留下 `transport_error` / `stream_read`，错误文本虽然发给了
+    #: 客户端，却没有进数据库。2026-11-14 审计时发现 7 天里有 269 条这样的记录，
+    #: 全部无法归因。
+    error: str | None = None
     account: str | None = None
     first_byte_ms: int | None = None
     first_token_ms: int | None = None
@@ -186,6 +269,14 @@ class RequestAudit:
     key_slot: int | None = None
     key_id: int | None = None
     budget_reserved: bool = False
+    #: 结算事务是否已经把这一行预算预留迁走（`settled`/`released`/`unknown`）。
+    #:
+    #: `budget.finish` 的兜底 UPDATE 只在"结算没跑成"时才有活干。结算一旦提交，
+    #: 它条件里的 `state IN ('reserved','forwarded')` 就再也匹配不到，于是每次
+    #: 请求都多付一个空事务：`BEGIN IMMEDIATE` + 0 行 + commit + fsync。
+    #: 这个标记只在结算事务**提交成功后**才置位（回滚时保持 False），所以兜底
+    #: 语义一点没变。
+    budget_settled: bool = False
     #: 调用方关联 ID（`X-Request-ID`，校验过）；None = 未提供或不合法。
     #: **不参与任何主键**，只是相关性提示；见模块 docstring。
     client_request_id: str | None = None
@@ -426,21 +517,48 @@ def ensure_outcome_schema() -> bool:
 
 
 def admission_snapshot(*, probe=False) -> dict | None:
-    """当前全局/大请求准入占用（in-flight）；未启动时返回 None。"""
+    """当前全局/大请求准入占用（in-flight）；未启动时返回 None。
+
+    ## 2026-11-15：两个分支的键集不一致，害得三个指标静默消失
+
+    共享准入开启时（生产就是）走上面那个分支，它从协调库拿到
+    `leases/active/large/body_bytes/preauth/queued`，再补几个进程内计数。
+    但**漏了 `key_slots`、`queue_timeouts`、`queue_overflows`** —— 而没开共享时
+    的分支是齐的。
+
+    于是 `/metrics` 里 `snap['queue_timeouts']` 抛 `KeyError`，被外层宽泛的
+    `except` 吞掉，只打一行 `Metrics admission snapshot unavailable (KeyError)`。
+    结果是：**排队超时、排队溢出、键槽占用三个指标一直没输出**，而它们恰恰是
+    回答「为什么 503」时最该看的数字。
+
+    这类问题的共同点是「少一个键 → 整段静默」：异常被捕获、服务照常、日志一行
+    警告容易被忽略。所以除了补齐键，`main.py` 那侧也改成了逐项容错。
+
+    两个分支现在返回**同一组键**，缺数据时给 0 而不是干脆不返回。
+    """
     inst = _middleware_ref
     if inst is None:
         return None
+    # 三个计数在两条分支里都要有；此处一次算好，避免两处各写一遍而漂移。
+    fair = getattr(inst, 'fair_gate', None)
+    queue_keys = {
+        'key_slots': len(_key_slots),
+        'queue_timeouts': int(getattr(fair, 'timeouts', 0)),
+        'queue_overflows': int(getattr(fair, 'overflows', 0)),
+    }
     if getattr(inst, 'shared', None) is not None:
         try:
             result = inst.shared.probe() if probe else inst.shared.snapshot()
-            return {**result, 'maximum': inst.maximum, 'large_maximum': inst.large_maximum,
+            return {**result, **queue_keys,
+                    'maximum': inst.maximum, 'large_maximum': inst.large_maximum,
                     'process_active': inst.active, 'process_preauth': inst.preauth_active,
                     'inflight_body_bytes': result['body_bytes'],
                     'maximum_body_bytes': inst.maximum_body_bytes,
                     'capacity_rejections': inst.capacity_rejections}
         except Exception:
             return {'scope': 'same_host_shared', 'healthy': False, 'active': None,
-                    'inflight_body_bytes': None, 'reason': 'coordination_unavailable'}
+                    'inflight_body_bytes': None, 'reason': 'coordination_unavailable',
+                    **queue_keys}
     return {'active': int(getattr(inst, 'active', 0)),
             'preauth_active': int(getattr(inst, 'preauth_active', 0)),
             'large': int(getattr(inst, 'large', 0)),
@@ -449,10 +567,8 @@ def admission_snapshot(*, probe=False) -> dict | None:
             'inflight_body_bytes': int(getattr(inst, 'inflight_body_bytes', 0)),
             'maximum_body_bytes': int(getattr(inst, 'maximum_body_bytes', 0)),
             'capacity_rejections': int(getattr(inst, 'capacity_rejections', 0)),
-            'key_slots': len(_key_slots),
-            'queued': int(getattr(getattr(inst, 'fair_gate', None), 'pending', 0)),
-            'queue_timeouts': int(getattr(getattr(inst, 'fair_gate', None), 'timeouts', 0)),
-            'queue_overflows': int(getattr(getattr(inst, 'fair_gate', None), 'overflows', 0))}
+            'queued': int(getattr(fair, 'pending', 0)),
+            **queue_keys}
 
 class CapacityError(Exception): pass
 class BodyLimitError(Exception): pass
@@ -711,10 +827,17 @@ def set_stream_state(observer, error=None, cancelled=False):
         state.terminal_state = ('upstream_error' if observer.error_stage == 'upstream' else
                                 'protocol_incomplete' if observer.error_stage in (None, 'protocol') else 'transport_error')
         state.error_stage = observer.error_stage or 'protocol'
+        # 这个 `error` 是调用方（流读取的 except 分支）合成的可读原因，例如
+        # 「上游流传输或协议异常：ReadTimeout」。它只被 yield 给了客户端，
+        # **没有**任何字段承载 —— 落库时 `error` 列因此是空的，事后无法归因。
+        # 存进 state，让 `_record` 在调用方没显式传 error 时回退到这里。
+        state.error = str(error)[:500]
     elif observer.error:
         state.terminal_state = ("upstream_error" if observer.error_stage == "upstream" else
                                 "protocol_incomplete" if observer.error_stage=='protocol' else "transport_error")
         state.error_stage = observer.error_stage or "stream_read"
+        # 上游 SSE 里的错误文本（已在上游侧截断到 500 字符）。
+        state.error = str(observer.error)[:500]
     elif observer.completed:
         state.terminal_state, state.error_stage = "completed", None
     else:
@@ -827,7 +950,8 @@ class RequestAuditMiddleware:
     def __init__(self, app, shared=None):
         self.app = app
         from .fairadmission import FairGate, wait_seconds
-        self.fair_gate = FairGate()
+        self.fair_gate = FairGate(maximum=max(1, _env_int('WB_GATEWAY_QUEUE_DEPTH', 64)),
+                                  per_key=max(1, _env_int('WB_GATEWAY_QUEUE_PER_KEY', 4)))
         self.queue_wait = wait_seconds(os.environ.get('WB_GATEWAY_QUEUE_WAIT_MS'))
         # One worker: bounded admission before body allocation, no unbounded queue.
         # 默认 8/2 与历史硬编码一致；生产由 systemd drop-in 抬高（见 zz-gateway-concurrency.conf）。
@@ -845,6 +969,17 @@ class RequestAuditMiddleware:
         # Retained raw input plus serialized output stay reserved through response
         # completion. JSON objects/encoder copies still need process memory headroom.
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
+        # 一个字节的请求体在内存里的实际倍率。
+        #:
+        #: 同一份**输入** body 至少同时存在：中间件缓存的整段（它被重放闭包引用，
+        #: 要陪跑到整条流式响应结束）、读取阶段的第二份、`json.loads` 出来的对象图。
+        #: 所以输入体按倍率记账，`WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES` 的含义是
+        #: **物理内存预算**。
+        #:
+        #: **输出不乘这个倍率。** 输出是逐步增长的字节缓冲，没有对象图开销；而且
+        #: 它的预留是「承诺上限」而不是「已分配」—— 一次 32 MiB 的承诺乘三倍就是
+        #: 96 MiB，直接把并发从二十几个压到三个（v1.2.43 的回归，17 次 503）。
+        self.body_physical_factor = max(1, _env_int('WB_GATEWAY_BODY_PHYSICAL_FACTOR', 3))
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
         from . import config
@@ -894,7 +1029,19 @@ class RequestAuditMiddleware:
         from . import requestperf
         if inference:
             state.performance = requestperf.Trace(state.started)
-        admitted=False; large=False; received=0; reserved=0
+        # ── 在途内存记账（两个独立量，语义不同，绝不混算） ──────────────
+        #
+        # `reserved` 是**逻辑预留**（协调器看到的字节数，用于跨进程公平分配），
+        # `charged` 是**本地物理记账**（本进程实际占用的预算）。
+        #
+        # 两者必须分开，因为输入与输出的性质不同：
+        #   · 输入体会被解析成对象图，物理占用是体积的若干倍；
+        #   · 输出缓冲是逐步增长的字节，没有对象图，且它的预留是「承诺上限」而非
+        #     「已分配」—— 把承诺也乘倍率，一次 32 MiB 的承诺就变成 96 MiB，
+        #     并发被从二十几个压到三个（v1.2.43 的真实回归）。
+        #
+        # 释放时按 `charged` 归还，因此加减始终配对。
+        admitted=False; large=False; received=0; reserved=0; charged=0
         inbound_retained=0; wire_reserved=0; output_reserved=0
         reading_body=False
         per_request_limit=None
@@ -912,17 +1059,19 @@ class RequestAuditMiddleware:
                 # No local fallback: losing the coordinator must not double limits.
                 return False
         def reserve_capacity():
-            nonlocal admitted, reserved, large
+            nonlocal admitted, reserved, charged, large
+            initial_charge = initial_reservation * self.body_physical_factor
             if (self.active >= self.maximum
                     or declared > 1024*1024 and self.large >= self.large_maximum
-                    or self.inflight_body_bytes + initial_reservation > self.maximum_body_bytes):
+                    or self.inflight_body_bytes + initial_charge > self.maximum_body_bytes):
                 return False
             if not shared_reserve(initial_reservation, declared > 1024*1024):
                 return False
             self.active += 1
             admitted = True
             reserved = initial_reservation
-            self.inflight_body_bytes += reserved
+            charged = initial_charge
+            self.inflight_body_bytes += initial_charge
             if declared > 1024*1024:
                 self.large += 1
                 large = True
@@ -932,52 +1081,63 @@ class RequestAuditMiddleware:
                 self.capacity_rejections += 1
             state.terminal_state,state.error_stage='rejected','admission'
         def reserve_wire_body(size):
-            nonlocal reserved, large, wire_reserved
+            nonlocal reserved, charged, large, wire_reserved
             if not admitted or not inference:
                 return
             if size <= wire_reserved:
                 return
             needed = max(reserved, inbound_retained + size + output_reserved)
             extra = needed - reserved
+            # 转发体是**输入体的序列化副本**，与输入同性质：它也是一段字节，
+            # 但它的量级与输入同阶，所以按输入倍率记账。
+            extra_charge = extra * self.body_physical_factor
             needs_large = size > 1024*1024 and not large
-            if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+            if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                     or needs_large and self.large >= self.large_maximum
                     or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                 capacity_rejected()
                 raise CapacityError('aggregate transformed-body capacity exceeded')
-            self.inflight_body_bytes += extra
+            self.inflight_body_bytes += extra_charge
+            charged += extra_charge
             reserved, wire_reserved = needed, size
             if needs_large:
                 self.large += 1; large=True
         state.reserve_wire_body = reserve_wire_body
         def reserve_output_body(size):
-            nonlocal reserved, output_reserved
+            nonlocal reserved, charged, output_reserved
             if not admitted or not inference or size<=output_reserved:
                 return
             needed=max(reserved,inbound_retained+wire_reserved+size)
             extra=needed-reserved
+            # **输出不乘物理倍率。** 它是逐步增长的字节缓冲，没有对象图开销；而且
+            # 这个预留是「承诺上限」而不是「已分配内存」—— 乘上去会让一个 32 MiB
+            # 的承诺占掉 96 MiB 预算，把并发压到个位数（v1.2.43 的回归）。
             if (self.inflight_body_bytes+extra>self.maximum_body_bytes
                     or extra>0 and not shared_reserve(needed,large)):
                 capacity_rejected()
                 raise CapacityError('aggregate response-body capacity exceeded')
             self.inflight_body_bytes+=extra
+            charged+=extra
             reserved,output_reserved=needed,size
         state.reserve_output_body=reserve_output_body
         def reserve_input(size):
-            nonlocal received,large,reserved
+            nonlocal received,large,reserved,charged
             received=size
             if inference:
                 needed = max(reserved, received + output_reserved)
                 extra = needed - reserved
+                # 输入体：按物理倍率记账（它会被解析成对象图）。
+                extra_charge = extra * self.body_physical_factor
                 needs_large = received > 1024*1024 and not large
                 # No await between checking and reserving: atomic within this
                 # ASGI worker, including chunked or understated-length requests.
-                if (self.inflight_body_bytes + extra > self.maximum_body_bytes
+                if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                         or needs_large and self.large >= self.large_maximum
                         or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
                     capacity_rejected()
                     raise CapacityError('aggregate request-body capacity exceeded')
-                self.inflight_body_bytes += extra
+                self.inflight_body_bytes += extra_charge
+                charged += extra_charge
                 reserved = needed
                 if needs_large:
                     self.large+=1; large=True
@@ -1094,6 +1254,10 @@ class RequestAuditMiddleware:
                     reading_body=True
                     chunks=[]
                     body_window=BodyReadWindow()
+                    # 下游还会再读一遍 body（`_read_json_body` 从重放流里读）。让它
+                    # 沿用同一个窗口，否则两份窗口各自从零开始计时：一次慢速上传
+                    # 的总预算就从一份变成两份，占着准入名额的窗口也随之翻倍。
+                    scope['wb_body_window'] = body_window
                     encoding=content_encoding(scope.get('headers', []))
                     with requestperf.measure('body_receive'):
                         async for message in body_frames(receive, encoding, per_request_limit,
@@ -1138,6 +1302,8 @@ class RequestAuditMiddleware:
                 raise
             state.terminal_state,state.error_stage='rejected','request_body'
             state.error_code,state.error_source='body_read_timeout',ERROR_SOURCE_GATEWAY
+            # 两种超时的处置不同（查链路 vs 精简上下文），指标上要能分开看。
+            note_body_timeout(getattr(exc, 'reason', None))
             await reject_response(gateway._oai_error(exc.message,408,'invalid_request_error','body_read_timeout'))
         except CapacityError:
             if state.http_status:
@@ -1257,7 +1423,10 @@ class RequestAuditMiddleware:
                             log.error('shared admission release deferred; capacity retained')
                     if admitted:
                         self.active-=1
-                        self.inflight_body_bytes -= reserved
+                        # 按 `charged` 归还：它与累加时的量严格配对。
+                        # 用 `reserved * factor` 会算错 —— `reserved` 是输入+输出+
+                        # 转发体的逻辑预留，其中输出那部分从未乘过倍率。
+                        self.inflight_body_bytes -= charged
                     if large: self.large-=1
                     self.fair_gate.notify()
                     state.reserve_wire_body = None

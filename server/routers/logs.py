@@ -380,3 +380,53 @@ def attempts_explain(request_id: str, user: dict = Depends(security.current_user
 @router.post('/clear')
 def clear_logs(user: dict = Depends(security.require_session_admin)) -> dict:
     raise HTTPException(409, detail='日志须先归档校验；批量清空已停用，以免丢失未决用量证据。请使用归档 CLI 或等待保留期归档任务。')
+
+
+@router.get('/forwarding')
+def forwarding(request_id: str,
+               user: dict = Depends(security.require_panel_reader)) -> dict:
+    """某个请求的**转发阶段链路**（只读）。
+
+    ## 为什么补这个端点
+
+    这张表从上线起就在写 —— 每次转发都记下选号、失败换号、拿到响应头、流终止等
+    阶段 —— 而且带不可改、不可删的触发器，是设计上的审计留痕。
+
+    **但代码里没有任何一处读它。** 2026-11-14 审计时扫了全部表：它是四张「只写不读」
+    表里最大的那张，**38 万行、约 89 MB**，每天还在长。
+
+    留痕没有读取入口，等于没有留痕：真出问题时只能手工开库去翻。
+
+    这个端点和已有的「结局」「尝试」「供应商尝试」三条并列，补齐最后一段 ——
+    能回答「这个请求在网关内部走去哪儿了、卡在哪个阶段、换了几个号」。
+
+    ## 返回什么
+
+    只有阶段与归属，**不含请求正文、不含凭据**。`config_hash` 这类内部标识也不返回
+    —— 它对定位问题没有帮助，却会把内部实现细节漏出去。
+    """
+    if not 0 < len(request_id) <= 128:
+        raise HTTPException(status_code=400, detail='request_id 必填且不超过 128 字符')
+    rows = [dict(row) for row in db.query(
+        'SELECT attempt,phase,ts,upstream_id,requested_model,resolved_model,'
+        'realm,protocol,transform,outcome '
+        'FROM forwarding_events WHERE request_id=? ORDER BY attempt,ts',
+        (request_id,))]
+    if not rows:
+        return {'request_id': request_id, 'count': 0, 'attempts': 0,
+                'phases': [], 'note': '该请求没有转发阶段记录（可能未到达转发阶段）'}
+    attempts = sorted({int(row['attempt']) for row in rows})
+    last = rows[-1]
+    return {
+        'request_id': request_id,
+        'count': len(rows),
+        'attempts': len(attempts),
+        # 只有一次尝试 = 没发生换号；多次则能看出在哪一步被放弃
+        'attempt_numbers': attempts,
+        'first_at': rows[0]['ts'],
+        'last_at': last['ts'],
+        'elapsed_ms': max(0, int(last['ts']) - int(rows[0]['ts'])) * 1000,
+        'last_phase': last['phase'],
+        'last_outcome': last['outcome'],
+        'phases': rows,
+    }

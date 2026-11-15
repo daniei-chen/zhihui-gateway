@@ -57,10 +57,20 @@ class Metrics:
         self.models = set()
         self.histograms = {}
         self.samples = deque(maxlen=20000)
+        # 上次 prune 到的分钟。请求热路径上每来一次就遍历近 1440 个分钟桶是
+        # 固定开销，而同一分钟内重复遍历的结果完全相同 —— 每分钟做一次即可。
+        self._pruned_minute = None
 
     def _prune(self, minute):
+        if self._pruned_minute == minute:
+            return
+        self._pruned_minute = minute
+        self._drop_expired_minutes(minute - 1439)
+
+    def _drop_expired_minutes(self, cutoff):
+        """真正遍历分钟桶的部分；独立成方法便于直接验证"每分钟只跑一次"。"""
         for old in tuple(self.minutes):
-            if old < minute - 1439:
+            if old < cutoff:
                 del self.minutes[old]
 
     def _histogram(self, name, protocol, seconds):
@@ -137,7 +147,7 @@ class Metrics:
             suffix = '{' + ','.join(k + '="' + _escape(v) + '"' for k, v in (labels or {}).items()) + '}' if labels else ''
             lines.append(name + suffix + ' ' + str(value))
 
-        emit('workbuddy_requests_total', 'counter', 'Tracked requests since this process started.', counts['requests'])
+        emit('workbuddy_requests_total', 'counter', 'All requests this process has handled, including health probes and admin calls. For real inference volume use workbuddy_request_outcomes_total with traffic="inference"; the two differ whenever a probe lives, and reading this number as business demand overstates it.', counts['requests'])
         emit('workbuddy_errors_total', 'counter', 'Tracked logical failures since this process started; inspect traffic/status groups.', counts['errors'])
         emit('workbuddy_metrics_window_coverage_seconds', 'gauge', 'Window coverage since process start, capped at 24h.', min(86400, max(0, now - self.started)))
         emit('workbuddy_requests_last_hour', 'gauge', 'Observed requests in the last 60 minute buckets.', hour['requests'])

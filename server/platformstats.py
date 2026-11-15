@@ -9,6 +9,10 @@ import datetime as dt
 import math
 import time
 
+#: 与 `db.day_of` 同一个日边界（固定 UTC+8）。这里自带一份而不是 import db：
+#: `platformstats` 是纯查询模块，不该为了一个常量把整个 db 模块拉进依赖图。
+_DAY_TZ = dt.timezone(dt.timedelta(hours=8))
+
 MAX_COUNT = 2**53 - 1
 
 
@@ -18,11 +22,14 @@ def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None =
     if type(days) is not int:
         raise ValueError('invalid selected key-usage window')
     days = max(1, min(90, days))
-    today = dt.date.fromtimestamp(time.time() if now is None else now)
+    # UTC+8 口径，与账本一致。原先 `date.fromtimestamp` / `mktime` 跟进程时区走。
+    today = dt.datetime.fromtimestamp(time.time() if now is None else now, _DAY_TZ).date()
     start_day = today - dt.timedelta(days=days - 1)
     end_day = today + dt.timedelta(days=1)
-    start = time.mktime(start_day.timetuple())
-    end = time.mktime(end_day.timetuple())
+    start = dt.datetime(start_day.year, start_day.month, start_day.day,
+                        tzinfo=_DAY_TZ).timestamp()
+    end = dt.datetime(end_day.year, end_day.month, end_day.day,
+                      tzinfo=_DAY_TZ).timestamp()
     known_tokens = ("l.usage_complete=1 AND typeof(l.prompt_tokens)='integer' "
                     "AND l.prompt_tokens>=0 AND typeof(l.completion_tokens)='integer' "
                     "AND l.completion_tokens>=0")

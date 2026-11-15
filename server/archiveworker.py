@@ -16,8 +16,22 @@ _stop = threading.Event()
 _wake = threading.Event()
 _thread = None
 _state = {'sampled': False, 'running': False, 'last_at': None, 'ok': None,
-          'error': None, 'pending': None, 'deleted_rows': 0}
-DATASETS = ('request_logs', 'request_outcomes')
+          'error': None, 'pending': None, 'deleted_rows': 0,
+          # 审计链校验结果（见下方 `_check_audit_chain`）：
+          #   chain_intact   True/False，None 表示还没跑过
+          #   chain_checked_at  上次校验的 epoch 秒
+          #   chain_events  校验时看到的行数
+          #   chain_error  校验本身失败时的异常类型（与「链断了」是两回事）
+          'chain_intact': None, 'chain_checked_at': None,
+          'chain_events': None, 'chain_error': None}
+#: 后台归档逐个处理的表。
+#:
+#: `retention` 里**已经**为 `budget_reservations` 定义了完整的归档策略
+#: （180 天、只动 `state IN ('settled','released')`、未决与 unknown 永不归档），
+#: 但这里一直只列了两张日志表 —— 于是那条策略从未被接线执行，预算预留表
+#: 只能无限增长（生产上 193k 行 / 27 MB）。策略与执行分开写在两个文件里，
+#: 漏一处不会有任何报错，只会悄悄不生效。
+DATASETS = ('request_logs', 'request_outcomes', 'budget_reservations')
 
 
 def notify():
@@ -85,7 +99,48 @@ def run_once(path: Path | None = None, out_dir: Path | None = None, *, max_rows:
         connection.close()
 
 
+def _check_audit_chain() -> None:
+    """每个归档周期顺手校验一次 `admin_events` 的哈希链。
+
+    ## 为什么需要单独做
+
+    `ledger.verify_chain()` 早就存在，但**生产里从来没有被调用过**：
+    它只在 `retention.verify_admin_chain()` 里被用到，而那条路径挂在归档流程上 ——
+    归档按 90 天阈值触发，而库里最老的数据还没到那个年龄。
+
+    **于是「审计链有没有被篡改」这件事，从上线到现在一次都没验证过。**
+    链本身是完整的（2026-11-15 手工验过：25993 行、创世 1 个、断链 0），
+    但那是**有人去查**才发现的，不是系统自己说的。
+
+    ## 为什么可以放进周期里
+
+    实测全表 25993 行、断链检测 0.02 秒。归档周期默认 300 秒，
+    这点开销可以忽略，比「等归档触发」可靠得多。
+
+    ## 两种失败要分开
+
+    - `chain_intact=False`：**链真的断了** —— 有人改过历史
+    - `chain_error=...`：**校验本身没跑成**（库读不了等）—— 磁盘/权限问题
+
+    混在一起会让人以为「链断了」，而实际上只是没查成。
+    """
+    try:
+        from . import db, ledger
+        row = db.query_one('SELECT count(*) AS n FROM admin_events')
+        intact = bool(ledger.verify_chain())
+        with _lock:
+            _state.update(chain_intact=intact, chain_checked_at=int(time.time()),
+                          chain_events=int(row['n']) if row else None, chain_error=None)
+        if not intact:
+            log.error('admin_events hash chain is broken; audit history was modified')
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        with _lock:
+            _state.update(chain_error=type(exc).__name__)
+        log.warning('audit chain check failed: %s', type(exc).__name__)
+
+
 def _loop():
+
     next_run = time.monotonic() + 30
     while not _stop.is_set():
         _wake.wait(min(1, max(0, next_run - time.monotonic())))
@@ -109,6 +164,7 @@ def _loop():
         finally:
             with _lock:
                 _state['running'] = False
+            _check_audit_chain()
             next_run = time.monotonic() + config.ARCHIVE_INTERVAL_SEC
 
 

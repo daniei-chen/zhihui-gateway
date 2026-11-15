@@ -140,6 +140,24 @@ BASE_PATH = f'/{_BASE_PATH_RAW}' if _BASE_PATH_RAW else ''
 
 # 网络
 UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 300)
+#: 按平台的超时覆盖。
+#:
+#: ## 为什么要按平台分
+#:
+#: 2026-11-15 实测：`qoder` 平台只有**一个**上游账号，那次它被上游限流
+#: （403 / 10605）。qoder 的代理不是快速失败，而是**等约 183 秒**才回 502 ——
+#: 那时调用方早已超时，用户只看到「卡住」，看不到任何原因。
+#:
+#: 而 qoder 自己的历史延迟是：近 7 天 43 次请求，平均 **2.2 秒**、最大 **12.8 秒**。
+#: 所以给它 60 秒的窗口完全够用，同时能让「不可用」在**一分钟内**变成可见的错误。
+#:
+#: 其它平台不在此表里，仍沿用 `UPSTREAM_TIMEOUT` —— 不设默认值就不影响它们。
+#:
+#: 为什么不能整体下调 `UPSTREAM_TIMEOUT`：workbuddy 侧实测有 158 次首字节超过
+#: 60 秒（长 prompt 的固有 prefill），最长 186 秒。那是正常业务，切断它才是问题。
+PLATFORM_TIMEOUT = {
+    'qoder': _env_int('WB_QODER_TIMEOUT', 60),
+}
 TENCENT_TIMEOUT = _env_int('WB_TENCENT_TIMEOUT', 15)
 # 「全部签到」的并发上限：太低会拖到前端超时（几十个账号时），
 # 太高又容易触发腾讯风控。5 是保守且够快的取值。
@@ -265,15 +283,36 @@ def ensure_dirs() -> None:
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+#: 上一次读到的 upstream `api_key`，按文件指纹（dev/ino/mtime_ns/size）缓存。
+#:
+#: 推理主路径每个请求都会问一次 `upstream_api_key()`，原来每次都
+#: `read_text` + `json.loads`（30～150 µs，且在事件循环上）。文件被原子替换
+#: 时 inode 或 mtime 一定变，所以指纹命中就等于"内容没变"，不存在"改了没看见"。
+_UPSTREAM_KEY_CACHE: dict[str, object] = {'marker': None, 'value': ''}
+
+
 def upstream_api_key() -> str:
     """优先环境变量，其次读取 workbuddy2api 的 config.json。"""
     if WB2API_KEY:
         return WB2API_KEY
     try:
-        cfg = json.loads(UPSTREAM_CONFIG.read_text(encoding='utf-8'))
-        return str(cfg.get('api_key') or '')
-    except Exception:
+        info = UPSTREAM_CONFIG.stat()
+        marker = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    except OSError:
+        # 文件不在就是没有 key；顺手清掉缓存，免得文件被删后还返回旧值。
+        _UPSTREAM_KEY_CACHE['marker'] = None
+        _UPSTREAM_KEY_CACHE['value'] = ''
         return ''
+    cached = _UPSTREAM_KEY_CACHE
+    if cached['marker'] == marker:
+        return cached['value']  # type: ignore[return-value]
+    try:
+        cfg = json.loads(UPSTREAM_CONFIG.read_text(encoding='utf-8'))
+        value = str(cfg.get('api_key') or '')
+    except Exception:
+        value = ''
+    cached['marker'], cached['value'] = marker, value
+    return value
 
 
 DEFAULT_POOL = {
@@ -534,20 +573,50 @@ def resolve_account_proxy(auth: dict) -> str | None:
     return None
 
 
+#: 全局出口代理的进程内缓存（代际 + TTL）。
+#:
+#: 推理主路径每请求至少问一次（`http_client` → `effective_http_proxy`），而它要
+#: 读 2 条 settings（`global_proxy_enabled` 与 `http_proxy`）—— 两次 SQLite 查询
+#: 全压在事件循环上。代理是"运维改一次、几天不变"的配置，所以：
+#:   * 同一代际内 2 秒复用（同请求内的多次调用直接命中）；
+#:   * `set_setting` 保存这两条时调 `invalidate_global_proxy()`，同进程立刻生效；
+#:   * 另一实例（MAIN 与 helper 是两个进程）最多陈旧 2 秒。
+#: 不做更长 TTL，也不做通用 settings 缓存：`settings` 表里还有协调类键，给它们
+#: 加缓存会把"栅栏刚被别的 owner 拿走"这类判断读成旧值（v1.2.31 试过，被
+#: `test_task_leases` 的 lease 抢占用例当场抓住）。
+_GLOBAL_PROXY_CACHE: dict[str, object] = {'generation': -1, 'at': 0.0, 'value': ''}
+_GLOBAL_PROXY_GENERATION = 0
+_GLOBAL_PROXY_TTL = 2.0
+
+
+def invalidate_global_proxy() -> None:
+    """让下次 `global_http_proxy()` 重新读库（保存代理设置时调用）。"""
+    global _GLOBAL_PROXY_GENERATION
+    _GLOBAL_PROXY_GENERATION += 1
+
+
 def global_http_proxy() -> str:
     """全局上游代理：面板设置里配了且开启时生效，否则回落环境变量 WB_HTTP_PROXY。
 
     位置与参考项目的「Global Proxy」一致：池不可用（关了 / 没有启用中的线路）时的
     兜底出口。
     """
+    generation = _GLOBAL_PROXY_GENERATION
+    cached = _GLOBAL_PROXY_CACHE
+    if (cached['generation'] == generation
+            and time.monotonic() - float(cached['at']) < _GLOBAL_PROXY_TTL):
+        return cached['value']  # type: ignore[return-value]
     try:
         from . import db
         if db.get_setting('global_proxy_enabled', True) is False:
-            return ''
-        stored = str(db.get_setting('http_proxy', '') or '').strip()
+            value = ''
+        else:
+            stored = str(db.get_setting('http_proxy', '') or '').strip()
+            value = stored or HTTP_PROXY
     except Exception:            # noqa: BLE001
-        stored = ''
-    return stored or HTTP_PROXY
+        value = HTTP_PROXY
+    cached['generation'], cached['at'], cached['value'] = generation, time.monotonic(), value
+    return value
 
 
 def account_proxy(auth: dict) -> str | None:
@@ -570,11 +639,17 @@ def new_secret() -> str:
 # 复用会炸（同步路由里 `asyncio.run` 另起循环那条路就是例子，见
 # `modelcatalog.fetch_ids_blocking`）。不同循环各建一个，互不干扰。
 _CLIENTS: dict = {}
-_CLIENTS_MAX = max(1, _env_int('WB_HTTP_MAX_POOLS', 24))
+# 24 个桶时，租户数一旦超过它，**每个新密钥的首次请求**都要"退役一个空闲 transport
+# → `await` 关闭 → 新建 TLS/TCP"。门户场景密钥数 ≈ 用户数，这条会常态触发。
+# 提到 32 只是缓解；真正的倍增来自每桶的连接上限，见下。
+_CLIENTS_MAX = max(1, _env_int('WB_HTTP_MAX_POOLS', 32))
 _HTTP_POOL = None
 _HTTP_POOL_INIT_LOCK = threading.RLock()
-HTTP_POOL_CONNECTIONS = max(1, _env_int('WB_HTTP_POOL_CONNECTIONS', 8))
-HTTP_POOL_KEEPALIVE = min(HTTP_POOL_CONNECTIONS, max(0, _env_int('WB_HTTP_POOL_KEEPALIVE', 4)))
+# 每桶 8 条连接与并发上限（默认 8、生产 64）不成比例：某个密钥被并发打满时，
+# 多出来的请求只能等池超时 —— 而池超时是"总超时"语义，最长能挂几分钟。16 条
+# 让单桶能覆盖常见的突发，同时把空闲连接总量控制在 32 × 8 = 256 以内。
+HTTP_POOL_CONNECTIONS = max(1, _env_int('WB_HTTP_POOL_CONNECTIONS', 16))
+HTTP_POOL_KEEPALIVE = min(HTTP_POOL_CONNECTIONS, max(0, _env_int('WB_HTTP_POOL_KEEPALIVE', 8)))
 
 
 def _transport_pool():
@@ -698,6 +773,28 @@ def effective_http_proxy() -> str:
     return global_http_proxy()
 
 
+#: 等「池里空闲连接」的最长等待（秒）。
+#:
+#: httpx 的 `Timeout(total, connect=c)` 会把未显式指定的 read/write/**pool**
+#: 全部设成 total。生产里 total 取 `WB_UPSTREAM_TIMEOUT`（300～600s），于是
+#: 传输池被占满时，新请求会在 `pool` 上挂 5～10 分钟，同时一直占着准入名额，
+#: 把网关整体拖成 503。而「还没拿到连接」属于**明确未发送**，PoolTimeout 已在
+#: `deadline.RETRYABLE_ERROR_NAMES` 里，可以安全重试 —— 所以这里给它一个明确
+#: 的短预算，而不是继承总超时。
+_POOL_WAIT_MAX_S = 5.0
+
+
+def _bounded_pool_timeout(tmo):  # noqa: ANN001
+    """把 pool 等待夹到 `_POOL_WAIT_MAX_S`，其余三个字段原样保留。"""
+    import httpx
+
+    pool = tmo.pool
+    if pool is not None and pool <= _POOL_WAIT_MAX_S:
+        return tmo
+    return httpx.Timeout(connect=tmo.connect, read=tmo.read,
+                         write=tmo.write, pool=_POOL_WAIT_MAX_S)
+
+
 def http_client(timeout, *, connect: float | None = None, proxy: str | None = None,
                 lane: str = '', identity: str | None = None, bounded_response: bool = False):
     """统一的 httpx 客户端：默认忽略系统/环境代理，避免内网请求被代理劫持。
@@ -720,11 +817,11 @@ def http_client(timeout, *, connect: float | None = None, proxy: str | None = No
     import httpx
 
     if isinstance(timeout, httpx.Timeout):
-        tmo = timeout
+        tmo = _bounded_pool_timeout(timeout)
     elif connect is not None:
-        tmo = httpx.Timeout(timeout, connect=connect)
+        tmo = _bounded_pool_timeout(httpx.Timeout(timeout, connect=connect))
     else:
-        tmo = httpx.Timeout(timeout)
+        tmo = _bounded_pool_timeout(httpx.Timeout(timeout))
     selected_proxy = effective_http_proxy() if proxy is None else proxy
 
     try:

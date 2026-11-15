@@ -63,10 +63,19 @@ class StreamingRelay:
         self.active = {name: 0 for name in self.backends}
         self.epoch, self.target = 0, None
         self.accepted, self.transport_errors = 0, 0
+        # read 原先给的是 None（永不超时）。对 SSE 来说"不设总时长"是对的 ——
+        # 一次回答可以连续流几分钟甚至更久。但 read 在 httpx 里是**相邻两次读之间**
+        # 的间隔，不是总时长：给 None 意味着上游只要不发也不关（半开连接、被挂起的
+        # 上游进程），这条连接就一直占着 `maximum` 里的一个名额，谁也不回收。
+        # 128 个这样的流就能把转发层永久打满，而它背后没有任何计时器。
+        #
+        # 600 秒是"十分钟没有任何字节"的判据：正常 SSE 每隔几秒就有数据或心跳，
+        # 真到十分钟没动静时那条上游已经没救了。它比主服务的上游读超时（300 秒）
+        # 更宽松，所以不会比后端先动手杀死一条还活着的流。
         self.client = client or httpx.AsyncClient(trust_env=False, follow_redirects=False,
             transport=httpx.AsyncHTTPTransport(retries=0,
                 limits=httpx.Limits(max_connections=maximum, max_keepalive_connections=min(16, maximum))),
-            timeout=httpx.Timeout(connect=3, read=None, write=30, pool=5))
+            timeout=httpx.Timeout(connect=3, read=600, write=30, pool=5))
 
     def route(self):
         parent = self.path.parent.lstat()

@@ -70,6 +70,8 @@ async def login(request: Request) -> JSONResponse:
 
 
 def _complete_login(request: Request, ip: str, username: str, password: str) -> JSONResponse:
+    # 日志与审计只写清洗后的标签；认证、锁定键与用户查找继续用原值。
+    label = security.log_text(username)
     if security.login_blocked(ip, username):
         raise HTTPException(status_code=429, detail='失败次数过多，请 10 分钟后再试')
 
@@ -80,11 +82,27 @@ def _complete_login(request: Request, ip: str, username: str, password: str) -> 
         security.dummy_verify(password)
     if not user or not security.verify_pwd(password, user.get('pwd_hash', '')):
         # 同时记 IP 与用户名：前者防单机爆破，后者防换 IP 打同一账号
-        security.record_fail(ip, username)
+        fails = security.record_fail(ip, username)
         # 登录失败也要留痕：本次事故中攻击者拿到了会话，但服务端没有任何记录
-        security.audit({'username': username or '(空)'}, 'login_failed', username,
+        security.audit({'username': label or '(空)'}, 'login_failed', label,
                        f'来源 {ip}', ip=ip)
-        raise HTTPException(status_code=401, detail='用户名或密码错误')
+        # 快到锁定时才说「还剩几次」。
+        #
+        # 2026-11-15：有用户输错几次后来问「密码是不是换了」—— 因为每次都是
+        # 同一句「用户名或密码错误」，他不知道已经接近锁定。
+        #
+        # **只在剩余一两次时提示**：全程报进度等于把「还能试几次」直接送给爆破方，
+        # 而临近锁定这条信息对正常用户最有用、对攻击者最没用（他马上就进不去了）。
+        #
+        # 对返回值做类型检查而不是直接用：这个函数在测试里会被替换成只记调用的桩，
+        # 而登录失败这条路径**不能因为一个附加提示的取值失败就整条崩掉** ——
+        # 那样连「用户名或密码错误」都不会返回，用户看到的是 500。
+        detail = '用户名或密码错误'
+        if isinstance(fails, int) and not isinstance(fails, bool):
+            remaining = max(security.MAX_FAILS - fails, 0)
+            if 0 < remaining <= 2:
+                detail = f'用户名或密码错误，再错 {remaining} 次将暂时锁定'
+        raise HTTPException(status_code=401, detail=detail)
 
     # Password verification is intentionally outside the user-store lock. Bind
     # signing to that exact snapshot so a concurrent reset cannot mint a fresh
@@ -101,14 +119,14 @@ def _complete_login(request: Request, ip: str, username: str, password: str) -> 
 
     security.clear_fail(ip, username)
     # URL 与 Host 都写进日志，便于在反馈里直接看出真实监听形态
-    logger.info('登录成功: %s（来源 %s）', username, ip)
+    logger.info('登录成功: %s（来源 %s）', label, ip)
     # 反代存在但 cookie 拿不到 Secure 时明确告警 —— 这类「以为安全其实没有」
     # 靠用户自己去翻 DevTools 才能发现，不如在日志里点出来（每个登录一条，不刷屏）。
     warn = security.insecure_cookie_warning(request)
     if warn:
         logger.warning(warn)
     # orig 缺省 = 现在（首次登录）：这次是会话的**起点**，后续续期不会推后它。
-    security.audit(user, 'login', username, f'来源 {ip}', ip=ip)
+    security.audit(user, 'login', label, f'来源 {ip}', ip=ip)
     resp = JSONResponse({'ok': True, 'username': username, 'role': user.get('role', 'viewer')})
     resp.set_cookie(
         config.COOKIE_NAME,

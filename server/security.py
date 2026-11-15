@@ -605,6 +605,20 @@ def _unmirror_fail(kind: str, key: str) -> None:
         pass
 
 
+def log_text(value, limit: int = 128) -> str:
+    """把任意用户输入变成**可安全写入日志的单行文本**。
+
+    登录用户名来自请求体，只做过 `strip()`：内部的 `\\n`、`\\r`、ESC 会原样
+    进 journal 与 `audit_logs`，攻击者因此能伪造出一整行看似正常的审计记录。
+    这里把控制字符替换成 `?`（而不是静默丢弃），让"被清洗过"在日志里看得见。
+
+    只用于**展示与留痕**：认证、锁定键与用户索引一律继续使用原值，
+    否则含控制字符的历史用户名会突然登录失败。
+    """
+    cleaned = ''.join(ch if ch >= ' ' and ch != '\x7f' else '?' for ch in str(value or ''))
+    return cleaned[:limit]
+
+
 def _prune(store: dict[str, list]) -> None:
     """超限时淘汰**已经过了锁定窗口**的条目，绝不整体清空。
 
@@ -650,7 +664,21 @@ def login_blocked(ip: str, username: str | None = None) -> bool:
 
 
 @_serialized_login_counters
-def record_fail(ip: str, username: str | None = None) -> None:
+def record_fail(ip: str, username: str | None = None) -> int:
+    """记一次失败，返回**该用户名**当前的失败次数（没有用户名时返回 IP 的）。
+
+    ## 为什么现在返回值
+    #
+    # 2026-11-15：有用户连续输错几次之后来问「密码是不是被换了」——
+    # 因为每次失败都只回同样一句「用户名或密码错误」，**他不知道自己快到锁定了**。
+    #
+    # 计数本来就在手里，只是没往外递。递出去之后登录失败可以带上
+    # 「还有几次机会」，把「我输错了」和「我记的密码不对」区分开：
+    # 前者试一两次就进去了，后者会一直撞到锁定。
+    #
+    # 返回值取「按用户名」与「按 IP」两者中较大的那个 —— 锁定判定同时看两边，
+    # 只报一边会让用户看到「还剩 4 次」却已经被锁。
+    """
     _load_fails_once()
     now = time.time()
     cnt, first = _fail.get(ip, [0, 0.0])
@@ -658,6 +686,7 @@ def record_fail(ip: str, username: str | None = None) -> None:
         cnt, first = 0, now
     _fail[ip] = [cnt + 1, first]
     _mirror_fail('ip', ip, cnt + 1, first)
+    counted = cnt + 1
 
     if username:
         key = username.lower()
@@ -666,9 +695,11 @@ def record_fail(ip: str, username: str | None = None) -> None:
             ucnt, ufirst = 0, now
         _user_fail[key] = [ucnt + 1, ufirst]
         _mirror_fail('user', key, ucnt + 1, ufirst)
+        counted = max(counted, ucnt + 1)
 
     _prune(_fail)
     _prune(_user_fail)
+    return counted
 
 
 @_serialized_login_counters

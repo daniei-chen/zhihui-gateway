@@ -198,6 +198,88 @@ def _oai_error_with_blip_body(message: str, status: int = 502, exc=None,
     return resp
 
 
+def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONResponse:
+    """429 限流：明确告诉客户端要等多久。
+
+    ## 为什么需要
+
+    2026-11-15 查一个用户的实际调用记录：两天里对同一个**上游并不存在**的模型
+    试了 55 次、全部失败。原因是状态码让他（或他的客户端）以为「稍后重试可能成功」。
+
+    同样的形状也出现在**限流**上：`429` 不带 `Retry-After` 时，客户端的退避库
+    只能自己猜 —— 常见默认是立刻重试或固定 1 秒，而窗口是 60 秒。
+    **于是它在窗口内反复撞，越撞越远。**
+
+    ## 等待时间是算出来的，不是拍的
+
+    - 频率超限：等整个窗口（`RATE_WINDOW` 秒）过去，这是能算出上界的
+    - 并发超限：等当前在跑的请求让出名额，通常很快，给 1 秒
+
+    ## 为什么头和体都写
+
+    响应头路径在 nginx 反代链路上透传不稳（同 `_oai_error_with_blip_body` 的
+    既有结论），而错误体字段任何 OpenAI 兼容客户端都能原样读到。
+    **两个都写，谁通就用谁** —— 只写一个的话，另一条路径上的人什么都拿不到。
+    """
+    suffix = ' 请等 %d 秒后重试' % retry_after
+    body = {'error': {
+        'message': message + suffix,
+        'type': 'rate_limit_error',
+        'code': code,
+        'retry_after_seconds': retry_after,
+    }}
+    resp = JSONResponse(body, status_code=429)
+    resp.headers['Retry-After'] = str(retry_after)
+    return resp
+
+
+#: 上游转发过等待时间的次数。
+#:
+#: 为什么单独计数：这个能力**依赖外部条件**（上游得先限流）。
+#: 2026-11-15 实现后查了两次，日志里都是 0 —— 不是坏了，是上游一直没限流。
+#: 只靠日志翻不出「它到底跑过几次」，而一个计数器能直接回答。
+#:
+#: 用最朴素的模块级字典而不是引入指标库：这只是一个自进程启动以来的累计数，
+#: 进程重启归零是合理的（它回答的是「这次运行里发生过吗」）。
+_RETRY_AFTER_FORWARDED = {'count': 0}
+
+
+def _upstream_retry_after(resp) -> int | None:
+    """读上游 `Retry-After` 并解析成整数秒；拿不到或不可信时返回 None。
+
+    ## 为什么需要
+
+    2026-11-15 顺着「限流没告诉客户端该等多久」这条线查下去，发现同一条链上
+    还有一环断着：**上游返回的等待时间到网关这里就被丢掉了**。
+
+    上游确实会给 —— 它把排队/限流对应的时长映射成 `Retry-After` 响应头下发。
+    但网关处理上游错误的那个分支里，**body 原样透传、响应头没有接**。
+    于是客户端只知道「出错了」，不知道「等多久」，退避库按默认值猜（常见 1 秒），
+    而真实等待可能是几十秒。
+
+    ## 只认秒数，且设上限
+
+    上游下发的就是整数秒。`Retry-After` 还允许 HTTP-date 形式，这里**不解析** ——
+    上游从不用那种形式，为它写一套日期解析只会多出一条没人验证的路径。
+
+    超过两小时按脏数据丢弃（与上游侧同一口径），避免把异常值当成让客户端等两小时。
+    **拿不到就不写字段**，而不是写 0 —— 一个假的等待时间比没有更糟。
+    """
+    try:
+        raw = resp.headers.get('retry-after')
+    except Exception:      # noqa: BLE001
+        return None
+    if not raw:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or value > 7200:
+        return None
+    return value
+
+
 # ── 上游「明确拒绝且未处理」的有界重试（2026-10-28）────────────────────────
 #
 # 现场（2026-10-28 取证）：上游把**内容拒绝**伪装成 `11102 模型不存在`，而且是
@@ -490,7 +572,9 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
 
     chunks: list[bytes] = []
     size = 0
-    window = BodyReadWindow()
+    # 复用中间件那遍读取的时间窗口：body 被读两遍，若各自从零开始计时，一次慢速
+    # 上传的实际预算是两份（180 秒 × 2），而它全程占着一个准入名额。
+    window = request.scope.get('wb_body_window') or BodyReadWindow()
     try:
         encoding = content_encoding(request.scope.get('headers', []))
         async for frame in body_frames(request.receive, encoding, limit, window=window):
@@ -888,7 +972,38 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
     credit = measured.credit
     cache_hit, cache_miss, cache_write = _usage_cache(usage)
     state = observability.current.get()
+    # 上游可能生成得比我们请求的多（实测见 `note_output_over_limit` 的说明）。
+    # 只计数，不改行为、不进账本 —— 网关替上游守不了约，但得能回答「发生过几次」。
+    observability.note_output_over_limit(
+        getattr(state, 'max_tokens_requested', None) if state else None, ct)
     http_status = state.http_status if state and state.http_status else status
+    # 把算好的状态码回填到请求状态上，**必须在 budget.settle 之前**。
+    #
+    # ## 为什么
+    #
+    # `state.http_status` 的唯一有意义的赋值点在 `observability.send_audited`
+    # —— 也就是**响应头真正发给客户端**的那一刻。而 `_record` 是在 handler
+    # **返回之前**调用的（非流式、流式两条路径都是），它内部又在同一个事务里
+    # 调 `budget.settle`。
+    #
+    # 于是 `budget.settle` 读到的 `state.http_status` **恒为 0**（默认值），
+    # 它里面那条「明确的上游 4xx 应释放预留」的判据
+    # （`400 <= state.http_status < 500 and != 429`）**永远不成立**。
+    #
+    # 后果不是抛错，是**静默**：每一次客户端把参数写错（不存在的模型名、
+    # 不合法的请求体、鉴权失败）都会在 `budget_reservations` 里留下一条
+    # `unknown`，进「待人工核对」队列。实测生产库 1538 条 unknown 中，
+    # 129 条对应 400、3 条对应 403 —— 那 132 条本应已被判为 released。
+    #
+    # 更严重的是它的下游：密钥一旦启用信用配额，`budget.admit` 见到任意
+    # `unknown` 就抛 `credit_quota_unconfirmed`，而 `upstream_rejected` 又不在
+    # 可归档类别里 —— 也就是说**一次参数写错就能让该密钥永久不可用**。
+    #
+    # 这里只是把**同一个值**回填（`http_status` 已经是 `state.http_status or status`），
+    # 所以对已经赋值的路径是幂等的，不改变任何对外行为；它只让结算阶段能看到
+    # 本该看到的东西。真正的线上状态仍由 send 包装在发送时覆盖。
+    if state is not None:
+        state.http_status = http_status
     terminal = state.terminal_state if state else None
     if stream and terminal == 'client_cancelled':
         status = 499
@@ -911,7 +1026,12 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         'mapped_model': db._clean(mapped, 128), 'status': status,
         'prompt_tokens': max(0, pt), 'completion_tokens': max(0, ct),
         'latency_ms': latency, 'first_token_ms': first_token,
-        'ua': db._clean(ua, 512), 'error': db._clean(error, 500),
+        'ua': db._clean(ua, 512),
+        # 调用方显式传的原因优先；没传时回退到请求状态里记的那份。
+        # 流中失败（`stream_read`）走的是「发一个错误帧给客户端 + finally 收尾」的
+        # 路径，那里没有人再调用 `_record` 传 error —— 不回落就会丢成空字符串，
+        # 记录里只剩一个 `transport_error` 的壳。
+        'error': db._clean(error or getattr(state, 'error', None), 500),
         'stream': 1 if stream else 0, 'credit': credit, 'realm': realm,
         'cache_hit_tokens': cache_hit, 'cache_miss_tokens': cache_miss,
         'cache_write_tokens': cache_write,
@@ -935,6 +1055,11 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         # （例如鉴权阶段就被拒），**不是** workbuddy —— 对账时单独归类。
         'actual_platform': getattr(state, 'actual_platform', None) if state else None,
         'upstream_ref': getattr(state, 'upstream_ref', None) if state else None,
+        # D-03：入口平台必须在这里定下来。`db.add_request_log` 的兜底读的是
+        # `forced_platform` 这个 ContextVar，而 spool 重放跑在后台线程里，
+        # ContextVar 是空的 —— 结果每条重放都记成 workbuddy，把别的平台的
+        # 调用算到 workbuddy 头上。写进 facts 之后，重放用的是入口那一刻的值。
+        'platform': forced_platform.get() or 'workbuddy',
         # RV01：调用方的关联 ID（X-Request-ID，已校验）。与 request_id
         # （服务端执行 ID）是两个字段：这里记的只是「调用方说自己是
         # 谁」，不参与主键，也不能用来反推执行归属。
@@ -942,9 +1067,12 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
     }
     try:
         with db.transaction():
-            if state and db.query_one('SELECT id FROM request_logs WHERE request_id=?', (state.request_id,)):
+            # 幂等由 `request_logs` 的唯一索引直接提供：插入命中冲突时返回 0 行，
+            # 说明这条请求已经记过账，直接收工。原先这里先 `SELECT ... WHERE
+            # request_id=?` 再插入，等于每个请求多一次同表定位。
+            inserted = db.add_request_log(**facts)
+            if state and not inserted:
                 return
-            db.add_request_log(**facts)
             from .. import budget
             budget.settle(usage,pt,ct,credit)
             from .. import ledger
@@ -960,6 +1088,9 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
                     db.bump_usage(key['id'],model_clean,max(0,pt),max(0,ct),credit,realm=realm,cache=(cache_hit or 0,cache_miss or 0),ts=facts['ts'])
         if state:
             state.recorded=True
+            # 事务到这里已经提交：结算真的把预算行迁走了，收尾阶段不必再用一次
+            # 空事务去"兜底"（见 budget.finish 的注释）。
+            state.budget_settled=getattr(state,'budget_settled_pending',False)
     except Exception:
         from .. import operational, ledgerreplay
         operational.ledger_write_healthy=False
@@ -976,6 +1107,22 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
             operational.ledger_spool_failed=True
         logger.exception('请求账本事务失败 request_id=%s（已落回执等待重放）',
                          state.request_id if state else None)
+    # 侧表清理放在事务之外：它原先挂在结算事务里，每两千次结算让账本多跑四条
+    # DELETE（含一条 OFFSET 子查询）。旁路工作不该占用账本的写窗口。
+    db.prune_if_pending()
+
+
+async def _record_async(*args, **kwargs) -> None:
+    """在线程里跑 `_record`：它是 1 个事务 + 5～7 条语句 + 至少一次 fsync。
+
+    直接在事件循环上跑会把所有在途 SSE 流一起卡住（`db` 是同步 SQLite）。
+    `asyncio.to_thread` 会复制 contextvars，所以 `_record` 里读的
+    `observability.current` 与 `forced_platform` 仍然是**这个请求**的。
+
+    流式响应的 `finally` 不走这里：那里 await 会在取消/关闭时丢掉结算，
+    丢一行账比阻塞一会儿更糟。
+    """
+    await asyncio.to_thread(_record, *args, **kwargs)
 
 
 def _global_ip_blocked(ip: str) -> bool:
@@ -1084,16 +1231,19 @@ def _authorize_key(request: Request, key: dict, ip: str, model: str | None,
     metadata_count = (request.scope.get('method') == 'POST'
                       and request.scope.get('path', '') == '/v1/messages/count_tokens')
     if not is_model_list and not metadata_count and not observability.admit_key(key):
+        # 并发名额满：等当前在跑的请求让出，通常很快，给 1 秒。
         observability.mark_error('key_concurrency_exceeded')
         _record(key,ip,model or '',mapped or '',429,0,0,0,ua,'密钥并发容量已满',False)
-        return None,ip,_oai_error('密钥并发容量已满，请等待当前请求结束',429,'rate_limit_error','key_concurrency_exceeded')
+        return None,ip,_oai_error_throttled('密钥并发容量已满，请等待当前请求结束',
+                                            'key_concurrency_exceeded', 1)
     limited, count = _rate_limited(key)
     if limited:
         msg = f'请求过于频繁（{RATE_WINDOW}s 内超过 {RATE_MAX_PER_MIN} 次）'
         observability.mark_error('rate_limit_exceeded')
         _record(key, ip, model or '', mapped or '', 429, 0, 0, 0, ua, msg, False)
         _log_ip(ip, path, True, ua, 'rate_limited')
-        return None, ip, _oai_error(msg, 429, 'rate_limit_error', 'rate_limit_exceeded')
+        # 频率超限：客户端得等整个窗口过去，这个上界是算得出来的。
+        return None, ip, _oai_error_throttled(msg, 'rate_limit_exceeded', RATE_WINDOW)
 
     _log_ip(ip, path, False, ua)
     return key, ip, None
@@ -1200,7 +1350,14 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         headers['X-Request-ID'] = state.client_request_id or state.request_id
         headers['X-Manager-Request-ID'] = state.request_id
         dispatch_id = uuid.uuid4().hex
-        db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)', (dispatch_id, state.request_id, int(time.time())))
+        try:
+            db.execute('INSERT INTO provider_dispatches_v2 VALUES(?,?,?)',
+                       (dispatch_id, state.request_id, int(time.time())))
+        except Exception:        # noqa: BLE001
+            # 归因证据不是转发的先决条件：dispatch_id 马上就要写进请求头，这一行
+            # 掉了只影响"事后把上游回执对回请求"，不该让整次转发失败。正常情况下
+            # 这条路径不会触发；它挡的是磁盘/锁的瞬时故障把 200 变成 5xx。
+            logger.warning('provider dispatch 记录失败 request_id=%s', state.request_id)
         headers['X-Manager-Dispatch-ID'] = dispatch_id
         headers['X-WB-Compatibility'] = 'manager-scoped-v1'
         platform = getattr(state, 'actual_platform', None) or forced_platform.get() or up.get('name')
@@ -1285,6 +1442,39 @@ def _public_upstream_error(upstream: dict | None) -> str:
     return '上游暂时不可用，请稍后重试' + _upstream_hint(upstream)
 
 
+#: 看起来像平台名、但**不是**的东西。
+#:
+#: 用户写错前缀时（最典型的是把网关自己的名字当平台名），我们目前会把这个字符串
+#: 原样转发给上游，上游回一句 `no such model`，用户看到 503 会以为是模型不存在，
+#: 而真正的错因是前缀写错了。
+#:
+#: **不能泛化判断"含斜杠就是写错"**：真实模型名也有带斜杠的（`meta-llama/Llama-3`
+#: 这类）。所以只对这张明确的清单提示 —— 保守，但覆盖实际踩过的坑。
+_PLATFORM_LIKE_PREFIXES = frozenset({
+    'zhihui', 'wb', 'workbuddy2', 'qtg', 'buddy', 'manager', 'gateway',
+})
+
+
+def _misused_platform_prefix(model: object) -> JSONResponse | None:
+    """模型名带斜杠、且前缀像平台名却不是合法平台时，给一条**能照做**的错误。
+
+    返回 None 表示没问题或无从判断，继续正常路由。
+
+    为什么不往后放：上游那一趟是真实开销，而且它给的错误会把人引向「模型不存在」
+    这个错误方向。能在本地判出来的，就别让它跑一趟。
+    """
+    if not isinstance(model, str) or '/' not in model:
+        return None
+    prefix = model.split('/', 1)[0].lower()
+    if prefix in platformpolicy.PLATFORMS or prefix not in _PLATFORM_LIKE_PREFIXES:
+        return None
+    return _oai_error(
+        f"模型名里的前缀 `{prefix}` 不是可用的平台名。"
+        f"可用的是：{', '.join(platformpolicy.PLATFORMS)}（例如 trae/Doubao-Seed-Code）。"
+        f"如果你想调用的模型名本身带斜杠，请确认它确实是上游提供的完整名称。",
+        400, 'invalid_request_error', 'unknown_platform_prefix')
+
+
 def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
                   ua: str | None) -> tuple[dict | None, JSONResponse | None]:
     """按密钥解析本次请求该走哪个上游；不可用时返回**明确报错**。
@@ -1294,6 +1484,13 @@ def _upstream_for(key: dict | None, *, ip: str, model: str, mapped: str,
     失败同时记一条请求日志（503 + 原因），排障的人第一时间就能看到。
     """
     _fp = forced_platform.get()
+    # 前缀写错就地拒绝：省一趟上游，也避免上游那句 "no such model" 把人带偏。
+    misuse = _misused_platform_prefix(model)
+    if misuse is not None:
+        observability.mark_error('unknown_platform_prefix')
+        _record(key, ip, model, mapped, 400, 0, 0, 0, ua,
+                '模型名前缀不是可用的平台名', False)
+        return None, misuse
     if not _fp and model and "/" in model:
         _cand = model.split("/", 1)[0].lower()
         if _cand in _THREEWAY_SPEC:
@@ -1675,7 +1872,7 @@ async def usage_v1(request: Request):
     if _global_ip_blocked(ip):
         _log_ip(ip, request.url.path, True, ua, 'ip_blocked')
         observability.mark_error('ip_blocked')
-        _record(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        await _record_async(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
         return _oai_error('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
     if not key['enabled']:
         return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
@@ -1737,10 +1934,10 @@ async def list_models(request: Request):
                 catalog = None
             if (resp.status_code != 200 or not isinstance(catalog, dict) or catalog.get('error')
                     or not isinstance(catalog.get('data'), list)):
-                _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), '用户模型目录上游不可用', False)
+                await _record_async(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), '用户模型目录上游不可用', False)
                 return _oai_error('上游模型目录暂不可用，请联系管理员检查公共池连接；不是用户密钥无效',
                                   502, 'api_error', 'portal_model_catalog_unavailable')
-        _record(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
+        await _record_async(key, ip, '', '', resp.status_code, 0, 0, latency, request.headers.get('user-agent'), None, False)
         request_platform = forced_platform.get() or 'workbuddy'
         payload = _scope_models(resp.json(), key, platform=request_platform)
         # 目录收缩（issue #239）：上游模型表可能仍列着腾讯已经下架的 id，
@@ -1761,11 +1958,81 @@ async def list_models(request: Request):
         # Anthropic 客户端（Claude Code 等）也会调这个路径，但期望的结构不同
         if request.headers.get('anthropic-version'):
             payload = _as_anthropic_models(payload)
+        else:
+            # 只在 OpenAI 形状上标注：Anthropic 的转换会重排结构，多出的字段留不住，
+            # 白拉一趟没有意义。
+            payload = await _annotate_other_platforms(payload, key, request_platform)
         return JSONResponse(payload, status_code=resp.status_code)
     except Exception as exc:  # noqa: BLE001
         latency = int((time.time() - started) * 1000)
-        _record(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
+        await _record_async(key, ip, '', '', 502, 0, 0, latency, request.headers.get('user-agent'), str(exc), False)
         return _oai_error_with_blip_body(_public_upstream_error(upstream), 502, exc)
+
+
+async def _annotate_other_platforms(payload: object, key: dict | None,
+                                    current_platform: str) -> object:
+    """在模型清单旁标注「其它平台也能用」的模型。
+
+    ## 为什么要它
+
+    `/v1/models` 一直按**本次请求的上游**返回清单。这对「这个密钥此刻能看到什么」
+    是准确的，但它回答不了另一个问题：**这个密钥到底还能用什么**。
+
+    具体表现：豆包系列在 trae 平台上一直可用（实测文本、流式、推理内容都正常），
+    但持有 workbuddy 入口密钥的人在模型列表里看不到它们 —— 于是这些能力事实上
+    不存在，除非有人专门去读文档。
+
+    ## 怎么标
+
+    只在 `payload` 的**同级**加两个字段，`data` 数组一个字节都不动：
+
+        payload['other_platforms'] = {'trae': ['Doubao-Seed-2.1-Turbo', ...]}
+        payload['other_platforms_hint'] = '调用时加平台前缀…'
+
+    这样「客户端拿 data 当模型选择器」的行为完全不变，而人或智能客户端读一眼就知道
+    还有别的可选。**不把它们混进 data**：混进去会让客户端选中一个需要前缀的模型名，
+    然后收到「不可用」，那比看不到更糟。
+
+    ## 边界
+
+    · 只列**该密钥有权限**的平台（`key.platforms`），不列它调不了的；
+    · 拉不到就跳过（超时 2 秒），**绝不让某个平台不可用拖垮整个模型列表**；
+    · 每个平台最多 80 个，避免异常上游把响应撑大；
+    · `data` 不是列表时原样返回 —— 认不出的结构不动手。
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+        return payload
+    allowed = set((key or {}).get('platforms') or ())
+    others = [name for name in _THREEWAY_SPEC
+              if name != current_platform and name in allowed]
+    if not others:
+        return payload
+    extra: dict[str, list[str]] = {}
+    for platform in others:
+        upstream = _threeway_upstream(platform)
+        if not upstream:
+            continue
+        try:
+            async with config.http_client(2, connect=1) as client:
+                resp = await client.get(f'{upstream["base_url"]}/v1/models',
+                                        headers=await _upstream_headers_async(upstream))
+            if resp.status_code != 200:
+                continue
+            items = (resp.json() or {}).get('data')
+            if not isinstance(items, list):
+                continue
+            ids = [str(item.get('id')) for item in items
+                   if isinstance(item, dict) and item.get('id')]
+            if ids:
+                extra[platform] = ids[:80]
+        except Exception as exc:  # noqa: BLE001 - 标注是附加信息，不能连坐
+            logger.debug('%s 模型清单不可用，跳过标注：%s', platform, exc)
+    if not extra:
+        return payload
+    payload['other_platforms'] = extra
+    payload['other_platforms_hint'] = (
+        '这些模型在其它平台可用；调用时加平台前缀，例如 trae/Doubao-Seed-2.1-Turbo。')
+    return payload
 
 
 def _as_anthropic_models(payload: object) -> object:
@@ -2207,6 +2474,21 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
     return wire
 
 
+#: 准入字节预留的阶梯。编码器每 64 KiB flush 一次；若每次 flush 都去协调器走一个
+#: 事务，一个 8 MiB 请求就是 128 次事务（每次 `BEGIN IMMEDIATE` + 提交），外加 128
+#: 次跨线程往返。改成只在**跨过阶梯**时真正预留，中间块只更新本地计数：协调器上的
+#: 预留仍然 ≥ 实际字节，最多多留一个阶梯（4 倍），对 384 MiB 的池子可以接受。
+_RESERVE_STEPS = (64 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20)
+
+
+def _reserve_step(size: int) -> int:
+    """覆盖 `size` 的最小阶梯；超过最大阶梯时按实际值预留。"""
+    for step in _RESERVE_STEPS:
+        if step >= size:
+            return step
+    return size
+
+
 async def _prepare_forward_async(key, body, *, request=None):
     """Keep blocking JSON/SQLite work off the loop; admission stays loop-owned."""
     from concurrent.futures import Future
@@ -2218,14 +2500,42 @@ async def _prepare_forward_async(key, body, *, request=None):
     original_reserve = getattr(state, 'reserve_wire_body', None)
     output_reserve=getattr(state,'reserve_output_body',None)
     if output_reserve is not None:
-        from ..outputlimits import maximum_bytes, FAILURE_ENVELOPE_BYTES
+        from ..outputlimits import maximum_bytes, FAILURE_ENVELOPE_BYTES, declared_output_bytes
         try:
-            # Reserve decoded input plus translated output BEFORE provider spend.
-            # It shares local/cohort capacity and the middleware's final release.
-            output_reserve(2*maximum_bytes()+FAILURE_ENVELOPE_BYTES)
+            # 输出承诺按**这个请求实际能产出多少**来算，而不是一律按上限。
+            #
+            # 原先每个请求都预留 `2 × 最大输出 + 信封`（本机 32 MiB）。那对一次
+            # 一万六千 token 的长回答是合理的，但对 `max_tokens: 100` 的短问答
+            # 就是三十多兆的空占 —— 而它决定并发：384 MiB ÷ 32 MiB = 12 个。
+            # 按声明值算之后，短请求只占几百 KB，并发回到由连接数决定。
+            #
+            # 声明值不可信时（缺省、非法、超上限）退回上限值 —— 宁可少放几个，
+            # 也不能让一个自称"只要 10 个 token"的请求把预算骗过去。
+            output_reserve(declared_output_bytes(body) + FAILURE_ENVELOPE_BYTES)
         except observability.CapacityError:
-            response=_oai_error('响应容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
-            response.headers['Retry-After']='1'
+            # 这是**内存预算**到顶，不是并发数、也不是配额。三者被拒时用户看到的
+            # 都是 503，所以消息必须自己说清是哪一种，否则排障会往错的方向走。
+            #
+            # 2026-11-14 实测：某密钥在 12 分钟内被拒 20 次，全是这一条。它当时的
+            # 并发约 59、单个请求并不大 —— 是「很多长输出同时在途」把预留吃满了。
+            # 原来的文案只说「响应容量已满」，用户无法据此做任何事。
+            #
+            # 加两样东西：
+            #   · `gateway_hint`：告诉调用方这是容量保护、做什么有用；
+            #   · 一行带占用的日志：事后能区分「并发多」还是「单个请求声明得太大」。
+            snap = observability.admission_snapshot() or {}
+            held = snap.get('inflight_body_bytes')
+            ceiling = snap.get('maximum_body_bytes')
+            logger.warning('输出预留被拒 key_id=%s 声明输出=%s 在途字节=%s/%s',
+                           (key or {}).get('id'), declared_output_bytes(body),
+                           held, ceiling)
+            response = _oai_error(
+                '响应容量已满，请稍后重试', 503, 'server_error',
+                'gateway_capacity_exceeded',
+                hint=('in-flight response reservations reached the memory ceiling; '
+                      'this is a capacity guard, not a key, quota or model problem. '
+                      'Retry shortly, or lower the concurrency of long-output requests.'))
+            response.headers['Retry-After'] = '1'
             return response
     cancelled = threading.Event()
     reserved = 0
@@ -2239,19 +2549,24 @@ async def _prepare_forward_async(key, body, *, request=None):
         check_cancelled()
         if original_reserve is None or size <= reserved:
             return
+        # 只在跨过阶梯时才真去协调器预留；中间的 64 KiB 块只更新本地计数。
+        target = _reserve_step(size)
+        if target <= reserved:
+            reserved = size
+            return
         # The encoder flushes exact blocks, not one callback per JSON token.
         result = Future()
         def apply():
             try:
                 check_cancelled()
-                original_reserve(size)
+                original_reserve(target)
             except BaseException as error:
                 result.set_exception(error)
             else:
                 result.set_result(None)
         loop.call_soon_threadsafe(apply)
         result.result()
-        reserved = size
+        reserved = target
 
     def work():
         with requestperf.measure('forward_prepare'):
@@ -2354,6 +2669,25 @@ async def _chat(request: Request, upstream_path: str):
         observability.mark_error(exc.code)
         return _oai_error(str(exc), 400, 'invalid_request_error', exc.code)
 
+    # `messages` 必须是非空数组。
+    #
+    # 2026-11-15 实测：空数组会一路透传到上游，返回的是一段英文的模糊提示
+    # （"We're sorry, the param is invalid."），调用方看不出是自己少传了东西。
+    # 本地拒掉能直接指出问题，也省掉一次往返。
+    #
+    # 只在结构明显不对时拒：缺字段、不是数组、空数组。不逐条校验 role/content ——
+    # 各家对内容的宽容度不同，多校验一步就可能拒掉本来能用的请求。
+    #
+    # Anthropic 协议同样用 `messages`，所以这里对三条协议都成立；
+    # Responses API 走自己的路由（`input` 字段），不经过这里。
+    if isinstance(body, dict):
+        _messages = body.get('messages')
+        if _messages is None or not isinstance(_messages, list) or not _messages:
+            observability.mark_error('invalid_messages')
+            return _oai_error(
+                'messages 必须是非空数组，且每条至少包含 role 与 content',
+                400, 'invalid_request_error', 'invalid_messages')
+
     # 越界的 max_tokens 会被上游包装成 503（见 clamp_max_tokens 的说明），
     # 鉴权后、转发前压回上限。
     clamp_max_tokens(body)
@@ -2396,7 +2730,12 @@ async def _chat(request: Request, upstream_path: str):
     # 默认值不改变线上行为（见 deadline.Budgets.from_config 的说明）。
     from .. import deadline as deadline_mod
     # U13：三条协议共用同一套预算对象（对照表见 deadline 模块 docstring）。
-    budgets = deadline_mod.request_budgets(config.UPSTREAM_TIMEOUT)
+    # 按平台取超时：qoder 只有单账号，被限流时上游要等约 3 分钟才回错误，
+    # 那时调用方早就超时了。取更短的窗口让「不可用」尽快变成可见错误。
+    # 见 config.PLATFORM_TIMEOUT 的说明（含为什么不能整体下调）。
+    _platform_timeout = config.PLATFORM_TIMEOUT.get(
+        actual_platform or '', config.UPSTREAM_TIMEOUT)
+    budgets = deadline_mod.request_budgets(_platform_timeout)
     request_deadline = deadline_mod.Deadline(budgets)
     _timeouts = deadline_mod.transport_timeouts(budgets)
 
@@ -2423,6 +2762,11 @@ async def _chat(request: Request, upstream_path: str):
                             and _is_not_processed_rejection(resp.status_code,
                                                             _response_text(resp))):
                         attempt += 1
+                        # 让转发留痕反映真实尝试序号（原因见 ledger.forwarding 的说明：
+                        # 那里曾把 attempt 硬编码成 1，重试记录会被唯一约束静默丢弃）。
+                        _retry_state = observability.current.get()
+                        if _retry_state is not None:
+                            _retry_state.forwarding_attempt = attempt
                         logger.warning('上游明确拒绝且未处理 status=%s，重试 attempt=%s/%s',
                                        resp.status_code, attempt, rejection_limit)
                         await deadline_mod.await_total(asyncio.sleep(_REJECTION_RETRY_DELAY_S), request_deadline)
@@ -2438,6 +2782,10 @@ async def _chat(request: Request, upstream_path: str):
                     if not decision.retry:
                         raise
                     attempt = decision.next_attempt
+                    # 连接阶段的重试同样要反映到转发留痕（同上）。
+                    _retry_state = observability.current.get()
+                    if _retry_state is not None:
+                        _retry_state.forwarding_attempt = attempt
                     logger.warning('连接或连接池获取失败，重试 attempt=%s/%s error=%s',
                                    attempt, policy.max_attempts, type(exc).__name__)
                     await deadline_mod.await_total(asyncio.sleep(decision.delay_s), request_deadline)
@@ -2460,7 +2808,7 @@ async def _chat(request: Request, upstream_path: str):
                     converted = JSONResponse(data, status_code=resp.status_code)
                 except Exception as exc:
                     _mark_invalid_response()
-                    _record(key, ip, requested_model or '', mapped or '', 502, pt, ct,
+                    await _record_async(key, ip, requested_model or '', mapped or '', 502, pt, ct,
                             latency, ua, str(exc), False, usage=usage,
                             effort=effort, session_key=session_key)
                     return _oai_error('上游返回了无法解析的响应', 502, 'api_error', 'upstream_invalid_body')
@@ -2473,32 +2821,61 @@ async def _chat(request: Request, upstream_path: str):
                     upstream_code = data['error'].get('code')
                 if upstream_code is not None:
                     observability.mark_error(upstream_code, observability.ERROR_SOURCE_UPSTREAM)
-            _record(
+            await _record_async(
                 key, ip, requested_model or '', mapped or '', resp.status_code, pt, ct,
                 latency, ua, error, False, usage=usage, effort=effort, session_key=session_key,
             )
             if resp.status_code < 400:
                 return converted
+            # 上游的等待时间此前在这里被丢掉：body 原样透传，响应头没人接。
+            # 现在把它转发出去 —— 头 + body 双写，理由见 `_oai_error_throttled`
+            # 的说明（头在反代链路上不稳，体字段客户端能可靠读到）。
+            wait = _upstream_retry_after(resp)
             if data is not None:
-                return JSONResponse(data, status_code=resp.status_code)
-            return JSONResponse({'error': {'message': resp.text[:1000], 'type': 'api_error'}}, status_code=resp.status_code)
+                if wait is not None and isinstance(data, dict):
+                    err = data.get('error')
+                    if isinstance(err, dict) and 'retry_after_seconds' not in err:
+                        err['retry_after_seconds'] = wait
+                out = JSONResponse(data, status_code=resp.status_code)
+            else:
+                body = {'error': {'message': resp.text[:1000], 'type': 'api_error'}}
+                if wait is not None:
+                    body['error']['retry_after_seconds'] = wait
+                out = JSONResponse(body, status_code=resp.status_code)
+            if wait is not None:
+                out.headers['Retry-After'] = str(wait)
+                _RETRY_AFTER_FORWARDED['count'] += 1
+                # 记一行，让这个转发**可被事后验证**。
+                #
+                # 2026-11-15 实现这条转发时想端到端验证它，结果发现做不到：
+                # 上游的 429/503 是外部条件，没法主动构造；而请求记录里
+                # 只存状态码与错误文本，**不存响应头**。
+                #
+                # 于是「这条转发有没有真的生效」在当时无法回答 ——
+                # 只能靠单测说「函数返回了正确的数」。
+                #
+                # 有了这行，下次上游真给出等待时间时，日志里会留下一条。
+                # 频率不高（24 小时内上游 5xx 约几十次），info 级别不会吵。
+                logger.info('上游返回 %s 且给出等待时间 %s 秒，已转发 Retry-After',
+                            resp.status_code, wait)
+            return out
         except OutputLimitExceeded:
             _mark_output_limit_failure()
             message = 'Upstream output exceeds the configured byte limit'
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                     int((time.time() - started) * 1000), ua, message, False,
                     effort=effort, session_key=session_key)
             return _oai_error(message, 502, 'api_error', 'upstream_output_limit')
         except deadline_mod.BudgetExceeded as exc:
             _mark_pre_stream_failure(exc)
             failure = deadline_mod.classify_budget_exceeded(exc)
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                     int((time.time() - started) * 1000), ua, failure.message, False,
                     effort=effort, session_key=session_key)
             return _oai_error(failure.message, 502, 'api_error', 'upstream_timeout')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            _record(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
+            await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0, latency, ua, str(exc), False, effort=effort, session_key=session_key)
             return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)
 
     # 流式转发
@@ -2537,7 +2914,7 @@ async def _chat(request: Request, upstream_path: str):
             state = observability.current.get()
             if state:
                 state.account = resp.headers.get('x-wb-account-uid')
-            _record(key, ip, requested_model or '', mapped or '', resp.status_code,
+            await _record_async(key, ip, requested_model or '', mapped or '', resp.status_code,
                     observability.usage_int(usage.get('prompt_tokens')),
                     observability.usage_int(usage.get('completion_tokens')),
                     int((time.time() - started) * 1000), ua, text[:500], True,
@@ -2546,20 +2923,20 @@ async def _chat(request: Request, upstream_path: str):
                             media_type=resp.headers.get('content-type', 'application/json'))
     except (asyncio.CancelledError, GeneratorExit) as exc:
         _mark_pre_stream_failure(exc)
-        _record(key, ip, requested_model or '', mapped or '', 499, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 499, 0, 0,
                 int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
                 effort=effort, session_key=session_key)
         raise
     except deadline_mod.BudgetExceeded as exc:
         _mark_pre_stream_failure(exc)
         failure = deadline_mod.classify_budget_exceeded(exc)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                 int((time.time() - started) * 1000), ua, failure.message, True,
                 effort=effort, session_key=session_key)
         return _oai_error(failure.message, 502, 'api_error', 'upstream_timeout')
     except Exception as exc:
         _mark_pre_stream_failure(exc)
-        _record(key, ip, requested_model or '', mapped or '', 502, 0, 0,
+        await _record_async(key, ip, requested_model or '', mapped or '', 502, 0, 0,
                 int((time.time() - started) * 1000), ua, str(exc), True,
                 effort=effort, session_key=session_key)
         return _oai_error_with_blip(_public_upstream_error(upstream), 502, exc)

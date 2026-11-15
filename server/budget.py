@@ -24,6 +24,22 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
 CREATE INDEX IF NOT EXISTS idx_budget_key_state ON budget_reservations(key_id,state);
 CREATE INDEX IF NOT EXISTS idx_budget_unresolved_scan ON budget_reservations(created_at,request_id)
  WHERE state IN ('reserved','forwarded','unknown');
+-- 待核对列表（GET /api/budgets/review）按 `state='unknown'` 过滤、按
+-- (created_at, request_id) 排序并做游标翻页。
+--
+-- 上面那个部分索引**没能被用上**：它的键序以 created_at 开头、状态条件写在 WHERE
+-- 里。SQLite 对「状态等值 + 按 created_at 排序」这种组合，没有把它选进计划。
+-- 2026-11-15 实测：查询计划是「SCAN + 临时 B 树排序」，即每次翻页都全表扫一遍。
+-- 表当时 19.4 万行、其中 unknown 只有 1474 行 —— 扫了 130 倍的无用数据，而且随着
+-- 每天新增约 5000 行还会继续变差。
+--
+-- 这个索引把状态放进键首位，正好匹配「等值过滤 + 有序翻页」，实测计划变成
+-- `SEARCH ... USING COVERING INDEX`（不用回表）。在 19.4 万行的副本上建它耗时
+-- 0.63 秒，一次性的。
+--
+-- 保留旧索引不动：它服务于别的扫描路径，且多一个索引的写放大远小于这里省下的读。
+CREATE INDEX IF NOT EXISTS idx_budget_state_scan
+    ON budget_reservations(state,created_at,request_id);
 CREATE TABLE IF NOT EXISTS budget_adjustments (
  request_id TEXT PRIMARY KEY, key_id INTEGER NOT NULL, ts INTEGER NOT NULL,
  token_delta INTEGER NOT NULL, credit_delta REAL NOT NULL, actor TEXT NOT NULL,
@@ -209,8 +225,8 @@ def prepare(key, body, *, encoded_body=None):
             now = int(time.time())
             day = db.day_of(now)
             daily = dailyquota.snapshot(key['id'], day)
-            start = int(time.mktime(time.strptime(day, '%Y-%m-%d')))
-            end = int(time.mktime(time.strptime(str(date.fromisoformat(day) + timedelta(days=1)), '%Y-%m-%d')))
+            start = db.day_start_ts(day)
+            end = db.day_start_ts(str(date.fromisoformat(day) + timedelta(days=1)))
             # Recovery/replay updates updated_at, not the accounting day. Active
             # streams still carry over midnight until their terminal facts arrive.
             outstanding = db.query("SELECT b.state,b.reserved_tokens,b.charged_tokens FROM budget_reservations b "
@@ -292,15 +308,42 @@ def settle(usage, pt, ct, credit):
     known = (state.terminal_state == 'completed' and measured.complete
              and not measured.malformed and measured.storage_tokens() == (pt, ct))
     if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
-    next_state = ('settled' if known else 'released'
-                  if row['state']=='reserved' and not measured.observed else 'unknown')
+    # 明确的客户端拒绝：上游在参数校验阶段就打回了，没有执行任何推理。
+    #
+    # 此前这类请求会落成 `unknown`，因为释放条件写的是
+    # 「`state == 'reserved'` 且没观察到用量」—— 而请求在**转发前**就已经是
+    # `forwarded` 了，所以那个分支永远走不到。
+    #
+    # 后果是：每一次「用错参数」都在账本里留一条待人工核对的记录。2026-11-15
+    # 实测的那两条就是这么来的（一次传了不存在的模型名、一次请求体不合法）。
+    # 对账的人得逐条去看，最后发现是调用方写错了参数。
+    #
+    # **排除 429**：限流不代表上游没处理过，它可能已经排队或部分执行。
+    # 只认 400/401/403/404/422 这类「看都不看就退回」的状态。
+    client_rejected = (state.terminal_state == 'rejected'
+                       and isinstance(state.http_status, int)
+                       and 400 <= state.http_status < 500
+                       and state.http_status != 429)
+    next_state = ('settled' if known
+                  else 'released' if client_rejected or (row['state'] == 'reserved' and not measured.observed)
+                  else 'unknown')
     db.execute('UPDATE budget_reservations SET state=?,charged_tokens=?,charged_credit=?,updated_at=? WHERE request_id=?',
                (next_state,pt+ct,credit or 0,int(time.time()),state.request_id))
+    # 只是"这一行被迁走了"，还没提交。真正置位由 `_record` 在事务提交后做：
+    # 事务回滚时这个 pending 标记会随对象一起被丢弃（对象复用不会发生，每次请求
+    # 一个 state），`finish` 的兜底路径照旧生效。
+    state.budget_settled_pending = True
 
 def finish(state):
     from . import portalwallet
     portalwallet.finish(state)
     if not state.budget_reserved: return
+    if getattr(state, 'budget_settled', False):
+        # 结算事务已经提交，这一行的状态不再是 `reserved`/`forwarded`。下面的
+        # UPDATE 必然命中 0 行 —— 也就是一次只有 fsync 没有效果的空事务。每请求
+        # 省掉一次磁盘同步，语义不变：真要兜底的时候（结算没跑成、或抛异常回滚）
+        # 这个标记不会置位。
+        return
     db.execute("UPDATE budget_reservations SET state=CASE WHEN state='reserved' THEN 'released' ELSE 'unknown' END,updated_at=? "
                "WHERE request_id=? AND owner=? AND fence=? AND state IN ('reserved','forwarded')", (int(time.time()),state.request_id,budgetowner.identity(),state.budget_fence))
 
@@ -641,6 +684,11 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         'older_7d': 0,
         'archived_pending': 0,
         'upstream_rejected': 0,
+        # 真正的 24 小时窗口。必须在这里初始化为 0 —— 这个 dict 是普通 dict
+        # 而不是 Counter，漏掉一个键就会在下面的 `+= 1` 上抛 KeyError。
+        # 2026-11-15 就是这么炸的：加了这个桶却忘了初始化，监控循环每轮都崩，
+        # 整个健康评估停摆。
+        'new_24h': 0,
     }
     total = unknown_total = needs_human = needs_human_old = auto_reconcilable = 0
     archived_pending = archived_pending_tokens = token_lower_bound = 0
@@ -689,6 +737,14 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
                 review_buckets['older_7d'] += 1
             if cls == 'upstream_rejected':
                 review_buckets['upstream_rejected'] += 1
+            # 2026-11-15：单独数「最近 24 小时新增」。
+            #
+            # 上面那两个桶的名字容易读错：`new_1h` 其实是「还没到处理期限」，
+            # `older_1h` 是「已超期」—— 与一小时无关，期限由
+            # `WB_BUDGET_REVIEW_DEADLINE_DAYS` 决定。所以这里按真正的 24 小时切一刀，
+            # 给「新增速率是否异常」一个直接可用的数。
+            if age_seconds <= 86400:
+                review_buckets['new_24h'] += 1
             needs_human_old += int(age_seconds > stale_after)
     return {
         'items': items,
@@ -719,35 +775,20 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
     }
 
 
-#: 「attempt 到达过上游」的阶段集合（N05）。
+#: 曾经有一个「attempt 是否到达过上游」的诊断函数，查 `attempt_events`。
 #:
-#: **与 `ledger.py::_REACHED_PHASES` 同源** —— 那张表是 `ledger.attempt()` 写的，
-#: 阶段取值由它定义。这里 import 私有名而不是抄一份字面量，避免两处漂移
-#: （`test_late_usage_race.py` 里有一条断言两者相等）。
-_UPSTREAM_PHASES = tuple(getattr(ledger, '_REACHED_PHASES', ()) or ())
-
-
-def _reached_upstream(request_id: str) -> bool:
-    """该请求是否有 attempt 到达过上游（N05 的证据加强）。
-
-    为什么错误字符串不够：`error` 里出现 `no_healthy_account` 只证明**至少有一次**
-    上游拒绝（或选号失败），不证明"所有 attempt 都没被处理"。池侧有重试/换号时，
-    attempt 2 可能已经打到上游并产生部分计费，而最终错误仍然是 attempt 3 的
-    `no_healthy_account`。所以结清前必须再确认：`attempt_events` 里**没有任何**
-    到达上游的阶段。
-
-    局限（写清楚，不夸大）：`attempt_events` 由上游日志轮询异步采集（约 15 秒一轮）。
-    **没有事件**只是"没有证据表明到达过上游"，不是"证明没到达"。
-    此函数仅供诊断，自动结清不再把事件缺失当作零用量证据。
-    """
-    if not _UPSTREAM_PHASES:
-        return False
-    placeholders = ','.join('?' * len(_UPSTREAM_PHASES))
-    row = db.query_one(
-        'SELECT 1 FROM attempt_events WHERE request_id=? AND phase IN (%s) LIMIT 1'
-        % placeholders, (request_id, *_UPSTREAM_PHASES))
-    return row is not None
-
+#: 2026-11-14 审计时确认两点，于是把它删了：
+#:
+#: 1. **它没有任何调用方** —— 结清路径早就不用它了（结清只认 `request_logs` 里
+#:    完整的用量回执，见 `_zero_usage_proof`）；
+#: 2. 它查的那张表在 2026-11-03 之后就不再写入（上游事件开始携带调度标识，
+#:    采集函数见到就跳过，证据改由 `provider_attempt_events_v2` 承载）。
+#:
+#: 留着它的坏处很具体：读代码的人会以为「到达过上游」这个判断还在生效，
+#: 而它其实永远返回「未到达」—— 一个永远为假的守卫比没有守卫更危险。
+#:
+#: 这里保留这段说明而不是留一个空行，是因为下次有人想加回类似判断时，
+#: 应该先看到这两个事实，而不是重新踩一遍。
 
 def reconcile_evidenced_unknowns(now: int, min_age: int = 3600) -> int:
     """Settle only complete, immutable request-level zero-usage evidence."""

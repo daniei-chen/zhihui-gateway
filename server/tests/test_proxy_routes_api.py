@@ -49,6 +49,20 @@ class _Base(unittest.TestCase):
         self.db_path = self.root / 'manager.db'
         patch = mock.patch.object(config, 'DB_PATH', self.db_path)
         patch.start()
+
+        # 全局代理有一个 2 秒的模块级缓存，命中条件是「generation 没变且未过期」。
+        #
+        # 生产上改设置时会调 `invalidate_global_proxy()` 把 generation 加一；
+        # 而测试直接 patch `HTTP_PROXY` 常量，**不会碰 generation** ——
+        # 于是只要上一个用例在 2 秒内读过一次，这里就拿到旧值。
+        #
+        # 症状很迷惑：`source` 判断是对的（它读的是配置来源），
+        # 但 `effective` 是空的 —— 因为它走了缓存。
+        #
+        # 2026-11-15 定位：两个文件一起跑失败、单独跑通过，就是这个原因。
+        # 修在测试这一侧是合理的：生产路径本来就会主动失效，测试要模拟同一个动作。
+        config.invalidate_global_proxy()
+        self.addCleanup(config.invalidate_global_proxy)
         self.addCleanup(patch.stop)
         db._conn = None
         db.connect()
@@ -246,6 +260,10 @@ class ProxySettingsApiTest(_Base):
         self.client.put('/api/settings/proxy', json={'http_proxy': 'http://panel:1111'})
         self.client.put('/api/settings/proxy', json={'http_proxy': ''})
         with mock.patch.object(config, 'HTTP_PROXY', 'http://env-proxy:7890'):
+            # 上面两次 PUT 已经让缓存算过一次（那时环境变量还是空的）。
+            # patch 常量不会 bump generation，所以必须在这里显式失效，
+            # 否则 GET 会读回 PUT 时缓存的那个空值。
+            config.invalidate_global_proxy()
             body = self.client.get('/api/settings/proxy').json()
         self.assertEqual(body['source'], 'env')
         self.assertEqual(body['effective'], 'http://env-proxy:7890')
