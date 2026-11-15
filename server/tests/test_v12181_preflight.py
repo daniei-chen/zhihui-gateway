@@ -172,6 +172,37 @@ class ItChecksForFailedUnitsTests(unittest.TestCase):
         self.assertIn('没有 systemctl', SCRIPT)
 
 
+class ItChecksCertificateExpiryTests(unittest.TestCase):
+    """好几次都只看到一个证书就说「还有一个月，不急」。
+
+    同一台机器上有七八张证书，**到期时间各不相同** —— 哪一张先过期，没有人知道。
+    而任何一张过期，对应站点立刻不可用，浏览器还会报成危险页面。
+    """
+
+    def test_it_scans_all_certificates(self):
+        self.assertIn('/etc/letsencrypt/live/*/fullchain.pem', SCRIPT)
+
+    def test_it_reports_the_soonest(self):
+        self.assertIn('soonest_days', SCRIPT)
+
+    def test_it_reports_expired_separately(self):
+        """已过期和即将过期是两种状态，报法要分开。"""
+        self.assertIn('已过期', SCRIPT)
+
+    def test_threshold_is_configurable(self):
+        self.assertIn('PREFLIGHT_CERT_WARN_DAYS', SCRIPT)
+
+    def test_it_records_the_near_miss(self):
+        self.assertIn('哪一张先过期，没有人知道', SCRIPT)
+
+    def test_it_says_expiry_is_not_degradation(self):
+        """过期不是「降级」，是「打不开」。"""
+        self.assertIn('不是「降级」', SCRIPT)
+
+    def test_missing_certificates_is_skip(self):
+        self.assertIn('没有证书目录或 openssl', SCRIPT)
+
+
 class ItIsReadOnlyTests(unittest.TestCase):
     """所有检查都必须只读 —— 发布前跑的东西不能改变被检查的对象。"""
 

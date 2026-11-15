@@ -239,6 +239,59 @@ else
     skipped=$((skipped + 1))
 fi
 
+# 七、证书不得临近过期。
+#
+# 这一项来自一次差点漏掉的事：查主站证书时发现它十二月十五日到期，
+# 而同一台机器上还有七八张别的证书 —— **到期时间各不相同**，
+# 用 `find | head -1` 只看到一个，就以为「还有一个月，不急」。
+#
+# **哪一张先过期，没有人知道。** 而任何一张过期，对应的站点就立刻不可用，
+# 且浏览器会把它报成危险页面 —— 那不是「降级」，是「打不开」。
+#
+# 阈值默认三十天。**少于阈值算失败**，因为自动续期如果坏了，
+# 留给人工介入的时间只剩这么多。
+CERT_WARN_DAYS=${PREFLIGHT_CERT_WARN_DAYS:-30}
+if [ -d /etc/letsencrypt/live ] && command -v openssl >/dev/null 2>&1; then
+    printf '%-34s ' "证书剩余天数"
+    now_epoch=$(date +%s)
+    soonest=''
+    soonest_days=99999
+    expired=''
+    for cert in /etc/letsencrypt/live/*/fullchain.pem; do
+        [ -f "$cert" ] || continue
+        end=$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+        [ -n "$end" ] || continue
+        end_epoch=$(date -d "$end" +%s 2>/dev/null) || continue
+        days=$(( (end_epoch - now_epoch) / 86400 ))
+        name=$(basename "$(dirname "$cert")")
+        if [ "$days" -lt 0 ]; then
+            expired="$expired $name(${days}d)"
+        elif [ "$days" -lt "$soonest_days" ]; then
+            soonest_days=$days
+            soonest=$name
+        fi
+    done
+    if [ -n "$expired" ]; then
+        printf 'FAIL\n'
+        printf '    已过期：%s\n' "$expired" | sed 's/^/    /'
+        failed=$((failed + 1))
+    elif [ -z "$soonest" ]; then
+        printf 'SKIP  没有可解析的证书\n'
+        skipped=$((skipped + 1))
+    elif [ "$soonest_days" -lt "$CERT_WARN_DAYS" ]; then
+        printf 'FAIL\n'
+        printf '    最近一张 %s 只剩 %d 天（阈值 %d）\n' "$soonest" "$soonest_days" "$CERT_WARN_DAYS" \
+            | sed 's/^/    /'
+        failed=$((failed + 1))
+    else
+        printf 'PASS  最近一张 %s 还有 %d 天\n' "$soonest" "$soonest_days"
+        passed=$((passed + 1))
+    fi
+else
+    printf '%-34s SKIP  没有证书目录或 openssl\n' "证书剩余天数"
+    skipped=$((skipped + 1))
+fi
+
 echo ""
 echo "PREFLIGHT passed=$passed failed=$failed skipped=$skipped"
 
