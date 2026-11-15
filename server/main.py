@@ -1084,6 +1084,51 @@ def prometheus_metrics(request: Request):
         lines.append('%s %s' % (name, value))
 
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
+    # 当前实际选中的数据面引擎。
+    #
+    # ## 为什么值得单独暴露
+    #
+    # qoder 和 trae 各有两代适配器，由 `QTG_QODER_ENGINE` / `QTG_TRAE_ENGINE`
+    # 或 `/opt/workbuddy-manager/engine/var/` 下的一个文件决定。
+    #
+    # **文件缺失时会回落到 `bff`** —— 而那个引擎的源码已经丢失，只用于回滚。
+    # 也就是说：一次误删、一次恢复备份没带上那个文件，服务会**静默**切到一个
+    # 再也升不了级的实现上。启动日志里有一行，但那需要有人去翻日志。
+    #
+    # 2026-11-15 查引擎时确认：日志有记录（`qtg 启动：qoder=qoder2(...)`），
+    # 但 `/metrics` 里一个引擎相关的序列都没有。**监控看不到，告警自然也配不了。**
+    #
+    # 三个平台各一条，取值是「当前引擎名」，用 `engine` 标签区分。
+    _qtg_rt = getattr(getattr(request.app, 'state', None), 'rt', None)
+    if _qtg_rt is not None:
+        for _platform, _adapter, _fallback in (('qoder', 'qoder', 'bff'),
+                                               ('trae', 'trae', 'bff')):
+            _obj = getattr(_qtg_rt, _adapter, None)
+            _name = type(_obj).__name__ if _obj is not None else 'absent'
+            # 适配器类名形如 Qoder2Adapter / QoderAdapter —— 归一成引擎名，
+            # 与配置文件里能写的值（qoder2 / bff、aiwork / bff）对得上。
+            _engine = {'Qoder2Adapter': 'qoder2', 'QoderAdapter': 'bff',
+                       'Trae2Adapter': 'aiwork', 'TraeAdapter': 'bff'}.get(_name, _name)
+            if _engine not in ('qoder2', 'aiwork', 'bff', 'absent'):
+                _engine = 'unknown'
+            _line = 'workbuddy_engine_active{platform="%s",engine="%s"} 1' % (
+                _platform, _engine)
+            if _line not in lines:
+                lines.append('# HELP workbuddy_engine_active The data-plane engine '
+                             'currently selected per platform. On bff the upstream '
+                             'source is no longer available, so a silent fallback '
+                             'there means the service can never be upgraded.')
+                lines.append('# TYPE workbuddy_engine_active gauge')
+                lines.append(_line)
+        _wb = getattr(_qtg_rt, 'wb', None)
+        _wb_engine = 'workbuddy' if _wb is not None else 'off'
+        _line = 'workbuddy_engine_active{platform="workbuddy",engine="%s"} 1' % _wb_engine
+        if _line not in lines:
+            if not any(x.startswith('# HELP workbuddy_engine_active ') for x in lines):
+                lines.append('# HELP workbuddy_engine_active The data-plane engine '
+                             'currently selected per platform.')
+                lines.append('# TYPE workbuddy_engine_active gauge')
+            lines.append(_line)
     _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
        int(time.time() - _PROCESS_STARTED_AT))
     # 进程自身占用：长期跑下去会不会胀，只能靠趋势看（见 `_process_memory_bytes`）。
