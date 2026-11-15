@@ -1194,11 +1194,13 @@ def prometheus_metrics(request: Request):
     try:
         _snapshot_age = _operational.snapshot_age_seconds()
         _m('workbuddy_snapshot_age_seconds', 'gauge',
-           'Seconds since the newest encrypted recovery snapshot; -1 means none exists at all. '
-           'Distinct from backup_age_seconds, which reads the baseline report: during the '
-           '2026-11-15 incident the report stayed ok while no snapshot was produced. '
-           'Emitting -1 rather than omitting the series keeps "no snapshot" distinguishable '
-           'from "metric broken".',
+           'Seconds since the newest encrypted recovery snapshot; -1 means unreadable, '
+           'not absent. The snapshot root lives under /root, which the service user cannot '
+           'traverse, so -1 is the expected value in normal operation -- cross-check '
+           'recovery_chain_age_seconds, which reads a state file the service can reach, '
+           'for the real reading. Distinct from backup_age_seconds, which covers the '
+           'baseline report: on 2026-11-15 that report stayed ok while no snapshot was '
+           'produced at all, and the two only diverged because both were being looked at.',
            -1 if _snapshot_age is None else _snapshot_age)
     except Exception:      # noqa: BLE001
         pass

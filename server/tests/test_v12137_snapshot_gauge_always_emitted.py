@@ -87,9 +87,17 @@ class TheSnapshotGaugeIsAlwaysEmittedTests(unittest.TestCase):
                          '-1 的条件不是「年龄为 None」')
 
     def test_the_help_text_explains_the_sentinel(self):
-        """-1 的含义必须写在 HELP 里，否则看图的人不知道。"""
+        """-1 的含义必须写在 HELP 里，否则看图的人不知道。
+
+        2026-11-15 更正：这条探针读的目录在 /root 下，
+        服务账号**没有穿越权**，所以 -1 在正常运行时就是预期值。
+        写成「none exists」会让人以为快照没做，而实际上是读不到。
+        """
         block = self._block()
-        self.assertIn('-1 means none exists', block)
+        self.assertIn('-1 means unreadable', block)
+        self.assertIn('not absent', block)
+        # 必须告诉读者去哪里看真实值
+        self.assertIn('recovery_chain_age_seconds', block)
 
 
 class ItStillCannotBreakTheEndpointTests(unittest.TestCase):
