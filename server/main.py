@@ -1383,52 +1383,6 @@ def prometheus_metrics(request: Request):
         except Exception:       # noqa: BLE001
             # 这个取数源坏了只影响这三个指标，不影响上面那一整段。
             logger.warning('account pool metrics unavailable', exc_info=True)
-
-        # ── 数据库容量 ──────────────────────────────────────────────────
-        #
-        # ## 为什么加
-        #
-        # 2026-11-15 的容量审计算出了一条时间线：转发事件表每天约 2.3 MB，
-        # 一年约 840 MB，当前剩余空间大约七年。**但那条时间线是手算的。**
-        #
-        # 算完之后它就不再有更新 —— 除非又有人想起来去 `stat` 一遍。
-        # 这正是「人工结论」的通用毛病：**它只在那一天是对的。**
-        #
-        # 把主库大小挂上去之后，容量增长就是一条可以直接画的曲线，
-        # 而不是一次性的、已经过期的估算。
-        #
-        # ## 为什么只 stat，不查表
-        #
-        # 行数比字节数更能说明「表在膨胀」，但 `count(*)` 在大表上是有代价的：
-        # 每抓一次 `/metrics` 就扫一遍。**这个端点会被 Prometheus 定时抓，
-        # 不该带上一项 O(n) 的工作。**
-        #
-        # `stat` 只读 inode，代价接近于零。代价是它看不到「表变小了但文件没缩」
-        # 那种情况 —— 而那种情况本来就需要 `VACUUM`，指标帮不上忙。
-        #
-        # ## 为什么连 sidecar 一起报
-        #
-        # WAL 模式下主库旁边还有 `-wal` 和 `-shm`。WAL 长时间不 checkpoint
-        # 会单独涨到几十上百 MB，而只看主库文件会**完全看不见**那一块。
-        try:
-            import os as _os
-            _db_path = config.DATA_DIR / 'manager.db'
-            _main = _os.stat(_db_path).st_size if _db_path.exists() else 0
-            _side = 0
-            for _suffix in ('-wal', '-shm'):
-                _p = _db_path.with_name(_db_path.name + _suffix)
-                if _p.exists():
-                    _side += _os.stat(_p).st_size
-            _m('workbuddy_db_bytes', 'gauge',
-               'Main SQLite database file size in bytes. '
-               'See docs/RETENTION-AND-CAPACITY-2026-11-15.md for growth rates.',
-               _main)
-            _m('workbuddy_db_sidecar_bytes', 'gauge',
-               'Bytes held by the -wal and -shm files beside the main database. '
-               'A large value means WAL has not been checkpointed recently.',
-               _side)
-        except Exception:       # noqa: BLE001
-            logger.warning('database size metrics unavailable', exc_info=True)
     except Exception as exc:                                    # noqa: BLE001
         # 这里刻意保留「不中断 /metrics」：一个取数源坏掉，不该让整个端点 500。
         #
