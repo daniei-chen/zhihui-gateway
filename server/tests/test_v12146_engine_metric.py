@@ -61,9 +61,9 @@ class TheMetricExistsTests(unittest.TestCase):
 
 class ItCoversEveryPlatformTests(unittest.TestCase):
     def test_qoder_and_trae_are_both_covered(self):
-        idx = SOURCE.find("('qoder', 'qoder', 'bff')")
+        idx = SOURCE.find("('qoder', 'qoder')")
         self.assertGreater(idx, 0, 'qoder 没被覆盖')
-        idx2 = SOURCE.find("('trae', 'trae', 'bff')")
+        idx2 = SOURCE.find("('trae', 'trae')")
         self.assertGreater(idx2, 0, 'trae 没被覆盖')
 
     def test_workbuddy_is_covered(self):
@@ -94,6 +94,51 @@ class ItDegradesSafelyTests(unittest.TestCase):
     def test_absent_adapter_is_reported_not_skipped(self):
         self.assertIn("'absent'", SOURCE,
                       '适配器缺失时应当报 absent，而不是什么都不输出')
+
+
+class HelpAndTypeAppearOnceTests(unittest.TestCase):
+    """HELP/TYPE 必须只在循环外写一次。
+
+    第一版把它们写在按平台的循环里，每个平台各来一份。
+    **Prometheus 对同一个名字重复的 HELP 是明确报错的**（duplicate HELP line），
+    采集直接失败 —— 而这条指标存在的意义就是让监控看得见，
+    采集挂掉等于完全白做。
+
+    这个 bug 在部署后读实际输出才看出来：`# HELP` 出现了两遍。
+    """
+
+    def _engine_block(self) -> str:
+        start = SOURCE.find('_engine_lines = []')
+        self.assertGreater(start, 0, '没找到引擎指标那段')
+        end = SOURCE.find("_m('workbuddy_uptime_seconds'", start)
+        self.assertGreater(end, start, '没找到这段的结尾')
+        return SOURCE[start:end]
+
+    def test_help_and_type_appear_exactly_once(self):
+        """整段里 HELP 与 TYPE 各只能有一处。
+
+        这是那个 bug 的直接判据：写在按平台的循环里就会出现两次，
+        Prometheus 报 duplicate HELP line，采集整个失败。
+        """
+        block = self._engine_block()
+        self.assertEqual(block.count('# HELP workbuddy_engine_active'), 1,
+                         'HELP 出现了不止一次 —— Prometheus 会拒绝采集')
+        self.assertEqual(block.count('# TYPE workbuddy_engine_active'), 1,
+                         'TYPE 出现了不止一次')
+
+    def test_help_comes_after_the_loop(self):
+        """平台名在循环里才算出来，HELP 放在循环之前会早于数据。"""
+        block = self._engine_block()
+        loop_at = block.find('for _platform, _adapter in')
+        help_at = block.find('# HELP workbuddy_engine_active')
+        self.assertGreater(loop_at, 0)
+        self.assertGreater(help_at, loop_at, 'HELP 写在循环之前')
+
+    def test_the_loop_body_only_collects_series(self):
+        block = self._engine_block()
+        body = block[block.find('for _platform, _adapter in'):block.find('_wb = getattr(')]
+        self.assertNotIn('# HELP', body, '循环体里不该出现 HELP')
+        self.assertNotIn('# TYPE', body, '循环体里不该出现 TYPE')
 
 
 if __name__ == '__main__':

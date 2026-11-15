@@ -1101,8 +1101,12 @@ def prometheus_metrics(request: Request):
     # 三个平台各一条，取值是「当前引擎名」，用 `engine` 标签区分。
     _qtg_rt = getattr(getattr(request.app, 'state', None), 'rt', None)
     if _qtg_rt is not None:
-        for _platform, _adapter, _fallback in (('qoder', 'qoder', 'bff'),
-                                               ('trae', 'trae', 'bff')):
+        # HELP/TYPE 只在循环外写一次。写在循环里会给每个平台各来一份，
+        # 而 Prometheus 对同一个名字重复的 HELP 是明确报错的
+        # （`duplicate HELP line`），采集直接失败 —— 而这条指标本来就是为了
+        # 让监控看得见，采集挂掉等于白做。
+        _engine_lines = []
+        for _platform, _adapter in (('qoder', 'qoder'), ('trae', 'trae')):
             _obj = getattr(_qtg_rt, _adapter, None)
             _name = type(_obj).__name__ if _obj is not None else 'absent'
             # 适配器类名形如 Qoder2Adapter / QoderAdapter —— 归一成引擎名，
@@ -1111,24 +1115,18 @@ def prometheus_metrics(request: Request):
                        'Trae2Adapter': 'aiwork', 'TraeAdapter': 'bff'}.get(_name, _name)
             if _engine not in ('qoder2', 'aiwork', 'bff', 'absent'):
                 _engine = 'unknown'
-            _line = 'workbuddy_engine_active{platform="%s",engine="%s"} 1' % (
-                _platform, _engine)
-            if _line not in lines:
-                lines.append('# HELP workbuddy_engine_active The data-plane engine '
-                             'currently selected per platform. On bff the upstream '
-                             'source is no longer available, so a silent fallback '
-                             'there means the service can never be upgraded.')
-                lines.append('# TYPE workbuddy_engine_active gauge')
-                lines.append(_line)
+            _engine_lines.append(
+                'workbuddy_engine_active{platform="%s",engine="%s"} 1' % (_platform, _engine))
         _wb = getattr(_qtg_rt, 'wb', None)
         _wb_engine = 'workbuddy' if _wb is not None else 'off'
-        _line = 'workbuddy_engine_active{platform="workbuddy",engine="%s"} 1' % _wb_engine
-        if _line not in lines:
-            if not any(x.startswith('# HELP workbuddy_engine_active ') for x in lines):
-                lines.append('# HELP workbuddy_engine_active The data-plane engine '
-                             'currently selected per platform.')
-                lines.append('# TYPE workbuddy_engine_active gauge')
-            lines.append(_line)
+        _engine_lines.append(
+            'workbuddy_engine_active{platform="workbuddy",engine="%s"} 1' % _wb_engine)
+        lines.append('# HELP workbuddy_engine_active The data-plane engine currently '
+                     'selected per platform. On bff the upstream source is no longer '
+                     'available, so a silent fallback there means the service can never '
+                     'be upgraded.')
+        lines.append('# TYPE workbuddy_engine_active gauge')
+        lines.extend(_engine_lines)
     _m('workbuddy_uptime_seconds', 'gauge', 'Process uptime in seconds.',
        int(time.time() - _PROCESS_STARTED_AT))
     # 进程自身占用：长期跑下去会不会胀，只能靠趋势看（见 `_process_memory_bytes`）。
