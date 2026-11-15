@@ -1212,6 +1212,35 @@ def prometheus_metrics(request: Request):
     except Exception:      # noqa: BLE001
         pass
 
+    # 应用卷的剩余空间。
+    #
+    # ## 为什么需要
+    #
+    # 磁盘水位只在**告警日志**里出现过（`disk_space_trend` 每轮监控打一行），
+    # 没有指标。后果是：想画一条「空间还剩多少」的趋势，只能去 grep 日志。
+    #
+    # 2026-11-15 实测就是这种情况：告警连着触发了 19 次，而从 3.8 GiB 降到
+    # 3.4 GiB 这个过程，只有把日志按时间排序才看得出来。指标本身就能画出来。
+    #
+    # 阈值口径与 `operational.disk_space_alerts` 保持一致：
+    # 低于 5 GiB 是趋势线，低于 2 GiB 是紧急线。
+    try:
+        import os as _os
+        if hasattr(_os, 'statvfs'):
+            _stat = _os.statvfs(config.DATA_DIR)
+            _free = _stat.f_bavail * _stat.f_frsize
+            _m('workbuddy_disk_free_bytes', 'gauge',
+               'Free bytes on the volume holding the application data directory. '
+               'Below 5 GiB raises disk_space_trend; below 2 GiB raises disk_free.',
+               _free)
+            _total = _stat.f_blocks * _stat.f_frsize
+            if _total > 0:
+                _m('workbuddy_disk_used_ratio', 'gauge',
+                   'Fraction of the application volume in use (0-1).',
+                   round(1 - _free / _total, 4))
+    except Exception:      # noqa: BLE001
+        pass
+
     try:
         from . import observability as _obs
         snap = _obs.admission_snapshot()
