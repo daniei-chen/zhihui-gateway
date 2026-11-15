@@ -1284,6 +1284,21 @@ def prometheus_metrics(request: Request):
                'works but is too slow for this payload; shrinking the request helps.',
                _body_timeouts['total'])
     except Exception as exc:                                    # noqa: BLE001
-        logger.warning('Metrics admission snapshot unavailable (%s)', type(exc).__name__)
+        # 这里刻意保留「不中断 /metrics」：一个取数源坏掉，不该让整个端点 500。
+        #
+        # 但**必须留下能诊断的痕迹**。原来只打异常类型：
+        #
+        #     logger.warning('... unavailable (%s)', type(exc).__name__)
+        #
+        # 2026-11-15 的实测说明了这个代价：日志里连着出现
+        # `Metrics admission snapshot unavailable (KeyError)`，
+        # **只知道是 KeyError，不知道哪个键、哪一行** —— 而同一个函数的文档里
+        # 正写着「少一个键 → 整段静默，日志一行警告容易被忽略」。
+        #
+        # 结论就是：把异常类型换成了 `exc_info=True`，把栈打出来。
+        # 类型那一行仍然在，只是后面多了栈 —— 习惯看简短警告的人不会觉得变吵，
+        # 真要查的人第一次就能看到位置。
+        logger.warning('Metrics admission snapshot unavailable (%s)',
+                       type(exc).__name__, exc_info=True)
 
     return PlainTextResponse('\n'.join(lines) + '\n', media_type='text/plain; version=0.0.4')
