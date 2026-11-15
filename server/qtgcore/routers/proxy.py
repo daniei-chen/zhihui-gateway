@@ -28,6 +28,7 @@ from .. import metrics
 from ..errors import BadRequest, ConfigMissing, Forbidden, RateLimited, Unauthorized, UpstreamError
 from ..model_map import resolve as resolve_model
 from ..store import KeyRow
+from ...iputil import client_ip
 
 router = APIRouter(tags=["data-plane"])
 
@@ -94,14 +95,43 @@ def _host_platform(request: Request) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    """取真实来源 IP：nginx 会写 X-Real-IP / X-Forwarded-For。"""
-    xr = (request.headers.get("x-real-ip") or "").strip()
-    if xr:
-        return xr
-    xf = (request.headers.get("x-forwarded-for") or "").strip()
-    if xf:
-        return xf.split(",")[0].strip()
-    return request.client.host if request.client else ""
+    """取真实来源 IP —— 复用 `iputil.client_ip()`，不自己解析转发头。
+
+    ## 这里原来是怎么写的
+
+    ```
+    xr = request.headers.get("x-real-ip")
+    if xr: return xr                                  # 无条件采信
+    xf = request.headers.get("x-forwarded-for")
+    if xf: return xf.split(",")[0].strip()            # 取最左侧
+    ```
+
+    ## 为什么那样是错的
+
+    `iputil.client_ip()` 的文档里写着一段历史：**这个形态曾被实测绕过**。
+
+    转发头是客户端可伪造的普通请求头。反代以 `$remote_addr` 覆写 `X-Real-IP`
+    只成立于「请求确实经过那个反代」；服务一旦直接可达，加一行
+    `X-Real-IP: 9.9.9.9` 就能冒充任意来源。
+
+    而这里更糟一层：它取 `X-Forwarded-For` 的**最左侧**，那正是客户端自己写的那段；
+    右侧才是反代追加的真实地址。`iputil` 是从**右往左**数可信跳数的。
+
+    这个函数的结果直接喂给 `_ip_allowed()`，也就是**密钥的 IP 白名单**。
+    无条件采信等于白名单可以被一个请求头绕过。
+
+    ## 当前状态
+
+    2026-11-15 核对：这个模块**没有被任何路由使用**（`@router.` 零匹配、
+    `_auth_key` 零引用、`router` 从未 include），所以上述绕过**当前不可达**。
+
+    **但「暂时不可达」不是安全边界。** 将来谁把它挂上去，漏洞就随之生效 ——
+    所以修在这里，而不是留着等它被启用。
+
+    走 `iputil` 还有个附带好处：`WB_TRUST_PROXY` 与 `WB_TRUSTED_PROXY_HOPS`
+    这些部署开关对它一并生效，不需要在这条路径上再维护一套。
+    """
+    return client_ip(request)
 
 
 def _ip_allowed(allow: List[str], ip: str) -> bool:
