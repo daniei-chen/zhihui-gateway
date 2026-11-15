@@ -133,6 +133,32 @@ class ItProbesDangerousRoutesTests(unittest.TestCase):
         self.assertIn('不在路由里', SCRIPT)
 
 
+class ItChecksForFailedUnitsTests(unittest.TestCase):
+    """一次真实的漏网：清理服务连续失败好几天，没有人知道。
+
+    它每天凌晨只失败一次，不影响任何用户请求，状态从 inactive 变成 failed，
+    而 inactive 看起来同样「没在跑」。旧快照一直堆积、磁盘慢慢涨。
+
+    **这类失败不影响线上，所以不会被任何面向用户的检查发现。**
+    """
+
+    def test_it_lists_failed_units(self):
+        self.assertIn('--state=failed', SCRIPT)
+
+    def test_it_only_covers_zhihui_units(self):
+        """这台机器上还有别的应用，它们的失败不该阻断这个网关的发布。"""
+        self.assertIn("'zhihui-*'", SCRIPT)
+
+    def test_failure_is_reported(self):
+        self.assertIn('处于 failed', SCRIPT)
+
+    def test_it_records_the_incident(self):
+        self.assertIn('没有人知道', SCRIPT)
+
+    def test_missing_systemctl_is_skip(self):
+        self.assertIn('没有 systemctl', SCRIPT)
+
+
 class ItIsReadOnlyTests(unittest.TestCase):
     """所有检查都必须只读 —— 发布前跑的东西不能改变被检查的对象。"""
 

@@ -199,6 +199,36 @@ else
     skipped=$((skipped + 1))
 fi
 
+# 六、关键定时服务不得处于失败状态。
+#
+# 这一项的来由是一次真实的漏网：快照清理服务连续失败了好几天，**没有人知道** ——
+# 它每天凌晨只失败一次，不影响任何用户请求，服务状态从 `inactive` 变成 `failed`
+# 而 `inactive` 看起来同样「没在跑」。于是旧快照一直堆积、磁盘慢慢涨。
+#
+# **这类失败的特征是：不影响线上，所以不会被任何面向用户的检查发现。**
+# 唯一的办法是主动去问「有没有谁失败了」。
+#
+# 只看 `zhihui-` 前缀的服务与定时器 —— 这台机器上还有别的应用，
+# 它们的失败不该阻断这个网关的发布。
+FAILED_SERVICES=''
+if command -v systemctl >/dev/null 2>&1; then
+    FAILED_SERVICES=$(systemctl list-units --state=failed --no-legend --no-pager \
+                        'zhihui-*' 2>/dev/null \
+                      | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
+    printf '%-34s ' "关键定时服务无失败"
+    if [ -z "$FAILED_SERVICES" ]; then
+        printf 'PASS  无失败单元\n'
+        passed=$((passed + 1))
+    else
+        printf 'FAIL\n'
+        printf '    以下单元处于 failed：%s\n' "$FAILED_SERVICES" | sed 's/^/    /'
+        failed=$((failed + 1))
+    fi
+else
+    printf '%-34s SKIP  没有 systemctl\n' "关键定时服务无失败"
+    skipped=$((skipped + 1))
+fi
+
 echo ""
 echo "PREFLIGHT passed=$passed failed=$failed skipped=$skipped"
 
