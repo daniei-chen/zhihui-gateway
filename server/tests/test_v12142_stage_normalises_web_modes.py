@@ -54,15 +54,27 @@ class TheNormalisationExistsTests(unittest.TestCase):
     def test_files_become_644(self):
         self.assertIn('-type f -exec chmod 644', self.text)
 
+    def test_ownership_is_normalised_too(self):
+        """验证器同时拒绝「不是 root 拥有」的路径。
+
+        chmod 改得再对，只要属主不是 root，一样被拒。
+        writer-guard 的 normalize_modes 一直是 chown + chmod 一起做的，
+        这里补齐同一口径。
+        """
+        idx = self.text.find('-type d -exec chmod 755')
+        window = self.text[max(0, idx - 300):idx]
+        self.assertIn('chown -R 0:0', window,
+                      '只改了权限没改归属 —— 解压树带着别的 uid 时仍会被拒')
+
     def test_it_targets_web_out(self):
         idx = self.text.find('-type d -exec chmod 755')
-        window = self.text[max(0, idx - 400):idx]
+        window = self.text[max(0, idx - 600):idx]
         self.assertIn('web/out', window)
 
     def test_it_is_guarded_by_a_directory_check(self):
         """纯后端发布没有 web/out，不能因此失败。"""
         idx = self.text.find('-type d -exec chmod 755')
-        window = self.text[max(0, idx - 600):idx]
+        window = self.text[max(0, idx - 800):idx]
         self.assertIn('-d "$root/web/out"', window)
 
 

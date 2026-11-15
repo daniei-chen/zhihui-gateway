@@ -45,9 +45,15 @@ key_mode=$(stat -c '%a' "$key")
 # 「外部发布验证失败」，签名、摘要、文件清单逐一核对全都正常，
 # 看起来像验证器本身坏了，实际差的是权限位。
 #
-# 内容对不对和路径安不安全是两件事，第 45 行之后的签名只管前者。
+# 内容对不对和路径安不安全是两件事，下面 create-web-manifest.py 只管前者。
 # 这里在签名之前把后者补齐，省得下次再从零查一遍。
+#
+# 归属也要一并规范：验证器同时拒绝「不是 root 拥有」的路径。解压出来的树
+# 如果带着别的 uid（打包机上是谁就是谁），chmod 改得再对也没用。
+# 这与 writer-guard 里 normalize_modes 的口径保持一致：目录 755、文件 644、
+# 属主 root:root。
 if [ -d "$root/web/out" ]; then
+  chown -R 0:0 "$root/web/out" 2>/dev/null || true
   find "$root/web/out" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "$root/web/out" -type f -exec chmod 644 {} + 2>/dev/null || true
 fi
