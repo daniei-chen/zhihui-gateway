@@ -19,6 +19,7 @@
 | 文档 | 什么时候看 |
 | --- | --- |
 | [`TROUBLESHOOTING-2026-11.md`](TROUBLESHOOTING-2026-11.md) | **先看这个** |
+| [`OPS-PITFALLS.md`](OPS-PITFALLS.md) | **发布与运维里踩过的坑** —— 每条都是「我以为是 A，实际是 B」 |
 | [`METRICS.md`](METRICS.md) | 要判断某个指标「读数为 0 是不是故障」时 |
 | [`EDGE-CASES.md`](EDGE-CASES.md) | 边界与异常路径的既有结论 |
 | [`SHUTDOWN-CANCEL-RESILIENCE.md`](SHUTDOWN-CANCEL-RESILIENCE.md) | 停机、取消、优雅退出相关的现象 |
