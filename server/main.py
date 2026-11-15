@@ -1068,12 +1068,66 @@ def _process_memory_bytes() -> tuple[int, int] | None:
         return None
 
 
-#: 首字延迟分位数的缓存。
+#: 分位数查询的缓存槽（按列名分开）。
 #:
-#: 查询本身很便宜（`ts` 有索引，两小时窗口实测 4 毫秒 / 828 行），
-#: 缓存不是为了省查询，是**避免并发抓取时把同一份数据算很多遍**。
+#: 查询本身很便宜（时间字段有索引，实测个位数毫秒），
+#: 缓存不是为了省查询，是**避免并发抓取时把同一份数据算很多遍** ——
 #: 监控系统常见行为是多个实例同时抓同一个端点。
-_TTFT_CACHE = {'at': 0.0, 'value': None}
+_COLUMN_CACHES: dict[str, dict] = {}
+
+
+def _column_quantiles(column: str, window_seconds: int = 3600) -> dict | None:
+    """某个数值列在窗口内的分位数，带 30 秒缓存。
+
+    ## 为什么抽成一个函数
+
+    首字延迟和上下文长度需要**完全一样**的查询形状（窗口内排序取分位、
+    样本不足不报、失败返回空）。复制一份等于以后要改两处，
+    而这两处一定会有人只改一处。
+
+    ## 列名必须白名单
+
+    `column` 会被**拼进 SQL**（列名不能用占位符参数化），
+    所以它只能是下面这几个内部常量，**绝不接受任何外部输入**。
+    不在名单里就直接返回空 —— 拼错的列名会让整条指标消失，
+    而不是让端点报错，那样更难发现。
+
+    ## 样本不足时不报分位值
+
+    少于 20 个样本时只报样本数，**分位值留空**。
+
+    10 个样本算出来的 p99 是那 10 个里最大的一个，把它当分位数展示
+    会让人以为看到了长尾，实际上只是看了最小值集。
+    **宁可空着，也不要给一个看起来像结论的数字。**
+    """
+    #: 列名 → 缓存槽。新增列必须登记在这里，否则查不了。
+    allowed = {'first_token_ms': 'ttft', 'prompt_tokens': 'context'}
+    slot = allowed.get(column)
+    if slot is None:
+        return None
+    cache = _COLUMN_CACHES.setdefault(slot, {'at': 0.0, 'value': None})
+    now = time.monotonic()
+    cached = cache['value']
+    if cached is not None and 0 <= now - cache['at'] <= 30:
+        return cached
+    try:
+        rows = db.query(
+            'SELECT %s AS v FROM request_logs WHERE ts > ? AND %s IS NOT NULL '
+            'ORDER BY %s' % (column, column, column),
+            (int(time.time()) - window_seconds,))
+        values = [int(row['v']) for row in rows]
+    except Exception:      # noqa: BLE001
+        # 读不到就报不了，不能让指标端点因此 500。
+        cache.update(at=now, value=None)
+        return None
+    result = {'samples': len(values), 'p50': None, 'p95': None, 'p99': None, 'max': None}
+    if len(values) >= 20:
+        def _pick(q: float) -> int:
+            return values[min(len(values) - 1, int(len(values) * q))]
+        result.update(p50=_pick(0.50), p95=_pick(0.95), p99=_pick(0.99),
+                      max=values[-1])
+    cache.update(at=now, value=result)
+    return result
 
 
 def _ttft_quantiles(window_seconds: int = 3600) -> dict | None:
@@ -1088,35 +1142,38 @@ def _ttft_quantiles(window_seconds: int = 3600) -> dict | None:
     **直接把 p99 拉高**。这类「少数账号拖垮长尾」的问题，
     不上趋势图就只能等用户来投诉。
 
-    ## 样本不足时不报分位值
-
-    少于 20 个样本时只报样本数，**分位值留空**。
-
-    10 个样本算出来的 p99 是那 10 个里最大的一个，把它当分位数展示
-    会让人以为看到了长尾，实际上只是看了最小值集。
-    **宁可空着，也不要给一个看起来像结论的数字。**
+    实现在 `_column_quantiles`，这里只固定列名。
     """
-    now = time.monotonic()
-    cached = _TTFT_CACHE['value']
-    if cached is not None and 0 <= now - _TTFT_CACHE['at'] <= 30:
-        return cached
-    try:
-        rows = db.query(
-            'SELECT first_token_ms FROM request_logs '
-            'WHERE ts > ? AND first_token_ms IS NOT NULL ORDER BY first_token_ms',
-            (int(time.time()) - window_seconds,))
-        values = [int(row['first_token_ms']) for row in rows]
-    except Exception:      # noqa: BLE001
-        # 读不到就报不了，不能让指标端点因此 500。
-        _TTFT_CACHE.update(at=now, value=None)
-        return None
-    result = {'samples': len(values), 'p50': None, 'p95': None, 'p99': None}
-    if len(values) >= 20:
-        def _pick(q: float) -> int:
-            return values[min(len(values) - 1, int(len(values) * q))]
-        result.update(p50=_pick(0.50), p95=_pick(0.95), p99=_pick(0.99))
-    _TTFT_CACHE.update(at=now, value=result)
-    return result
+    return _column_quantiles('first_token_ms', window_seconds)
+
+
+def _context_quantiles(window_seconds: int = 3600) -> dict | None:
+    """最近窗口内的上下文长度（prompt tokens）分位数。
+
+    ## 为什么需要
+
+    2026-11-15 有反馈说长对话跑到后面会开始重复同一段内容。
+    查下去网关侧三项都排除了（不裁剪历史、不注入系统消息、不丢推理内容），
+    但数据面看到一个强信号：
+
+        近三小时平均 prompt_tokens 31 万，**最大 50 万**，
+        还有一个请求输出了 2 万 token / 93 秒。
+
+    **正常回答不会有两万字。** 那几乎可以确定是在重复。
+
+    问题在于：**这个数字当时没有任何地方能看到**。要发现「对话在膨胀」，
+    只能去翻数据库。等到它表现为循环，已经晚了。
+
+    这个指标的作用是让膨胀**先于故障可见** —— 上下文一路上涨时，
+    趋势图会先抬头，而不是等对话崩掉。
+
+    ## 为什么不设「太大」的阈值
+
+    不同模型的上下文上限不同，而且上游随时会调。
+    写死一个阈值，要么太松没意义、要么太紧天天误报。
+    **只报分位数和最大值，让看的人按自己的模型判断。**
+    """
+    return _column_quantiles('prompt_tokens', window_seconds)
 
 
 @app.get('/metrics')
@@ -1154,6 +1211,33 @@ def prometheus_metrics(request: Request):
                 lines.append('# TYPE workbuddy_ttft_ms gauge')
             for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
                 lines.append('workbuddy_ttft_ms{quantile="%s"} %d' % (_q, _ttft[_key]))
+    # 上下文长度（prompt tokens）分位数。
+    #
+    # 同一套查询，换一个列。**不设「太大」的阈值** ——
+    # 各模型上限不同且上游随时会调，写死阈值要么没用要么天天误报。
+    # 只报分位数和最大值，让看的人按自己的模型判断。
+    _ctx = _context_quantiles()
+    if _ctx is not None:
+        _m('workbuddy_context_samples', 'gauge',
+           'Requests with a prompt-token measurement in the last hour. Below 20 '
+           'the quantiles are withheld, for the same reason as the first-token '
+           'metric: a p99 over a handful of samples is just the largest of them.',
+           _ctx['samples'])
+        if _ctx['p50'] is not None:
+            if not any(x.startswith('# HELP workbuddy_context_tokens ') for x in lines):
+                lines.append('# HELP workbuddy_context_tokens Prompt tokens per request '
+                             'over the last hour, by quantile, plus the largest seen. '
+                             'No threshold is applied: model limits differ and change, '
+                             'so the number is for whoever knows their own limit. A '
+                             'dialogue that keeps growing shows here before it starts '
+                             'repeating itself.')
+                lines.append('# TYPE workbuddy_context_tokens gauge')
+            for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
+                lines.append('workbuddy_context_tokens{quantile="%s"} %d'
+                             % (_q, _ctx[_key]))
+            _m('workbuddy_context_max_tokens', 'gauge',
+               'Largest prompt-token count in the last hour. Grows steadily in a '
+               'long dialogue; that is the signal worth watching.', _ctx['max'])
     # 当前实际选中的数据面引擎。
     #
     # ## 为什么值得单独暴露

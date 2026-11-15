@@ -118,7 +118,9 @@ class ItWithholdsQuantilesOnThinSamplesTests(unittest.TestCase):
 
 class ItCachesTests(unittest.TestCase):
     def test_cache_exists(self):
-        self.assertIn('_TTFT_CACHE', MAIN)
+        # v1.2.160 起改成按列分开的缓存槽，名字变了但性质没变：
+        # 必须有一份带上限的缓存，避免并发抓取重复计算。
+        self.assertIn('_COLUMN_CACHES', MAIN)
 
     def test_cache_has_a_bounded_ttl(self):
         self.assertIn('<= 30', MAIN, '缓存没有上限，指标会变成陈旧值')
@@ -126,16 +128,18 @@ class ItCachesTests(unittest.TestCase):
 
 class ItDegradesSafelyTests(unittest.TestCase):
     def test_query_failure_does_not_break_metrics(self):
-        idx = MAIN.find('def _ttft_quantiles')
-        block = MAIN[idx:idx + 2000]
+        # v1.2.160 起实现搬到了公用函数里，`_ttft_quantiles` 只剩一行委托。
+        # 断言必须跟着实现走，否则它检查的是一段空壳。
+        idx = MAIN.find('def _column_quantiles')
+        block = MAIN[idx:idx + 2600]
         self.assertIn('except Exception', block,
                       '查库失败会让 /metrics 整体 500')
         self.assertIn('return None', block)
 
     def test_query_uses_the_ts_index(self):
         """窗口过滤必须带 ts，否则会全表扫 33 万行。"""
-        idx = MAIN.find('def _ttft_quantiles')
-        block = MAIN[idx:idx + 2000]
+        idx = MAIN.find('def _column_quantiles')
+        block = MAIN[idx:idx + 2600]
         self.assertIn('WHERE ts > ?', block, '没按时间过滤，会全表扫描')
 
 
