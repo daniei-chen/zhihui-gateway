@@ -138,5 +138,36 @@ class ItSaysWhyTests(unittest.TestCase):
         self.assertIn('而不是写 0', block)
 
 
+class TheForwardingIsObservableTests(unittest.TestCase):
+    """转发必须留下痕迹 —— 否则事后无法回答「它到底有没有生效」。
+
+    2026-11-15 实现它时想端到端验证，发现做不到：上游的 429/503 是外部条件，
+    没法主动构造；而请求记录只存状态码与错误文本，不存响应头。
+    于是当时只能靠单测说「函数返回了正确的数」。
+
+    加一行日志不是装饰 —— 它把这个能力从「只能推理」变成「可以查证」。
+    """
+
+    def test_it_logs_when_forwarding(self):
+        idx = SOURCE.find("out.headers['Retry-After']")
+        self.assertGreater(idx, 0)
+        window = SOURCE[idx:idx + 900]
+        self.assertIn('logger.info', window, '转发了却没有留下任何记录')
+
+    def test_the_log_carries_both_numbers(self):
+        """要能看懂是哪个状态码、等了多久，否则记了也没用。"""
+        idx = SOURCE.find('logger.info(')
+        self.assertGreater(idx, 0)
+        window = SOURCE[idx:idx + 300]
+        self.assertIn('resp.status_code', window)
+        self.assertIn('wait', window)
+
+    def test_it_does_not_log_on_the_success_path(self):
+        """只有真的转发了才记 —— 正常请求不该被这条日志刷屏。"""
+        idx = SOURCE.find("out.headers['Retry-After']")
+        before = SOURCE[max(0, idx - 120):idx]
+        self.assertIn('if wait is not None', before)
+
+
 if __name__ == '__main__':
     unittest.main()

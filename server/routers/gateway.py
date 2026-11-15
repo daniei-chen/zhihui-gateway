@@ -2806,6 +2806,19 @@ async def _chat(request: Request, upstream_path: str):
                 out = JSONResponse(body, status_code=resp.status_code)
             if wait is not None:
                 out.headers['Retry-After'] = str(wait)
+                # 记一行，让这个转发**可被事后验证**。
+                #
+                # 2026-11-15 实现这条转发时想端到端验证它，结果发现做不到：
+                # 上游的 429/503 是外部条件，没法主动构造；而请求记录里
+                # 只存状态码与错误文本，**不存响应头**。
+                #
+                # 于是「这条转发有没有真的生效」在当时无法回答 ——
+                # 只能靠单测说「函数返回了正确的数」。
+                #
+                # 有了这行，下次上游真给出等待时间时，日志里会留下一条。
+                # 频率不高（24 小时内上游 5xx 约几十次），info 级别不会吵。
+                logger.info('上游返回 %s 且给出等待时间 %s 秒，已转发 Retry-After',
+                            resp.status_code, wait)
             return out
         except OutputLimitExceeded:
             _mark_output_limit_failure()
