@@ -131,5 +131,49 @@ class TheReasonIsWrittenDownTests(unittest.TestCase):
                       '没写出实测结论 —— 后来人不敢用这个脚本')
 
 
+class ItVerifiesTheGateIsActuallyOpenTests(unittest.TestCase):
+    """删除文件不等于门禁解除。
+
+    实测（2026-11-15）：marker 存在时 `systemctl start` **返回 0**，
+    而服务根本没起来 —— `ActiveState=inactive`、`ConditionResult=no`。
+
+    **退出码是骗人的。** 只看退出码的自动化会认为一切正常。
+    `ConditionResult` 才是唯一可靠判据。
+    """
+
+    def test_it_checks_condition_result(self):
+        self.assertIn('ConditionResult', SOURCE,
+                      '只删文件不验证条件状态 —— 门禁可能仍生效')
+
+    def test_it_does_not_trust_the_start_exit_code(self):
+        """脚本里不该出现「start 成功就说明起来了」这种判断。"""
+        # start 只用于 timer（timer 没有 ConditionPathExists 门禁）
+        for line in SOURCE.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#') or 'say' not in stripped:
+                continue
+            self.assertNotIn('systemctl start workbuddy-web', stripped,
+                             '不该用 start 的退出码判断 helper 是否起来')
+
+    def test_both_units_are_reported(self):
+        self.assertIn('workbuddy-web-helper.service', SOURCE)
+        self.assertIn('workbuddy-web.service', SOURCE)
+
+
+class TheTimerClaimIsAccurateTests(unittest.TestCase):
+    """第一版把 timer 说成「不部署就停」。实测它自愈 —— 说法必须改。"""
+
+    def test_it_says_the_timer_self_heals(self):
+        self.assertIn('自愈', SOURCE,
+                      '没写清 timer 实测会自愈，读者会以为是脚本修好的')
+
+    def test_it_does_not_claim_reconciliation_stops(self):
+        self.assertNotIn('不部署就停', SOURCE,
+                         '这句被实测推翻了（全仓没有代码启动它，但它自己变回 active）')
+
+    def test_it_explains_this_step_is_a_fallback(self):
+        self.assertIn('兜底', SOURCE)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -24,11 +24,16 @@
 # `phase=complete` 之后才动手，那时新代码已经在跑，门禁已无必要。
 # **对未完成的事务绝不清理** —— 那才是它该拦的时候。
 #
-# ## 为什么恢复 timer 不会引发重任务
+# ## 关于 timer：它会自愈，这一步是兜底
 #
-# timer 是 `OnCalendar` + `Persistent=yes`：错过的时间点会补跑。
-# 但 migration 期间本来就会手动跑一次同一个 oneshot service，
-# 所以补跑不会造成额外的重活（实测：恢复后 service 没有立刻触发）。
+# 实测（2026-11-15）：block() 停掉它之后，**systemd 会自己在重新评估时把它拉起来**
+# —— 全仓没有任何代码启动它，我的命令也没有，但它确实自己变回了 active。
+#
+# 所以「对账停跑」这个说法并不成立，脚本里这一步只是**幂等兜底**：
+# 不依赖自愈发生的时机，也不依赖下一次 daemon-reload。
+#
+# 另外 timer 是 `OnCalendar` + `Persistent=yes`，错过的时间点会补跑，
+# 但 migration 期间本来就会跑一次同一个 oneshot service，所以补跑不构成额外重活。
 #
 # ## 用法
 #
@@ -87,6 +92,26 @@ done
 # daemon-reload 让 systemd 重新评估 ConditionPathExists。
 # 不清缓存的话，marker 删了 unit 仍可能维持 skipped。
 systemctl daemon-reload 2>/dev/null || say "daemon-reload 失败（不阻断）"
+
+# 验证门禁真的解除了。
+#
+# 这里不能看 `systemctl start` 的退出码 —— 实测过：marker 存在时
+# `start` **返回 0**，而服务根本没起来（ActiveState=inactive、
+# ConditionResult=no）。退出码是骗人的。
+#
+# `ConditionResult` 才是唯一可靠判据：yes 表示条件已满足，
+# unit 下次真的能启动；no 表示仍被挡住。
+for unit in workbuddy-web-helper.service workbuddy-web.service; do
+    if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        continue
+    fi
+    cond=$(systemctl show "$unit" -p ConditionResult --value 2>/dev/null)
+    case "$cond" in
+        yes) say "$unit 门禁已解除（ConditionResult=yes）" ;;
+        no)  say "$unit 仍被条件挡住（ConditionResult=no），需人工确认" ;;
+        *)   say "$unit ConditionResult=${cond:-未知}" ;;
+    esac
+done
 
 # ── 3. 恢复每日预算对账 timer ────────────────────────────────────────
 
