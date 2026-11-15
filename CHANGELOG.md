@@ -46,8 +46,8 @@ if ($uri !~ ^/(healthz|readyz|api/healthz|api/readyz)/?$) { return 503; }
 ### 三、`purge_credentials.py` 承诺了一件它没做的事
 
 脚本开头写「生成新的 secret → **立即吊销所有既有 cookie**（含攻击者伪造的）」。
-但它只轮换了 `secret`，没有动 `secret_previous` —— 而 `server/security.py` 在轮换过渡窗口里
-**同时接受** `secret_previous`。只要过渡密钥存在，旧 cookie 依然能验签，
+但它只换掉了当前密钥，没有清掉**过渡期的旧密钥** —— 而会话校验在轮换过渡窗口里
+**同时接受新旧两把密钥**。只要过渡密钥还在，旧 cookie 依然能验签，
 脚本打印的「已吊销」就是**假的**。
 
 应急响应脚本给出错误承诺的代价最高：它让人以为已经止血而停止排查。
