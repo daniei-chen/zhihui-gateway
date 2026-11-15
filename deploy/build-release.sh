@@ -118,15 +118,23 @@ while IFS= read -r line; do
 
     # 第二关：形状。不依赖期望值。
     #
-    # 标记必须**只属于错误响应**。第一版把 `Not Found` 也列了进来，
-    # 结果把两个正常文件判成了污染 —— 一个在注释里写了这个词，另一个是测试里
-    # 的断言文本。**校验误伤的代价和漏判一样高**：它会让人开始手动绕过校验。
+    # 两次都栽在「标记太宽」上：
     #
-    # 所以这里只留三种只会出现在错误响应里的标记：
-    # `rate limit exceeded`（限流的正文）、`documentation_url`（同上的字段名）、
-    # `Bad credentials`（鉴权失败的正文）。
-    if grep -qiE 'rate limit exceeded|documentation_url|Bad credentials' "$OUT/$rel"; then
+    # 第一版把「未找到」这个短语也列了进来 —— 它在文档、注释、断言里都是普通
+    # 词汇，于是两个正常文件被判成污染。**校验误伤的代价和漏判一样高**：
+    # 它会让人开始手动绕过校验，而绕过一次之后这个校验就没用了。
+    #
+    # 第二版去掉了那个短语，却仍然误伤同样的两个文件 —— 因为**这段注释本身
+    # 就写着那三个标记名**，而脚本检查自己时必然命中自己的规则。
+    #
+    # 所以现在匹配的是**带结构的完整形态**（JSON 键名 + 冒号 + 值），
+    # 而那三个词以裸词形式出现在注释或断言里不会命中。
+    if grep -qiE '"message":[[:space:]]*"API rate limit|"documentation_url":"https://docs\.github\.com' "$OUT/$rel"; then
         echo "  POLLUTED     $rel  （内容是 HTTP 错误响应，不是文件）"
+        fail=$((fail + 1)); continue
+    fi
+    if grep -qE '^Bad credentials$' "$OUT/$rel"; then
+        echo "  POLLUTED     $rel  （内容是鉴权失败响应，不是文件）"
         fail=$((fail + 1)); continue
     fi
     case "$rel" in

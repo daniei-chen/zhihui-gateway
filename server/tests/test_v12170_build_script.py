@@ -61,8 +61,24 @@ class ItChecksThreeLayersTests(unittest.TestCase):
         self.assertIn('POLLUTED', SCRIPT)
 
     def test_layer_two_catches_http_errors(self):
-        for marker in ('rate limit exceeded', 'documentation_url', 'Bad credentials'):
-            self.assertIn(marker, SCRIPT, '漏了错误标记：' + marker)
+        """匹配的是带结构的完整形态，不是裸词。
+
+        两次误伤都是因为裸词：注释和断言里写一写就命中，而脚本检查自己时
+        必然命中自己的注释。
+        """
+        self.assertIn('"message":[[:space:]]*"API rate limit', SCRIPT)
+        self.assertIn('"documentation_url":"https://docs', SCRIPT)
+        self.assertIn("^Bad credentials$", SCRIPT)
+
+    def test_the_pattern_has_structure_not_bare_words(self):
+        """裸词会命中注释。这里断言模式里带引号或锚点。"""
+        line = [l for l in SCRIPT.splitlines() if 'grep -qiE' in l or 'grep -qE' in l]
+        self.assertTrue(line, '没找到形状校验行')
+        for pattern in line:
+            if 'Bad credentials' in pattern:
+                self.assertIn('^Bad credentials$', pattern)
+            if 'rate limit' in pattern:
+                self.assertIn('"message"', pattern)
 
     def test_it_does_not_use_ambiguous_markers(self):
         """`Not Found` 太通用 —— 第一次真跑用它误伤了两个正常文件。
