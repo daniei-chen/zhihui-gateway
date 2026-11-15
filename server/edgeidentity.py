@@ -19,8 +19,36 @@ from fastapi import HTTPException, Request
 from . import config
 
 
-def _secret() -> str:
-    path = config.QTG_IDENTITY_SECRET_FILE
+#: 身份签名密钥的默认位置。
+#:
+#: ## 为什么需要这个兜底
+#:
+#: 这个常量在 2026-11-15 之前是**硬编码在路由里**的。当天把它改成「复用本模块的
+#: 校验」时，本模块读的是配置项 `QTG_IDENTITY_SECRET_FILE` ——
+#: **而那个配置项在部署里从来没设过**（默认空串）。
+#:
+#: 后果是：管理员密码正确、登录接口返回 200，但 nginx 的鉴权子请求读密钥拿到空值
+#: 返回 503，于是**登录成功也进不去面板**。三小时内 19 次 503。
+#:
+#: 原来的说法是「核过生产上密钥文件都是 0600」——**核的是文件权限，没核配置项的
+#: 取值**。文件权限确实对，但那个值根本没被读到。
+#:
+#: 现在的语义：**配置项优先，缺省回落这个路径**。这样：
+#:
+#:   · 没设配置的部署（当前生产就是）行为与改动前一致
+#:   · 要换位置的部署仍可显式指定
+#:   · 两条路都走同一套严格校验，不存在「哪条更宽松」
+DEFAULT_IDENTITY_SECRET_FILE = '/opt/workbuddy-manager/engine/secrets/identity_signing.key'
+
+
+def identity_secret_path() -> str:
+    """解析要读的密钥路径：配置项优先，缺省回落默认位置。"""
+    configured = (getattr(config, 'QTG_IDENTITY_SECRET_FILE', '') or '').strip()
+    return configured or DEFAULT_IDENTITY_SECRET_FILE
+
+
+def _secret(path: str | None = None) -> str:
+    path = path or identity_secret_path()
     if not path:
         return ''
     # 文件不存在时返回 ''，而不是让 `lstat` 抛出去。
