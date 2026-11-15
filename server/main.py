@@ -1068,6 +1068,57 @@ def _process_memory_bytes() -> tuple[int, int] | None:
         return None
 
 
+#: 首字延迟分位数的缓存。
+#:
+#: 查询本身很便宜（`ts` 有索引，两小时窗口实测 4 毫秒 / 828 行），
+#: 缓存不是为了省查询，是**避免并发抓取时把同一份数据算很多遍**。
+#: 监控系统常见行为是多个实例同时抓同一个端点。
+_TTFT_CACHE = {'at': 0.0, 'value': None}
+
+
+def _ttft_quantiles(window_seconds: int = 3600) -> dict | None:
+    """最近窗口内的首字延迟分位数。
+
+    ## 为什么需要
+
+    2026-11-15 查性能时发现：平均首字延迟 7.3 秒、p99 57 秒，
+    而**这些数字当时只存在于数据库里** —— 看板看不见，也就没有人会盯。
+
+    两个账号的首字延迟接近 40 秒（其他 6–13 秒），差距六倍，
+    **直接把 p99 拉高**。这类「少数账号拖垮长尾」的问题，
+    不上趋势图就只能等用户来投诉。
+
+    ## 样本不足时不报分位值
+
+    少于 20 个样本时只报样本数，**分位值留空**。
+
+    10 个样本算出来的 p99 是那 10 个里最大的一个，把它当分位数展示
+    会让人以为看到了长尾，实际上只是看了最小值集。
+    **宁可空着，也不要给一个看起来像结论的数字。**
+    """
+    now = time.monotonic()
+    cached = _TTFT_CACHE['value']
+    if cached is not None and 0 <= now - _TTFT_CACHE['at'] <= 30:
+        return cached
+    try:
+        rows = db.query(
+            'SELECT first_token_ms FROM request_logs '
+            'WHERE ts > ? AND first_token_ms IS NOT NULL ORDER BY first_token_ms',
+            (int(time.time()) - window_seconds,))
+        values = [int(row['first_token_ms']) for row in rows]
+    except Exception:      # noqa: BLE001
+        # 读不到就报不了，不能让指标端点因此 500。
+        _TTFT_CACHE.update(at=now, value=None)
+        return None
+    result = {'samples': len(values), 'p50': None, 'p95': None, 'p99': None}
+    if len(values) >= 20:
+        def _pick(q: float) -> int:
+            return values[min(len(values) - 1, int(len(values) * q))]
+        result.update(p50=_pick(0.50), p95=_pick(0.95), p99=_pick(0.99))
+    _TTFT_CACHE.update(at=now, value=result)
+    return result
+
+
 @app.get('/metrics')
 def prometheus_metrics(request: Request):
     from .metricsauth import require_metrics
@@ -1084,6 +1135,25 @@ def prometheus_metrics(request: Request):
         lines.append('%s %s' % (name, value))
 
     _m('workbuddy_up', 'gauge', '1 when the manager is serving.', 1)
+    # 首字延迟分位数。
+    #
+    # 必须带标签（Prometheus 的分位数惯例），而 `_m` 不支持标签，
+    # 所以这三条手工写，HELP/TYPE 只写一次。
+    _ttft = _ttft_quantiles()
+    if _ttft is not None:
+        _m('workbuddy_ttft_samples', 'gauge',
+           'Requests with a first-token measurement in the last hour. Below 20 the '
+           'quantiles are withheld on purpose: a p99 over that few samples is just '
+           'the largest of them, not a tail.', _ttft['samples'])
+        if _ttft['p50'] is not None:
+            if not any(x.startswith('# HELP workbuddy_ttft_ms ') for x in lines):
+                lines.append('# HELP workbuddy_ttft_ms Time to first token in milliseconds '
+                             'over the last hour, by quantile. This is what a user waits '
+                             'through before any text appears; end-to-end latency hides '
+                             'it behind the generation time.')
+                lines.append('# TYPE workbuddy_ttft_ms gauge')
+            for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
+                lines.append('workbuddy_ttft_ms{quantile="%s"} %d' % (_q, _ttft[_key]))
     # 当前实际选中的数据面引擎。
     #
     # ## 为什么值得单独暴露
