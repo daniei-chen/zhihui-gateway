@@ -162,9 +162,34 @@ class Budgets:
             return value
 
         base = float(upstream_timeout or _num('WB_UPSTREAM_TIMEOUT', 300.0))
+
+        # 首字节预算不能超过本条请求的 base。
+        #
+        # ## 2026-11-15：一个按平台收紧的超时从未生效
+        #
+        # `config.PLATFORM_TIMEOUT` 给 qoder 设了 60 秒，注释写的是
+        # 「让『不可用』在**一分钟内**变成可见的错误」。
+        #
+        # 实际上那个 60 只落到 `total_s`（读 body 时才检查），而**等首字节**用的是
+        # `first_byte_s` —— 它读环境变量 `WB_FIRST_BYTE_TIMEOUT_S`（生产是 240），
+        # **硬覆盖了按平台算出来的 60**。
+        #
+        # 证据：一条 qoder 请求耗时 **183.6 秒**、首字节始终没到、终态 502。
+        # 183 秒落在 240 以内，所以那条"一分钟内可见"的承诺一次都没兑现过。
+        #
+        # ## 为什么是 min 而不是直接改环境变量
+        #
+        # 那个 240 是为 workbuddy 的长 prompt 设的（实测有 158 次首字节超过 60 秒，
+        # 最长 186 秒，属于正常 prefill）。它的 base 是 300，**240 < 300，不受影响**。
+        #
+        # 只有 base 更小的平台才被收紧：qoder 60 → 取 60。
+        #
+        # 换句话说：显式配置仍然优先，但**不能比这条请求自己的总预算还宽** ——
+        # 比总预算还宽的首字节窗口没有意义，因为它允许一次请求在"总时长"之外继续挂着等。
+        _first_byte_env = _num('WB_FIRST_BYTE_TIMEOUT_S', base)
         return cls(
             connect_s=_num('WB_CONNECT_TIMEOUT_S', 5.0),
-            first_byte_s=_num('WB_FIRST_BYTE_TIMEOUT_S', base),
+            first_byte_s=min(_first_byte_env, base),
             stream_idle_s=_num('WB_STREAM_IDLE_TIMEOUT_S', base),
             total_s=_num('WB_TOTAL_TIMEOUT_S', base),
             client_cancel_s=_num('WB_CLIENT_CANCEL_S', 5.0),
