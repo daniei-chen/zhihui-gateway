@@ -638,10 +638,20 @@ async def compat_account_refresh(request: Request, file: str) -> Dict[str, Any]:
     res = await adapter.refresh_account(uid)
     # 不能恒回 ok:true —— aiwork 的 `refresh_jwt` 在「JWT 还没到期」时会返回
     # ok:false + 原因，前端要能把这句原文显示出来（审计点名的「恒回 OK」问题）。
+    #
+    # 2026-11-15：再往前一步 —— 「无需刷新」不是「失败」。
+    # 上游在 JWT 还有十几天有效期时拒绝刷新是**省一次无意义的操作**，
+    # 而不是出错。把它报成失败会让用户以为渠道坏了，于是反复点。
     ok = _res_ok(res)
     detail = res if isinstance(res, dict) else {}
-    message = "已刷新" if ok else str(detail.get("error") or "刷新结果未确认，请核对账号状态")
-    return {"ok": ok, "message": message, "detail": detail}
+    reason = str(detail.get('error') or detail.get('message') or '').strip()
+    if ok:
+        state, message = 'refreshed', '已刷新'
+    elif reason and ('无需刷新' in reason or '还没到期' in reason or '无需' in reason):
+        state, message = 'not_needed', reason
+    else:
+        state, message = 'failed', (reason or "刷新结果未确认，请核对账号状态")
+    return {"ok": ok, "state": state, "message": message, "detail": detail}
 
 
 
@@ -914,16 +924,35 @@ async def compat_refresh_tokens(request: Request) -> Dict[str, Any]:
         try:
             result = await adapter.refresh_account(a.uid)
             ok = _res_ok(result)
+            # 上游拒绝刷新时通常**带着明确原因**，最典型的是
+            # 「JWT 剩余有效期还有 N 小时，暂无需刷新」。
+            #
+            # 2026-11-15：这里原来只回一句「刷新结果未确认」，把原因丢了 ——
+            # 用户于是在「其实不需要刷新」和「刷新坏了」之间无从判断，
+            # 只能反复点。**同一个接口的单账号版本一直是有原因的，批量版本没有。**
+            #
+            # 现在把原因带出来，并把「无需操作」单独标出来：那不是失败，
+            # 是上游在省一次无意义的刷新。
+            detail = result if isinstance(result, dict) else {}
+            reason = str(detail.get('error') or detail.get('message') or '').strip()
+            if ok:
+                message, state = '已刷新', 'refreshed'
+            elif reason and ('无需刷新' in reason or '还没到期' in reason
+                             or '无需' in reason or 'not need' in reason.lower()):
+                message, state = reason, 'not_needed'
+            else:
+                message, state = (reason or '刷新结果未确认，请核对账号状态'), 'failed'
             results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
-                            "ok": ok, "message": "已刷新" if ok else "刷新结果未确认"})
-            if not ok:
+                            "ok": ok, "state": state, "message": message})
+            if not ok and state == 'failed':
                 failed.append(file)
         except Exception as exc:  # noqa: BLE001
             results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
-                            "ok": False, "message": str(exc)[:160]})
+                            "ok": False, "state": 'failed', "message": str(exc)[:160]})
             failed.append(file)
     ok = len([r for r in results if r["ok"]])
     return {"total": len(results), "succeeded": ok, "failed": failed,
+            "not_needed": len([r for r in results if r.get("state") == 'not_needed']),
             "results": results, "reload_triggered": False}
 
 
