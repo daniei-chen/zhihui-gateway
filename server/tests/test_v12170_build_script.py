@@ -173,5 +173,31 @@ class ItLeavesTheDirectoryBeforeDeletingItTests(unittest.TestCase):
         self.assertIn('cd / || exit 1', SCRIPT)
 
 
+class PermissionsUseAGlobNotAListTests(unittest.TestCase):
+    """v1.2.175 加了新脚本却忘了改进手写清单，它落地后是 Permission denied。
+
+    列举式清单的问题不是「这次漏了」，是**每次新增都要记得回来改**，
+    而漏掉时不会有任何声音 —— 那一版发布完全没报错，因为没人去执行它。
+    """
+
+    def test_deploy_scripts_use_a_glob(self):
+        self.assertIn('"$DST"/deploy/*.sh', SCRIPT)
+
+    def test_no_hand_written_executable_list(self):
+        """旧写法是把每个脚本名逐行列出来。"""
+        self.assertNotIn('for exe in server/backup_application.py', SCRIPT)
+
+    def test_it_records_the_permission_denied_incident(self):
+        self.assertIn('Permission denied', SCRIPT)
+
+    def test_non_entry_python_gets_restored_to_644(self):
+        """通配给 server/*.py 全 755 是过宽的，非入口必须收回。"""
+        self.assertIn('chmod 644 "$f"', SCRIPT)
+
+    def test_backup_application_stays_executable(self):
+        """它是部署时被直接执行的入口。"""
+        self.assertIn('backup_application.py) chmod 755', SCRIPT)
+
+
 if __name__ == '__main__':
     unittest.main()

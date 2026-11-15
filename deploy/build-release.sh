@@ -176,10 +176,21 @@ while IFS= read -r line; do
 done < "$MANIFEST"
 
 # 可执行位在这个流程里会被 `cp` 丢掉，逐次恢复。
-for exe in server/backup_application.py deploy/post-migration-cleanup.sh \
-           deploy/rollout.sh deploy/prepare-managed-stage.sh \
-           deploy/verify-staged-files.sh deploy/build-release.sh; do
-    [ -f "$DST/$exe" ] && chmod 755 "$DST/$exe"
+#
+# **用通配而不是列举。** 第一版是手写清单，v1.2.175 加了新脚本却忘了加进清单，
+# 结果它落地后是 `Permission denied` —— 而当次发布没有报错，因为没人去执行它。
+# 列举式清单的问题不是「这次漏了」，是**每次新增都要记得回来改**，
+# 而漏掉时不会有任何声音。
+for exe in "$DST"/deploy/*.sh "$DST"/deploy/*.py "$DST"/server/*.py; do
+    [ -f "$exe" ] && chmod 755 "$exe"
+done
+# server 下的 Python 不全是入口脚本，上面的通配会给过多权限；把非入口的收回 644。
+# 入口只有 backup_application.py（部署时被直接执行）。
+for f in "$DST"/server/*.py; do
+    case "$(basename "$f")" in
+        backup_application.py) chmod 755 "$f";;
+        *) chmod 644 "$f";;
+    esac
 done
 cp "$DST/CHANGELOG.md" "$DST/server/CHANGELOG.md" 2>/dev/null
 chmod 644 "$DST/server/CHANGELOG.md" 2>/dev/null
