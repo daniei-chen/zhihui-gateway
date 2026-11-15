@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import time
 
 from state_guard import Capabilities, Rejected, _json
 from launch_guard import protected
@@ -148,7 +149,24 @@ class Journal:
             raise Rejected('migration journal compare-and-swap conflict')
         value = {**expected, **changes, 'epoch': expected['epoch'] + 1, 'phase': phase}
         self._atomic(self.path, canonical(value))
+        self._timing(phase)
         return self.load(permit)
+
+    def _timing(self, phase):
+        """把每次阶段切换的时间点追加到 `writer-state/phase-timing.log`。
+
+        升级时长以前只能靠猜：事务 journal 只留最后一次快照，systemd 日志只记
+        服务启停，中间十几个阶段各花多久没人知道 —— 我因此把一次 8 分钟的
+        release 目录构建误判成"续接阶段变慢"。这个文件只追加、不轮转，一行一个
+        时间点，专门用来回答"这次升级的时间花在哪"。
+        """
+        try:
+            line = '%s %s %s\n' % (time.strftime('%Y-%m-%dT%H:%M:%S'),
+                                   self.root.name, phase)
+            with open(self.paths.floor.parent / 'phase-timing.log', 'a') as handle:
+                handle.write(line)
+        except OSError:
+            pass  # 计时只是诊断信息，绝不能让迁移本身失败
 
 
 class Controller:
@@ -234,7 +252,12 @@ class Controller:
             if record['phase'] in ('rolling-helper-started', 'rolling-helper-checking'):
                 if record['phase'] == 'rolling-helper-started':
                     record = self.journal.save(authority, record, 'rolling-helper-checking')
-                self._effect(self.host.helper_ready, record, candidate)
+                # `helper_ready` 的成功结果是候选进程身份，不是 None。把它交给
+                # `_effect`（要求 call 返回 None）会在**已经确认就绪之后**抛
+                # "host effects must verify completion or raise"，把一次成功的
+                # 切换判成失败并触发围栏。这里直接校验返回值必须存在。
+                if self.host.helper_ready(record, candidate) is None:
+                    raise Rejected('helper readiness returned no process identity')
                 record = self.journal.save(authority, record, 'rolling-helper-ready')
 
             if record['phase'] in ('rolling-helper-ready', 'rolling-routing-helper'):

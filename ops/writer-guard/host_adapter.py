@@ -363,7 +363,12 @@ class Host:
             return
         if state['ActiveState'] not in ('inactive', 'failed'):
             raise Rejected('helper is transitioning')
-        self.systemd.command(['reset-failed', HELPER])
+        # `systemctl reset-failed` 对"从未进入 failed"的 unit 会退化为
+        # "Unit … not loaded"（没有 manager object），返回非零并让整次交接
+        # 在 `start` 之前失败。`start` 本身不需要这条清理 —— 只有确实处于
+        # failed 时才需要它把残留状态清掉再启动。
+        if state['ActiveState'] == 'failed':
+            self.systemd.command(['reset-failed', HELPER])
         self.systemd.command(['start', HELPER])
 
     def _helper_ready(self, record, candidate):
@@ -388,7 +393,10 @@ class Host:
         return identity
 
     def helper_ready(self, record, candidate):
-        self._retry_helper_ready(record, candidate, 'helper-ready')
+        # 返回值是候选进程身份：`_run_rolling` 用它判断"就绪已被确认"。
+        # 丢掉它会让控制器在 helper 已就绪之后报 "returned no process identity"
+        # 并围栏 —— 第一次真正的 rolling 就是这样失败的。
+        return self._retry_helper_ready(record, candidate, 'helper-ready')
 
     def _retry_helper_ready(self, record, candidate, label):
         deadline = time.monotonic() + 90

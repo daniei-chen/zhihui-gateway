@@ -106,7 +106,12 @@ class Frontend:
         if value.get('buildId') != current.name:
             raise Rejected('console current pointer/metadata mismatch')
         if build == current.name:
-            raise Rejected('new console build must not overwrite existing build')
+            # 纯后端发版很常见：前端源码只动了版本常量，构建产物的 build id
+            # 不变。同名不是"覆盖"—— 下游的 publisher 资产池是 add-only，
+            # `activate` 也会跳过已存在的 releases/<build>，两者对"同名同内容"
+            # 都是幂等的。只有候选产物与已发布内容真的不同时才是覆盖风险。
+            if self.auth.tree(candidate.root / 'web/out') != self.auth.tree(current):
+                raise Rejected('new console build must not overwrite existing build')
         self.f.protected(self.p.sync)
         if self.p.sync.read_bytes() != self.f.DISABLED_SYNC:
             raise Rejected('unsafe legacy console synchronization enabled')
