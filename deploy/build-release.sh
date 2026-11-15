@@ -72,31 +72,52 @@ if [ ! -d "$PREV/web/out" ]; then
 fi
 
 mkdir -p "$CACHE"
+
+# 克隆本身也要有超时。
+#
+# 上一版加了接口回退，但那一次它没有生效 —— 回退守的是**取文件**那一步，
+# 而卡住的是**克隆**这一步：进程挂在那里七十多秒，脚本一直等，永远走不到回退。
+#
+# 「有回退」和「回退会被执行到」是两件事，中间差一个超时。
+CLONE_TIMEOUT=${ZHIHUI_CLONE_TIMEOUT:-90}
+
+clone_repo() {
+    cd / || return 1
+    rm -rf "$CACHE/repo"
+    if timeout "$CLONE_TIMEOUT" git clone --no-checkout --filter=blob:none --depth 1 \
+            --branch "$BRANCH" "$REPO_URL" "$CACHE/repo" >/dev/null 2>&1; then
+        cd "$CACHE/repo" || return 1
+        echo "[build] 克隆成功"
+        return 0
+    fi
+    echo "[build] 克隆失败或超时（${CLONE_TIMEOUT}s），取文件将走接口"
+    rm -rf "$CACHE/repo"
+    # 克隆不通不算失败：fetch_one 会退回接口。留一个空仓标记让后续步骤知道现状。
+    mkdir -p "$CACHE/repo"
+    return 0
+}
+
 if [ ! -d "$CACHE/repo/.git" ]; then
     echo "[build] 首次克隆（blob 懒加载，不占 API 额度）"
-    git clone --no-checkout --filter=blob:none --depth 1 \
-        --branch "$BRANCH" "$REPO_URL" "$CACHE/repo" || {
-        echo "FAIL: 克隆失败" >&2; exit 1; }
+    clone_repo
 fi
-cd "$CACHE/repo" || { echo "FAIL: 进不了缓存仓库" >&2; exit 1; }
 
-HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo '')
-if [ "$HEAD_SHA" != "$COMMIT" ]; then
-    echo "[build] 缓存仓库在 $HEAD_SHA，需要 $COMMIT —— 重新克隆"
-    # 必须先离开待删目录再删。
-    #
-    # 第一次跑这个脚本时就是这么挂的：`rm -rf "$CACHE/repo"` 执行时，bash 的
-    # 当前目录正位于该目录内部，删完之后 cwd 变成一个不存在的 inode ——
-    # 之后**任何**命令都报 "Unable to read current working directory"，
-    # 连 `git clone` 都起不来，而错误信息看起来像是网络问题。
-    cd / || exit 1
-    rm -rf "$CACHE/repo"
-    git clone --no-checkout --filter=blob:none --depth 1 \
-        --branch "$BRANCH" "$REPO_URL" "$CACHE/repo" || {
-        echo "FAIL: 克隆失败" >&2; exit 1; }
-    cd "$CACHE/repo" || exit 1
+HEAD_SHA=''
+if [ -d "$CACHE/repo/.git" ]; then
+    cd "$CACHE/repo" 2>/dev/null || true
     HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo '')
-    if [ "$HEAD_SHA" != "$COMMIT" ]; then
+fi
+
+if [ -d "$CACHE/repo/.git" ] && [ "$HEAD_SHA" != "$COMMIT" ]; then
+    echo "[build] 缓存仓库在 $HEAD_SHA，需要 $COMMIT —— 重新克隆"
+    # 必须先离开待删目录再删（这条是第一次真跑时挂出来的）。
+    clone_repo
+    HEAD_SHA=''
+    if [ -d "$CACHE/repo/.git" ]; then
+        cd "$CACHE/repo" 2>/dev/null || true
+        HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo '')
+    fi
+    if [ -n "$HEAD_SHA" ] && [ "$HEAD_SHA" != "$COMMIT" ]; then
         echo "FAIL: 仍然对不上（想要 $COMMIT，得到 $HEAD_SHA）" >&2
         exit 1
     fi

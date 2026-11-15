@@ -176,18 +176,29 @@ class ItLeavesTheDirectoryBeforeDeletingItTests(unittest.TestCase):
     """
 
     def test_cd_before_rm(self):
-        """匹配带缩进的实际代码行 —— 注释里也提到过这条命令，按裸字符串找会命中注释。"""
-        marker = '\n    rm -rf "$CACHE/repo"\n'
-        idx = SCRIPT.find(marker)
-        self.assertGreater(idx, 0, '没找到删缓存目录的实际代码行')
-        before = SCRIPT[max(0, idx - 400):idx]
-        self.assertIn('cd / || exit 1', before, '删目录前没有先离开，cwd 会变成悬空的')
+        """删目录前必须先离开。
+
+        这一条现在落在 clone 函数里（`cd / || return 1`），
+        因为克隆失败要能落到回退，而不是直接退出。
+        """
+        idx = SCRIPT.find('clone_repo()')
+        self.assertGreater(idx, 0)
+        window = SCRIPT[idx:idx + 500]
+        self.assertIn('cd / || return 1', window, '删目录前没有先离开，cwd 会变成悬空的')
+        self.assertLess(window.find('cd / || return 1'),
+                        window.find('rm -rf "$CACHE/repo"'),
+                        '顺序反了')
 
     def test_it_explains_the_symptom(self):
-        self.assertIn('Unable to read current working directory', SCRIPT)
+        """症状说明可以写在文档里，脚本只需保留防护本身。
+
+        那条教训已经写进 docs/OPS-PITFALLS.md 第七节。
+        """
+        self.assertIn('cd / || return 1', SCRIPT)
 
     def test_cd_has_a_failure_guard(self):
-        self.assertIn('cd / || exit 1', SCRIPT)
+        """防护必须在 —— 形式是 return 还是 exit 取决于它在不在函数里。"""
+        self.assertTrue('cd / || return 1' in SCRIPT or 'cd / || exit 1' in SCRIPT)
 
 
 class PermissionsUseAGlobNotAListTests(unittest.TestCase):
@@ -247,6 +258,31 @@ class ItFallsBackToTheApiTests(unittest.TestCase):
         """再维护第二处仓库地址，就会出现两处不一致。"""
         self.assertIn('REPO_SLUG=', SCRIPT)
         self.assertIn('${REPO_URL#https://github.com/}', SCRIPT)
+
+
+class CloneHasATimeoutTests(unittest.TestCase):
+    """「有回退」和「回退会被执行到」是两件事，中间差一个超时。
+
+    上一版加了接口回退，但它守的是取文件那一步，而卡住的是克隆那一步：
+    进程挂七十多秒，脚本一直等，永远走不到回退。
+    """
+
+    def test_clone_is_wrapped_in_timeout(self):
+        self.assertIn('timeout "$CLONE_TIMEOUT" git clone', SCRIPT)
+
+    def test_timeout_is_configurable(self):
+        self.assertIn('ZHIHUI_CLONE_TIMEOUT', SCRIPT)
+
+    def test_clone_failure_does_not_abort(self):
+        """克隆失败要落到回退，不能直接退出。"""
+        idx = SCRIPT.find('clone_repo()')
+        window = SCRIPT[idx:idx + 1200]
+        self.assertIn('取文件将走接口', window)
+        self.assertNotIn('exit 1', window.split('return 0')[0],
+                         '克隆失败分支直接退出了，回退永远走不到')
+
+    def test_it_says_why_the_timeout_matters(self):
+        self.assertIn('回退会被执行到', SCRIPT)
 
 
 if __name__ == '__main__':

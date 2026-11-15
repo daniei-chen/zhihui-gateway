@@ -32,6 +32,14 @@ class ItRunsTheThreeChecksTests(unittest.TestCase):
         self.assertIn('.version', SCRIPT)
         self.assertIn('release_id', SCRIPT)
 
+    def test_no_end_of_line_anchor_in_version_extraction(self):
+        """第一个过滤的输出末尾还有引号，`v[0-9.]+$` 匹配不到。
+
+        第一版就是这么误报的，而它报出来的是「版本不一致」这种严重结论。
+        """
+        self.assertNotIn("grep -oE 'v[0-9.]+$'", SCRIPT)
+        self.assertIn("grep -oE 'v[0-9.]+' | head -1", SCRIPT)
+
 
 class SkippedIsNotPassedTests(unittest.TestCase):
     """最容易写错的一条。"""

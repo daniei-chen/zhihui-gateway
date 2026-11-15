@@ -91,9 +91,12 @@ fi
 if [ -f "$TARGET/.version" ] && [ -f "$TARGET/server/writer-capabilities.json" ]; then
     printf '%-34s ' "版本号与能力声明一致"
     vfile=$(tr -d '[:space:]' < "$TARGET/.version")
+    # 不要用行尾锚点：第一个过滤的输出形如 `"release_id": "v1.2.181"`，
+    # 末尾还有个引号，`v[0-9.]+$` 匹配不到，于是这里会显示「<空>」——
+    # 第一版就是这么误报的，而它报出来的是「版本不一致」这种严重结论。
     vdecl=$(grep -oE '"release_id"[[:space:]]*:[[:space:]]*"v[0-9.]+"' \
                 "$TARGET/server/writer-capabilities.json" 2>/dev/null \
-            | grep -oE 'v[0-9.]+$' | tr -d '"')
+            | grep -oE 'v[0-9.]+' | head -1)
     if [ "$vfile" = "$vdecl" ]; then
         printf 'PASS  %s\n' "$vfile"
         passed=$((passed + 1))
