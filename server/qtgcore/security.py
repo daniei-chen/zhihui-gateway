@@ -116,7 +116,7 @@ class CredentialStore:
         if self._mtimes.get("internal") != mtime_key or self._internal_list is None:
             tokens: list[str] = []
             for candidate in (next_path, path):
-                raw = _read(candidate)
+                raw = _read_secret(candidate)
                 if raw and raw not in tokens:
                     tokens.append(raw)
             self._internal_list = tokens
@@ -143,7 +143,7 @@ class CredentialStore:
         path = str(self.token_file)
         mtime = self._mtime(path)
         if self._token is None or self._mtimes.get(path) != mtime:
-            raw = _read(path)
+            raw = _read_secret(path)
             if not raw:
                 raise Unauthorized(
                     f"管理令牌未配置：{self.token_file} 不存在或为空", code="no_admin_token"
@@ -164,14 +164,14 @@ class CredentialStore:
         `.previous`。本方法只在**验证失败后**才被调用，签发永远用当前 secret。
         """
         path = str(self.secret_file) + self.SECRET_PREVIOUS_SUFFIX
-        raw = _read(path)
+        raw = _read_secret(path)
         return raw.encode("utf-8") if raw else None
 
     def secret(self) -> bytes:
         path = str(self.secret_file)
         mtime = self._mtime(path)
         if self._secret is None or self._mtimes.get(path) != mtime:
-            raw = _read(path)
+            raw = _read_secret(path)
             if not raw:
                 raw = secrets.token_hex(32)
                 try:
@@ -303,6 +303,65 @@ def _read(path: str) -> str:
         return Path(path).read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def _read_secret(path: str, *, limit: int = 4096) -> str:
+    """读凭据文件：拒绝符号链接、非常规文件、过大、以及组或其他可读。
+
+    ## 为什么单独一个函数
+
+    `_read()` 是裸的 `Path.read_text()` —— 它读**撤销计数**这种非机密文件时完全够用，
+    但这个模块里**四个凭据读取点**（服务令牌、令牌、密钥、上一版密钥）也用它。
+
+    同一份代码里其实已经有三套严格的读取实现：
+
+    | 位置 | 校验 |
+    | --- | --- |
+    | `identity_signing_key()` | 符号链接 + 常规文件 + 大小 + 权限 |
+    | `steward_config.secret_file()` | 上面全部 **+ `st_nlink` + 属主** |
+    | 本文件 `_read()` | **无** |
+
+    **同一个 secrets 目录、三套标准** —— 而最松的那套正好用在这些最要紧的凭据上。
+    攻击者若要动手，只需要挑最松的入口；这里就是它。
+
+    ## 为什么不会打断现有部署
+
+    2026-11-15 核过生产：secrets 目录 `0700`，其中每个文件都是 `0600` 或 `0400`，
+    属主 `10001`（服务自己的 uid）。**四个凭据点读到的文件全部满足这里的每一条。**
+
+    所以收紧不改变任何现有行为，只是把「将来有人把权限配成 0640」从
+    「静默继续用」变成「读不到，鉴权失败」。
+
+    ## 失败时返回空串，不抛
+
+    调用方（`token()`、`secret()`）拿到空串会走「未授权」分支 —— 那是安全的一侧。
+    抛异常则会变成 500，把一次配置错误变成一次故障。
+
+    **两者的区别只在可观测性上**：这里选了「失败关闭」而不是「响亮失败」，
+    因为这条路径每个请求都走，抛异常会让日志被 500 淹没。
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY
+                     | getattr(os, 'O_NOFOLLOW', 0)
+                     | getattr(os, 'O_NONBLOCK', 0))
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return ""
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            return ""
+        if os.name == 'posix' and info.st_mode & 0o077:
+            return ""
+        return os.read(fd, limit + 1).decode('utf-8', 'replace').strip()
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _b64(b: bytes) -> str:

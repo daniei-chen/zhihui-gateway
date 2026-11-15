@@ -283,6 +283,9 @@ class WriteEndpointScopeMatrixTest(unittest.TestCase):
     # 服务级 / 不可逆 / 能提权或抹痕迹的动作，只对**会话**开放。
     SESSION_ONLY = {
         'POST /api/budgets/{request_id}/resolve',
+    # 批量核销：一次最多 200 条，且不可逆。它比单条核销更需要会话约束，
+    # 而不是更不需要 —— 加这个端点时漏登记，被这条矩阵断言抓住。
+    'POST /api/budgets/resolve-batch',
         'POST /api/auth/start',  # Authorization can persist provider credentials.
         'POST /api/auth/review',  # Owner-bound evidence; human admin session only.
         'POST /api/auth/finish',
