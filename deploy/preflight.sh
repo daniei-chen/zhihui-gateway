@@ -208,14 +208,24 @@ fi
 # **这类失败的特征是：不影响线上，所以不会被任何面向用户的检查发现。**
 # 唯一的办法是主动去问「有没有谁失败了」。
 #
-# 只看 `zhihui-` 前缀的服务与定时器 —— 这台机器上还有别的应用，
-# 它们的失败不该阻断这个网关的发布。
+# ## 前缀为什么要写两个
+#
+# 第一版只查 `zhihui-*`，**而主服务叫 `workbuddy-web`** —— 不带那个前缀。
+# 也就是说**主服务失败时这一项不会报**，而那正是最该报的一个。
+#
+# 这台机器上的 unit 命名并不统一：网关主体叫 `workbuddy-web`，
+# 后加的定时任务统一用了 `zhihui-` 前缀。**两个都得查。**
+#
+# 不查 `wb-*`：那是 `onfailure` 告警的模板实例，正常状态下就有非活动实例，
+# 把它们算进来会产生与故障无关的噪音。
+#
+# 也不查别的应用（`kaogong-*` 等）—— 它们的失败不该阻断这个网关的发布。
 FAILED_SERVICES=''
 if command -v systemctl >/dev/null 2>&1; then
     FAILED_SERVICES=$(systemctl list-units --state=failed --no-legend --no-pager \
-                        'zhihui-*' 2>/dev/null \
+                        'zhihui-*' 'workbuddy-*' 2>/dev/null \
                       | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
-    printf '%-34s ' "关键定时服务无失败"
+    printf '%-34s ' "关键服务无失败"
     if [ -z "$FAILED_SERVICES" ]; then
         printf 'PASS  无失败单元\n'
         passed=$((passed + 1))
@@ -225,7 +235,7 @@ if command -v systemctl >/dev/null 2>&1; then
         failed=$((failed + 1))
     fi
 else
-    printf '%-34s SKIP  没有 systemctl\n' "关键定时服务无失败"
+    printf '%-34s SKIP  没有 systemctl\n' "关键服务无失败"
     skipped=$((skipped + 1))
 fi
 

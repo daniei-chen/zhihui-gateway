@@ -145,9 +145,22 @@ class ItChecksForFailedUnitsTests(unittest.TestCase):
     def test_it_lists_failed_units(self):
         self.assertIn('--state=failed', SCRIPT)
 
-    def test_it_only_covers_zhihui_units(self):
-        """这台机器上还有别的应用，它们的失败不该阻断这个网关的发布。"""
+    def test_it_covers_both_prefixes(self):
+        """第一版只查 `zhihui-*`，而主服务叫 `workbuddy-web` —— 不带那个前缀。
+
+        也就是说**主服务失败时这一项不会报**，而那正是最该报的一个。
+        这台机器上的命名并不统一，两个都得查。
+        """
         self.assertIn("'zhihui-*'", SCRIPT)
+        self.assertIn("'workbuddy-*'", SCRIPT)
+
+    def test_it_does_not_cover_other_apps(self):
+        """别的应用的失败不该阻断这个网关的发布。"""
+        self.assertNotIn("'kaogong-*'", SCRIPT)
+
+    def test_it_excludes_the_onfailure_template(self):
+        """`wb-*` 是告警模板实例，正常就有非活动实例，算进来是噪音。"""
+        self.assertIn('不查 `wb-*`', SCRIPT)
 
     def test_failure_is_reported(self):
         self.assertIn('处于 failed', SCRIPT)
