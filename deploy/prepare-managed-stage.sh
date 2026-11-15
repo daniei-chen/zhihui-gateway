@@ -37,6 +37,21 @@ key_mode=$(stat -c '%a' "$key")
 [ "$key_owner" = 0:0 ] || die "signing key must be root-owned"
 [ "$key_mode" = 600 ] || die "signing key must be mode 600"
 
+# 前端产物权限归一化。
+#
+# 2026-11-15：用 tar 解压前端包时把归档里的 777 一并保留下来，于是
+# web/out 下每个目录都成了 world-writable。主机侧验证器会走一遍路径及其
+# 全部父目录，拒绝任何 group/other 可写的路径 —— 而它只报一句
+# 「外部发布验证失败」，签名、摘要、文件清单逐一核对全都正常，
+# 看起来像验证器本身坏了，实际差的是权限位。
+#
+# 内容对不对和路径安不安全是两件事，第 45 行之后的签名只管前者。
+# 这里在签名之前把后者补齐，省得下次再从零查一遍。
+if [ -d "$root/web/out" ]; then
+  find "$root/web/out" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "$root/web/out" -type f -exec chmod 644 {} + 2>/dev/null || true
+fi
+
 "$python" -I -S -B -X pycache_prefix="$cache" \
   "$root/deploy/create-web-manifest.py" "$root/web/out" "$key"
 "$python" -I -S -B -X pycache_prefix="$cache" \
