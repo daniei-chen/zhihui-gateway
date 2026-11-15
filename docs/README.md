@@ -18,6 +18,7 @@
 
 | 文档 | 什么时候看 |
 | --- | --- |
+| [`BACKUP-RESTORE-STATUS-2026-11-15.md`](BACKUP-RESTORE-STATUS-2026-11-15.md) | **备份与恢复的现状** —— 三层结构、每份自校验、真实缺口是异地 |
 | [`ERROR-BUDGET-BASELINE-2026-11-15.md`](ERROR-BUDGET-BASELINE-2026-11-15.md) | **错误预算基线** —— 判断「这次是不是异常」之前先看它 |
 | [`TROUBLESHOOTING-2026-11.md`](TROUBLESHOOTING-2026-11.md) | **先看这个** |
 | [`OPS-PITFALLS.md`](OPS-PITFALLS.md) | **发布与运维里踩过的坑** —— 每条都是「我以为是 A，实际是 B」 |
