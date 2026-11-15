@@ -233,6 +233,42 @@ def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONRespo
     return resp
 
 
+def _upstream_retry_after(resp) -> int | None:
+    """读上游 `Retry-After` 并解析成整数秒；拿不到或不可信时返回 None。
+
+    ## 为什么需要
+
+    2026-11-15 顺着「限流没告诉客户端该等多久」这条线查下去，发现同一条链上
+    还有一环断着：**上游返回的等待时间到网关这里就被丢掉了**。
+
+    上游确实会给 —— 它把排队/限流对应的时长映射成 `Retry-After` 响应头下发。
+    但网关处理上游错误的那个分支里，**body 原样透传、响应头没有接**。
+    于是客户端只知道「出错了」，不知道「等多久」，退避库按默认值猜（常见 1 秒），
+    而真实等待可能是几十秒。
+
+    ## 只认秒数，且设上限
+
+    上游下发的就是整数秒。`Retry-After` 还允许 HTTP-date 形式，这里**不解析** ——
+    上游从不用那种形式，为它写一套日期解析只会多出一条没人验证的路径。
+
+    超过两小时按脏数据丢弃（与上游侧同一口径），避免把异常值当成让客户端等两小时。
+    **拿不到就不写字段**，而不是写 0 —— 一个假的等待时间比没有更糟。
+    """
+    try:
+        raw = resp.headers.get('retry-after')
+    except Exception:      # noqa: BLE001
+        return None
+    if not raw:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or value > 7200:
+        return None
+    return value
+
+
 # ── 上游「明确拒绝且未处理」的有界重试（2026-10-28）────────────────────────
 #
 # 现场（2026-10-28 取证）：上游把**内容拒绝**伪装成 `11102 模型不存在`，而且是
@@ -2753,9 +2789,24 @@ async def _chat(request: Request, upstream_path: str):
             )
             if resp.status_code < 400:
                 return converted
+            # 上游的等待时间此前在这里被丢掉：body 原样透传，响应头没人接。
+            # 现在把它转发出去 —— 头 + body 双写，理由见 `_oai_error_throttled`
+            # 的说明（头在反代链路上不稳，体字段客户端能可靠读到）。
+            wait = _upstream_retry_after(resp)
             if data is not None:
-                return JSONResponse(data, status_code=resp.status_code)
-            return JSONResponse({'error': {'message': resp.text[:1000], 'type': 'api_error'}}, status_code=resp.status_code)
+                if wait is not None and isinstance(data, dict):
+                    err = data.get('error')
+                    if isinstance(err, dict) and 'retry_after_seconds' not in err:
+                        err['retry_after_seconds'] = wait
+                out = JSONResponse(data, status_code=resp.status_code)
+            else:
+                body = {'error': {'message': resp.text[:1000], 'type': 'api_error'}}
+                if wait is not None:
+                    body['error']['retry_after_seconds'] = wait
+                out = JSONResponse(body, status_code=resp.status_code)
+            if wait is not None:
+                out.headers['Retry-After'] = str(wait)
+            return out
         except OutputLimitExceeded:
             _mark_output_limit_failure()
             message = 'Upstream output exceeds the configured byte limit'
