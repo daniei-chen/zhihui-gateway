@@ -75,6 +75,31 @@ class SkippedIsNotPassedTests(unittest.TestCase):
         self.assertIn('exit 1', window)
 
 
+class TheMemoryCheckIsHonestAboutItsLimitsTests(unittest.TestCase):
+    """这一项不判断泄漏 —— 泄漏要看趋势，而一次采样看不出趋势。
+
+    如果把它当成「泄漏检测」，它会给出一份**虚假的安全感**：
+    每次都是 PASS，而真正在缓慢上涨的东西没人在看。
+    """
+
+    def test_it_reads_resident_memory(self):
+        self.assertIn('VmRSS', SCRIPT)
+
+    def test_it_has_a_configurable_threshold(self):
+        self.assertIn('PREFLIGHT_MEM_LIMIT_KB', SCRIPT)
+
+    def test_it_says_it_does_not_detect_leaks(self):
+        self.assertIn('不判断泄漏', SCRIPT)
+        self.assertIn('虚假的安全感', SCRIPT)
+
+    def test_missing_pid_is_skip_not_fail(self):
+        """取不到进程是「没法检查」，不是「检查失败」。"""
+        idx = SCRIPT.find('取不到主进程')
+        self.assertGreater(idx, 0)
+        before = SCRIPT[max(0, idx - 200):idx]
+        self.assertIn('skipped=$((skipped + 1))', SCRIPT[idx:idx + 200])
+
+
 class ItIsReadOnlyTests(unittest.TestCase):
     """所有检查都必须只读 —— 发布前跑的东西不能改变被检查的对象。"""
 

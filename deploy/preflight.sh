@@ -118,6 +118,40 @@ else
     skipped=$((skipped + 1))
 fi
 
+# 四、进程内存。
+#
+# 这一项**不判断泄漏** —— 泄漏要看趋势，而一次采样看不出趋势。
+# 它只拦一种情况：内存已经大到不该再放行的程度。
+#
+# 写清楚这一点很重要：如果把它当成「泄漏检测」，它会给出一份**虚假的安全感** ——
+# 每次都是 PASS，而真正在缓慢上涨的东西没人在看。
+MEM_LIMIT_KB=${PREFLIGHT_MEM_LIMIT_KB:-1048576}   # 默认 1 GiB
+if [ -f "$TARGET/.version" ]; then
+    printf '%-34s ' "进程常驻内存"
+    main_pid=$(systemctl show workbuddy-web.service -p MainPID --value 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$main_pid" ] || [ "$main_pid" = "0" ]; then
+        printf 'SKIP  取不到主进程\n'
+        skipped=$((skipped + 1))
+    else
+        rss_kb=$(awk '/^VmRSS:/ {print $2}' "/proc/$main_pid/status" 2>/dev/null)
+        if [ -z "$rss_kb" ]; then
+            printf 'SKIP  读不到 /proc 状态\n'
+            skipped=$((skipped + 1))
+        elif [ "$rss_kb" -gt "$MEM_LIMIT_KB" ]; then
+            printf 'FAIL\n'
+            printf '    常驻 %s KB 超过阈值 %s KB\n' "$rss_kb" "$MEM_LIMIT_KB" | sed 's/^/    /'
+            failed=$((failed + 1))
+        else
+            printf 'PASS  %s MB（阈值 %s MB）\n' \
+                "$((rss_kb / 1024))" "$((MEM_LIMIT_KB / 1024))"
+            passed=$((passed + 1))
+        fi
+    fi
+else
+    printf '%-34s SKIP  目标不是发布目录\n' "进程常驻内存"
+    skipped=$((skipped + 1))
+fi
+
 echo ""
 echo "PREFLIGHT passed=$passed failed=$failed skipped=$skipped"
 
