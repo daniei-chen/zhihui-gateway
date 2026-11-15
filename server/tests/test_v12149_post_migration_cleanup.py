@@ -132,22 +132,41 @@ class TheReasonIsWrittenDownTests(unittest.TestCase):
 
 
 class ItVerifiesTheGateIsActuallyOpenTests(unittest.TestCase):
-    """删除文件不等于门禁解除。
+    """判据必须是文件本身，不能是 systemd 的状态缓存。
 
-    实测（2026-11-15）：marker 存在时 `systemctl start` **返回 0**，
-    而服务根本没起来 —— `ActiveState=inactive`、`ConditionResult=no`。
+    2026-11-15 实测两件事，都很反直觉：
 
-    **退出码是骗人的。** 只看退出码的自动化会认为一切正常。
-    `ConditionResult` 才是唯一可靠判据。
+    1. marker 存在时 `systemctl start` **返回 0**，而服务根本没起来
+       （`ActiveState=inactive`）。**退出码是骗人的。**
+    2. `ConditionResult` 是上一次启动尝试的缓存，**删掉 marker 后不刷新** ——
+       上一版拿它当判据，于是每次部署都误报「仍被挡住」。
+
+    第 2 条是上一版自己引入的缺陷，这一版把判据换成了文件存在性。
     """
 
-    def test_it_checks_condition_result(self):
-        self.assertIn('ConditionResult', SOURCE,
-                      '只删文件不验证条件状态 —— 门禁可能仍生效')
+    def test_it_checks_the_marker_file(self):
+        idx = SOURCE.find('看文件，不看 systemd 的状态缓存')
+        self.assertGreater(idx, 0, '没写清判据为什么是文件')
+        self.assertIn('[ -e "$STATE/$unit.start-blocked" ]', SOURCE,
+                      '没用文件存在性做判据')
+
+    def test_it_does_not_use_condition_result_as_a_verdict(self):
+        """`ConditionResult` 可以出现在注释里（解释它为什么不可靠），
+        但不能出现在**实际输出**里 —— 那正是上一版误报的来源。
+
+        第一版这条测试断言整个文件不含那几个字，结果被自己的注释绊倒了。
+        断言要落到「会真的打给用户看的那部分」上。
+        """
+        for line in SOURCE.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            self.assertNotIn('ConditionResult=', stripped,
+                             '还在用 ConditionResult 下结论：' + stripped)
+            self.assertNotIn('仍被条件挡住', stripped,
+                             '还在输出上一版的误报结论：' + stripped)
 
     def test_it_does_not_trust_the_start_exit_code(self):
-        """脚本里不该出现「start 成功就说明起来了」这种判断。"""
-        # start 只用于 timer（timer 没有 ConditionPathExists 门禁）
         for line in SOURCE.splitlines():
             stripped = line.strip()
             if stripped.startswith('#') or 'say' not in stripped:
@@ -155,9 +174,16 @@ class ItVerifiesTheGateIsActuallyOpenTests(unittest.TestCase):
             self.assertNotIn('systemctl start workbuddy-web', stripped,
                              '不该用 start 的退出码判断 helper 是否起来')
 
-    def test_both_units_are_reported(self):
+    def test_it_reports_both_units(self):
         self.assertIn('workbuddy-web-helper.service', SOURCE)
         self.assertIn('workbuddy-web.service', SOURCE)
+
+    def test_the_measurement_is_recorded(self):
+        """把实测写进注释 —— 否则后来人会"顺手"换回 ConditionResult。"""
+        idx = SOURCE.find('看文件，不看 systemd 的状态缓存')
+        window = SOURCE[idx:idx + 1600]
+        self.assertIn('返回 0', window, '没写出 start 退出码骗人这件事')
+        self.assertIn('不会自动刷新', window, '没写出 ConditionResult 是缓存')
 
 
 class TheTimerClaimIsAccurateTests(unittest.TestCase):

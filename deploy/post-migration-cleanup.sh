@@ -93,24 +93,27 @@ done
 # 不清缓存的话，marker 删了 unit 仍可能维持 skipped。
 systemctl daemon-reload 2>/dev/null || say "daemon-reload 失败（不阻断）"
 
-# 验证门禁真的解除了。
+# 验证门禁真的解除了：**看文件，不看 systemd 的状态缓存**。
 #
-# 这里不能看 `systemctl start` 的退出码 —— 实测过：marker 存在时
-# `start` **返回 0**，而服务根本没起来（ActiveState=inactive、
-# ConditionResult=no）。退出码是骗人的。
+# 2026-11-15 实测过两件事，都很反直觉：
 #
-# `ConditionResult` 才是唯一可靠判据：yes 表示条件已满足，
-# unit 下次真的能启动；no 表示仍被挡住。
+#   1. marker 存在时 `systemctl start` **返回 0**，而服务根本没起来
+#      （`ActiveState=inactive`）。**退出码是骗人的** —— 任何只看退出码的
+#      收尾脚本都会认为一切正常，而服务其实一直没启动。
+#
+#   2. `ConditionResult` 是**上一次启动尝试**的结果缓存，删掉 marker 之后
+#      **不会自动刷新**。上一版拿它当判据，于是刚清完文件就立即读，
+#      读到旧值 `no`，每次部署都误报「仍被条件挡住」。
+#
+# 所以判据只能是文件本身：marker 不在了，门禁就没了。
+# 至于 unit 实际能不能起，那是真的调用 `start` 之后看 `ActiveState` 的事，
+# **不该由收尾脚本替它下结论** —— 下错结论比不下更糟。
 for unit in workbuddy-web-helper.service workbuddy-web.service; do
-    if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
-        continue
+    if [ -e "$STATE/$unit.start-blocked" ]; then
+        say "$unit 门禁仍在（marker 未清除），需人工确认"
+    else
+        say "$unit 门禁已移除（marker 不存在）"
     fi
-    cond=$(systemctl show "$unit" -p ConditionResult --value 2>/dev/null)
-    case "$cond" in
-        yes) say "$unit 门禁已解除（ConditionResult=yes）" ;;
-        no)  say "$unit 仍被条件挡住（ConditionResult=no），需人工确认" ;;
-        *)   say "$unit ConditionResult=${cond:-未知}" ;;
-    esac
 done
 
 # ── 3. 恢复每日预算对账 timer ────────────────────────────────────────
