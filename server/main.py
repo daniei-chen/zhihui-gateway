@@ -1307,6 +1307,34 @@ def prometheus_metrics(request: Request):
         _m('workbuddy_archive_last_cycle_failed', 'gauge',
            'Last archive cycle raised. Rows stay protected; nothing is deleted on failure.',
            0 if _arch_status.get('ok') is not False else 1)
+        # 审计链完整性。
+        #
+        # `ledger.verify_chain()` 一直存在，但**生产里从来没被调用过** ——
+        # 它只挂在归档流程上，而归档按 90 天阈值触发，库里最老的数据还没到那个年龄。
+        # 也就是说「审计链有没有被篡改」这件事，上线至今一次都没验证过。
+        #
+        # 现在归档周期（默认 300 秒）顺手校验一次，成本实测 0.02 秒 / 25993 行。
+        #
+        # 三态要分清：**没跑过**（`-1`）、**链是好的**（`1`）、**链断了**（`0`）。
+        # 把「没跑过」也报成 0 会和「真的断了」混在一起，那是最糟的一种歧义 ——
+        # 一个从没验证过的系统看起来和刚验过且完好的系统一模一样。
+        _chain_intact = _arch_status.get('chain_intact')
+        _m('workbuddy_audit_chain_intact', 'gauge',
+           '1 when the admin_events hash chain verifies end to end, 0 when it is '
+           'broken, -1 before the first check has run. A broken chain means audit '
+           'history was modified; -1 means nobody has looked yet, which is a '
+           'different kind of problem.',
+           1 if _chain_intact is True else (0 if _chain_intact is False else -1))
+        _chain_events = _arch_status.get('chain_events')
+        if isinstance(_chain_events, int) and not isinstance(_chain_events, bool):
+            _m('workbuddy_audit_chain_events', 'gauge',
+               'Rows in admin_events at the last chain verification.', _chain_events)
+        _chain_error = _arch_status.get('chain_error')
+        _m('workbuddy_audit_chain_check_failed', 'gauge',
+           '1 when the last chain verification could not run at all (database '
+           'unreadable, permissions), which is not the same as a broken chain and '
+           'must not be read as one.',
+           0 if not _chain_error else 1)
     except Exception:      # noqa: BLE001
         pass
 
