@@ -118,25 +118,30 @@ while IFS= read -r line; do
 
     # 第二关：形状。不依赖期望值。
     #
-    # 两次都栽在「标记太宽」上：
+    # 这一关三次都和「自指」撞上，每次都是同一个形状：**被检查的东西里装着被检查的标记**。
     #
-    # 第一版把「未找到」这个短语也列了进来 —— 它在文档、注释、断言里都是普通
-    # 词汇，于是两个正常文件被判成污染。**校验误伤的代价和漏判一样高**：
-    # 它会让人开始手动绕过校验，而绕过一次之后这个校验就没用了。
+    # 1. 标记用了「文件不存在」这种普通词 —— 注释和断言里一写就命中。
+    # 2. 去掉了普通词，但**这段注释本身写着那三个标记名**，脚本检查自己必然命中。
+    # 3. 改成结构化匹配之后，**一份文档引用了错误响应的原文**来描述这个坑 —— 又命中。
     #
-    # 第二版去掉了那个短语，却仍然误伤同样的两个文件 —— 因为**这段注释本身
-    # 就写着那三个标记名**，而脚本检查自己时必然命中自己的规则。
+    # 前两次的解法是收紧标记。第三次不能那样解：**文档必须能引用错误形态，
+    # 否则它根本说不清发生过什么。** 所以这里按文件类型分流。
     #
-    # 所以现在匹配的是**带结构的完整形态**（JSON 键名 + 冒号 + 值），
-    # 而那三个词以裸词形式出现在注释或断言里不会命中。
-    if grep -qiE '"message":[[:space:]]*"API rate limit|"documentation_url":"https://docs\.github\.com' "$OUT/$rel"; then
-        echo "  POLLUTED     $rel  （内容是 HTTP 错误响应，不是文件）"
-        fail=$((fail + 1)); continue
-    fi
-    if grep -qE '^Bad credentials$' "$OUT/$rel"; then
-        echo "  POLLUTED     $rel  （内容是鉴权失败响应，不是文件）"
-        fail=$((fail + 1)); continue
-    fi
+    # 只看代码与配置：它们里面不该出现错误响应原文。
+    # 文档（.md）跳过这一关，仍受存在性与哈希约束。
+    case "$rel" in
+        *.md) ;;
+        *)
+            if grep -qiE '"message":[[:space:]]*"API rate limit|"documentation_url":"https://docs\.github\.com' "$OUT/$rel"; then
+                echo "  POLLUTED     $rel  （内容是 HTTP 错误响应，不是文件）"
+                fail=$((fail + 1)); continue
+            fi
+            if grep -qE '^Bad credentials$' "$OUT/$rel"; then
+                echo "  POLLUTED     $rel  （内容是鉴权失败响应，不是文件）"
+                fail=$((fail + 1)); continue
+            fi
+            ;;
+    esac
     case "$rel" in
         *.json) grep -q '^{' "$OUT/$rel" || {
             echo "  NOT-JSON     $rel"; fail=$((fail + 1)); continue; };;

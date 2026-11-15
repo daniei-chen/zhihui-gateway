@@ -70,6 +70,19 @@ class ItChecksThreeLayersTests(unittest.TestCase):
         self.assertIn('"documentation_url":"https://docs', SCRIPT)
         self.assertIn("^Bad credentials$", SCRIPT)
 
+    def test_markdown_is_exempt_from_shape_check(self):
+        """文档必须能引用错误响应原文来描述这个坑 —— 否则它说不清发生过什么。
+
+        这是第三次自指：前两次靠收紧标记解决，这一次不能那样解。
+        """
+        idx = SCRIPT.find('*.md) ;;')
+        self.assertGreater(idx, 0, '.md 没有被豁免')
+
+    def test_code_and_config_still_checked(self):
+        idx = SCRIPT.find('POLLUTED')
+        before = SCRIPT[max(0, idx - 600):idx]
+        self.assertIn('*)', before, '没有对非文档文件保留检查')
+
     def test_the_pattern_has_structure_not_bare_words(self):
         """裸词会命中注释。这里断言模式里带引号或锚点。"""
         line = [l for l in SCRIPT.splitlines() if 'grep -qiE' in l or 'grep -qE' in l]
