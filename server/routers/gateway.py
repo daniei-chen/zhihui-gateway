@@ -198,6 +198,41 @@ def _oai_error_with_blip_body(message: str, status: int = 502, exc=None,
     return resp
 
 
+def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONResponse:
+    """429 限流：明确告诉客户端要等多久。
+
+    ## 为什么需要
+
+    2026-11-15 查一个用户的实际调用记录：两天里对同一个**上游并不存在**的模型
+    试了 55 次、全部失败。原因是状态码让他（或他的客户端）以为「稍后重试可能成功」。
+
+    同样的形状也出现在**限流**上：`429` 不带 `Retry-After` 时，客户端的退避库
+    只能自己猜 —— 常见默认是立刻重试或固定 1 秒，而窗口是 60 秒。
+    **于是它在窗口内反复撞，越撞越远。**
+
+    ## 等待时间是算出来的，不是拍的
+
+    - 频率超限：等整个窗口（`RATE_WINDOW` 秒）过去，这是能算出上界的
+    - 并发超限：等当前在跑的请求让出名额，通常很快，给 1 秒
+
+    ## 为什么头和体都写
+
+    响应头路径在 nginx 反代链路上透传不稳（同 `_oai_error_with_blip_body` 的
+    既有结论），而错误体字段任何 OpenAI 兼容客户端都能原样读到。
+    **两个都写，谁通就用谁** —— 只写一个的话，另一条路径上的人什么都拿不到。
+    """
+    suffix = ' 请等 %d 秒后重试' % retry_after
+    body = {'error': {
+        'message': message + suffix,
+        'type': 'rate_limit_error',
+        'code': code,
+        'retry_after_seconds': retry_after,
+    }}
+    resp = JSONResponse(body, status_code=429)
+    resp.headers['Retry-After'] = str(retry_after)
+    return resp
+
+
 # ── 上游「明确拒绝且未处理」的有界重试（2026-10-28）────────────────────────
 #
 # 现场（2026-10-28 取证）：上游把**内容拒绝**伪装成 `11102 模型不存在`，而且是
@@ -1122,16 +1157,19 @@ def _authorize_key(request: Request, key: dict, ip: str, model: str | None,
     metadata_count = (request.scope.get('method') == 'POST'
                       and request.scope.get('path', '') == '/v1/messages/count_tokens')
     if not is_model_list and not metadata_count and not observability.admit_key(key):
+        # 并发名额满：等当前在跑的请求让出，通常很快，给 1 秒。
         observability.mark_error('key_concurrency_exceeded')
         _record(key,ip,model or '',mapped or '',429,0,0,0,ua,'密钥并发容量已满',False)
-        return None,ip,_oai_error('密钥并发容量已满，请等待当前请求结束',429,'rate_limit_error','key_concurrency_exceeded')
+        return None,ip,_oai_error_throttled('密钥并发容量已满，请等待当前请求结束',
+                                            'key_concurrency_exceeded', 1)
     limited, count = _rate_limited(key)
     if limited:
         msg = f'请求过于频繁（{RATE_WINDOW}s 内超过 {RATE_MAX_PER_MIN} 次）'
         observability.mark_error('rate_limit_exceeded')
         _record(key, ip, model or '', mapped or '', 429, 0, 0, 0, ua, msg, False)
         _log_ip(ip, path, True, ua, 'rate_limited')
-        return None, ip, _oai_error(msg, 429, 'rate_limit_error', 'rate_limit_exceeded')
+        # 频率超限：客户端得等整个窗口过去，这个上界是算得出来的。
+        return None, ip, _oai_error_throttled(msg, 'rate_limit_exceeded', RATE_WINDOW)
 
     _log_ip(ip, path, False, ua)
     return key, ip, None
