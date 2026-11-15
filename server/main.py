@@ -181,6 +181,42 @@ async def lifespan(app: FastAPI):
         app.state.rt = _qtg_rt
         if _qtg_rt is not None:
             logger.info('qoder/trae control plane merged in (qtgcore started)')
+
+        # 身份签名密钥的启动自检。
+        #
+        # ## 为什么需要
+        #
+        # 2026-11-15：管理员密码正确、登录接口返回 200，然后 nginx 的鉴权子请求
+        # 读不到密钥返回 503，于是**登录成功也进不去面板**，三小时 19 次。
+        #
+        # 根因是那条路径的来源被换成了一个**部署里从未设置过的配置项**。
+        # 这件事从代码上看完全正常，从测试上看也全绿 ——
+        # **它只在真实登录时以「进不去」的形式暴露。**
+        #
+        # 现在路径解析已经有兜底（配置为空时回落默认位置），所以默认情况下
+        # 不会再把这条链路弄断。但**兜底也读不到**的情形仍然存在（文件没部署、
+        # 权限被改），而那种情况下依然是同一句「登录进不去」。
+        #
+        # 所以启动时读一次，把结论写进启动日志：
+        # 正常情况下只有一行 INFO，异常时是一行 WARNING 并点名后果。
+        #
+        # 只记日志、不阻断启动：密钥读不到时面板仍可浏览，只是登录流程走不完，
+        # 而把它变成启动失败会让一次配置错误升级成一次宕机。
+        try:
+            from . import edgeidentity as _edge
+            _secret_path = _edge.identity_secret_path()
+            if _edge._secret():
+                logger.info('identity signing key ready (%s)', _secret_path)
+            else:
+                logger.warning(
+                    'identity signing key UNREADABLE at %s — admin login will succeed '
+                    'but the shell cannot pass nginx auth_request (503). '
+                    'Check the file exists, is a regular file, mode 0600, '
+                    'size <= 4096, and contains no whitespace.',
+                    _secret_path)
+        except Exception:      # noqa: BLE001
+            logger.warning('identity signing key check failed', exc_info=True)
+
         # D-008 修复（2026-10-27 审计 S1）：qtg 合并时**漏了这一步接线**。
         # `checkin_scheduler.start()` 的 docstring 明确写着「在 lifespan 里调用」，
         # 但全仓没有任何调用方，于是 qoder/trae 的每日随机签到静默停摆：
