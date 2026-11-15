@@ -1,0 +1,125 @@
+"""v1.2.170：把发布组装固化成仓库里的脚本。
+
+## 为什么
+
+2026-11-15 一天里手写了**五个**临时构建脚本，每个都在 `/tmp`，每个都少了点东西 ——
+其中一个把 HTTP 403 的响应体当成文件内容写进了产物。
+
+**临时脚本不会积累防护。** 上一次踩过的坑，下一个临时脚本照样踩。
+
+## 三道校验，强弱不同
+
+| 关卡 | 检查 | 弱点 |
+| --- | --- | --- |
+| 存在 | 文件非空 | **最弱** —— 先复制了上一版，文件永远非空 |
+| 形状 | JSON 以 `{` 开头、不含 HTTP 错误标记 | **不依赖期望值** |
+| 哈希 | 与清单逐条比对 | 期望值本身可能填错 |
+
+**第二关的价值在于它不看我的期望值。** 期望值是人填的，人是会抄错的；
+「这个 JSON 文件里写着 rate limit exceeded」是不需要参照就能判断的荒唐。
+
+## 本测试守什么
+
+脚本无法在 Windows 上执行（没有 bash），所以这里钉结构：
+**三道校验必须都在**、**形状校验不能被挪到哈希之后**（那等于没用）、
+**失败必须中止而不是继续组装**。
+"""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / 'deploy' / 'build-release.sh'
+SCRIPT = SCRIPT_PATH.read_text(encoding='utf-8')
+
+
+class ItExistsAndIsSafeTests(unittest.TestCase):
+    def test_script_exists(self):
+        self.assertTrue(SCRIPT_PATH.is_file())
+
+    def test_strict_mode(self):
+        self.assertIn('set -uo pipefail', SCRIPT)
+
+    def test_refuses_existing_target(self):
+        """覆盖一个已存在的发布目录是事故，不是便利。"""
+        self.assertIn('REFUSE: 目标已存在', SCRIPT)
+
+    def test_requires_previous_release(self):
+        self.assertIn('上一版目录不存在', SCRIPT)
+
+    def test_explains_why_previous_release_matters(self):
+        """前端产物无法在主机重建，必须继承。"""
+        self.assertIn('web/out', SCRIPT)
+        self.assertIn('无法在主机重建', SCRIPT)
+
+
+class ItChecksThreeLayersTests(unittest.TestCase):
+    def test_layer_one_non_empty(self):
+        self.assertIn('[ ! -s "$OUT/$rel" ]', SCRIPT)
+
+    def test_layer_two_shape(self):
+        self.assertIn('POLLUTED', SCRIPT)
+
+    def test_layer_two_catches_http_errors(self):
+        for marker in ('rate limit exceeded', 'documentation_url', 'Bad credentials'):
+            self.assertIn(marker, SCRIPT, '漏了错误标记：' + marker)
+
+    def test_layer_two_checks_json_opens_with_brace(self):
+        self.assertIn("grep -q '^{'", SCRIPT)
+
+    def test_layer_three_hash(self):
+        self.assertIn('HASH-MISMATCH', SCRIPT)
+
+    def test_shape_runs_before_hash(self):
+        """顺序反了就失去意义：哈希先报错，形状检查永远走不到。"""
+        shape = SCRIPT.find('POLLUTED')
+        hashed = SCRIPT.find('HASH-MISMATCH')
+        self.assertGreater(shape, 0)
+        self.assertGreater(hashed, 0)
+        self.assertLess(shape, hashed, '形状校验必须在哈希之前')
+
+    def test_it_says_shape_does_not_depend_on_expectations(self):
+        """这是加这一关的全部理由，必须写在代码里。"""
+        self.assertIn('不依赖任何人填的期望值', SCRIPT)
+
+
+class ItAbortsInsteadOfContinuingTests(unittest.TestCase):
+    def test_abort_on_failure(self):
+        self.assertIn('不组装', SCRIPT)
+
+    def test_it_removes_the_partial_output(self):
+        """半成品留在磁盘上，下次可能被误用。"""
+        idx = SCRIPT.find('ABORT')
+        window = SCRIPT[idx:idx + 200]
+        self.assertIn('rm -rf "$OUT"', window)
+
+    def test_empty_manifest_is_an_error(self):
+        self.assertIn('清单里没有条目', SCRIPT)
+
+
+class ItAvoidsTheApiQuotaTrapTests(unittest.TestCase):
+    def test_uses_partial_clone(self):
+        self.assertIn('--filter=blob:none', SCRIPT)
+
+    def test_explains_why_not_the_api(self):
+        self.assertIn('API', SCRIPT)
+        self.assertIn('额度', SCRIPT)
+
+    def test_verifies_the_commit_actually_matches(self):
+        """克隆到别的 commit 却继续组装，会得到一版内容不对的发布。"""
+        self.assertIn('HEAD_SHA', SCRIPT)
+        self.assertIn('仍然对不上', SCRIPT)
+
+
+class ItRestoresPermissionsTests(unittest.TestCase):
+    def test_executable_bits_are_restored(self):
+        """`cp` 会丢掉可执行位，入口脚本变成不可执行就起不来。"""
+        self.assertIn('chmod 755', SCRIPT)
+        self.assertIn('backup_application.py', SCRIPT)
+
+    def test_changelog_copy(self):
+        self.assertIn('server/CHANGELOG.md', SCRIPT)
+
+
+if __name__ == '__main__':
+    unittest.main()
