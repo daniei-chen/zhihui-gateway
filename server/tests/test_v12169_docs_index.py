@@ -28,7 +28,9 @@ TEXT = INDEX.read_text(encoding='utf-8')
 
 def _linked_targets() -> list[str]:
     """索引里所有 `[label](file.md)` 形式的相对链接。"""
-    return re.findall(r'\]\(([A-Za-z0-9._-]+\.md)\)', TEXT)
+    return re.findall(r'\]\(([^)\n]+\.md)\)', TEXT)
+        # 字符集不能只写 ASCII：索引里有一份文档的文件名是中文的，
+        # 旧字符集把它整条排除在覆盖检查之外 —— 而那条检查当时是绿的。
 
 
 class EveryLinkPointsAtARealFileTests(unittest.TestCase):

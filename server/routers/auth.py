@@ -82,11 +82,27 @@ def _complete_login(request: Request, ip: str, username: str, password: str) -> 
         security.dummy_verify(password)
     if not user or not security.verify_pwd(password, user.get('pwd_hash', '')):
         # 同时记 IP 与用户名：前者防单机爆破，后者防换 IP 打同一账号
-        security.record_fail(ip, username)
+        fails = security.record_fail(ip, username)
         # 登录失败也要留痕：本次事故中攻击者拿到了会话，但服务端没有任何记录
         security.audit({'username': label or '(空)'}, 'login_failed', label,
                        f'来源 {ip}', ip=ip)
-        raise HTTPException(status_code=401, detail='用户名或密码错误')
+        # 快到锁定时才说「还剩几次」。
+        #
+        # 2026-11-15：有用户输错几次后来问「密码是不是换了」—— 因为每次都是
+        # 同一句「用户名或密码错误」，他不知道已经接近锁定。
+        #
+        # **只在剩余一两次时提示**：全程报进度等于把「还能试几次」直接送给爆破方，
+        # 而临近锁定这条信息对正常用户最有用、对攻击者最没用（他马上就进不去了）。
+        #
+        # 对返回值做类型检查而不是直接用：这个函数在测试里会被替换成只记调用的桩，
+        # 而登录失败这条路径**不能因为一个附加提示的取值失败就整条崩掉** ——
+        # 那样连「用户名或密码错误」都不会返回，用户看到的是 500。
+        detail = '用户名或密码错误'
+        if isinstance(fails, int) and not isinstance(fails, bool):
+            remaining = max(security.MAX_FAILS - fails, 0)
+            if 0 < remaining <= 2:
+                detail = f'用户名或密码错误，再错 {remaining} 次将暂时锁定'
+        raise HTTPException(status_code=401, detail=detail)
 
     # Password verification is intentionally outside the user-store lock. Bind
     # signing to that exact snapshot so a concurrent reset cannot mint a fresh
