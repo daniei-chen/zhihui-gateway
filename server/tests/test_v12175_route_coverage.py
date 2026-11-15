@@ -119,5 +119,26 @@ class ItRecordsWhyTheNaiveApproachFailsTests(unittest.TestCase):
         self.assertIn('生产环境不该暴露', SCRIPT)
 
 
+class ItCatchesTemplateLiteralsTests(unittest.TestCase):
+    """第一版只抓了带引号的字面量，于是报告「全部覆盖」——而它漏掉了模板字符串。
+
+    那种漏报比「没检查」更危险：**它给出一个绿色的结论。**
+
+    发现路径是反向的：查「后端有、前端未调用」的危险操作时，
+    那三个（清冷却、重置用量、撤销红包）明明在前端用着，只是写法不同。
+    """
+
+    def test_it_scans_template_literals(self):
+        self.assertIn('`/api/[a-z0-9/_{}$.-]+`', SCRIPT)
+
+    def test_it_normalises_interpolation(self):
+        """`${id}` 要归一化成 `{}`，才能与后端的路径参数形式比对。"""
+        self.assertIn("s/\${[^}]*}/{}/g", SCRIPT)
+
+    def test_both_patterns_are_used(self):
+        self.assertIn('"/api/[a-z0-9/_-]+"', SCRIPT)
+        self.assertIn('fe_raw.txt', SCRIPT)
+
+
 if __name__ == '__main__':
     unittest.main()

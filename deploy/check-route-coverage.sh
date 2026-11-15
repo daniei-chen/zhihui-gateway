@@ -51,8 +51,22 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 # ── 前端调用的路径 ───────────────────────────────────────────────
+#
+# 两种写法都要抓：
+#
+#   1. 带引号的字面量："/api/accounts"
+#   2. **模板字符串**：`/api/keys/${e}/reset-usage`
+#
+# 第二版之前只抓了第一种，于是报告「89 个全部覆盖」—— **而它漏掉了所有
+# 用模板字符串拼出来的路径**。后来在一个反向查询里发现三个危险操作
+# （清冷却、重置用量、撤销红包）在前端是调用着的，只是写法不同。
+#
+# 那种漏报比「没检查」更危险：**它给出一个绿色的结论。**
 grep -rhoE '"/api/[a-z0-9/_-]+"' "$FRONTEND"/_next/static/chunks/*.js 2>/dev/null \
-    | tr -d '"' | sort -u > "$WORK/fe.txt"
+    | tr -d '"' >> "$WORK/fe_raw.txt"
+grep -rhoE '`/api/[a-z0-9/_{}$.-]+`' "$FRONTEND"/_next/static/chunks/*.js 2>/dev/null \
+    | tr -d '`' | sed 's/\${[^}]*}/{}/g' >> "$WORK/fe_raw.txt"
+sort -u "$WORK/fe_raw.txt" > "$WORK/fe.txt"
 
 if [ ! -s "$WORK/fe.txt" ]; then
     echo "FAIL: 在前端产物里一个 API 路径都没找到（产物目录对吗？）" >&2
