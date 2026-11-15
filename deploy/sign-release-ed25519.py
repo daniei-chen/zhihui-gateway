@@ -192,6 +192,28 @@ def rebuild_json_manifest(root: Path, manifest: Path, *, add=(), write: bool = T
             print('version: %r -> %r' % (release.get('version'), actual_version))
             release['version'] = actual_version
 
+    # `release_id` 必须与发布目录名一致，**不能只改 `version`**。
+    #
+    # ## 为什么
+    #
+    # 启动门禁（`writer-guard/state_guard.py` 的 `inspect_release`）同时要求：
+    #
+    #     manifest['version']    == root.name
+    #     manifest['release_id'] == root.name      ← 这一条
+    #
+    # 而这里此前只同步 `version`。于是 `--rebuild` 之后清单里 `version` 是新的、
+    # `release_id` 还是旧的，门禁判为 `verified release identity mismatch`，
+    # 服务直接 `WRITER-LAUNCH-BLOCKED` 起不来。
+    #
+    # 2026-11-16 实测：把 v1.2.198 复制成 v1.3.2 后重签，清单里
+    # `version=v1.3.2` 而 `release_id=v1.2.198`，重启后网关 15 分钟不可用。
+    #
+    # 顺带修掉注释里提到的那个备份问题：`backup_application.py` 优先读
+    # `release_id`，只同步 `version` 时它仍会记错版本。
+    if release.get('release_id') != root.name:
+        print('release_id: %r -> %r' % (release.get('release_id'), root.name))
+        release['release_id'] = root.name
+
     if write:
         manifest.write_text(json.dumps(release, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                             encoding='utf-8')
