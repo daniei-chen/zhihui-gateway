@@ -121,5 +121,28 @@ class ItRestoresPermissionsTests(unittest.TestCase):
         self.assertIn('server/CHANGELOG.md', SCRIPT)
 
 
+class ItLeavesTheDirectoryBeforeDeletingItTests(unittest.TestCase):
+    """第一次真的跑这个脚本时挂在这里，而错误信息看起来像网络问题。
+
+    `rm -rf` 执行时 bash 的当前目录正在被删的目录里，删完 cwd 就是个不存在的
+    inode —— 之后任何命令都报 "Unable to read current working directory"，
+    连 `git clone` 都起不来。
+    """
+
+    def test_cd_before_rm(self):
+        """匹配带缩进的实际代码行 —— 注释里也提到过这条命令，按裸字符串找会命中注释。"""
+        marker = '\n    rm -rf "$CACHE/repo"\n'
+        idx = SCRIPT.find(marker)
+        self.assertGreater(idx, 0, '没找到删缓存目录的实际代码行')
+        before = SCRIPT[max(0, idx - 400):idx]
+        self.assertIn('cd / || exit 1', before, '删目录前没有先离开，cwd 会变成悬空的')
+
+    def test_it_explains_the_symptom(self):
+        self.assertIn('Unable to read current working directory', SCRIPT)
+
+    def test_cd_has_a_failure_guard(self):
+        self.assertIn('cd / || exit 1', SCRIPT)
+
+
 if __name__ == '__main__':
     unittest.main()

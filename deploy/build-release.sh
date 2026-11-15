@@ -80,6 +80,13 @@ cd "$CACHE/repo" || { echo "FAIL: 进不了缓存仓库" >&2; exit 1; }
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo '')
 if [ "$HEAD_SHA" != "$COMMIT" ]; then
     echo "[build] 缓存仓库在 $HEAD_SHA，需要 $COMMIT —— 重新克隆"
+    # 必须先离开待删目录再删。
+    #
+    # 第一次跑这个脚本时就是这么挂的：`rm -rf "$CACHE/repo"` 执行时，bash 的
+    # 当前目录正位于该目录内部，删完之后 cwd 变成一个不存在的 inode ——
+    # 之后**任何**命令都报 "Unable to read current working directory"，
+    # 连 `git clone` 都起不来，而错误信息看起来像是网络问题。
+    cd / || exit 1
     rm -rf "$CACHE/repo"
     git clone --no-checkout --filter=blob:none --depth 1 \
         --branch "$BRANCH" "$REPO_URL" "$CACHE/repo" || {
