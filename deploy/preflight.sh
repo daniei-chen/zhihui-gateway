@@ -65,12 +65,20 @@ echo "发布前检查: $TARGET"
 echo ""
 
 # 一、发布目录自身的完整性。
-#     verify-staged-files.sh 需要一份哈希清单；没有清单时它退 2，这里记为跳过而不是失败。
+#
+#     清单从发布目录里读，**不再依赖某个固定路径的临时文件**。
+#     早先那一版读 `/tmp/preflight-manifest.txt` —— 那个文件在重启后就不存在，
+#     于是这一项实际上是长期跳过。**长期跳过的检查等于没有检查**，
+#     而且它让「三项都在跑」看起来成立。
+MANIFEST="$TARGET/PREFLIGHT-MANIFEST.txt"
+if [ ! -f "$MANIFEST" ]; then
+    MANIFEST=/tmp/preflight-manifest.txt
+fi
 if [ -f "$DEPLOY/verify-staged-files.sh" ] && [ -x "$DEPLOY/verify-staged-files.sh" ]; then
-    if [ -f /tmp/preflight-manifest.txt ]; then
-        run_check "文件哈希与清单一致" "$DEPLOY/verify-staged-files.sh" "$TARGET" /tmp/preflight-manifest.txt
+    if [ -f "$MANIFEST" ]; then
+        run_check "文件哈希与清单一致" "$DEPLOY/verify-staged-files.sh" "$TARGET" "$MANIFEST"
     else
-        printf '%-34s SKIP  没有清单（/tmp/preflight-manifest.txt）\n' "文件哈希与清单一致"
+        printf '%-34s SKIP  发布目录里没有清单\n' "文件哈希与清单一致"
         skipped=$((skipped + 1))
     fi
 else

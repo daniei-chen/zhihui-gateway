@@ -41,6 +41,17 @@ class ItRunsTheThreeChecksTests(unittest.TestCase):
         self.assertIn("grep -oE 'v[0-9.]+' | head -1", SCRIPT)
 
 
+class ItFindsTheManifestItselfTests(unittest.TestCase):
+    """不再依赖某个固定路径的临时文件。"""
+
+    def test_reads_from_the_release(self):
+        self.assertIn('PREFLIGHT-MANIFEST.txt', SCRIPT)
+
+    def test_keeps_a_fallback(self):
+        """旧布局的发布目录没有这个文件，仍要能用。"""
+        self.assertIn('/tmp/preflight-manifest.txt', SCRIPT)
+
+
 class SkippedIsNotPassedTests(unittest.TestCase):
     """最容易写错的一条。"""
 

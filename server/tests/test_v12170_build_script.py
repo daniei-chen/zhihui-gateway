@@ -285,5 +285,20 @@ class CloneHasATimeoutTests(unittest.TestCase):
         self.assertIn('回退会被执行到', SCRIPT)
 
 
+class ItLeavesTheManifestBehindTests(unittest.TestCase):
+    """清单要跟着发布走。
+
+    否则发布前检查里「文件哈希与清单一致」那一项**永远在读一个固定路径的临时文件** ——
+    那个文件在重启后就不存在，于是那一项实际上是**长期跳过**。
+    **长期跳过的检查等于没有检查**，而且它让「三项都在跑」看起来成立。
+    """
+
+    def test_manifest_is_copied_into_the_release(self):
+        self.assertIn('PREFLIGHT-MANIFEST.txt', SCRIPT)
+
+    def test_it_says_why(self):
+        self.assertIn('长期跳过', SCRIPT)
+
+
 if __name__ == '__main__':
     unittest.main()

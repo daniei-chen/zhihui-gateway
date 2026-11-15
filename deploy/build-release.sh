@@ -245,6 +245,14 @@ cp "$DST/CHANGELOG.md" "$DST/server/CHANGELOG.md" 2>/dev/null
 chmod 644 "$DST/server/CHANGELOG.md" 2>/dev/null
 printf '%s\n' "$VERSION" > "$DST/.version"
 chmod 644 "$DST/.version"
+# 把清单留在发布目录里。
+#
+# 不这样做的话，发布前检查里「文件哈希与清单一致」那一项**永远在读一个固定路径的临时文件** ——
+# 而那个文件在下次重启后就不存在了，于是那一项实际上是**长期跳过**。
+#
+# 一个长期跳过的检查，和没有这个检查是一样的；更糟的是它让「三项都跑」看起来成立。
+cp "$MANIFEST" "$DST/PREFLIGHT-MANIFEST.txt" 2>/dev/null
+chmod 644 "$DST/PREFLIGHT-MANIFEST.txt" 2>/dev/null
 chown -R 0:0 "$DST/web/out" 2>/dev/null || true
 chmod -R 755 "$DST/web/out" 2>/dev/null || true
 
