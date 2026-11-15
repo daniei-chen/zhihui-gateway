@@ -255,6 +255,19 @@ def main():
                     archive.add(path,arcname=family+'/'+relative.as_posix())
             for relative,raw,mode in managed:
                 add_release_bytes(archive,'manager/'+relative,raw,mode)
+            # 恢复点里必须能分清两个「版本」。
+            #
+            # `manager/.version` 打包的是**安装根**的那一份（`/opt/workbuddy-manager/.version`），
+            # 它记录的是安装根自己什么时候被铺开过，**不等于正在服务的发布版本**。
+            # 2026-11-15 实测：安装根那份是 `v1.2.2+audit.20261112.1`，
+            # 而 `releases/current` 是 `v1.2.143` —— 恢复时若只看前者会误判。
+            #
+            # 两者都不是坏数据，混在一起才是问题。这里把发布版本单独落一份，
+            # 名字直接说清它是发布版本。
+            release_version=MANAGER/'releases'/'current'/'.version'
+            if release_version.is_file() and not release_version.is_symlink():
+                add_bytes(archive,'manager/release-version.txt',
+                          release_version.read_bytes(),uid=0,gid=0)
             add_bytes(archive,'snapshot.json',json.dumps({'ts':int(time.time()),'request_rows':count,'database_quick_check':'ok','auth_consistency':'per-file stable reads'}).encode())
             for path in (Path('/etc/nginx/sites-available/zhihui.kaogong.art'),Path('/etc/nginx/conf.d/workbuddy-audit.conf')):
                 if path.is_file() and not path.is_symlink():
