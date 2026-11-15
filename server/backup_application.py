@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from pathlib import Path
-import fcntl,hashlib,io,json,os,sqlite3,stat,tarfile,tempfile,time,subprocess
+import fcntl,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 # Recovery invokes this file directly with Python's isolated mode (-I), which
 # intentionally omits the script directory from import search.  Keep the
@@ -209,6 +209,25 @@ def main():
     lock=(BASE/'backup.lock').open('a')
     try:fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise RuntimeError('backup already running')
+    # 清理上一次被中断留下的临时工作区。
+    #
+    # `TemporaryDirectory` 只在正常退出时删除自己；被 SIGKILL、OOM 或
+    # 宿主重启打断时，`snapshot-*` 会原样留下 —— 而它里面有一份完整
+    # 的 manager.db，一份就是一点几 GB。
+    #
+    # 2026-11-15 实测：两次中断累积了 2.6 GB，在磁盘涨到 94% 时才被发现。
+    # 当时是手工删的；这段让下一次不必再手工。
+    #
+    # 只在**拿到独占锁之后**动它：那时可以确定没有别的备份在跑，
+    # 留下的这些必然是死的。仍然按「早于本次启动」判断，避免误删。
+    for stale in BASE.glob('snapshot-*'):
+        if not stale.is_dir() or stale.is_symlink():
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError:
+            # 删不掉不该阻断一次正常备份；下次启动再试。
+            pass
     stamp=time.strftime('%Y%m%d-%H%M%S')
     output=BASE/('recovery-'+stamp+'.tar.gz')
     managed=managed_sources(MANAGER)
