@@ -133,8 +133,13 @@ fi
 
 # ── 4. 汇总当前状态 ──────────────────────────────────────────────────
 
-say "主服务：$(systemctl is-active workbuddy-web.service 2>/dev/null || echo unknown)"
-say "helper：$(systemctl is-active workbuddy-web-helper.service 2>/dev/null || echo unknown)（按需实例，inactive 正常）"
+say "主服务：$(systemctl is-active workbuddy-web.service 2>/dev/null || true)"
+# `is-active` 对 inactive 的单元**输出 'inactive' 同时返回非 0**。
+# 上一版写成 `$(...) || echo unknown`，于是两种情况都触发：
+# 先打印 'inactive'，再追加一个 'unknown'，日志变成两行。
+# 这里先把输出收进变量，空才回落。
+helper_state=$(systemctl is-active workbuddy-web-helper.service 2>/dev/null || true)
+say "helper：${helper_state:-unknown}（按需实例，inactive 正常）"
 say "收尾完成"
 
 exit 0
