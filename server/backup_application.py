@@ -178,7 +178,31 @@ def verify_release_archive(archive):
     # 本地清单（sign_release.py 生成）用的是 version 字段；旧清单曾叫 release_id。
     # 两者都认，缺失时回落到空串——备份不该因一个展示用字段而整体失败。
     release_id=manifest.get('release_id') or manifest.get('version') or ''
-    return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed}
+    # 再记一份「当前正在服务的版本」，用来和归档里那份对比。
+    #
+    # ## 为什么
+    #
+    # 2026-11-15 查一个备份快照时发现它记着 `v1.2.96`，而当时线上是 `v1.2.14x`
+    # ——差了几十个版本。追下去才确认：那份快照**不是这个模块产的**
+    # （加密方式是 age-X25519，这里的清单没有 release_check 字段），
+    # 它出自一套更早的运维脚本。**但这件事暴露了一个真实的信息缺口**：
+    #
+    # 归档里只有「被打进去的那份清单说自己是哪个版本」，
+    # **没有「备份时线上实际在跑哪个版本」**。两者不一致时，
+    # 事后翻备份只能看到前者，会得出错误结论。
+    #
+    # 所以两个都记。读不到当前版本不算错误（安装根布局可能不同），
+    # 记空串，让不一致如实显示为「无法确认」而不是伪装成一致。
+    current_version=''
+    try:
+        current_version=(MANAGER/'releases/current/.version').read_text().strip()
+    except OSError:
+        current_version=''
+    def _bare(value):
+        return value[1:] if isinstance(value,str) and value.startswith('v') else value
+    return {'release_id':release_id,'files_verified':len(manifest['files']),'check':'ok','signature_verified':signed,
+            'current_version':current_version,
+            'version_consistent':bool(current_version) and _bare(current_version)==_bare(release_id)}
 
 
 def verify_paired_archive(archive, destination, receipt):
