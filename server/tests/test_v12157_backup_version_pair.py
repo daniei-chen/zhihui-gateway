@@ -112,5 +112,36 @@ class TheReasonIsWrittenDownTests(unittest.TestCase):
                       '没写出「读不到要如实显示为无法确认」')
 
 
+class TheTraceIsRecordedTests(unittest.TestCase):
+    """追那条 v1.2.96 花了十几步，结论必须写在代码里，否则下一个人重追一遍。
+
+    而且**岔路也要写**：一眼看过去最像「读到了旧代码」的两个地方
+    （安装根下的 server / deploy 目录）其实都是符号链接，
+    不写清楚，下一个人就会去那里白费功夫。
+    """
+
+    def test_it_names_the_producing_service(self):
+        self.assertIn('recovery_v3.py', SOURCE,
+                      '没写清是哪套脚本产的灾备快照')
+
+    def test_it_names_the_nested_archive(self):
+        self.assertIn('application.tar.gz', SOURCE,
+                      '没写出真凶是内层那份 tar')
+
+    def test_it_rules_out_the_symlink_trap(self):
+        idx = SOURCE.find('2026-11-15 查一个灾备快照')
+        self.assertGreater(idx, 0)
+        window = SOURCE[idx:idx + 2200]
+        self.assertIn('符号链接', window,
+                      '没写清安装根那两个目录是符号链接，后来人会去那里白找')
+
+    def test_it_says_the_value_cannot_be_changed_here(self):
+        self.assertIn('既定事实', SOURCE,
+                      '没说明这个值本模块改不了，避免后人以为能修')
+
+    def test_it_says_unreadable_means_unknown(self):
+        self.assertIn('无法确认', SOURCE)
+
+
 if __name__ == '__main__':
     unittest.main()
