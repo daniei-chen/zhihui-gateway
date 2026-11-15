@@ -46,6 +46,11 @@
 | [`security-notes.md`](security-notes.md) | 日常注意事项 |
 | [`CSRF-AUDIT-2026-11-15.md`](CSRF-AUDIT-2026-11-15.md) | CSRF 面 |
 | [`FRONTEND-SESSION-SECURITY-2026-11-15.md`](FRONTEND-SESSION-SECURITY-2026-11-15.md) | 前端会话 |
+| [`DEPENDENCY-AUDIT-PYTHON-2026-11-15.md`](DEPENDENCY-AUDIT-PYTHON-2026-11-15.md) | **后端 Python 依赖**的 CVE 核对 |
+| [`DEPENDENCY-VERSION-AUDIT-2026-11-15.md`](DEPENDENCY-VERSION-AUDIT-2026-11-15.md) | **前端 npm 依赖**的 CVE 核对 |
+
+**这两份依赖审计名字很像，但对象完全不同**：一份是服务器上的 Python 包，
+另一份是打包进前端产物里的 npm 包。**找错一份会看到一份与你无关的结论。**
 
 ## 数据、容量、账务
 
@@ -82,7 +87,6 @@
 | [`REACHABILITY-AUDIT-2026-11-15.md`](REACHABILITY-AUDIT-2026-11-15.md) | 可达性 |
 | [`ACCOUNT-POOL-BALANCE-2026-11-15.md`](ACCOUNT-POOL-BALANCE-2026-11-15.md) | 账号池均衡 |
 | [`ACCOUNT-SCHEDULER-FINDINGS-2026-11-15.md`](ACCOUNT-SCHEDULER-FINDINGS-2026-11-15.md) | 账号调度 |
-| [`DEPENDENCY-VERSION-AUDIT-2026-11-15.md`](DEPENDENCY-VERSION-AUDIT-2026-11-15.md) | 依赖版本 |
 
 ## 维护这份索引
 
