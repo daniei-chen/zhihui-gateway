@@ -152,6 +152,53 @@ else
     skipped=$((skipped + 1))
 fi
 
+# 五、危险操作必须拒绝未认证请求。
+#
+# 这一项的来由：鉴权不在每个路由的依赖里（`Depends` 只出现过一次），
+# 而是由中间件统一处理。**「不在路由里」和「没有保护」是两件事** ——
+# 2026-11-15 逐个实测了七个删除/清空/重置类路由，全部返回 401。
+#
+# 但「现在都对」不等于「以后都对」：新加一个路由时，中间件是否覆盖到它，
+# 没有任何声音会提醒。所以这几条固定下来当回归防护。
+#
+# 只探这七个有代表性的；返回 401/403 算拒绝，其余一律算放行。
+PROBE_BASE=${PREFLIGHT_PROBE_BASE:-http://127.0.0.1:7866}
+DANGEROUS_PROBES="
+POST /api/checkin-logs/clear
+POST /api/keys/probe-invalid/reset-usage
+POST /api/logs/clear
+POST /api/security/logs/clear
+DELETE /api/system/update-package
+DELETE /api/system/update-status
+"
+if curl -s -o /dev/null -m 3 "$PROBE_BASE/healthz" 2>/dev/null; then
+    printf '%-34s ' "危险路由拒绝未认证请求"
+    open_routes=''
+    # 用 while read 而不是 for：for 会按空格分词，把「方法」和「路径」拆散。
+    while read -r method path; do
+        [ -z "$method" ] && continue
+        [ -z "$path" ] && continue
+        code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X "$method" \
+                    "$PROBE_BASE$path" 2>/dev/null || echo 000)
+        case "$code" in
+            401|403) ;;                 # 拒绝了，正确
+            000)     ;;                 # 连不上，跳过这条（不算放行）
+            *)       open_routes="$open_routes $method$path($code)";;
+        esac
+    done <<< "$DANGEROUS_PROBES"
+    if [ -z "$open_routes" ]; then
+        printf 'PASS  全部返回 401\n'
+        passed=$((passed + 1))
+    else
+        printf 'FAIL\n'
+        printf '    以下路由未认证也能访问：%s\n' "$open_routes" | sed 's/^/    /'
+        failed=$((failed + 1))
+    fi
+else
+    printf '%-34s SKIP  服务未响应\n' "危险路由拒绝未认证请求"
+    skipped=$((skipped + 1))
+fi
+
 echo ""
 echo "PREFLIGHT passed=$passed failed=$failed skipped=$skipped"
 

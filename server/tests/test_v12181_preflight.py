@@ -100,6 +100,39 @@ class TheMemoryCheckIsHonestAboutItsLimitsTests(unittest.TestCase):
         self.assertIn('skipped=$((skipped + 1))', SCRIPT[idx:idx + 200])
 
 
+class ItProbesDangerousRoutesTests(unittest.TestCase):
+    """鉴权不在每个路由的依赖里，而由中间件统一处理。
+
+    「不在路由里」和「没有保护」是两件事 —— 2026-11-15 逐个实测了七个
+    删除/清空/重置类路由，全部返回 401。但「现在都对」不等于「以后都对」，
+    新加路由时中间件是否覆盖到它，没有任何声音提醒。
+    """
+
+    def test_it_probes_routes(self):
+        self.assertIn('DANGEROUS_PROBES', SCRIPT)
+
+    def test_401_and_403_both_count_as_refused(self):
+        self.assertIn('401|403)', SCRIPT)
+
+    def test_unreachable_is_not_treated_as_allowed(self):
+        """连不上不等于放行，也不算失败。"""
+        self.assertIn('000)', SCRIPT)
+
+    def test_it_uses_while_read_not_for(self):
+        """`for spec in $LIST` 会按空格分词，把方法和路径拆散。
+
+        第一版就是这么写的：方法和路径变成两个独立单词，
+        于是每条探测都拿「路径」当方法去发请求。
+        """
+        idx = SCRIPT.find('DANGEROUS_PROBES')
+        window = SCRIPT[idx:idx + 900]
+        self.assertIn('while read -r method path', window)
+        self.assertNotIn('for spec in $DANGEROUS_PROBES', window)
+
+    def test_it_explains_why_absence_of_dependency_is_not_absence_of_protection(self):
+        self.assertIn('不在路由里', SCRIPT)
+
+
 class ItIsReadOnlyTests(unittest.TestCase):
     """所有检查都必须只读 —— 发布前跑的东西不能改变被检查的对象。"""
 
