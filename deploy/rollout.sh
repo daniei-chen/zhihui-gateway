@@ -77,14 +77,39 @@ wait_phase() {
 }
 
 # ── 1. prepare ────────────────────────────────────────────────────────
+#
+# **这里需要两层重试，不是一层。**
+#
+# `prepare-retry.sh` 内部会重试 4 次，但实测下来**一整轮 4 次全部被拒是常态**
+# （2026-11-15 连续几轮都是这样）：拒绝原因是「多了一个写入者」，
+# 而那个写入者是看门狗的一轮巡视 —— 它并不会因为你在 4 次内重试就消失。
+#
+# **过去的做法是「人工再跑一次」，第二次通常就过了。** 这个脚本第一版只调一次，
+# 自举验证时正是这样失败的：prepare 4 连拒 → 直接中止。
+#
+# 所以外层再套几轮，每轮之间留出让看门狗跑完的间隔。
+prepare_with_outer_retry() {
+    local attempt=1 max=4
+    while [ "$attempt" -le "$max" ]; do
+        say "prepare 第 $attempt/$max 轮"
+        if "$ROOT/deploy/prepare-retry.sh" "$VERSION" "$TXN"; then
+            return 0
+        fi
+        if [ "$attempt" -eq "$max" ]; then
+            return 1
+        fi
+        say "第 $attempt 轮未成功，等 15 秒让写入者退出后重试"
+        sleep 15
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
 
 say "步骤 1/3 prepare：$VERSION / $TXN"
-"$ROOT/deploy/prepare-retry.sh" "$VERSION" "$TXN"
-prep_rc=$?
-if [ "$prep_rc" -ne 0 ]; then
-    # 首次 prepare 被「多了一个写入者」拒掉是常态（乐观锁），
-    # prepare-retry 内部已经重试过；到这里还失败就是别的原因。
-    die "prepare 未成功（退出 $prep_rc），事务保留：$TXN"
+if ! prepare_with_outer_retry; then
+    # 到这一步说明外层也跑完了，是别的原因。
+    # 不引用函数里的 $max —— 它是 local，在这里是空的。
+    die "prepare 未成功（外层重试已用尽），事务保留：$TXN"
 fi
 say "prepare 成功"
 

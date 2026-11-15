@@ -59,6 +59,50 @@ class ItRunsAllThreeStepsTests(unittest.TestCase):
                       '漏掉收尾 —— 门禁会残留，而残留是静默的')
 
 
+class PrepareNeedsTwoLayersOfRetryTests(unittest.TestCase):
+    """**一层重试不够。**
+
+    `prepare-retry.sh` 内部重试 4 次，但实测一整轮 4 次全被拒是常态：
+    拒绝原因是「多了一个写入者」，而那是看门狗的一轮巡视 ——
+    它不会因为你在 4 次内重试就消失。
+
+    **过去的做法是人工再跑一次，第二次通常就过了。** 这个脚本第一版只调一次，
+    自举验证时正是这样失败的。
+    """
+
+    def test_it_has_an_outer_retry_function(self):
+        self.assertIn('prepare_with_outer_retry', SOURCE,
+                      '没有外层重试 —— 一整轮 4 连拒就会直接中止')
+
+    def test_it_loops_over_attempts(self):
+        idx = SOURCE.find('prepare_with_outer_retry()')
+        self.assertGreater(idx, 0)
+        body = SOURCE[idx:idx + 900]
+        self.assertIn('while', body, '外层重试没有循环')
+        self.assertIn('sleep', body, '重试之间没有间隔，等不到写入者退出')
+
+    def test_it_returns_failure_after_exhausting(self):
+        idx = SOURCE.find('prepare_with_outer_retry()')
+        body = SOURCE[idx:idx + 900]
+        self.assertIn('return 1', body, '用尽重试后没有返回失败')
+
+    def test_it_does_not_reference_the_local_max_outside(self):
+        """`$max` 是 local，函数外引用它会是空字符串。
+
+        第一版就在 die 的消息里写了 `$max`，实际输出会是「已重试  轮」。
+        """
+        idx = SOURCE.find('prepare_with_outer_retry; then')
+        self.assertGreater(idx, 0)
+        window = SOURCE[idx:idx + 400]
+        # 只看会真的执行的行 —— 注释里提到 `$max` 是在解释「为什么不引用它」，
+        # 第一版测试连注释一起判，被自己的说明绊倒。
+        for line in window.splitlines():
+            if line.strip().startswith('#'):
+                continue
+            self.assertNotIn('$max', line,
+                             '在函数外引用了 local 变量 $max：' + line.strip())
+
+
 class ItKeepsTheThreeFailuresDistinctTests(unittest.TestCase):
     def test_no_set_e(self):
         """`set -e` 会把三种失败压成同一个退出码。"""
@@ -77,9 +121,10 @@ class ItKeepsTheThreeFailuresDistinctTests(unittest.TestCase):
                          '收尾失败调用了 die —— 会把成功发布判成失败')
 
     def test_prepare_failure_stops(self):
-        idx = SOURCE.find('prep_rc=$?')
-        self.assertGreater(idx, 0)
-        self.assertIn('die', SOURCE[idx:idx + 300])
+        idx = SOURCE.find('prepare_with_outer_retry; then')
+        self.assertGreater(idx, 0, '没找到 prepare 的失败分支')
+        self.assertIn('die', SOURCE[idx:idx + 400],
+                      'prepare 失败后没有中止')
 
     def test_run_failure_stops(self):
         idx = SOURCE.find('wait_phase complete')
