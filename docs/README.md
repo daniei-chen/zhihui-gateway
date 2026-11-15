@@ -19,6 +19,7 @@
 | 文档 | 什么时候看 |
 | --- | --- |
 | [`TROUBLESHOOTING-2026-11.md`](TROUBLESHOOTING-2026-11.md) | **先看这个** |
+| [`TLS-AND-TIMERS-2026-11-15.md`](TLS-AND-TIMERS-2026-11-15.md) | **TLS 与定时任务** —— 只接受 1.2/1.3，续期自动；机器上还有别的服务 |
 | [`SERVICE-HARDENING-2026-11-15.md`](SERVICE-HARDENING-2026-11-15.md) | **服务加固现状** —— 已降权到 uid 10001，两处可再收紧 |
 | [`BACKUP-RESTORE-STATUS-2026-11-15.md`](BACKUP-RESTORE-STATUS-2026-11-15.md) | **备份与恢复的现状** —— 三层结构、每份自校验、真实缺口是异地 |
 | [`ERROR-BUDGET-BASELINE-2026-11-15.md`](ERROR-BUDGET-BASELINE-2026-11-15.md) | **错误预算基线** —— 判断「这次是不是异常」之前先看它 |
