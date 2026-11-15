@@ -33,6 +33,57 @@ from .. import db, security
 
 router = APIRouter(prefix='/api/read-api', tags=['read-api'])
 
+
+def _utc_offset() -> str:
+    """本机时区相对 UTC 的偏移，形如 `+08:00`。
+
+    ## 为什么需要它
+
+    `time.strftime('%Z')` 在 Asia/Shanghai 上返回 **`CST`** —— 而这个缩写同时是
+    China Standard Time（UTC+8）、Central Standard Time（UTC-6）和
+    Cuba Standard Time（UTC-5）。
+
+    口径声明的意义是「避免调用方猜」，一个三义的缩写做不到。偏移量没有歧义。
+
+    用 `tm_gmtoff`（本地时间相对 UTC 的秒数，已含夏令时），而不是 `time.timezone`
+    —— 后者在启用夏令时的时区上会给出一小时误差。
+    """
+    seconds = time.localtime().tm_gmtoff
+    sign = '+' if seconds >= 0 else '-'
+    seconds = abs(int(seconds))
+    return '%s%02d:%02d' % (sign, seconds // 3600, (seconds % 3600) // 60)
+
+
+def _tz_name() -> str | None:
+    """IANA 时区名（如 `Asia/Shanghai`）；取不到返回 None。
+
+    偏移量能算对「现在几点」，但算不了「某年某月某日那天的边界」—— 有夏令时的
+    时区必须靠名字才能还原历史日期。所以两个都提供，用途不同。
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:            # pragma: no cover - Python < 3.9
+        return None
+    # 从 TZ 环境变量或 /etc/localtime 的符号链接拿名字；拿不到就按偏移反查。
+    import os
+    from pathlib import Path
+    name = os.environ.get('TZ', '').strip()
+    if not name:
+        try:
+            target = Path('/etc/localtime').resolve()
+            if 'zoneinfo' in target.parts:
+                name = '/'.join(target.parts[target.parts.index('zoneinfo') + 1:])
+        except OSError:
+            name = ''
+    if not name:
+        return None
+    try:
+        ZoneInfo(name)
+    except Exception:              # noqa: BLE001 - 名字不可用就当没有
+        return None
+    return name
+
+
 # 读取契约版本。**只增不改语义**：字段含义变更必须升版本，并保留旧版本字段一个周期，
 # 让 QTG 能按版本分支而不是靠猜。
 READ_API_VERSION = 2
@@ -107,7 +158,18 @@ def read_api_version(request: Request, response: Response,
         'capabilities': dict(CAPABILITIES),
         'endpoints': {k: list(v) for k, v in ENDPOINTS.items()},
         # 聚合日边界用本机时区（与 /api/stats 的 _since 实现一致）
+        #
+        # **这个字符串是有歧义的**：本机在 Asia/Shanghai 时它返回 `CST`，而 `CST`
+        # 同时可以是 China Standard Time（UTC+8）、Central Standard Time（UTC-6）
+        # 与 Cuba Standard Time（UTC-5）。口径声明的作用是「避免调用方猜」，
+        # 一个需要猜的缩写做不到这件事。
+        #
+        # 保留这个字段不动（已发布的契约），另加两个无歧义的：
+        #   `utc_offset` —— 形如 `+08:00`，可直接解析
+        #   `tz_name`    —— IANA 名，形如 `Asia/Shanghai`，能处理夏令时
         'timezone': time.strftime('%Z') or 'local',
+        'utc_offset': _utc_offset(),
+        'tz_name': _tz_name(),
         # 额度是浮点（不是分、不是整数 token）；token 是整数
         'credit_unit': 'float',
         'timestamp_unit': 'epoch_seconds',
