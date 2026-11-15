@@ -60,7 +60,18 @@ class UsageBoundaryTests(unittest.IsolatedAsyncioTestCase):
                          {'used': 0.000001, 'limit': 0.000002, 'remaining': 0.000001})
 
     async def test_usage_totals_and_breakdown_share_two_aggregate_reads(self):
-        today = time.strftime('%Y-%m-%d')
+        # 必须用 `db.day_of()`，**不能**用 `time.strftime('%Y-%m-%d')`。
+        #
+        # 产品侧的日界口径是固定 UTC+8（`db.day_of` 的注释写明「哪怕主机配置被
+        # 改成 UTC 也一样」）。而 `time.strftime` 跟随进程 TZ：
+        #
+        #   · 在 Asia/Shanghai 主机上两者相同，测试绿；
+        #   · 在 UTC runner 上差一天 —— 这里插入的行日期与代码查询的日期不一致，
+        #     `dailyquota.snapshot` 找不到 `key_daily_usage` 行，于是走兼容回退
+        #     再查一次 `usage_daily`，多出第 3 条聚合读，断言 3 != 2 失败。
+        #
+        # 2026-11-16 在 GitHub Actions（UTC）上稳定复现，本机（CST）稳定通过。
+        today = db.day_of()
         for model, tokens in (('cn:MODEL', 50), ('model', 75)):
             db.execute('INSERT INTO usage_daily(day,key_id,model,realm,requests,prompt_tokens,'
                        'completion_tokens,cache_hit_tokens,cache_miss_tokens) VALUES(?,?,?,?,1,?,0,?,?)',
