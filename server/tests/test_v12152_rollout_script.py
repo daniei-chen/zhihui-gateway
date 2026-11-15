@@ -177,6 +177,38 @@ class ItValidatesArgumentsTests(unittest.TestCase):
         self.assertIn('post-migration-cleanup.sh" ]', SOURCE)
 
 
+class ItChecksTheRuntimeAfterwardsTests(unittest.TestCase):
+    """事务 complete 不等于进程加载了新代码。
+
+    2026-11-15 手工验证过一次两者一致，但手工查过的东西不写下来，
+    下次还得靠人想起。这一步把它变成每次自动核对。
+
+    判据是进程 cwd，不是 `current` 符号链接 ——
+    链接指对了、进程还在旧目录里跑，是可能的。
+    """
+
+    def test_it_reads_the_current_target(self):
+        self.assertIn('readlink -f "$RELEASES/current"', SOURCE)
+
+    def test_it_reads_the_process_cwd(self):
+        self.assertIn('/proc/$main_pid/cwd', SOURCE,
+                      '没查进程 cwd —— 只信符号链接会漏掉「进程还在旧目录」')
+
+    def test_it_compares_them(self):
+        self.assertIn('[ "$proc_cwd" != "$target" ]', SOURCE)
+
+    def test_mismatch_does_not_fail_the_release(self):
+        """事务已 complete，回滚比这更危险。要报告，不要失败。"""
+        idx = SOURCE.find('[ "$proc_cwd" != "$target" ]')
+        self.assertGreater(idx, 0)
+        window = SOURCE[idx:idx + 400]
+        self.assertNotIn('die', window, 'cwd 不一致时判发布失败')
+        self.assertIn('需人工确认', window)
+
+    def test_it_survives_a_missing_pid(self):
+        self.assertIn('取不到主进程 pid', SOURCE)
+
+
 class TheReasonIsWrittenDownTests(unittest.TestCase):
     def test_it_says_why_cleanup_matters(self):
         self.assertIn('等于没有这个步骤', SOURCE,

@@ -105,7 +105,7 @@ prepare_with_outer_retry() {
     return 1
 }
 
-say "步骤 1/3 prepare：$VERSION / $TXN"
+say "步骤 1/4 prepare：$VERSION / $TXN"
 if ! prepare_with_outer_retry; then
     # 到这一步说明外层也跑完了，是别的原因。
     # 不引用函数里的 $max —— 它是 local，在这里是空的。
@@ -115,7 +115,7 @@ say "prepare 成功"
 
 # ── 2. run ────────────────────────────────────────────────────────────
 
-say "步骤 2/3 run（滚动切换，可能 1–2 分钟）"
+say "步骤 2/4 run（滚动切换，可能 1–2 分钟）"
 setsid "$PYTHON" -I -S -B -X pycache_prefix="$CACHE" \
     "$GUARD/migration_entry.py" run "$TXN" \
     > "/tmp/rollout-run-$TXN.log" 2>&1 < /dev/null &
@@ -137,13 +137,42 @@ fi
 # 这一步失败**不**判发布失败：新版本已经在跑，收尾只是清理残留门禁。
 # 但要把失败说清楚，因为它的后果是静默的。
 
-say "步骤 3/3 收尾"
+say "步骤 3/4 收尾"
 "$ROOT/deploy/post-migration-cleanup.sh" "$TXN"
 cleanup_rc=$?
 if [ "$cleanup_rc" -ne 0 ]; then
     say "收尾返回 $cleanup_rc —— 发布本身已完成，但门禁可能残留，需人工确认"
 else
     say "收尾完成"
+fi
+
+# ── 4. 核对：新代码是不是真的在跑 ──────────────────────────────────────
+#
+# 事务报 complete 只说明**迁移流程**走完了，不直接说明**进程加载了新代码**。
+#
+# 2026-11-15 验证过一次两者一致（`current` 指向新版本、进程 cwd 也在新版本、
+# 启动时间与部署时间吻合），但那次是**手工查的**。
+# 手工查过的东西不写下来，下次还得靠人想起。
+#
+# 这里把它变成每次自动核对。判据是进程的 cwd ——
+# 那比 `current` 符号链接更直接：符号链接指对了，进程可能还在旧目录里跑。
+say "步骤 4/4 核对运行时"
+target=$(readlink -f "$RELEASES/current" 2>/dev/null || true)
+say "current -> ${target:-未知}"
+
+main_pid=$(systemctl show workbuddy-web.service -p MainPID --value 2>/dev/null || true)
+if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
+    proc_cwd=$(readlink -f "/proc/$main_pid/cwd" 2>/dev/null || true)
+    say "主进程 $main_pid cwd = ${proc_cwd:-未知}"
+    if [ "$proc_cwd" != "$target" ]; then
+        # **不判发布失败** —— 事务已经 complete，回滚比这更危险。
+        # 但必须说清楚，因为「部署成功但跑的是旧代码」是最难发现的形态。
+        say "注意：进程 cwd 与 current 不一致 —— 可能仍在跑旧代码，需人工确认"
+    else
+        say "运行时一致（进程确实在 current 指向的目录里）"
+    fi
+else
+    say "取不到主进程 pid，跳过运行时核对"
 fi
 
 say "发布结束：$(cat "$RELEASES/current/.version" 2>/dev/null)"
