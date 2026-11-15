@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS admin_events (
  actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, outcome TEXT NOT NULL,
  status INTEGER, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL
 );
+-- 2026-11-15：**这张表已停止写入**，由 provider_attempt_events_v2 取代。
+--
+-- 上游从 2026-11-03 起在每次派发的事件里带上 dispatch_id（见 ledger.attempt 的
+-- 第一道判断：带 dispatch_id 的直接交给 v2 表）。而本表主键是
+-- (request_id, attempt, phase) —— 同一个 request_id 多次派发时，
+-- 同一个 phase 的第二条会被主键冲突吞掉，**留下一个「只试过一次」的假象**。
+-- 新表把 dispatch_id / rotation / provider_attempt 纳入主键才能区分。
+--
+-- **保留而不删**：11-03 之前的历史在这里，且不可变（下面的触发器阻止 UPDATE/DELETE）。
+-- 删表等于销毁审计记录。
+--
+-- **要查「最近试了几次」请查 v2 表。** 当天有人按本表名查到空结果，
+-- 差点据此判断「采集停了十二天」—— 实际是 v2 表在收。写在这里，省下一次误判。
 CREATE TABLE IF NOT EXISTS attempt_events (
  request_id TEXT NOT NULL, attempt INTEGER NOT NULL, phase TEXT NOT NULL,
  ts INTEGER NOT NULL, account_uid TEXT NOT NULL, resolved_model TEXT NOT NULL,
