@@ -80,6 +80,8 @@ mkdir -p "$CACHE"
 #
 # 「有回退」和「回退会被执行到」是两件事，中间差一个超时。
 CLONE_TIMEOUT=${ZHIHUI_CLONE_TIMEOUT:-90}
+# 单个文件从 git 对象取的上限。超时不是错误，是「换一条路」的信号。
+BLOB_TIMEOUT=${ZHIHUI_BLOB_TIMEOUT:-20}
 
 clone_repo() {
     cd / || return 1
@@ -133,7 +135,14 @@ fi
 # 所以：**先试不占额度的那条，卡住就换计数的这条**，两条都要过同样三道校验。
 fetch_one() {
     local rel=$1 out=$2
-    if git cat-file blob "HEAD:$rel" > "$out" 2>/dev/null && [ -s "$out" ]; then
+    # 这一步也要有超时。
+    #
+    # `--filter=blob:none` 意味着 blob 是按需拉的：`git cat-file` 表面上是本地读，
+    # 实际会去远端取。2026-11-15 有两次它挂了一分多钟，而脚本一直等 ——
+    # **克隆那一步有超时，这一步没有，所以回退仍然走不到。**
+    #
+    # 每个文件单独限时，超时就落到接口上；两个文件都卡也不会把整次构建拖死。
+    if timeout "${BLOB_TIMEOUT}" git cat-file blob "HEAD:$rel" > "$out" 2>/dev/null && [ -s "$out" ]; then
         return 0
     fi
     local api="https://api.github.com/repos/${REPO_SLUG}/contents/$rel?ref=$COMMIT"

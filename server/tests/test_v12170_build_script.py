@@ -300,5 +300,28 @@ class ItLeavesTheManifestBehindTests(unittest.TestCase):
         self.assertIn('长期跳过', SCRIPT)
 
 
+class BlobFetchHasATimeoutTests(unittest.TestCase):
+    """克隆那一步有超时，取文件那一步原来没有 —— 所以回退仍然走不到。
+
+    `--filter=blob:none` 让 blob 按需拉：`git cat-file` 表面读本地，实际会去远端取。
+    2026-11-15 有两次它挂了一分多钟，脚本一直等。
+    """
+
+    def test_cat_file_is_wrapped_in_timeout(self):
+        self.assertIn('timeout "${BLOB_TIMEOUT}" git cat-file', SCRIPT)
+
+    def test_blob_timeout_is_configurable(self):
+        self.assertIn('ZHIHUI_BLOB_TIMEOUT', SCRIPT)
+
+    def test_the_timeout_leads_to_the_fallback(self):
+        """超时不是错误，是「换一条路」的信号 —— 后面必须还有接口那条。"""
+        idx = SCRIPT.find('timeout "${BLOB_TIMEOUT}" git cat-file')
+        window = SCRIPT[idx:idx + 700]
+        self.assertIn('api.github.com', window)
+
+    def test_it_explains_the_second_blind_spot(self):
+        self.assertIn('这一步没有，所以回退仍然走不到', SCRIPT)
+
+
 if __name__ == '__main__':
     unittest.main()
