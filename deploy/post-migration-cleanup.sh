@@ -116,7 +116,52 @@ for unit in workbuddy-web-helper.service workbuddy-web.service; do
     fi
 done
 
-# ── 3. 恢复每日预算对账 timer ────────────────────────────────────────
+# ── 3. 清掉同版本的陈旧空事务 ────────────────────────────────────────
+#
+# ## 为什么会有垃圾
+#
+# `prepare` 常被乐观锁拒（「多了一个写入者」），而**被拒的尝试也会留下一个事务目录**。
+# 2026-11-15 清点：26 个事务里 11 个是这种情况 ——
+# 9 个空 phase（被拒）、2 个 prepared（成功但没 run）。
+#
+# 每个约 1 MB，单看不值一提，但**没有任何东西清理它们**，会随每次发布累积。
+# 完整事务是 57 MB，那部分由人工按保留策略处理，不在这个脚本里做。
+#
+# ## 安全边界（三条，缺一不可）
+#
+# 1. **只动同一个版本号的**（`v12155a` 只清 `v12155*`），绝不跨版本扫
+# 2. **只动空 phase 或 prepared 的**，complete 的一律保留（那是审计记录）
+# 3. **绝不动本次事务**
+#
+# 版本号解析失败就整段跳过 —— 表达式会退化成 `*`，那等于清掉所有事务。
+# **这一步宁可不动，也不能动错。**
+
+version_tag=$(printf '%s' "$TXN" | sed -n 's/^\(v[0-9]\{1,\}\)[a-z].*/\1/p')
+if [ -z "$version_tag" ]; then
+    say "跳过陈旧事务清理（无法从 $TXN 解析版本号）"
+else
+    stale=0
+    for d in "$STATE"/transactions/"${version_tag}"*/; do
+        [ -d "$d" ] || continue
+        name=$(basename "$d")
+        [ "$name" = "$TXN" ] && continue
+        phase=$(grep -oE '"phase":"[a-z-]+"' "$d/active.json" 2>/dev/null | head -1 | cut -d'"' -f4)
+        case "$phase" in
+            ""|prepared)
+                if rm -rf "$d" 2>/dev/null; then
+                    say "已清掉陈旧空事务：$name（phase=${phase:-空}）"
+                    stale=$((stale + 1))
+                else
+                    say "清掉失败：$name（保留）"
+                fi
+                ;;
+            *) : ;;   # complete 等，保留
+        esac
+    done
+    [ "$stale" -eq 0 ] && say "无同版本陈旧空事务（$version_tag）"
+fi
+
+# ── 4. 恢复每日预算对账 timer ────────────────────────────────────────
 
 if systemctl is-active --quiet "$BUDGET_TIMER" 2>/dev/null; then
     say "$BUDGET_TIMER 已在运行"
@@ -131,7 +176,7 @@ else
     fi
 fi
 
-# ── 4. 汇总当前状态 ──────────────────────────────────────────────────
+# ── 5. 汇总当前状态 ──────────────────────────────────────────────────
 
 say "主服务：$(systemctl is-active workbuddy-web.service 2>/dev/null || true)"
 # `is-active` 对 inactive 的单元**输出 'inactive' 同时返回非 0**。
