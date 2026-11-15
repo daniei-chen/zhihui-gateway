@@ -64,6 +64,19 @@ class ItChecksThreeLayersTests(unittest.TestCase):
         for marker in ('rate limit exceeded', 'documentation_url', 'Bad credentials'):
             self.assertIn(marker, SCRIPT, '漏了错误标记：' + marker)
 
+    def test_it_does_not_use_ambiguous_markers(self):
+        """`Not Found` 太通用 —— 第一次真跑用它误伤了两个正常文件。
+
+        校验误伤的代价和漏判一样高：它会让人开始手动绕过校验，
+        那样任何校验都不再有意义。
+        """
+        # 只看形状校验那一行的匹配模式，不看注释（注释里引用这些词是正常的）
+        line = [l for l in SCRIPT.splitlines() if 'grep -qiE' in l and 'POLLUT' not in l]
+        self.assertTrue(line, '没找到形状校验的 grep 行')
+        pattern = line[0]
+        self.assertNotIn('Not Found', pattern,
+                         '形状校验的匹配模式里仍有 Not Found，会误伤正常文本')
+
     def test_layer_two_checks_json_opens_with_brace(self):
         self.assertIn("grep -q '^{'", SCRIPT)
 

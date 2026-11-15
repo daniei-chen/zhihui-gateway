@@ -117,7 +117,15 @@ while IFS= read -r line; do
     fi
 
     # 第二关：形状。不依赖期望值。
-    if grep -qiE 'rate limit exceeded|documentation_url|Bad credentials|Not Found' "$OUT/$rel"; then
+    #
+    # 标记必须**只属于错误响应**。第一版把 `Not Found` 也列了进来，
+    # 结果把两个正常文件判成了污染 —— 一个在注释里写了这个词，另一个是测试里
+    # 的断言文本。**校验误伤的代价和漏判一样高**：它会让人开始手动绕过校验。
+    #
+    # 所以这里只留三种只会出现在错误响应里的标记：
+    # `rate limit exceeded`（限流的正文）、`documentation_url`（同上的字段名）、
+    # `Bad credentials`（鉴权失败的正文）。
+    if grep -qiE 'rate limit exceeded|documentation_url|Bad credentials' "$OUT/$rel"; then
         echo "  POLLUTED     $rel  （内容是 HTTP 错误响应，不是文件）"
         fail=$((fail + 1)); continue
     fi
