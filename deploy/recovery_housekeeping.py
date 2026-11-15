@@ -109,6 +109,7 @@ def build_plan(base=BASE, keep=3, days=7, now=None):
         raise ValueError('latest snapshot has no exact local decryption proof')
     check_cipher(current, latest['snapshot'])
     candidates = []
+    incomplete = []
     for path in sorted(snapshots.iterdir()):
         if not STAMP.fullmatch(path.name):
             continue
@@ -119,7 +120,29 @@ def build_plan(base=BASE, keep=3, days=7, now=None):
             if (info.st_uid != 0 or stat.S_ISLNK(info.st_mode)
                     or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode))):
                 raise ValueError('unsafe snapshot descendant')
-        meta = read_json(path / 'snapshot.json')
+        meta = None
+        # 不完整的快照目录要跳过，**不是崩溃**。
+        #
+        # 2026-11-15：清理任务连续失败，原因是遍历时遇到一个没有 snapshot.json 的
+        # 半成品目录（上一次生成中途被中断留下的），read_json 抛出 FileNotFoundError，
+        # 而这里只预期 ValueError —— 于是整个保留清理中止。
+        #
+        # 后果不是「少删几个文件」，而是**清理从此永久失效**：每一天都会再遇到同一个
+        # 半成品，每一天都在同一个地方崩，旧快照一天天堆积，磁盘慢慢涨。
+        # 而它每天凌晨只失败一次，**没有人被通知到**。
+        #
+        # 注意这里的界限：**「不完整」跳过，「不安全」仍然中止。**
+        # 权限不对、符号链接、非预期类型——那些是安全性问题，fail closed 是对的；
+        # 而「目录里少了元数据文件」是完整性问题的正常形态（生成本身就可能被打断）。
+        if not (path / 'snapshot.json').is_file():
+            incomplete.append(path.name)
+            continue
+        try:
+            meta = read_json(path / 'snapshot.json')
+        except FileNotFoundError:
+            # 检查与读取之间被删掉了，同样按不完整处理
+            incomplete.append(path.name)
+            continue
         if not isinstance(meta.get('restore_check'), dict):
             raise ValueError('snapshot lacks restore validation')
         check_cipher(path, meta)
@@ -139,6 +162,7 @@ def build_plan(base=BASE, keep=3, days=7, now=None):
         rows.append({'name': path.name, 'action': 'prune' if reason.startswith('expired') else 'keep',
                      'reason': reason})
     return {'current': current.name, 'snapshots': rows,
+            'incomplete_snapshots': incomplete,
             'runtime_blobs_pruned': False, 'invalid_or_unsafe_snapshot': 'fail_closed'}
 
 
