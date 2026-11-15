@@ -426,7 +426,20 @@ export const accountApi = {
       total: number;
       succeeded: number;
       failed: string[];
-      results: {file: string; nickname: string; uid: string; ok: boolean; message: string}[];
+      /**
+       * 只被上游明确拒绝的「无需刷新」个数（JWT 还没到期）。
+       *
+       * 2026-11-15：这些账号的 `ok` 是 false，但它们**不是失败** ——
+       * 上游是在省一次无意义的刷新。把两者混在一起计数，界面就会把
+       * 「十三个月的有效期」报成「刷新失败」。老后端可能不带这个字段。
+       */
+      not_needed?: number;
+      results: {
+        file: string; nickname: string; uid: string; ok: boolean;
+        /** refreshed / not_needed / failed；老后端可能不带。 */
+        state?: 'refreshed' | 'not_needed' | 'failed';
+        message: string;
+      }[];
       reload_triggered: boolean;
     }>(`/api/accounts/refresh-tokens${groupQs(upstreamId)}`),
   /** 令牌刷新计划（计划任务：每 N 天自动全量刷新一次） */

@@ -519,6 +519,8 @@
     "refreshTokensDoneDetail": "{ok}/{total} 個帳號續期成功，上游已重載生效",
     "refreshTokensPartial": "部分帳號 Token 未重新整理（{failed} 個）",
     "refreshTokensPartialDetail": "{ok}/{total} 成功，其餘 refreshToken 可能已失效，需重新掃碼或登入",
+    "refreshTokensNoneNeeded": "{n} 個帳號無需重新整理（Token 仍在有效期內）",
+    "refreshTokensNoneNeededDetail": "{ok}/{total} 成功，其中 {n} 個 Token 未到期、無需重新整理",
     "planTitle": "權杖重新整理計畫",
     "dailyCheckin": "每日簽到",
     "dailyClaim": "每日領獎",

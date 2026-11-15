@@ -519,6 +519,8 @@
     "refreshTokensDoneDetail": "{ok}/{total} 件のアカウントを更新し、上流を再読み込みしました",
     "refreshTokensPartial": "一部のトークンを更新できませんでした（{failed} 件）",
     "refreshTokensPartialDetail": "{ok}/{total} 件成功。残りは refreshToken が失効している可能性があり、再ログインが必要です",
+    "refreshTokensNoneNeeded": "{n} 件は更新不要です（トークンはまだ有効）",
+    "refreshTokensNoneNeededDetail": "{ok}/{total} 件成功。うち {n} 件はトークンが有効期限内のため更新不要でした",
     "planTitle": "トークン更新プラン",
     "dailyCheckin": "毎日チェックイン",
     "dailyClaim": "毎日受け取り",

@@ -354,14 +354,29 @@ function FullAccountsPage() {
     setRefreshTokensBusy(true);
     try {
       const r = await accountApi.refreshAllTokens(groupId);
-      if (r.succeeded === r.total) {
+      // 三态，不是二态。
+      //
+      // 2026-11-15：这里原来只判 `succeeded === total`，其余一律算「失败」。
+      // 但上游在 JWT 还没到期时会**明确拒绝**刷新（「剩余有效期 321.3 小时，
+      // 暂无需刷新」）—— 那是省一次无意义的操作，不是出错。
+      //
+      // 把它算进失败，用户看到的是一个健康的渠道在报错，于是反复点。
+      const notNeeded = r.not_needed ?? 0;
+      const realFailed = Math.max(0, r.total - r.succeeded - notNeeded);
+      if (realFailed === 0 && notNeeded === 0) {
         notify.ok(
           t('accounts.refreshTokensDone'),
           t('accounts.refreshTokensDoneDetail', {ok: r.succeeded, total: r.total}),
         );
+      } else if (realFailed === 0) {
+        // 全部无需刷新：中性提示，不是警告。
+        notify.info(
+          t('accounts.refreshTokensNoneNeeded', {n: notNeeded}),
+          t('accounts.refreshTokensNoneNeededDetail', {ok: r.succeeded, n: notNeeded}),
+        );
       } else {
         notify.warn(
-          t('accounts.refreshTokensPartial', {failed: r.total - r.succeeded}),
+          t('accounts.refreshTokensPartial', {failed: realFailed}),
           t('accounts.refreshTokensPartialDetail', {ok: r.succeeded, total: r.total}),
         );
       }

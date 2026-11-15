@@ -546,6 +546,8 @@
     "refreshTokensDoneDetail": "{ok}/{total} accounts renewed; upstream reloaded",
     "refreshTokensPartial": "Some tokens were not refreshed ({failed})",
     "refreshTokensPartialDetail": "{ok}/{total} succeeded; the rest may have an expired refreshToken and need to sign in again",
+    "refreshTokensNoneNeeded": "{n} accounts need no refresh (token still valid)",
+    "refreshTokensNoneNeededDetail": "{ok}/{total} succeeded; {n} tokens are still valid so no refresh was needed",
     "planTitle": "Token refresh plan",
     "dailyCheckin": "Daily check-in",
     "dailyClaim": "Daily claim",

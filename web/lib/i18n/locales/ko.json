@@ -519,6 +519,8 @@
     "refreshTokensDoneDetail": "{ok}/{total}개 계정 갱신 완료, 업스트림 재로드됨",
     "refreshTokensPartial": "일부 Token을 갱신하지 못했습니다 ({failed}개)",
     "refreshTokensPartialDetail": "{ok}/{total}개 성공. 나머지는 refreshToken이 만료되었을 수 있어 다시 로그인해야 합니다",
+    "refreshTokensNoneNeeded": "{n}개 계정은 갱신이 필요하지 않습니다 (Token 아직 유효)",
+    "refreshTokensNoneNeededDetail": "{ok}/{total}개 성공. 그중 {n}개는 Token이 아직 유효하여 갱신하지 않았습니다",
     "planTitle": "Token 갱신 계획",
     "dailyCheckin": "매일 체크인",
     "dailyClaim": "매일 보상 수령",

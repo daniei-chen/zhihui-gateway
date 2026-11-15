@@ -197,6 +197,8 @@
     "refreshTokensDoneDetail": "{ok}/{total} 个账号续期成功，上游已重载生效",
     "refreshTokensPartial": "部分账号令牌未刷新（{failed} 个）",
     "refreshTokensPartialDetail": "{ok}/{total} 成功，其余 refreshToken 可能已失效，需重新扫码或登录",
+    "refreshTokensNoneNeeded": "{n} 个账号无需刷新（令牌仍在有效期内）",
+    "refreshTokensNoneNeededDetail": "{ok}/{total} 成功，其中 {n} 个令牌未到期、无需刷新",
     "planTitle": "令牌刷新计划",
     "dailyCheckin": "每日签到",
     "dailyClaim": "每日领奖",
