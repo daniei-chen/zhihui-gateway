@@ -1319,6 +1319,70 @@ def prometheus_metrics(request: Request):
                'Uploads that were still trickling past the cumulative time limit. The link '
                'works but is too slow for this payload; shrinking the request helps.',
                _body_timeouts['total'])
+
+        # ── 账号池集中度 ────────────────────────────────────────────────
+        #
+        # ## 为什么加
+        #
+        # 2026-11-15 的审计发现：96 个账号文件里只有 48 个在产生流量，
+        # 用量最高与最低相差 **228 倍**，而其中一个余额比第一名还多的账号
+        # 只被调用了 3 次。
+        #
+        # 上游（另一个仓库）的配置写着「按空闲时间加权，上限 2 倍」，
+        # 二进制里也确实有加权选择和最小选择间隔两个机制 ——
+        # **但实测行为与配置完全不符**。
+        #
+        # 那件事是上游的，不在这个仓库能修的范围内。**但「它不均衡」这件事
+        # 本身应该是一个能被监控看到的数字，而不是一次人工排查才发现的结论。**
+        #
+        # 所以这里把集中度暴露成指标：以后它继续恶化，`/metrics` 会先报警，
+        # 而不是等到有人注意到一半账号闲置。
+        #
+        # ## 口径
+        #
+        # 窗口取**最近一小时**而不是 24 小时 —— 这是一个 gauge，每次抓取都算，
+        # 长窗口会让它对「刚刚开始倾斜」无感。
+        #
+        # 只统计带账号标记的对话请求：模型目录、拒绝类请求不落到具体账号上，
+        # 把它们算进来会稀释比例。
+        #
+        # 指标含义：
+        #
+        # - `accounts`   窗口内有流量的账号数
+        # - `requests`   窗口内这些账号上的请求数
+        # - `top_share`  最忙那个账号占的比例（0~1）。1.0 表示全压在一个账号上
+        #
+        # 单独包一层 try：这一个取数源出问题，不该连带把上面那些指标一起弄没。
+        try:
+            from . import db as _db
+            import time as _time
+            _since = int(_time.time()) - 3600
+            _row = _db.query_one(
+                'WITH c AS ('
+                '  SELECT account, count(*) AS n FROM request_logs'
+                "  WHERE ts > ? AND account != '' AND endpoint LIKE '%chat%'"
+                '  GROUP BY account)'
+                ' SELECT count(*) AS accounts,'
+                '        COALESCE(sum(n), 0) AS total,'
+                '        COALESCE(max(n), 0) AS top_n FROM c',
+                (_since,))
+            _accounts = int(_row['accounts'] or 0) if _row is not None else 0
+            _total = int(_row['total'] or 0) if _row is not None else 0
+            _top = int(_row['top_n'] or 0) if _row is not None else 0
+            _share = (_top / _total) if _total else 0.0
+            _m('workbuddy_account_pool_accounts', 'gauge',
+               'Accounts that served at least one chat request in the last hour.',
+               _accounts)
+            _m('workbuddy_account_pool_requests', 'gauge',
+               'Chat requests attributed to an account in the last hour.', _total)
+            _m('workbuddy_account_pool_top_share', 'gauge',
+               'Share of the last hour handled by the busiest single account (0..1). '
+               'A value near 1.0 means the pool is not spreading load; '
+               'see docs/ACCOUNT-SCHEDULER-FINDINGS-2026-11-15.md.',
+               round(_share, 4))
+        except Exception:       # noqa: BLE001
+            # 这个取数源坏了只影响这三个指标，不影响上面那一整段。
+            logger.warning('account pool metrics unavailable', exc_info=True)
     except Exception as exc:                                    # noqa: BLE001
         # 这里刻意保留「不中断 /metrics」：一个取数源坏掉，不该让整个端点 500。
         #
