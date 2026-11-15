@@ -112,10 +112,16 @@ class TheMetricIsHonestTests(unittest.TestCase):
     def test_the_metric_exists(self):
         self.assertIn('workbuddy_snapshot_age_seconds', self.SOURCE)
 
-    def test_skipped_when_unknown(self):
+    def test_unknown_is_reported_as_minus_one(self):
+        """拿不到年龄时要报 -1，不能让整条序列消失。
+
+        「从来没有过快照」正是最该报警的状态；
+        序列不存在时告警会安静地不触发。
+        """
         start = self.SOURCE.index('workbuddy_snapshot_age_seconds')
-        window = self.SOURCE[max(0, start - 400):start + 100]
-        self.assertIn('if _snapshot_age is not None', window)
+        window = self.SOURCE[max(0, start - 500):start + 900]
+        self.assertIn('-1 if _snapshot_age is None', window,
+                      '未知要报 -1，不是不报')
 
     def test_help_records_the_incident(self):
         start = self.SOURCE.index('workbuddy_snapshot_age_seconds')

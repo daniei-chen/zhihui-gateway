@@ -1167,28 +1167,39 @@ def prometheus_metrics(request: Request):
 
     # 最近一次成功备份距今多久。告警只在超过 26 小时时报，这条能看到「还差多久」，
     # 也就能看出备份时间是否在一天天往后漂。见 operational.backup_age_seconds。
+    #
+    # 2026-11-15 补充：与下面那条快照年龄一样，改成「总是输出」。
+    # 原来读不到年龄时整条序列消失 —— 而「从来没备份过」正是最该报警的状态。
     try:
         _backup_age = _operational.backup_age_seconds()
-        if _backup_age is not None:
-            _m('workbuddy_backup_age_seconds', 'gauge',
-               'Seconds since the newest verified backup report. The stale alert only fires '
-               'past 26 hours; this shows the drift before it does, so a backup creeping '
-               'later each day is visible while it is still healthy.',
-               _backup_age)
+        _m('workbuddy_backup_age_seconds', 'gauge',
+           'Seconds since the newest verified backup report; -1 means no report exists, '
+           'which is itself the state worth alerting on. The stale alert only fires past '
+           '26 hours; this shows the drift before it does, so a backup creeping later '
+           'each day is visible while it is still healthy.',
+           -1 if _backup_age is None else _backup_age)
     except Exception:      # noqa: BLE001
         pass
 
     # 加密快照（恢复体系 v2）的年龄。**与上面那条备份年龄不是一回事**：
     # 那个测的是基线报告，这个测的是 v2 恢复点本身。
     # 2026-11-15 的故障里，前者一直 ok，后者断了整整一天。
+    #
+    # 2026-11-15 补充：原来只有「拿到年龄」时才输出这一条，
+    # 于是「从未产出过快照」和「这个指标坏了」在监控上长得一模一样 ——
+    # 都是「这条序列不存在」。**而前者恰恰是最该报警的状态。**
+    #
+    # 现在总是输出：没有快照时报 -1。
+    # 这样告警可以直接写「值 > 86400 或值 == -1」，不用再赌序列是否存在。
     try:
         _snapshot_age = _operational.snapshot_age_seconds()
-        if _snapshot_age is not None:
-            _m('workbuddy_snapshot_age_seconds', 'gauge',
-               'Seconds since the newest encrypted recovery snapshot. Distinct from '
-               'backup_age_seconds, which reads the baseline report: during the 2026-11-15 '
-               'incident the report stayed ok while no snapshot was produced at all.',
-               _snapshot_age)
+        _m('workbuddy_snapshot_age_seconds', 'gauge',
+           'Seconds since the newest encrypted recovery snapshot; -1 means none exists at all. '
+           'Distinct from backup_age_seconds, which reads the baseline report: during the '
+           '2026-11-15 incident the report stayed ok while no snapshot was produced. '
+           'Emitting -1 rather than omitting the series keeps "no snapshot" distinguishable '
+           'from "metric broken".',
+           -1 if _snapshot_age is None else _snapshot_age)
     except Exception:      # noqa: BLE001
         pass
 
@@ -1196,16 +1207,22 @@ def prometheus_metrics(request: Request):
     # backup_age_seconds 测基线报告，snapshot_age_seconds 读不到 /root。
     try:
         _chain = _operational.recovery_chain_status()
-        if _chain is not None:
-            _m('workbuddy_recovery_chain_age_seconds', 'gauge',
-               'Seconds since the encrypted recovery chain last verified end to end. '
-               'Distinct from backup_age_seconds, which only covers the baseline tar: '
-               'on 2026-11-15 the chain failed repeatedly while the baseline kept '
-               'succeeding, so that alert stayed silent.',
-               _chain['age_seconds'])
-            _m('workbuddy_recovery_chain_bytes', 'gauge',
-               'Size of the verified encrypted snapshot from the last successful chain run.',
-               _chain['snapshot_bytes'])
+        # 同样是「总是输出」：链断了不能被伪装成「没有数据」。
+        # 2026-11-15 那天这条链反复失败而基线一直成功，所以相关告警全程沉默 ——
+        # 那种沉默不该再靠人眼发现。
+        _m('workbuddy_recovery_chain_age_seconds', 'gauge',
+           'Seconds since the encrypted recovery chain last verified end to end; '
+           '-1 means the chain state is unavailable, which is itself worth alerting on. '
+           'Distinct from backup_age_seconds, which only covers the baseline tar: '
+           'on 2026-11-15 the chain failed repeatedly while the baseline kept '
+           'succeeding, so that alert stayed silent.',
+           -1 if _chain is None else _chain['age_seconds'])
+        # 这一条同样不能条件性输出 —— 缺失也报 0，配合上一条的 -1 一起看。
+        _m('workbuddy_recovery_chain_bytes', 'gauge',
+           'Size of the verified encrypted snapshot from the last successful chain run; '
+           '0 when the chain state is unavailable (cross-check the age gauge, which '
+           'reports -1 in that same situation).',
+           0 if _chain is None else _chain['snapshot_bytes'])
     except Exception:      # noqa: BLE001
         pass
 

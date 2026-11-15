@@ -101,11 +101,19 @@ class TheMetricIsHonestTests(unittest.TestCase):
     def test_the_metric_exists(self):
         self.assertIn('workbuddy_backup_age_seconds', self.SOURCE)
 
-    def test_it_is_skipped_when_unknown(self):
+    def test_unknown_is_reported_as_minus_one_not_zero(self):
+        """拿不到证据时不能用 0 —— 0 会被读成「刚备份过」。
+
+        2026-11-15 更正：原来的做法是「整条序列不输出」，
+        但那让「从来没备份过」和「指标坏了」在监控上长得一模一样。
+        现在改成总是输出，用 -1 表示未知 —— 时间不能为负，所以 -1 不会歧义。
+        """
         start = self.SOURCE.index('workbuddy_backup_age_seconds')
-        window = self.SOURCE[max(0, start - 400):start + 100]
-        self.assertIn('if _backup_age is not None', window,
-                      '拿不到证据时不能输出 —— 0 会被读成刚备份过')
+        window = self.SOURCE[max(0, start - 400):start + 900]
+        self.assertIn('-1 if _backup_age is None', window,
+                      '未知要报 -1，不是不报')
+        self.assertNotIn(', 0)', window,
+                         '未知不能报 0 —— 那会被读成刚备份过')
 
     def test_help_explains_the_drift_use(self):
         start = self.SOURCE.index('workbuddy_backup_age_seconds')

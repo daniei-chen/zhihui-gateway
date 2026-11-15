@@ -149,10 +149,16 @@ class TheMetricsExposeItTests(unittest.TestCase):
         self.assertIn('backup_age_seconds', window,
                       '要写明与基线指标的区别，否则后来人会以为两个是重复的')
 
-    def test_skipped_when_unknown(self):
+    def test_unknown_is_reported_rather_than_omitted(self):
+        """链状态读不到时要报 -1，不能让整条序列消失。
+
+        2026-11-15 那天这条链反复失败而基线一直成功；
+        如果指标在异常时反而不输出，告警会全程安静 —— 那正是要避免的。
+        """
         start = self.SOURCE.index('workbuddy_recovery_chain_age_seconds')
-        window = self.SOURCE[max(0, start - 500):start + 100]
-        self.assertIn('if _chain is not None', window)
+        window = self.SOURCE[max(0, start - 500):start + 900]
+        self.assertIn('-1 if _chain is None', window,
+                      '链状态不可用要报 -1，不是不报')
 
 
 class TheReasonIsRecordedTests(unittest.TestCase):
