@@ -34,6 +34,8 @@ set -euo pipefail
 
 MIG=/tmp/mig.sh
 WATCHDOG=zhihui-steward-watchdog.service
+#: 看门狗的定时器。**prepare 期间要临时停掉它**，理由见 `quiesce_watchdog`。
+WATCHDOG_TIMER=zhihui-steward-watchdog.timer
 CANDIDATE="${1:?usage: prepare-retry.sh <candidate-version> <transaction-name>}"
 TRANSACTION="${2:?usage: prepare-retry.sh <candidate-version> <transaction-name>}"
 MAX_ATTEMPTS=4
@@ -82,6 +84,55 @@ wait_for_watchdog() {
     echo "    等待超过 ${limit}s 仍在运行，继续尝试" >&2
     return 0
 }
+
+#: 本次运行是否由我们停掉了 timer（决定退出时要不要恢复）。
+TIMER_STOPPED=0
+
+# 在 prepare 期间让看门狗彻底安静。
+#
+# ## 为什么「等它结束」不够
+#
+# 上一版只做 `wait_for_watchdog`：等到它退出，然后立刻 prepare。
+#
+# 但 prepare 自己要跑约 20 秒，而看门狗是「60 秒间隔 + 约 20 秒运行」——
+# **prepare 跑到一半时下一轮就起来了**。写入者校验看到两个进程就拒绝，
+# 于是四次重试全都撞在同一个窗口上，看起来像「等不到它退出」，实际是
+# **等得再准也没用，因为要等的那段时间比窗口还长**。
+#
+# 2026-11-15 实测：连续两轮发布都是 4/4 全拒，换事务标识才过 —— 而换标识
+# 并没有改变时序，只是恰好错开了。**靠运气通过的东西不算通过。**
+#
+# ## 做法
+#
+# 停 timer（不是停 service）：已经在跑的那一轮不受影响，只是不再触发下一轮。
+# 用 trap 保证任何退出路径都恢复 —— 忘了恢复就等于关掉了看门狗的调度。
+quiesce_watchdog() {
+    if systemctl is-active --quiet "$WATCHDOG_TIMER" 2>/dev/null; then
+        if systemctl stop "$WATCHDOG_TIMER" 2>/dev/null; then
+            TIMER_STOPPED=1
+            echo "    已暂停看门狗定时器（prepare 结束后恢复）"
+        else
+            echo "    无法暂停看门狗定时器，退回「等它退出再试」" >&2
+        fi
+    fi
+}
+
+resume_watchdog() {
+    if [ "$TIMER_STOPPED" -eq 1 ]; then
+        if systemctl start "$WATCHDOG_TIMER" 2>/dev/null; then
+            echo "    看门狗定时器已恢复"
+        else
+            echo "!! 看门狗定时器恢复失败，请手工执行：systemctl start $WATCHDOG_TIMER" >&2
+        fi
+        TIMER_STOPPED=0
+    fi
+}
+
+trap resume_watchdog EXIT INT TERM
+
+# 先让看门狗不再触发下一轮；已经在跑的那一轮由循环里的 `wait_for_watchdog` 等掉。
+# trap 保证无论怎么退出都会恢复。
+quiesce_watchdog
 
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     echo "[$attempt/$MAX_ATTEMPTS] 先确认看门狗不在运行"
