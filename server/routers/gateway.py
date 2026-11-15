@@ -233,6 +233,17 @@ def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONRespo
     return resp
 
 
+#: 上游转发过等待时间的次数。
+#:
+#: 为什么单独计数：这个能力**依赖外部条件**（上游得先限流）。
+#: 2026-11-15 实现后查了两次，日志里都是 0 —— 不是坏了，是上游一直没限流。
+#: 只靠日志翻不出「它到底跑过几次」，而一个计数器能直接回答。
+#:
+#: 用最朴素的模块级字典而不是引入指标库：这只是一个自进程启动以来的累计数，
+#: 进程重启归零是合理的（它回答的是「这次运行里发生过吗」）。
+_RETRY_AFTER_FORWARDED = {'count': 0}
+
+
 def _upstream_retry_after(resp) -> int | None:
     """读上游 `Retry-After` 并解析成整数秒；拿不到或不可信时返回 None。
 
@@ -2806,6 +2817,7 @@ async def _chat(request: Request, upstream_path: str):
                 out = JSONResponse(body, status_code=resp.status_code)
             if wait is not None:
                 out.headers['Retry-After'] = str(wait)
+                _RETRY_AFTER_FORWARDED['count'] += 1
                 # 记一行，让这个转发**可被事后验证**。
                 #
                 # 2026-11-15 实现这条转发时想端到端验证它，结果发现做不到：

@@ -1238,6 +1238,17 @@ def prometheus_metrics(request: Request):
             _m('workbuddy_context_max_tokens', 'gauge',
                'Largest prompt-token count in the last hour. Grows steadily in a '
                'long dialogue; that is the signal worth watching.', _ctx['max'])
+    # 上游等待时间的转发次数。
+    #
+    # 这个能力依赖外部条件 —— 上游得先限流。实现当天查了两次日志都是零，
+    # 那不是坏了，是上游一直没限流。只靠翻日志答不出「它跑过几次」，
+    # 计数器能直接回答。进程重启归零，语义是「本次运行里发生过吗」。
+    from .routers import gateway as _gateway_router
+    _m('workbuddy_retry_after_forwarded', 'counter',
+       'Times the gateway forwarded a Retry-After taken from upstream. Zero means '
+       'the capability has not had a chance to run, not that it is broken: it only '
+       'fires when upstream itself returns a wait time.',
+       _gateway_router._RETRY_AFTER_FORWARDED['count'])
     # 当前实际选中的数据面引擎。
     #
     # ## 为什么值得单独暴露

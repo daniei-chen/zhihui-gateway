@@ -169,5 +169,30 @@ class TheForwardingIsObservableTests(unittest.TestCase):
         self.assertIn('if wait is not None', before)
 
 
+class TheCounterAnswersTheQuestionTests(unittest.TestCase):
+    """日志能证明「发生过」，但答不出「几次」；计数器能。"""
+
+    def test_counter_exists(self):
+        self.assertIn('_RETRY_AFTER_FORWARDED', SOURCE)
+
+    def test_it_increments_only_when_forwarding(self):
+        idx = SOURCE.find("_RETRY_AFTER_FORWARDED['count'] += 1")
+        self.assertGreater(idx, 0, '转发时没有累加')
+        before = SOURCE[max(0, idx - 200):idx]
+        self.assertIn('if wait is not None', before,
+                      '累加落到了 if 之外，正常请求也会被算进去')
+
+    def test_metric_is_rendered(self):
+        main = (Path(__file__).resolve().parents[1] / 'main.py').read_text(encoding='utf-8')
+        self.assertIn('workbuddy_retry_after_forwarded', main)
+
+    def test_help_explains_zero_is_not_a_fault(self):
+        main = (Path(__file__).resolve().parents[1] / 'main.py').read_text(encoding='utf-8')
+        idx = main.find('workbuddy_retry_after_forwarded')
+        window = main[idx:idx + 600]
+        self.assertIn('has not had a chance', window,
+                      'HELP 没说清「零不代表坏了」，看板的人会误判')
+
+
 if __name__ == '__main__':
     unittest.main()
