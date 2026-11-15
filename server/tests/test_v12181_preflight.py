@@ -192,6 +192,18 @@ class ItChecksCertificateExpiryTests(unittest.TestCase):
     def test_threshold_is_configurable(self):
         self.assertIn('PREFLIGHT_CERT_WARN_DAYS', SCRIPT)
 
+    def test_default_threshold_is_twenty_one_not_thirty(self):
+        """三十天会在边界上必然误报。
+
+        Let's Encrypt 的续期在「剩余不足三十天」时才启动，
+        所以剩余三十天是正常等待状态。第一版写成三十天，**第一次运行就误报了**。
+        """
+        self.assertIn('PREFLIGHT_CERT_WARN_DAYS:-21', SCRIPT)
+        self.assertNotIn('PREFLIGHT_CERT_WARN_DAYS:-30', SCRIPT)
+
+    def test_it_explains_the_boundary(self):
+        self.assertIn('正常的等待状态', SCRIPT)
+
     def test_it_records_the_near_miss(self):
         self.assertIn('哪一张先过期，没有人知道', SCRIPT)
 
