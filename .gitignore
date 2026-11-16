@@ -147,3 +147,6 @@ stop-all.cmd
 dev/.weight-task
 dev/.shots-weight-task
 web/node_modules
+
+# 本地审计与发布传输临时文件
+audit-artifacts/

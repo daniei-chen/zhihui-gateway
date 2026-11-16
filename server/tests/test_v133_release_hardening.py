@@ -111,9 +111,14 @@ class HelperResourceContractTests(unittest.TestCase):
         self.assertLess(values['MemoryHigh'], values['MemoryMax'])
         self.assertLess(values['MemoryMax'], 1536)
         self.assertIn('MemorySwapMax=256M', text)
+        self.assertIn('WB_GATEWAY_MAX_CONCURRENCY=64', text)
+        self.assertIn('WB_GATEWAY_LARGE_MAX_CONCURRENCY=28', text)
         installer = ROOT / 'deploy/install-resource-budget.sh'
         self.assertTrue(os.access(installer, os.X_OK))
-        self.assertIn('MemorySwapMax=256M', installer.read_text(encoding='utf-8'))
+        installer_text = installer.read_text(encoding='utf-8')
+        self.assertIn('MemorySwapMax=256M', installer_text)
+        self.assertNotIn('WB_GATEWAY_MAX_CONCURRENCY', installer_text)
+        self.assertNotIn('WB_GATEWAY_LARGE_MAX_CONCURRENCY', installer_text)
 
 
 if __name__ == '__main__':

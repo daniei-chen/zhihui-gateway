@@ -16,7 +16,7 @@
 
 ### 二、滚动交接的内存边界
 
-- helper 实例增加 `MemoryHigh=1G`、`MemoryMax=1280M`、`MemorySwapMax=256M` 与 `TasksMax=512`，并在交接窗口把并发上限收敛到 48、大请求上限 20，避免双实例挤压主机。
+- helper 实例增加 `MemoryHigh=1G`、`MemoryMax=1280M`、`MemorySwapMax=256M` 与 `TasksMax=512`，避免双实例挤压主机；准入参数保持与主实例完全一致，避免共享 cohort 策略漂移。
 - 请求体重放流在消费后立即释放对应块，降低长流请求把完整请求体保留到响应结束的内存放大。
 
 ### 三、对账与运行时可观测
