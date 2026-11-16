@@ -26,4 +26,5 @@ class AtomicReleaseContracts(unittest.TestCase):
             pointer=root/'current';pointer.symlink_to('old',target_is_directory=True)
             self.assertEqual(state.activate(pointer,'new',lambda:None,lambda:None,lambda:True),'old')
             (root/'current.next').symlink_to('old',target_is_directory=True)
-            with self.assertRaises(RuntimeError):state.point(pointer,'old')
+            self.assertEqual(state.point(pointer,'old'),None)
+            self.assertEqual(os.readlink(pointer),'old')

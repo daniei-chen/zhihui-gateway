@@ -21,3 +21,6 @@ Daniei Chen <daniei-chen@users.noreply.github.com>  merge <merge@local>
 Daniei Chen <daniei-chen@users.noreply.github.com>  up <up@up>
 Daniei Chen <daniei-chen@users.noreply.github.com>  upstream <up@local>
 Daniei Chen <daniei-chen@users.noreply.github.com>  upstream <upstream@local>
+
+# 历史自动化审计提交身份归并（保留历史提交与签名，不改写仓库）
+Daniei Chen <daniei-chen@users.noreply.github.com>  Codex Audit <codex-audit@localhost>

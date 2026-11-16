@@ -12,12 +12,17 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
+    "server.tests.test_v133_release_hardening",
+    "server.tests.test_v12149_post_migration_cleanup",
+    "server.tests.test_v12152_rollout_script",
+    "server.tests.test_release_pointer_closure",
     "server.tests.test_release_consistency",
     "server.tests.test_product_origin",
     "server.tests.test_changelog",
@@ -55,22 +60,33 @@ def main() -> int:
     sys.path.insert(0, str(ROOT))
     if os.environ.get("ZH_CI_NET_ISOLATED") == "1":
         subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
-    suite = unittest.TestSuite()
-    loader = unittest.defaultTestLoader
-    for name in MODULES:
-        suite.addTests(loader.loadTestsFromName(name))
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
-    summary = {
-        "modules": list(MODULES),
-        "tests": result.testsRun,
-        "failures": len(result.failures),
-        "errors": len(result.errors),
-        "skips": len(result.skipped),
-        "network_namespace_isolated": os.environ.get("ZH_CI_NET_ISOLATED") == "1",
-    }
-    Path("ci-validation-summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    with tempfile.TemporaryDirectory(prefix="zhihui-ci-data-",
+                                     ignore_cleanup_errors=True) as data_dir:
+        os.environ["WB_DATA_DIR"] = data_dir
+        suite = unittest.TestSuite()
+        loader = unittest.defaultTestLoader
+        for name in MODULES:
+            suite.addTests(loader.loadTestsFromName(name))
+        result = unittest.TextTestRunner(verbosity=1).run(suite)
+        summary = {
+            "modules": list(MODULES),
+            "tests": result.testsRun,
+            "failures": len(result.failures),
+            "errors": len(result.errors),
+            "skips": len(result.skipped),
+            "network_namespace_isolated": os.environ.get("ZH_CI_NET_ISOLATED") == "1",
+            "isolated_data_dir": True,
+        }
+        Path("ci-validation-summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        try:
+            from server import budgetowner, db
+            budgetowner.close()
+            with db._lock:
+                db._close_connection_locked()
+        except Exception:
+            pass
     return 0 if result.wasSuccessful() else 1
 
 

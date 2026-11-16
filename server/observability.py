@@ -1278,6 +1278,7 @@ class RequestAuditMiddleware:
                         nonlocal cursor
                         if cursor < len(chunks):
                             message=chunks[cursor]
+                            chunks[cursor]=None
                             cursor+=1
                             return message
                         return await receive()
