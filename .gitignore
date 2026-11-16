@@ -31,6 +31,9 @@ config.json
 next-env.d.ts
 *.tsbuildinfo
 
+# CI 本地/工作流生成的校验摘要
+ci-validation-summary.json
+
 # 调试用临时截图
 .*.png
 # 多语言验收脚本的输出
