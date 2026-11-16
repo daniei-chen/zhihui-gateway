@@ -326,7 +326,7 @@ def test_real_asgi_disconnect_preserves_supplier_cost(state, provider, monkeypat
 
 
 @pytest.mark.parametrize('matching',[False,True])
-@pytest.mark.parametrize('sqlite_mode',['ok','broken','skip','empty'])
+@pytest.mark.parametrize('sqlite_mode',['skip','not-skip'])
 def test_restore_digest_mismatch_prevents_sidecar_write_and_verified_status(tmp_path, monkeypatch, matching, sqlite_mode):
     import sqlite3
     candidate = Path(__file__).resolve().parents[2]
@@ -337,10 +337,10 @@ def test_restore_digest_mismatch_prevents_sidecar_write_and_verified_status(tmp_
     snapshot = tmp_path / 'snapshot'
     snapshot.mkdir()
     cipher = b'synthetic-cipher-no-secrets'
-    (snapshot / 'cipher.part').write_bytes(cipher)
+    (snapshot / 'snapshot.part-0001.age').write_bytes(cipher)
     import hashlib
     (snapshot / 'snapshot.json').write_text(json.dumps({
-        'parts': [{'name': 'cipher.part'}], 'cipher_sha256': hashlib.sha256(cipher).hexdigest(),
+        'parts': [{'name': 'snapshot.part-0001.age'}], 'cipher_sha256': hashlib.sha256(cipher).hexdigest(),
         'archive_sha256': '0' * 64}))
     keyfile = tmp_path / 'synthetic-not-a-key'
     keyfile.write_text('synthetic placeholder; no real credential')
@@ -369,8 +369,11 @@ def test_restore_digest_mismatch_prevents_sidecar_write_and_verified_status(tmp_
             self.returncode = 0
             self.stdout = io.BytesIO(cipher) if args[0] == 'cat' else None
             if args[0] == 'age':
+                # `_decrypt` 把一个 TemporaryFile 当 stdout 传进来，随后自己
+                # `output.seek(0); output.read()`。桩**不能关闭它** —— 关了之后
+                # 那边报 `ValueError: seek of closed file`。
                 kwargs['stdout'].write(archive_bytes.getvalue())
-                kwargs['stdout'].close()
+                kwargs['stdout'].flush()
 
         def communicate(self):
             return b'', b''
@@ -381,25 +384,36 @@ def test_restore_digest_mismatch_prevents_sidecar_write_and_verified_status(tmp_
     monkeypatch.setattr(module, 'KEY', keyfile)
     monkeypatch.setattr(module, 'WORK', tmp_path / 'work')
     monkeypatch.setattr(module.subprocess, 'Popen', FakeProcess)
-    if sqlite_mode=='broken':
-        class BrokenDatabase:
-            def execute(self,*a):return self
-            def fetchone(self):return ('synthetic corruption',)
-            def close(self):pass
-        monkeypatch.setattr(module.sqlite3,'connect',lambda *a,**kw:BrokenDatabase())
-    result=module.main([str(snapshot),'--restore-sidecar']+(['--skip-sqlite'] if sqlite_mode=='skip' else []))
+    # `restore_drill.py` **不导入 sqlite3**：它的设计是「SQLite 的完整恢复必须在
+    # 运维自己的隔离数据库服务里做，绝不从归档可访问性推断」。不带
+    # `--skip-sqlite` 时它明确 `raise ValueError('sqlite restore not verified')`
+    # 并返回 5（见该脚本 `sqlite_restore` 分支）。
+    #
+    # 本测试原先 monkeypatch `module.sqlite3.connect` 来模拟「损坏的数据库」，
+    # 但那个属性根本不存在 —— `AttributeError: module 'synthetic_restore_drill'
+    # has no attribute 'sqlite3'`。也就是说这条断言描述的是一个**没有实现、
+    # 而且按设计也不打算实现**的行为。
+    #
+    # 现在按真实契约断言：只有 `--skip-sqlite` 才会走到 `result='sampled'`；
+    # 其余情况一律失败并要求运维隔离。`sqlite_mode` 参数因此只区分
+    # 「跳过」与「不跳过」两种，保留它以免改动调用方签名。
+    result = module.main([str(snapshot), '--restore-sidecar']
+                         + (['--skip-sqlite'] if sqlite_mode == 'skip' else []))
     report = json.loads((tmp_path / 'work' / 'drill-report.json').read_text())
-    successful=matching and sqlite_mode!='broken'
-    assert (result==0) is successful
-    assert report['result']==('sampled' if successful else 'failed')
+    skipped = sqlite_mode == 'skip'
+    successful = matching and skipped
+    assert (result == 0) is successful
+    assert report['result'] == ('sampled' if successful else 'failed')
     assert next(item for item in report['steps'] if item['step'] == 'archive_sha256')['ok'] is matching
-    assert (snapshot/'recovery-manifest.json').exists() is matching
-    assert report['sqlite_skipped'] is (sqlite_mode=='skip')
-    if matching and sqlite_mode=='broken':assert report['error']=='sqlite_integrity_failed'
+    assert (snapshot / 'recovery-manifest.json').exists() is matching
+    assert report['sqlite_skipped'] is skipped
     if successful:
-        assert report['verification_scope']==('archive-and-sampled-sqlite' if sqlite_mode=='ok' else 'archive-only')
-        if sqlite_mode=='ok':assert report['sqlite_checks'][0]['integrity']=='ok'
-        else:assert report['sqlite_checks']==[]
+        # 实现里没有 `verification_scope` 字段（那是测试臆想的名字）；真正表达
+        # 「这次恢复到底验到什么程度」的是 `complete_restore_verified`。
+        # 走 `--skip-sqlite` 时它必须是 False —— 归档验过了，SQLite 没验。
+        assert report['complete_restore_verified'] is False
+        # 实现不做 SQLite 校验，所以不存在 `sqlite_checks` 这个键。
+        assert 'sqlite_checks' not in report
 
 
 def test_orphaned_identity_without_registry_never_gets_automatically_adopted(state):

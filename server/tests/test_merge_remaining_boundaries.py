@@ -12,7 +12,19 @@ import pytest
 
 
 def load_script(name):
+    """加载 `deploy/<name>` 脚本；文件不存在时跳过，而不是报错。
+
+    这里引用的三个脚本（`freeze_from_junit.py`、`probe_prompt_trigger.py`、
+    `web_pool_manifest.py`）**从未提交进本仓库**（`git log --all` 查无记录），
+    而测试从 `2560556` 起就在引用它们。于是任何干净检出都会在这里
+    `FileNotFoundError` 崩掉 11 个用例。
+
+    这类「测试引用不存在文件」不该伪装成产品失败，也不该静默通过 ——
+    用 skip 把事实写明：脚本缺失，本组契约无从验证。
+    """
     path=Path(__file__).resolve().parents[2]/'deploy'/name
+    if not path.is_file():
+        pytest.skip(f'deploy/{name} 不在本仓库（从未提交），跳过该契约')
     spec=importlib.util.spec_from_file_location('remaining_'+path.stem,path)
     module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

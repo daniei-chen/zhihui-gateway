@@ -28,8 +28,29 @@ def activate(pointer,target,stop,start,healthy):
         if not healthy():raise RuntimeError('candidate readiness failed')
     except BaseException:
         stop()
-        point(pointer,previous)
+        # 回滚路径**必须尽最大努力把服务重新拉起来**，即使指针恢复本身也失败。
+        #
+        # 原先这里写的是 `point(...); start()`：`point` 抛异常时 `start()` 根本
+        # 不执行，服务就停在「已停止」状态 —— 指针可能还指向坏版本，而且没人再
+        # 启动它。这不是「回滚失败」，是**回滚把服务留在停机态**。
+        #
+        # 现在无论 `point` 成败都调 `start()`；两者都失败时一并报告，交给运维。
+        pointer_error=None
+        try:
+            point(pointer,previous)
+        except BaseException as exc:          # noqa: BLE001 - 要连异常一起报出去
+            pointer_error=exc
         start()
         if not healthy():raise RuntimeError('rollback readiness failed; operator action required')
+        if pointer_error is not None:
+            # 保留**原始异常类型**，只是补一句说明：调用方按 `OSError` 等具体类型
+            # 分支处理时不该因为这里换了类型而走错路径。
+            note = ('release pointer could not be restored; service was restarted on the '
+                    'previously linked release but the pointer may still name the failed one')
+            try:
+                pointer_error.add_note(note)
+            except AttributeError:            # Python < 3.11
+                pass
+            raise pointer_error
         raise
     return previous
