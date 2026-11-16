@@ -60,7 +60,8 @@ def main() -> int:
     sys.path.insert(0, str(ROOT))
     if os.environ.get("ZH_CI_NET_ISOLATED") == "1":
         subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
-    with tempfile.TemporaryDirectory(prefix="zhihui-ci-data-") as data_dir:
+    with tempfile.TemporaryDirectory(prefix="zhihui-ci-data-",
+                                     ignore_cleanup_errors=True) as data_dir:
         os.environ["WB_DATA_DIR"] = data_dir
         suite = unittest.TestSuite()
         loader = unittest.defaultTestLoader

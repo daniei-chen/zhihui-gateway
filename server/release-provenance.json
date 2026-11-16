@@ -142,7 +142,7 @@
     "server/tests/test_windows_scripts.py": "cf099bd9330375d38e9b87b7a04bf7ad668bf4046c394526e1b77ddf0c596c35",
     "server/tests/test_writer_guard_contract.py": "623e056abd0789b1ebec30f2dc5fc5598f25c53f8f3c6e84a9bbe2159bb137f5",
     "server/writer-capabilities.json": "a48b2f94410ef42c600bac16b812daca1bce019a63047355d735eb81bc5c368b",
-    "tools/ci_regression.py": "6486e7a27fb62ff8d05065fe213b9012462ad2adaba00d8e53e14d3d97a86b3d",
+    "tools/ci_regression.py": "895f817314fe1aa40fad08e0ea26fedec0110b3bd190aa905d9dcaf39a92dd58",
     "web/app/(main)/settings/layout.tsx": "553c7150bc0b3c854d472f0c0db2b7dc829682008b423a05397f2594eba75712",
     "web/components/common/settings/ResetPasswordDialog.tsx": "9a219ecbaf704d72a6ddbbec7ae86e33f17855366f476dacd6632ef1cb2d4a61",
     "web/lib/i18n/locales/en.json": "933d6087921dc386903db7693ab178c25a60e6323734787732cbb489e4e5d57a",
