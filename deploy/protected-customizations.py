@@ -33,10 +33,32 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / 'docs' / 'protected-customizations.json'
 
 
-def digest(path: Path) -> str:
-    """LF 规范化后的 sha256：行尾不影响结论。"""
-    raw = path.read_bytes()
-    return hashlib.sha256(raw.replace(b'\r\n', b'\n')).hexdigest()
+def digest(path: Path, relative: str) -> str:
+    """**原始字节**的 sha256 —— 与 CI 那条检查逐字一致。
+
+    ## 不要在这里做行尾规范化
+
+    我第一版按 LF 规范化算，结果把 `server/observability.py` 原本正确的登记值
+    改坏了：那个文件的 blob 本身就是 CRLF（1435 处），CI 用 `read_bytes()` 算出的
+    是 `495f5af1…`，而规范化后变成 `c1cc1774…`，于是 CI 立刻红。
+
+    教训：登记值必须与**校验方**的算法一致，不能各按各的直觉。
+
+    ## 为什么优先读 git 存储字节
+
+    在 `core.autocrlf=true` 的 Windows 工作区里，`read_bytes()` 拿到的是 CRLF，
+    而 CI 在 Linux 检出拿到的是 blob 原样 —— 两者对「blob 本身是 LF」的文件会
+    算出不同的哈希。直接读 `git cat-file blob` 就绕开了这个差异：那正是 CI
+    检出的字节。工作区不在 git 仓库里（例如发布包）时退回读文件。
+    """
+    try:
+        import subprocess
+        blob = subprocess.run(
+            ['git', 'cat-file', 'blob', f'HEAD:{relative}'],
+            cwd=ROOT, capture_output=True, check=True, timeout=10)
+        return hashlib.sha256(blob.stdout).hexdigest()
+    except Exception:                      # noqa: BLE001 - 非 git 环境退回读文件
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load() -> dict:
@@ -58,7 +80,7 @@ def main(argv=None) -> int:
         if not path.is_file():
             problems.append(f'{relative}: 文件不存在')
             continue
-        actual = digest(path)
+        actual = digest(path, relative)
         fresh[relative] = actual
         if actual != registry[relative]:
             problems.append(f'{relative}: 登记 {registry[relative][:16]}… 实际 {actual[:16]}…')
