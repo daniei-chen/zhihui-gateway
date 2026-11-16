@@ -16,8 +16,6 @@ MemoryHigh=1G
 MemoryMax=1280M
 MemorySwapMax=256M
 TasksMax=512
-Environment=WB_GATEWAY_MAX_CONCURRENCY=48
-Environment=WB_GATEWAY_LARGE_MAX_CONCURRENCY=20
 EOF
 chmod 0644 "$tmp"
 chown 0:0 "$tmp"
