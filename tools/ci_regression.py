@@ -79,6 +79,13 @@ def main() -> int:
         Path("ci-validation-summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        try:
+            from server import budgetowner, db
+            budgetowner.close()
+            with db._lock:
+                db._close_connection_locked()
+        except Exception:
+            pass
     return 0 if result.wasSuccessful() else 1
 
 

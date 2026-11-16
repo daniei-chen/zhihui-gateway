@@ -67,7 +67,9 @@ def _closure() -> set[str]:
     seen: set[str] = set()
     frontier = set()
     for name in roots:
-        frontier |= _linked_docs((_ROOT / name).read_text(encoding='utf-8'))
+        # Root README links outside docs/ resolve against the repository root.
+        # The "简体中文" link is README.md there, not docs/README.md.
+        frontier |= _linked_docs((_ROOT / name).read_text(encoding='utf-8'), Path('..'))
     while frontier:
         name = frontier.pop()
         if name in seen:
