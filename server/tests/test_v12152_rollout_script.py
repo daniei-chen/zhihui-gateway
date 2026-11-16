@@ -17,7 +17,7 @@
 | --- | --- |
 | prepare | 中止，事务保留供排查（内部已重试过乐观锁拒绝） |
 | run | 中止，**不杀进程**（可能有补偿步骤要跑完） |
-| 收尾 | **不判发布失败**（新版本已在跑，收尾只清残留） |
+| 收尾 | **非零退出，但不自动回滚**（新版本已在跑，失败必须人工核对） |
 
 统一 `set -e` 会把这三种情况压成同一个「退出 1」，
 而它们需要的处理完全不同。
@@ -110,15 +110,13 @@ class ItKeepsTheThreeFailuresDistinctTests(unittest.TestCase):
         self.assertNotIn('set -euo', SOURCE)
         self.assertNotIn('set -eu', SOURCE)
 
-    def test_cleanup_failure_does_not_fail_the_release(self):
-        """新版本已经在跑，收尾失败不该把它判成失败。"""
+    def test_cleanup_failure_returns_nonzero_without_blind_rollback(self):
         idx = SOURCE.find('cleanup_rc=$?')
         self.assertGreater(idx, 0)
         window = SOURCE[idx:idx + 500]
-        self.assertIn('发布本身已完成', window,
-                      '没说明收尾失败不影响发布结论')
-        self.assertNotIn('die', window,
-                         '收尾失败调用了 die —— 会把成功发布判成失败')
+        self.assertIn('die', window)
+        self.assertIn('暂停发布', window)
+        self.assertNotIn('rollback', window.lower())
 
     def test_prepare_failure_stops(self):
         idx = SOURCE.find('prepare_with_outer_retry; then')
@@ -195,18 +193,21 @@ class ItChecksTheRuntimeAfterwardsTests(unittest.TestCase):
                       '没查进程 cwd —— 只信符号链接会漏掉「进程还在旧目录」')
 
     def test_it_compares_them(self):
-        self.assertIn('[ "$proc_cwd" != "$target" ]', SOURCE)
+        self.assertIn('[ "$proc_cwd" = "$target" ]', SOURCE)
 
-    def test_mismatch_does_not_fail_the_release(self):
-        """事务已 complete，回滚比这更危险。要报告，不要失败。"""
-        idx = SOURCE.find('[ "$proc_cwd" != "$target" ]')
+    def test_mismatch_returns_nonzero(self):
+        idx = SOURCE.find('[ "$proc_cwd" = "$target" ]')
         self.assertGreater(idx, 0)
-        window = SOURCE[idx:idx + 400]
-        self.assertNotIn('die', window, 'cwd 不一致时判发布失败')
-        self.assertIn('需人工确认', window)
+        window = SOURCE[idx:idx + 180]
+        self.assertIn('die', window, 'cwd 不一致时仍返回成功')
 
-    def test_it_survives_a_missing_pid(self):
-        self.assertIn('取不到主进程 pid', SOURCE)
+    def test_missing_pid_returns_nonzero(self):
+        self.assertIn('主服务没有运行中的 MainPID', SOURCE)
+
+    def test_runtime_release_identity_and_inference_are_checked(self):
+        self.assertIn('/api/release', SOURCE)
+        self.assertIn('/api/readyz', SOURCE)
+        self.assertIn('/v1/models', SOURCE)
 
 
 class TheReasonIsWrittenDownTests(unittest.TestCase):

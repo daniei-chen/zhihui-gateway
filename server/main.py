@@ -503,6 +503,19 @@ def public_ready():
     return JSONResponse({'ok': ready}, status_code=200 if ready else 503)
 
 
+@app.get('/api/release', include_in_schema=False)
+def release_info():
+    """Expose only the immutable release identity used by host cutover checks."""
+    from . import product, release_identity
+    metadata = product.metadata(config.ROOT, managed=True)
+    return JSONResponse({
+        'service': 'zhihui-gateway',
+        'release_id': release_identity.current(),
+        'version': metadata['version'],
+        'source_commit': metadata['source_commit'],
+    }, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/api/readyz/detail', include_in_schema=False)
 def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
     """完整就绪诊断（需面板读者身份）。

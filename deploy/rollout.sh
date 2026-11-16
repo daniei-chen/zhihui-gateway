@@ -48,6 +48,7 @@ ROOT="$RELEASES/$VERSION"
 [ -d "$ROOT" ] || die "版本目录不存在：$ROOT"
 [ -x "$ROOT/deploy/prepare-retry.sh" ] || die "缺 prepare-retry.sh"
 [ -x "$ROOT/deploy/post-migration-cleanup.sh" ] || die "缺 post-migration-cleanup.sh"
+[ -x "$ROOT/deploy/install-resource-budget.sh" ] || die "缺 install-resource-budget.sh"
 [ -f "$STATE/transactions/$TXN/active.json" ] || true   # 首次运行时还不存在，正常
 
 JOURNAL="$STATE/transactions/$TXN/active.json"
@@ -105,6 +106,12 @@ prepare_with_outer_retry() {
     return 1
 }
 
+# The helper is inactive before this point. Installing its finite resource
+# ceiling cannot restart the serving primary.
+say "步骤 0/4 安装 helper 资源上限"
+"$ROOT/deploy/install-resource-budget.sh" || die "helper 资源上限安装失败"
+say "helper 资源上限已复核"
+
 say "步骤 1/4 prepare：$VERSION / $TXN"
 if ! prepare_with_outer_retry; then
     # 到这一步说明外层也跑完了，是别的原因。
@@ -134,17 +141,16 @@ fi
 
 # ── 3. 收尾 ───────────────────────────────────────────────────────────
 #
-# 这一步失败**不**判发布失败：新版本已经在跑，收尾只是清理残留门禁。
-# 但要把失败说清楚，因为它的后果是静默的。
+# 事务已经 complete 时新版本正在服务，因此这里失败不自动回滚代码；
+# 但命令必须非零，让上层停止宣称发布成功并进入人工检查。
 
 say "步骤 3/4 收尾"
 "$ROOT/deploy/post-migration-cleanup.sh" "$TXN"
 cleanup_rc=$?
 if [ "$cleanup_rc" -ne 0 ]; then
-    say "收尾返回 $cleanup_rc —— 发布本身已完成，但门禁可能残留，需人工确认"
-else
-    say "收尾完成"
+    die "版本已切换，但收尾未完成（rc=$cleanup_rc）；新流量保持，暂停发布并核对门禁/对账"
 fi
+say "收尾完成"
 
 # ── 4. 核对：新代码是不是真的在跑 ──────────────────────────────────────
 #
@@ -158,24 +164,27 @@ fi
 # 那比 `current` 符号链接更直接：符号链接指对了，进程可能还在旧目录里跑。
 say "步骤 4/4 核对运行时"
 target=$(readlink -f "$RELEASES/current" 2>/dev/null || true)
-say "current -> ${target:-未知}"
+expected_version=$(cat "$RELEASES/current/.version" 2>/dev/null || true)
+[ -n "$target" ] && [ -n "$expected_version" ] || die "无法确定 current 发布身份"
+say "current -> $target（$expected_version）"
 
 main_pid=$(systemctl show workbuddy-web.service -p MainPID --value 2>/dev/null || true)
-if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
-    proc_cwd=$(readlink -f "/proc/$main_pid/cwd" 2>/dev/null || true)
-    say "主进程 $main_pid cwd = ${proc_cwd:-未知}"
-    if [ "$proc_cwd" != "$target" ]; then
-        # **不判发布失败** —— 事务已经 complete，回滚比这更危险。
-        # 但必须说清楚，因为「部署成功但跑的是旧代码」是最难发现的形态。
-        say "注意：进程 cwd 与 current 不一致 —— 可能仍在跑旧代码，需人工确认"
-    else
-        say "运行时一致（进程确实在 current 指向的目录里）"
-    fi
-else
-    say "取不到主进程 pid，跳过运行时核对"
-fi
+[ -n "$main_pid" ] && [ "$main_pid" != "0" ] || die "主服务没有运行中的 MainPID"
+proc_cwd=$(readlink -f "/proc/$main_pid/cwd" 2>/dev/null || true)
+say "主进程 $main_pid cwd = ${proc_cwd:-未知}"
+[ "$proc_cwd" = "$target" ] || die "进程 cwd 与 current 不一致，可能仍在执行旧代码"
 
-say "发布结束：$(cat "$RELEASES/current/.version" 2>/dev/null)"
+resolved_version=$(curl -fsS --max-time 5 http://127.0.0.1:7866/api/release \
+    | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("release_id",""))')
+[ "$resolved_version" = "$expected_version" ] \
+    || die "运行时 release_id=$resolved_version，期望=$expected_version"
+http_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+    http://127.0.0.1:7866/v1/models || true)
+case "$http_code" in 200|401|403) ;; *) die "真实推理入口不可用（/v1/models HTTP $http_code）" ;; esac
+curl -fsS --max-time 5 http://127.0.0.1:7866/api/readyz >/dev/null \
+    || die "候选版本 readiness 未通过"
+
+say "发布结束：$expected_version"
 say "主服务：$(systemctl is-active workbuddy-web.service 2>/dev/null || true)"
 
 exit 0

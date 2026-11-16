@@ -545,7 +545,7 @@ def test_failed_pointer_replace_cleans_only_own_stage_and_restarts_old(tmp_path,
     monkeypatch.setattr(module.os,'readlink',lambda _: 'old')
     def failed(*a):raise OSError('synthetic replace failure')
     monkeypatch.setattr(module,'point',failed)
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError,match='rollback did not fully verify'):
         module.activate('synthetic','new',lambda:events.append('stop'),lambda:events.append('start-old'),lambda:True)
     assert events==['stop','stop','start-old']
 
@@ -578,7 +578,7 @@ def test_rollback_postcommit_fsync_error_still_starts_the_old_service(monkeypatc
     monkeypatch.setattr(module.os,'readlink',lambda _:current[0])
     def uncertain(_pointer,target):current[0]=target;raise OSError('synthetic directory fsync failed after rename')
     monkeypatch.setattr(module,'point',uncertain)
-    with pytest.raises(RuntimeError,match='durability unconfirmed'):
+    with pytest.raises(RuntimeError,match='rollback did not fully verify'):
         module.activate('synthetic','new',lambda:events.append('stop'),lambda:events.append('start-'+current[0]),lambda:True)
     assert current==['old'] and events==['stop','stop','start-old']
 
