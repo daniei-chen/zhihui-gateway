@@ -219,11 +219,13 @@ class ConfigMaskingAllowlistTest(unittest.TestCase):
         import inspect
 
         from server.services import wb2api
-        src = inspect.getsource(wb2api.load_upstream_config)
-        # The public function now owns the path lock; the existing write policy
-        # lives in its locked helper. Inspect that policy, not just the wrapper.
+        # `load_upstream_config` 后来加了按文件指纹的缓存（每个请求都要算配置指纹，
+        # 原来每次完整读+解析+重建，两百多行压在推理主路径上）。真正按段列表
+        # 重建视图的逻辑移到了 `_load_upstream_config_uncached`，公开函数只剩
+        # 缓存判断。测试的意图（读写同源）不变，但要看**真正干活的那个函数**。
+        read_src = inspect.getsource(wb2api._load_upstream_config_uncached)
         save_src = inspect.getsource(wb2api._save_upstream_config_locked)
-        self.assertIn('_EDITABLE_SECTIONS', src)
+        self.assertIn('_EDITABLE_SECTIONS', read_src)
         self.assertIn('_EDITABLE_SECTIONS', save_src)
 
 

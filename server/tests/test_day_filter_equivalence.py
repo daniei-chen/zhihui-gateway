@@ -163,17 +163,24 @@ class DayFilterEquivalenceTest(unittest.TestCase):
                 self.assertNotEqual(prev, day, f'{day} 的前一秒不该归到当天')
 
     def test_day_start_ts_is_local_not_utc(self) -> None:
-        """零点必须按**本地**时区算（与 day_sql 的 localtime 同口径）。
+        """零点必须按**产品用的那个时区**算（固定 UTC+8，见 `db.day_of`）。
 
         若误用 UTC，UTC+8 机器上会差 8 小时 —— 凌晨的调用会被算到前一天。
-        这里用「该零点再格式化成日期字符串应等于原日期」来验证（跨时区都成立）。
+        这里用「该零点再格式化成日期字符串应等于原日期」来验证。
+
+        注意验证也必须用**同一个时区**：原先这里用 `time.localtime`，它跟随
+        进程 TZ。在 UTC+8 主机上恰好与产品一致；在 UTC runner 上，
+        `day_start_ts` 算的是 UTC+8 零点，而 `localtime` 按 UTC 格式化，
+        得到前一天 —— 断言 `'2026-11-15' != '2026-11-16'` 失败。
+        这是测试的口径错误，不是产品的。
         """
         day = db.day_of()
         ts = db.day_start_ts(day)
-        self.assertEqual(time.strftime('%Y-%m-%d', time.localtime(ts)), day)
+        fmt = lambda value: datetime.fromtimestamp(value, db._DAY_TZ).strftime('%Y-%m-%d')
+        self.assertEqual(fmt(ts), day)
         # 再加一秒仍应落在同一天（证明它是当天最早的时刻，而不是别处的零点）
-        self.assertEqual(time.strftime('%Y-%m-%d', time.localtime(ts + 1)), day)
-        self.assertNotEqual(time.strftime('%Y-%m-%d', time.localtime(ts - 1)), day)
+        self.assertEqual(fmt(ts + 1), day)
+        self.assertNotEqual(fmt(ts - 1), day)
 
 
 if __name__ == '__main__':

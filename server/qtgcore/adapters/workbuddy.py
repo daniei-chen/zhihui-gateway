@@ -40,6 +40,7 @@ workbuddy 这一侧本来就已经是成熟的两层结构，而且**正在对�
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import sqlite3
@@ -48,7 +49,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .. import manager_api
-from ... import cachemetrics
+from ... import cachemetrics, db
 from ..config import Settings
 from .base import BaseAdapter
 from .local_settings import read_panel as _read_settings_panel
@@ -79,8 +80,22 @@ def _reported_cache_rate(hit: int, miss: int) -> float | None:
     return round(hit / (hit + miss), 6) if hit >= 0 and miss >= 0 and hit + miss > 0 else None
 
 
+def _day_start_epoch(day: str) -> int:
+    """把 `db.day_of()` 的日期串换算成**该时区**的零点时间戳。
+
+    `since` 一律来自 `db.day_of()`，那是**固定 UTC+8**（其注释明说「哪怕主机配置
+    被改成 UTC 也一样」）。所以这里不能用 `time.mktime` —— 它跟随进程时区。
+
+    在 UTC 主机上，`mktime('2026-11-16')` 得到的是 UTC 零点，比真实的 UTC+8 零点
+    晚 8 小时，于是凌晨那几小时的样本被排除在窗口外。2026-11-16 由
+    `test_product_stats` 在 `TZ=UTC0` / `TZ=EST5` 下抓出。
+    """
+    return int(datetime.datetime.strptime(day, '%Y-%m-%d')
+               .replace(tzinfo=db._DAY_TZ).timestamp())
+
+
 def _sql_cache_requests(conn: sqlite3.Connection, since: str, realm: str, dimension: str) -> dict:
-    epoch = int(_time.mktime(_time.strptime(since, '%Y-%m-%d')))
+    epoch = _day_start_epoch(since)
     try:
         return cachemetrics.request_rates(conn.execute, epoch, realm, dimension, normalize_models=False)
     except sqlite3.Error:
@@ -90,7 +105,7 @@ def _sql_cache_requests(conn: sqlite3.Connection, since: str, realm: str, dimens
 
 def _sql_throughput(conn: sqlite3.Connection, since: str, realm: str, dimension: str) -> dict:
     group = {"model": "model", "key": "key_id"}[dimension]
-    epoch = int(_time.mktime(_time.strptime(since, "%Y-%m-%d")))
+    epoch = _day_start_epoch(since)
     rf = " AND realm = ?" if realm in ("cn", "global") else ""
     try:
         rows = conn.execute(

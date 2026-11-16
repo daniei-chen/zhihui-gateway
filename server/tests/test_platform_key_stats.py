@@ -106,16 +106,25 @@ class PlatformKeyStatsTests(unittest.TestCase):
         self.assertIsNone(row['total_tokens'])
 
     def test_window_is_local_calendar_bounded_at_next_midnight(self):
-        today = dt.date.today()
-        start = time.mktime(today.timetuple())
-        end = time.mktime((today + dt.timedelta(days=1)).timetuple())
-        self.log(ts=start - 1)
-        self.log(ts=start)
-        self.log(ts=end - 1)
-        self.log(ts=end)
+        # 「当地零点」必须是**产品用的那个时区**（固定 UTC+8，见 `db.day_of`），
+        # 不是进程时区。
+        #
+        # 原先这里用 `dt.date.today()` + `time.mktime` —— 两者都跟随进程 TZ。
+        # 在 UTC+8 主机上恰好与产品一致，测试绿；在 UTC runner 上 today 与产品的
+        # UTC+8 日期错开，`days=2` 的窗口少算一天，断言 `2 != 3` 失败。
+        # 与 `test_product_stats` 那组失败是同一个根因。
+        today = db.day_of()
+        midnight = dt.datetime.combine(
+            dt.date.fromisoformat(today), dt.time.min, tzinfo=db._DAY_TZ)
+        start = midnight.timestamp()
+        end = (midnight + dt.timedelta(days=1)).timestamp()
+        self.log(ts=int(start) - 1)
+        self.log(ts=int(start))
+        self.log(ts=int(end) - 1)
+        self.log(ts=int(end))
         row = self.rows()[0]
         self.assertEqual(row['requests'], 2)
-        self.assertEqual((row['from'], row['to']), (today.isoformat(), today.isoformat()))
+        self.assertEqual((row['from'], row['to']), (today, today))
         self.assertEqual(self.rows(days=2)[0]['requests'], 3)
 
     def test_deleted_key_hidden_and_queries_never_modify_logs_ledger_or_budgets(self):
