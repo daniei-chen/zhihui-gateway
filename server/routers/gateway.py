@@ -1012,6 +1012,18 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         status = 502
     if terminal is None:
         terminal = 'rejected' if 400 <= status < 500 else 'upstream_error' if status >= 500 else 'completed'
+        # 4xx 还要区分「谁拒绝的」，因为 `budget.settle` 靠这个决定是否释放预留：
+        #   · 网关自己拒绝（参数不合法、模型名不在白名单…）→ 上游从未参与 → 可释放；
+        #   · 上游拒绝（渠道校验 11128、配额、提示词过长…）→ 上游看过 → 可能已计费
+        #     → 必须留在 `unknown` 待核对。
+        #
+        # 判据复用 `budget._REJECTED_MARKERS`：那是本项目对「上游明确拒绝」的既有
+        # 定义，`budget._classify` 已经在用同一份清单，不另造一套。
+        if terminal == 'rejected' and state is not None:
+            from .. import budget as _budget
+            text = str(error or '')
+            if any(marker in text for marker in _budget._REJECTED_MARKERS):
+                state.error_stage = 'upstream'
     if state:
         state.terminal_state = terminal
         state.first_token_ms = first_token

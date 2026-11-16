@@ -290,7 +290,14 @@ def parse_source_defaults(server_dir=None, *, refresh=False):
         parts = set(path.parts)
         # tests 不是配置消费者；qtgcore 是**另一个服务**（自带 schema），
         # 用 manager 的模型去判它的变量只会产生假阳性。
-        if 'tests' in parts or 'qtgcore' in parts:
+        #
+        # `deploy` 同理：`server/deploy/update.py` 是**独立运行的更新器**，
+        # 不经过 `validate_environment`（它是被人/定时任务直接执行的脚本）。
+        # 它的 `WB_SYNC_DEPLOY` / `WB_SYNC_UPSTREAM` / `WB_UPSTREAM_PORT` /
+        # `WB_MANAGER_REPO` 等只控制「怎么更新」，与运行时配置无关。
+        # 把它们算进来会让 `test_config_drift` 要求把它们登记进 qtg 的 schema，
+        # 而登记进去反而意味着「运维可以设，服务会校验」——语义是错的。
+        if 'tests' in parts or 'qtgcore' in parts or 'deploy' in parts:
             continue
         try:
             tree = ast.parse(path.read_text(encoding='utf-8'))

@@ -320,10 +320,25 @@ def settle(usage, pt, ct, credit):
     #
     # **排除 429**：限流不代表上游没处理过，它可能已经排队或部分执行。
     # 只认 400/401/403/404/422 这类「看都不看就退回」的状态。
+    #
+    # ## 还必须排除「上游」的 4xx
+    #
+    # `terminal_state == 'rejected'` 只说明**最终状态码是 4xx**，不说明**是谁拒绝的**：
+    # 上游渠道拒绝（例如 11128 `channel_check_rejected`）同样落成 `rejected` + 400，
+    # 但那是上游看过并拒绝的请求，可能已经计费，**不能**当作「没有执行」而释放预留。
+    #
+    # 2026-11-16 修 `state.http_status` 回填之后，这条判据第一次真正生效，于是
+    # `test_rejection_retry_integration` 立刻抓到这个问题：
+    # 上游渠道拒绝的预留被误判为 `released`（该测试要求 `unknown`）。
+    # 判据写得太宽是我的疏漏——回填是对的，这里补上来源判断。
+    #
+    # `error_stage` 是区分来源的现成字段（`upstream` / `stream_read` / `client` /
+    # `protocol`）。只有**非上游**阶段的 4xx 才算客户端拒绝。
     client_rejected = (state.terminal_state == 'rejected'
                        and isinstance(state.http_status, int)
                        and 400 <= state.http_status < 500
-                       and state.http_status != 429)
+                       and state.http_status != 429
+                       and (getattr(state, 'error_stage', None) or '') != 'upstream')
     next_state = ('settled' if known
                   else 'released' if client_rejected or (row['state'] == 'reserved' and not measured.observed)
                   else 'unknown')

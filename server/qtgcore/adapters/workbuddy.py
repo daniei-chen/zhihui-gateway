@@ -722,9 +722,26 @@ class WorkBuddyAdapter(BaseAdapter):
 
     @staticmethod
     def _stats_since(days: int) -> str:
-        """与 manager 的 _since(days) 同口径：本地时区、含今天。"""
+        """与 manager 的 `stats._since(days)` **同口径**：固定 UTC+8、含今天。
+
+        ## 为什么必须用 `db.day_of` 而不是 `time.localtime`
+
+        这里原先写的是 `_time.strftime('%Y-%m-%d', _time.localtime(...))` ——
+        口径跟着**进程时区**走。而 manager 侧 `stats._since` 已经改成
+        `db.day_of`（固定 UTC+8，其注释明说「哪怕主机配置被改成 UTC 也一样」）。
+
+        两者在 Asia/Shanghai 主机上恰好相同，所以看不出问题；在 UTC 主机上
+        差一天：qtg 面板的「今日/近 7 天」与 manager 的统计落在不同日期，
+        同一批用量在两个界面上对不上。
+
+        2026-11-16 由 `test_product_stats` 的
+        `test_sqlite_statistics_cutoff_matches_manager_local_date_not_fixed_china_date`
+        在 UTC 下稳定抓出（`'2026-10-29' != '2026-10-30'`）。该测试的名字就是
+        这条要求本身。
+        """
+        from ... import db as _db
         d = max(1, min(3650, int(days)))
-        return _time.strftime('%Y-%m-%d', _time.localtime(_time.time() - (d - 1) * 86400))
+        return _db.day_of(_time.time() - (d - 1) * 86400)
 
     async def usage_by_model(self, days: int = 30, realm: str = "") -> List[Dict[str, Any]]:
         """照抄 manager 的 /stats/by-model：
