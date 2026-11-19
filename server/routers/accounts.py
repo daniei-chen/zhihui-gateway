@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Reques
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from .. import config, db, security, upstreamsvc
+from .. import accountguard, config, db, security, upstreamsvc
 from ..iputil import client_ip
 from ..services import (
     credits as creditsvc, dailyplan, modelcatalog, reload, renew, tasklog, taskrun,
@@ -1367,6 +1367,7 @@ def cached_group_credits(upstream_id: int | None = Query(None),
 
 @router.post('/accounts/refresh-credits')
 async def refresh_all_credits(
+    request: Request,
     force: bool = True,
     upstream_id: int | None = Query(None),
     user: dict = Depends(security.current_user),
@@ -1395,6 +1396,17 @@ async def refresh_all_credits(
         raise HTTPException(status_code=403, detail='刷新积分需要管理员权限')
     if stale_only and force:
         raise HTTPException(status_code=400, detail='按需后台刷新不能强制绕过缓存')
+
+    # 出口闸门（2026-11-19 批量吊销事故后新增）。
+    # `force=True` 会对**每个账号**向腾讯发一次真实请求 —— 这正是事故当天
+    # 把 38 个账号打光的动作。所以只有它需要过闸门；`stale_only` 走缓存
+    # 与后台退避，不放大成上游扇出。
+    if force:
+        _dir = _require_dir(_group(upstream_id))
+        accountguard.guard_account_action(
+            request, count=len(wb2api.list_auth_accounts(_dir)),
+            what='刷新全部账号积分', batch=True,
+        )
 
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
@@ -1500,7 +1512,8 @@ async def _checkin_with_retry(payload: dict, realm) -> tuple[int, str]:
 
 
 @router.post('/accounts/checkin-all')
-async def checkin_all(upstream_id: int | None = Query(None),
+async def checkin_all(request: Request,
+                      upstream_id: int | None = Query(None),
                       user: dict = Depends(security.require_admin)) -> dict:
     """对所有账号执行一次签到，并逐条记录结果。
 
@@ -1513,6 +1526,11 @@ async def checkin_all(upstream_id: int | None = Query(None),
     """
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
+    # 出口闸门（2026-11-19 批量吊销事故后新增）：全量签到会对每个账号
+    # 打腾讯的签到接口，同样属于批量扇出。
+    accountguard.guard_account_action(
+        request, count=len(accounts), what='全部账号签到', batch=True,
+    )
     done_today = db.checkin_done_since(_today_start())
     sem = _checkin_semaphore()
 
@@ -1959,7 +1977,8 @@ def _refresh_semaphore() -> asyncio.Semaphore:
 
 
 @router.post('/accounts/refresh-tokens')
-async def refresh_all_tokens(upstream_id: int | None = Query(None),
+async def refresh_all_tokens(request: Request,
+                             upstream_id: int | None = Query(None),
                              user: dict = Depends(security.require_admin)) -> dict:
     """一键刷新**所有**账号的 accessToken（issue #40 的批量版）。
 
@@ -1973,6 +1992,12 @@ async def refresh_all_tokens(upstream_id: int | None = Query(None),
     """
     group = _group(upstream_id)
     base_dir = _require_dir(group)
+    # 出口闸门（2026-11-19 批量吊销事故后新增）：一键刷新会向腾讯逐个账号
+    # 换 token，属于最容易触发风控的批量动作，必须先过闸门。
+    accountguard.guard_account_action(
+        request, count=len(wb2api.list_auth_accounts(base_dir)),
+        what='一键刷新全部 Token', batch=True,
+    )
     accounts = wb2api.list_auth_accounts(base_dir)
     sem = _refresh_semaphore()
 
@@ -2044,13 +2069,20 @@ def save_refresh_plan(body: dict,
 
 
 @router.post('/accounts/refresh-plan/run')
-async def run_refresh_plan_now(user: dict = Depends(security.require_admin)) -> dict:
+async def run_refresh_plan_now(request: Request,
+                               user: dict = Depends(security.require_admin)) -> dict:
     """立即执行一次全量刷新（不等下一个整点），并把它算作本轮。
 
     与上面「一键刷新令牌」的共同点：都真续期。区别：那个并发、末尾重载一次上游；
     这里串行（与后台巡检同一套，防腾讯风控），**不重载上游**——写回的凭证由上游
     的 auths 热加载自行收录。执行后重置计划计时，避免刚手动跑完到点又跑一次。
     """
+    # 出口闸门（2026-11-19 批量吊销事故后新增）：全量续期 = 对每个账号打一次
+    # 腾讯刷新接口，正是事故当天那类动作，必须过闸门。
+    accountguard.guard_account_action(
+        request, count=len(wb2api.list_auth_accounts(_require_dir(_group(None)))),
+        what='立即执行全量续期', batch=True,
+    )
     stats = await renew.refresh_all(force=True)
     renew.mark_plan_ran()
     plan = renew.get_plan()
