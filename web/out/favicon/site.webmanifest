@@ -1,0 +1,25 @@
+{
+  "name": "智汇网关",
+  "short_name": "智汇",
+  "lang": "zh-CN",
+  "description": "智汇网关 · WorkBuddy / Qoder / Trae 多平台控制台",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#f8f9fb",
+  "background_color": "#f8f9fb",
+  "icons": [
+    {
+      "src": "android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
