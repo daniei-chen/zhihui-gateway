@@ -8,7 +8,8 @@ import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 
 /**
- * 平台切换（豆包工作 / Trae / WorkBuddy）。豆包工作排第一：它顶替了 qoder 原来的位置。
+ * 平台切换（WorkBuddy / Trae / 豆包工作）。WorkBuddy 排第一：它是当前主力平台，
+ * 账号池最厚、在线流量最大。
  *
  * 2026-11-19：qoder 官方不再送积分，qtg 不再接入它，平台位置由豆包工作接管。
  * 这里**不再产出 qoder 选项** —— `lib/platform-store.ts` 的 `Platform` 类型里仍保留
@@ -26,19 +27,19 @@ export function PlatformToggle({compact = false}: {compact?: boolean}) {
   const t = useT();
   const options: {id: Platform; label: string; title: string; icon: typeof Bot}[] = [
     {
+      id: 'workbuddy',
+      label: 'WorkBuddy',
+      title: t('platform.workbuddyHint'),
+      icon: Cloud,
+    },
+    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
+    {
       id: 'doubaowork',
       // 走 i18n：前两个平台名是英文专名（Trae / WorkBuddy），中文产品名
       // 若在这里写死，en/ja/ko 界面会突然出现中文。
       label: t('platform.doubaoworkShort'),
       title: t('platform.doubaoworkHint'),
       icon: Brain,
-    },
-    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
-    {
-      id: 'workbuddy',
-      label: 'WorkBuddy',
-      title: t('platform.workbuddyHint'),
-      icon: Cloud,
     },
   ];
 

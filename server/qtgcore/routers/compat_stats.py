@@ -21,7 +21,7 @@ from ._shared import _rt
 router = APIRouter(prefix="/api", tags=["compat-stats"])
 
 # 2026-11-19：qoder 摘除，豆包工作顶替它的位置（顺序即 UI 显示顺序）。
-PLATFORMS = ("doubaowork", "trae", "workbuddy")
+PLATFORMS = ("workbuddy", "trae", "doubaowork")
 
 
 def _platform(request: Request) -> str:

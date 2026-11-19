@@ -40,7 +40,7 @@ class PlatformEnumTests(unittest.TestCase):
         """2026-11-19：豆包工作进默认集合，qoder 移除。
 
         这条测试守的是「权限放大」：新平台曾经不能自动进默认集合。
-        但现在豆包是**主力平台**（顶替 qoder 的位置），它必须默认可用；
+        但现在豆包已接入（顶替 qoder 的位置），它必须默认可用；
         而 qoder 已经整体摘除，留在默认集合里会让 normalize 产出
         一个 PLATFORMS 里不存在的平台。
         """
@@ -48,7 +48,7 @@ class PlatformEnumTests(unittest.TestCase):
         self.assertNotIn('qoder', platformpolicy.DEFAULT_PLATFORMS,
                          'qoder 已摘除，不得出现在默认授予集合')
         self.assertEqual(list(platformpolicy.DEFAULT_PLATFORMS),
-                         ['doubaowork', 'trae', 'workbuddy'])
+                         ['workbuddy', 'trae', 'doubaowork'])
         # 默认集合必须是全集子集，否则 normalize 会产出非法平台
         self.assertTrue(set(platformpolicy.DEFAULT_PLATFORMS)
                         <= set(platformpolicy.PLATFORMS))
@@ -62,7 +62,9 @@ class PlatformEnumTests(unittest.TestCase):
 
     def test_normalize_keeps_stable_order(self):
         got = platformpolicy.normalize(['workbuddy', 'doubaowork'])
-        self.assertEqual(got, ['doubaowork', 'workbuddy'])
+        # 输出按 PLATFORMS 的声明顺序归一，不保留入参顺序：
+        # 现在是 WorkBuddy 第一、豆包工作第三。
+        self.assertEqual(got, ['workbuddy', 'doubaowork'])
 
     def test_qoder_is_recognisable_but_not_served(self):
         """qoder 摘除后的语义是「可识别、但不可用」，不是「非法」。

@@ -50,8 +50,8 @@
  */
 export type Platform = 'qoder' | 'trae' | 'workbuddy' | 'doubaowork';
 
-// 顺序即 UI 显示顺序：豆包工作顶替 qoder 原来的第一位。
-export const PLATFORMS: readonly Platform[] = ['doubaowork', 'trae', 'workbuddy'] as const;
+// 顺序即 UI 显示顺序：WorkBuddy 第一（主力平台）、Trae 第二、豆包工作第三。
+export const PLATFORMS: readonly Platform[] = ['workbuddy', 'trae', 'doubaowork'] as const;
 
 /** 与 `PlatformProvider`、axios 拦截器共用的存储键（沿用线上既有键，不迁移）。 */
 export const PLATFORM_STORAGE_KEY = 'qtg.platform';

@@ -8,8 +8,14 @@ from urllib.parse import quote
 # 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
 #
 # **对外枚举**：UI 切换器、`/api/platforms`、`_CAP_MATRIX` 都只认这三个。
-# 顺序即显示顺序，豆包在第一位（qoder 原来的位置）。
-PLATFORMS = ('doubaowork', 'trae', 'workbuddy')
+#
+# 顺序即显示顺序：**WorkBuddy 第一**（当前主力平台，账号池最厚、在线流量最大），
+# Trae 第二，豆包工作第三（新接入，上游尚未上线）。
+#
+# 注意这跟 `compat_fixes.UPSTREAM_IDS` 的**编号**是两件事：那里 1/2/3 是
+# 外部面板的编号契约（豆包=1、Trae=2、WorkBuddy=3），**不随显示顺序重排** ——
+# 重排会让已对接的外部面板把账号归错平台。改这里只影响 UI 展示次序。
+PLATFORMS = ('workbuddy', 'trae', 'doubaowork')
 
 # **内部可解析集合**：比 `PLATFORMS` 多一个已摘除的 `qoder`。
 #
@@ -33,7 +39,8 @@ _ACCEPTED = PLATFORMS + ('qoder',)
 # 新平台绝不允许自动进入这里；而任何系统代建路径都必须**显式**传本常量，
 # 否则新增平台就会静默生效——红包密钥正是这种路径（`redpacket.py` 已显式传）。
 # 2026-11-19：豆包工作加入默认授予集合，qoder 移除。
-DEFAULT_PLATFORMS = ('doubaowork', 'trae', 'workbuddy')
+# 顺序与 `PLATFORMS` 一致（WorkBuddy → Trae → 豆包工作）。
+DEFAULT_PLATFORMS = ('workbuddy', 'trae', 'doubaowork')
 current_platform: ContextVar[str] = ContextVar('forced_platform', default='')
 
 

@@ -41,7 +41,7 @@ from ...iputil import client_ip
 router = APIRouter(tags=["data-plane"])
 
 # 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
-PLATFORMS = ("doubaowork", "trae", "workbuddy")
+PLATFORMS = ("workbuddy", "trae", "doubaowork")
 
 # 进程内在途计数：用于每 key 并发上限。单进程部署够用；
 # 多副本时要换成 Redis（与 WorkBuddy 的已知短板一致，已写入文档）。

@@ -32,7 +32,9 @@ router = APIRouter(prefix="/api", tags=["compat-fixes"])
 
 # 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
 # 注意顺序就是 UI 里的显示顺序 —— 豆包放在原来 qoder 的第一位。
-PLATFORMS = ("doubaowork", "trae", "workbuddy")
+# 显示顺序：WorkBuddy 第一（主力平台）、Trae 第二、豆包工作第三。
+# **不要**把它跟下面的 `UPSTREAM_IDS` 编号对齐 —— 编号是外部契约，不随显示顺序变。
+PLATFORMS = ("workbuddy", "trae", "doubaowork")
 
 _SERIES = (
     ("auto", "Auto"), ("qwen", "Qwen"), ("deepseek", "DeepSeek"),
