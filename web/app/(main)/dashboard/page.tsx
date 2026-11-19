@@ -61,6 +61,7 @@ import {StatCard, type StatTone} from '@/components/common/layout/StatCard';
 import {CreditCountdown} from '@/components/common/accounts/CreditCountdown';
 import {EmptyState} from '@/components/common/layout/EmptyState';
 import {LoadError} from '@/components/common/states/LoadError';
+import {PlatformDisabledPanel, usePlatformEnabled} from '@/components/common/states/PlatformDisabledPanel';
 import {SkeletonBar} from '@/components/common/states/SkeletonBar';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
@@ -248,6 +249,20 @@ export default function DashboardPage() {
   const slices: GroupSlice[] = values.pool ?? EMPTY_SLICES;
   const summary: StatsSummary | null = values.summary ?? null;
   const daily: UsagePoint[] = values.daily ?? EMPTY_POINTS;
+
+  /**
+   * 当前平台是否**未启用**（引擎没挂），以及它的说明文案。
+   *
+   * 判据来自 `/api/platforms` 的 `enabled`（机器可读布尔值），不解析中文 note。
+   * `PlatformDisabledNotice`（布局层那条黄色横幅）用的是同一个接口，但它是
+   * **常驻横幅**，不改变页面主体的错误态；这里要的是「别把未启用画成加载失败」。
+   *
+   * 拿不到能力矩阵时按「已启用」处理（`disabled=false`）：升级顺序不一致时
+   * 不能凭空把正常页面改成「未启用」。
+   */
+  const platformEnabled = usePlatformEnabled();
+  const platformDisabled = platformEnabled.enabled === false;
+  const platformDisabledNote = platformEnabled.note;
 
   /**
    * 账号那一块没取到。
@@ -445,6 +460,22 @@ export default function DashboardPage() {
   // 首屏：还没拿到任何数据。此时**不能**渲染下面的卡片——它们会把「还没取到」
   // 显示成「暂无账号」「暂无调用数据」，那是在撒谎。一次都没取到（失败）同理：
   // 页面上没有任何可信数字，直接给错误态与「重试」，而不是一直转圈。
+  //
+  // **例外：平台未启用**（2026-11-19）。`doubaowork` 的引擎默认是 off，
+  // 此时上游根本没挂，四份数据**必然全部失败** —— 那不是「取数出错」，
+  // 是「这个平台现在没有后端」。两者对用户的含义完全不同：
+  //   · 错误态 →「网关坏了 / 网络断了」，用户会去点重试、去查服务
+  //   · 未启用 →「这个平台没开」，用户知道该找谁、该改哪个开关
+  // 之前一律走错误态，豆包页面就显示「数据加载失败」，看起来像网关崩了。
+  if (platformDisabled) {
+    return (
+      <div className="flex flex-col gap-4 md:gap-6">
+        {header}
+        <PlatformDisabledPanel note={platformDisabledNote} />
+      </div>
+    );
+  }
+
   if (isInitialFailed || isInitialLoading) {
     return (
       <div className="flex flex-col gap-4 md:gap-6">
