@@ -552,8 +552,12 @@ app.include_router(qtg_panel.router)
 # 2026-10-27 审计 H-001（第一步）：以下 11 个 router 文件的**全部端点**都不在
 # _QTGP_ROUTE_PREFIXES 白名单内（67 条路由、命中 0 次），已整文件删除：
 #   actions adapter anthropic auth authz capabilities data_admin health ip_guard read system
-# proxy.py **未删**：路由同样不可达，但 compat.py 依赖其中的
-# _base / _catalog / _upstream_key（函数级引用）。
+# proxy.py **未删**，但原因不是"还有人用"：它当年被 compat.py 函数级引用
+# （_base / _catalog / _upstream_key），**该引用现已不存在** —— compat.py 里
+# 没有任何 `_base(`/`_catalog(`/`_upstream_key`，全仓也没有 `from .proxy import`。
+# 它现在是一份纯死代码，保留只因为删除属于一次独立的清理。
+# 注意它内部 `_base`/`_upstream_key` 的 if/elif 只有 qoder/trae 两个分支，
+# doubaowork 会落到 trae（拿 Trae 的地址与密钥）——真有人接线前必须先补分支。
 from .qtgcore.routers import (compat as _qc,
     compat_accounts_ext as _qace, compat_fixes as _qcf, compat_settings as _qcs,
     compat_stats as _qst)
@@ -600,7 +604,12 @@ async def _qtg_platform_route(request, call_next):
             platform = (request.query_params.get("platform") or "").strip().lower()
         except Exception:  # noqa: BLE001  取不到就当没有
             platform = ""
-    if platform in ("qoder", "trae") and _qtg_should_route(path):
+    # 这里列出「数据面由 qtgcore 托管」的平台。workbuddy 不在其中——它走
+    # manager 自己的原生实现（accounts.py / status 等），这是历史分工。
+    # doubaowork 必须在这里：它的账号/模型/统计只在 qtgcore 的 compat 层实现过，
+    # 漏掉这一项会让第四个平台的请求落到 manager 的 WorkBuddy handler 上
+    # （显示 WorkBuddy 的账号池，写操作也会写进 WorkBuddy 的目录）。
+    if platform in ("qoder", "trae", "doubaowork") and _qtg_should_route(path):
         try:
             # Identity resolution may wait on a file/SQLite lock. Keep that
             # blocking work off the loop that also delivers inference streams.

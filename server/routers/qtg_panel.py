@@ -52,7 +52,27 @@ async def _rt_or_503() -> Runtime:
         return await get_rt()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503,
-                            detail=f'qoder/trae 控制面不可用：{exc}') from exc
+                            detail=f'控制面不可用：{exc}') from exc
+
+
+def _need_qoder(rt: Runtime, what: str = '该功能'):
+    """qoder 是可摘除的平台（2026-11-19 起默认 `off`）。
+
+    下面几个端点直接调 `rt.qoder.xxx`。摘掉后 `rt.qoder` 是 `None`，
+    再点进去就是 `AttributeError` → 500。这里统一给一个**说清原因**的 503，
+    而不是让面板抛一个看不出所以然的 500。
+
+    为什么不做成「自动切到别的平台」：这些端点的语义就是「qoder 的密钥 /
+    模型 / 日志 / 告警 / 请求记录」，换成别的平台就是答非所问。
+    """
+    if getattr(rt, 'qoder', None) is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(f'{what}属于 qoder 能力，而 qoder 已摘除'
+                    '（QTG_QODER_ENGINE=off）。要看豆包工作的同类数据请用 '
+                    '/api/* 端点。'),
+        )
+    return rt.qoder
 
 
 def _panel_scope(request: Request, *, authority: str = 'upstream'):
@@ -101,7 +121,7 @@ async def tasks(user: dict = Depends(security.current_user)):
 @router.get('/keys')
 async def keys(user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    qs = await rt.qoder.settings()
+    qs = await _need_qoder(rt, "密钥与设置").settings()
     tk = await rt.trae.keys()
     return qservice.keys_payload(qs or {}, tk or {})
 
@@ -115,7 +135,7 @@ async def models(user: dict = Depends(security.current_user)):
     # config_generation —— 平台之间不会互相覆盖，配置变更也不会命中旧目录。
     qm = await cache.get_or_set(
         scoped_key('qoder.models', fixed('qoder', authority='upstream')),
-        rt.settings.cache_models_sec, rt.qoder.models)
+        rt.settings.cache_models_sec, _need_qoder(rt, "模型清单").models)
     tm = await cache.get_or_set(
         scoped_key('trae.models', fixed('trae', authority='upstream')),
         rt.settings.cache_models_sec, rt.trae.models)
@@ -125,7 +145,7 @@ async def models(user: dict = Depends(security.current_user)):
 @router.get('/logs')
 async def logs(user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    ql = await rt.qoder.logs()
+    ql = await _need_qoder(rt, "控制面日志").logs()
     tl = await rt.trae.logs()
     return qservice.logs_payload(ql or {}, tl or {})
 
@@ -133,7 +153,7 @@ async def logs(user: dict = Depends(security.current_user)):
 @router.get('/alerts')
 async def alerts(user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    qa = await rt.qoder.alerts()
+    qa = await _need_qoder(rt, "控制面告警").alerts()
     ts = await rt.trae.settings()
     return qservice.alerts_payload(qa or {}, ts or {})
 
@@ -142,7 +162,7 @@ async def alerts(user: dict = Depends(security.current_user)):
 async def requests_rows(days: int = Query(default=3, ge=1, le=30),
                         user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    qu = await rt.qoder.usage(days)
+    qu = await _need_qoder(rt, "用量统计").usage(days)
     tu = await rt.trae.usage(days)
     return qservice.requests_payload(qu or {}, tu or {}, days)
 
@@ -165,7 +185,7 @@ async def ops(user: dict = Depends(security.current_user)):
 async def settings(request: Request,
                    user: dict = Depends(security.current_user)):
     rt = await _rt_or_503()
-    qs = await rt.qoder.settings()
+    qs = await _need_qoder(rt, "密钥与设置").settings()
     ts = await rt.trae.settings()
     from ..qtgcore import __version__ as qtgcore_version
     from ..qtgcore.cache import cache

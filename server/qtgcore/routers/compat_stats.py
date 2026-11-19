@@ -20,7 +20,8 @@ from ._shared import _rt
 
 router = APIRouter(prefix="/api", tags=["compat-stats"])
 
-PLATFORMS = ("qoder", "trae", "workbuddy")
+# 2026-11-19：qoder 摘除，豆包工作顶替它的位置（顺序即 UI 显示顺序）。
+PLATFORMS = ("doubaowork", "trae", "workbuddy")
 
 
 def _platform(request: Request) -> str:
@@ -40,6 +41,12 @@ def _get(obj: Any, key: str, default: Any = 0) -> Any:
 
 
 def _merge_daily(payload: Any, days: int, platform: str) -> List[Dict[str, Any]]:
+    # 豆包工作的上游没有用量接口。这里**必须返回空列表**：给 `days` 个全 0 的
+    # 桶会让前端画出一条「每天 0 请求」的曲线，那是把「上游不给数据」讲成
+    # 「这段时间确实没有调用」——两个完全不同的事实。
+    # 空列表在页面上表现为「暂无数据」，是真话。
+    if platform == "doubaowork":
+        return []
     buckets: Dict[str, Dict[str, Any]] = {
         d: {"day": d, "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
             "credit": 0.0, "failed": 0}
@@ -96,6 +103,7 @@ async def _realm_available(request: Request, platform: str, realm: str) -> bool:
         "qoder": agg.qoder_accounts,
         "trae": agg.trae_accounts,
         "workbuddy": agg.wb_accounts,
+        "doubaowork": agg.doubaowork_accounts,
     }.get(platform, [])
     observed={('global' if str(getattr(a,'realm','')).lower()=='intl' else str(getattr(a,'realm','') or 'cn').lower()) for a in rows}
     if len(observed)>1:
@@ -157,13 +165,25 @@ async def stats_summary(request: Request, realm: str = Query(default="")) -> Dic
 
     rt, payload = await _payload(request, 14)
     platform = _platform(request)
-    daily = _merge_daily(payload, 14, platform)
+    # 与 /stats/daily 同口径：豆包工作的上游不给用量，用本机代理流水。
+    if platform == 'doubaowork':
+        daily = rt.store.daily(14, 'doubaowork')
+    else:
+        daily = _merge_daily(payload, 14, platform)
     today = dt.date.today().isoformat()
     week_from = (dt.date.today() - dt.timedelta(days=6)).isoformat()
     today_row = next((d for d in daily if d["day"] == today), None)
     week_rows = [d for d in daily if d["day"] >= week_from]
     by_model = _get(payload, "by_model", []) or []
     top = next((m for m in by_model if _get(m, "platform", platform) == platform), None)
+    top_model = str(_get(top, "model", "")) if top else None
+    if platform == 'doubaowork':
+        # `by_model` 来自上游 usage，豆包工作没有；改从本机流水里取最活跃的模型。
+        try:
+            _rows = rt.store.stats(14, 'doubaowork').get('by_model') or []
+            top_model = str(_rows[0]['model']) if _rows and _rows[0].get('model') else None
+        except Exception:  # noqa: BLE001 - 聚合失败不该让整页报表 500
+            top_model = None
     return {
         "today_requests": int(today_row["requests"]) if today_row else 0,
         "today_tokens": int(today_row["prompt_tokens"] + today_row["completion_tokens"]) if today_row else 0,
@@ -178,7 +198,7 @@ async def stats_summary(request: Request, realm: str = Query(default="")) -> Dic
         "lifetime_totals_known": False,
         "active_keys": len([k for k in rt.store.list_keys()
                             if platform in (k.get("platforms") or PLATFORMS)]),
-        "top_model": str(_get(top, "model", "")) if top else None,
+        "top_model": top_model,
         "stats_health": {"ok": True, "detail": ""},
         "usage_health": {"ok": True, "detail": "", "logs_today": 0},
     }
@@ -194,6 +214,10 @@ async def stats_daily(request: Request, days: int = Query(default=14),
         return (await scoped(max(1, min(90, days)), realm))['daily']
     if not await _realm_available(request, _platform(request), realm):
         return []
+    # 豆包工作的上游没有用量接口 —— 用**本机代理流水**按天聚合，
+    # 那是「经过 qtg 的转发量」的真数据，不是补零。qoder/trae 仍走上游 usage。
+    if _platform(request) == 'doubaowork':
+        return _rt(request).store.daily(max(1, min(90, days)), 'doubaowork')
     _, payload = await _payload(request, days)
     return _merge_daily(payload, days, _platform(request))
 
@@ -289,6 +313,11 @@ async def stats_by_key(request: Request, days: int = Query(default=30),
     if _platform(request) == "workbuddy" and w is not None:
         # An empty current-key list is authoritative, not a fallback signal.
         return await w.usage_by_key(days, realm)
+    if _platform(request) == "doubaowork":
+        # 豆包工作的上游没有用量接口，「按密钥的用量」无从谈起。
+        # 明确 409 + 原因，别让调用方拿到一个含糊的 503「来源不可用」。
+        raise HTTPException(status_code=409,
+                            detail='豆包工作上游不提供用量接口，无法按密钥统计')
     raise HTTPException(status_code=503, detail='Manager key-usage source unavailable')
 
 

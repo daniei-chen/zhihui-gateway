@@ -205,7 +205,10 @@ def requested_platform(request) -> str:
             raw = ''
     if not raw:
         return ''
-    if raw not in platformpolicy.PLATFORMS:
+    if raw not in platformpolicy._ACCEPTED:
+        # `_ACCEPTED` 含已摘除的 qoder：它的请求应该走到下游被明确拒绝
+        # （runtime.qoder is None），而不是在这里报「未知平台」——
+        # 那会把「平台已下线」误导成「你名字写错了」。
         raise ScopeConflict(f'未知平台：{raw[:24]!r}', 'invalid_platform')
     return raw
 
@@ -243,7 +246,7 @@ def for_request(request, *, authority: str = 'local_db', realm: object = None,
 def fixed(platform: str = PLATFORM_ALL, realm: str = REALM_ALL, *,
           authority: str = 'local_db') -> Scope:
     """给"与请求无关"的调用点（缓存预热、后台任务、测试）用的固定作用域。"""
-    if platform != PLATFORM_ALL and platform not in platformpolicy.PLATFORMS:
+    if platform != PLATFORM_ALL and platform not in platformpolicy._ACCEPTED:
         raise ScopeConflict(f'未知平台：{platform!r}', 'invalid_platform')
     if realm != REALM_ALL and realm not in REALMS:
         raise ScopeConflict(f'未知 realm：{realm!r}', 'invalid_realm')

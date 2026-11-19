@@ -1,5 +1,13 @@
 """数据面：对外提供统一的 OpenAI 兼容入口。
 
+> **注意：本模块当前没有被任何地方 import（已确认全仓无 `from .proxy` / 无路由注册）。**
+> 实际在用的数据面是 `server/routers/gateway.py` 的 `_THREEWAY_SPEC` 与 compat 层。
+> 保留它是因为 `_host_platform` 等辅助函数曾被引用过，删掉需要一次跨文件核对。
+> **若将来重新接线**：本文件的 `_base`/`_upstream_key` 的 if/elif 链只有
+> qoder/trae 两个分支，`doubaowork` 会落到 else（拿 Trae 的地址与密钥）——
+> 接线前必须先补 `doubaowork` 分支，否则第四个平台的请求会串到 Trae。
+> 这是「死代码里的一颗雷」，特意写在这里而不是让它沉默。
+
 设计要点（对照 WorkBuddy 的数据面取舍）：
 
 * **一个 base URL + 一个 key**：客户端只认 qtg 的 `sk-qtg-*`，由 qtg 决定打到
@@ -32,7 +40,8 @@ from ...iputil import client_ip
 
 router = APIRouter(tags=["data-plane"])
 
-PLATFORMS = ("qoder", "trae", "workbuddy")
+# 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
+PLATFORMS = ("doubaowork", "trae", "workbuddy")
 
 # 进程内在途计数：用于每 key 并发上限。单进程部署够用；
 # 多副本时要换成 Redis（与 WorkBuddy 的已知短板一致，已写入文档）。
@@ -87,6 +96,10 @@ def _host_platform(request: Request) -> str:
     # 直连 127.0.0.1 则返回 "" 不限制——三平台都能用。
     if "workbuddy" in host or "codebuddy" in host:
         return "workbuddy"
+    # 豆包工作：匹配 doubao / doubaowork 域名。放在最前是因为
+    # "doubao" 比其余关键字更具体，且不与 workbuddy 的子串冲突。
+    if "doubaowork" in host or "doubao" in host:
+        return "doubaowork"
     if "trae" in host:
         return "trae"
     if "qoder" in host:
@@ -272,6 +285,10 @@ async def _platform_credits(rt) -> Dict[str, float]:
         from ..service import build_aggregate, summarize
 
         agg = await build_aggregate(rt)
+        # 豆包工作**故意不出现**在这里：它的 `credits_remain` 恒为 0，但那个 0
+        # 的含义是「上游不提供额度」，不是「余额为零」。把它放进来会让
+        # 「按余额优选」把豆包工作永久排到最后，等于用一个未知值参与排序。
+        # 需要它时请用显式平台路由（`/doubaowork/v1` 或模型前缀）。
         return {
             "qoder": summarize(agg.qoder_accounts).credits,
             "trae": summarize(agg.trae_accounts).credits,

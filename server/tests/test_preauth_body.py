@@ -35,7 +35,7 @@ class PreauthBodyTests(_Fixture):
         return status, value, len(reads)
 
     def test_missing_and_invalid_credentials_never_read_body_or_reserve_capacity(self):
-        for prefix in ('', '/workbuddy', '/qoder', '/trae'):
+        for prefix in ('', '/workbuddy', '/doubaowork', '/trae'):
             for protocol in (*PROTOCOLS, 'messages/count_tokens'):
                 for auth in ((), (('Authorization', 'Bearer wbk_invalid'),)):
                     with self.subTest(prefix=prefix, protocol=protocol, auth=bool(auth)):
@@ -71,7 +71,7 @@ class PreauthBodyTests(_Fixture):
                     self.assertEqual(value['error']['code'], code)
 
     def test_global_ip_policy_and_explicit_platform_are_checked_before_body(self):
-        key = self.key(platforms=['qoder'])
+        key = self.key(platforms=['doubaowork'])
         for protocol in PROTOCOLS:
             for headers in ((('Authorization', 'Bearer ' + key['key']), ('X-QTG-Platform', 'trae')),
                             (('Authorization', 'Bearer ' + key['key']),)):
@@ -102,9 +102,9 @@ class PreauthBodyTests(_Fixture):
 
     def test_model_platform_selection_and_alias_realm_checks_are_not_guessed_from_headers(self):
         for protocol in PROTOCOLS:
-            key = self.key(platforms=['qoder'], models=['qoder/m'])
+            key = self.key(platforms=['doubaowork'], models=['doubaowork/m'])
             with self.mock_transport(lambda _: httpx.Response(200, json=GOOD)):
-                response = self.post(protocol, key=key, model='qoder/m')
+                response = self.post(protocol, key=key, model='doubaowork/m')
             self.assertEqual(response.status_code, 200, response.text)
         key = self.key(models=['alias'], realm='global')
         db.set_setting('model_map', {'alias': 'global:m'})

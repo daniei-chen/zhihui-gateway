@@ -42,10 +42,15 @@ forced_platform = platformpolicy.current_platform
 _THREEWAY_SPEC = {
     'qoder': ('http://127.0.0.1:8799', '/opt/workbuddy-manager/engine/secrets/qoder_upstream_key'),
     'trae': ('http://127.0.0.1:8080', '/opt/workbuddy-manager/engine/secrets/aiwork_api_key'),
+    # 豆包工作：直连 doubaowork2api 的 OpenAI 兼容数据面。
+    # 密钥是**上游自己的** sk-（在 doubaowork2api 面板创建），不是 qtg 的 sk-qtg。
+    'doubaowork': ('http://127.0.0.1:18789',
+                   '/opt/workbuddy-manager/engine/secrets/doubaowork_upstream_key'),
 }
 _THREEWAY_ROUTE_FILES = {
     'qoder': '/opt/workbuddy-manager/engine/var/qoder_gateway_base',
     'trae': '/opt/workbuddy-manager/engine/var/trae_gateway_base',
+    'doubaowork': '/opt/workbuddy-manager/engine/var/doubaowork_gateway_base',
 }
 _DYNAMIC_UPSTREAM_LOCK = threading.Lock()
 _DYNAMIC_UPSTREAM_CACHE: dict[str, tuple[tuple[object, ...], str | None]] = {}
@@ -1372,8 +1377,11 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
             logger.warning('provider dispatch 记录失败 request_id=%s', state.request_id)
         headers['X-Manager-Dispatch-ID'] = dispatch_id
         headers['X-WB-Compatibility'] = 'manager-scoped-v1'
+        # 这个分支的语义是「**非直连三路**的平台才加 WorkBuddy 的预算/剩余时间头」。
+        # 判据必须与 `_THREEWAY_SPEC` 一致：qoder/trae/豆包工作 都是直连上游，
+        # 不该收到 WorkBuddy 专属 header，也不该被打开 provider 预算逻辑。
         platform = getattr(state, 'actual_platform', None) or forced_platform.get() or up.get('name')
-        if platform not in ('qoder', 'trae'):
+        if platform not in ('qoder', 'trae', 'doubaowork'):
             state.provider_budget_enabled = True
             headers['X-WB-Attempt-Budget'] = str(state.provider_attempts_remaining)
             from .. import deadline as provider_deadline
@@ -2215,9 +2223,10 @@ def _scope_models(payload: object, key: dict | None, *, platform: str = 'workbud
         return {**payload, 'data': [item for item in payload['data'] if isinstance(item, dict)
             and portalpolicy.model_allowed(item.get('id'))
             and portalpolicy.model_allowed(_map_model(item.get('id')))]}
-    # qoder/trae 的模型 id 不属于 workbuddy 的 cn/global realm；对它们做
+    # qoder/trae/豆包工作 的模型 id 不属于 workbuddy 的 cn/global realm；对它们做
     # realm 裁剪会把整张清单清空。白名单维度仍然保留（那是密钥授权）。
-    want = '' if platform in ('qoder', 'trae') else keysvc._norm_realm(key.get('realm'))
+    # 豆包工作尤其明显：适配器的 realm 恒为空，任何 realm 过滤都会全空。
+    want = '' if platform in ('qoder', 'trae', 'doubaowork') else keysvc._norm_realm(key.get('realm'))
     allow = [str(x) for x in (key.get('models') or []) if str(x).strip()]
     if not want and not allow:
         return payload

@@ -208,11 +208,17 @@ def create_packet(name: str, kind: str, total: float, shares: int,
                 (title, kind, float(total), shares, mode,
                  json.dumps(model_list), code, actor, int(time.time()), expires_at),
             ).lastrowid
+            # 红包是**系统代建**密钥：必须显式给保守集合。`create_key` 的默认值
+            # 走 `platformpolicy.normalize(None)`，那是「全部平台」——新增的
+            # 豆包工作会因此对每一张红包密钥静默生效（权限放大）。
+            from . import platformpolicy
+            _conservative_platforms = list(platformpolicy.DEFAULT_PLATFORMS)
             for i, amount in enumerate(amounts, start=1):
                 made = keysvc.create_key(
                     name=f'{title}-{i}',
                     expires_at=expires_at,
                     models=model_list,      # 积分红包不填时为 []（= 不限制）
+                    platforms=_conservative_platforms,
                     quota=amount if kind == KIND_TOKEN else 0,
                     quota_credit=amount if kind == KIND_CREDIT else 0,
                     _conn=conn,          # ← 在同一个事务里，由本函数统一提交

@@ -41,8 +41,8 @@ def platform_for(request: Request | None, body: dict | None = None) -> str:
     if body and body.get('platform') is not None:
         values.append(body['platform'])
     if any(not isinstance(v, str) or v.strip().lower() not in
-           ('workbuddy', 'qoder', 'trae') for v in values):
-        _deny(400, '授权平台无效，请重新选择 WorkBuddy、Qoder 或 Trae')
+           ('workbuddy', 'qoder', 'trae', 'doubaowork') for v in values):
+        _deny(400, '授权平台无效，请重新选择 WorkBuddy、Qoder、Trae 或豆包工作')
     normalized = {v.strip().lower() for v in values}
     if len(normalized) > 1:
         _deny(400, '授权平台参数不一致，请刷新页面后重试')
@@ -89,7 +89,11 @@ async def _adapter(request, platform):
             rt = await get_rt()
         except Exception:
             _deny(503, '当前平台的授权服务不可用，请稍后重试')
-    adapter = getattr(rt, platform, None)
+    # Runtime 上的属性名与平台名不总相同：workbuddy 挂在 `wb`，豆包工作挂在
+    # `dbw`。直接 getattr(rt, platform) 会返回 None，然后被误报成「未配置」
+    # —— 那是把「我们没接上」说成「部署没配」，排障会走错方向。
+    _ATTR = {'workbuddy': 'wb', 'doubaowork': 'dbw'}
+    adapter = getattr(rt, _ATTR.get(platform, platform), None)
     if adapter is None:
         _deny(503, '当前平台的授权服务未配置')
     return adapter
@@ -241,6 +245,12 @@ async def start(request, user, platform, realm, upstream_id, body):
                 _deny(502, 'Qoder 未返回有效授权会话')
         else:
             out = await adapter.oauth_login_url()
+            # 适配器可以明确声明「本平台没有 OAuth 流程」（豆包工作用 Cookie
+            # JSON 导入）。此时必须把它给出的原因以 409 透出，不能继续往下
+            # 校验一个不存在的 URL —— 那会报「上游授权链接格式异常」，
+            # 与用户实际要做的事无关。
+            if isinstance(out, dict) and out.get('ok') is False:
+                _deny(409, str(out.get('error') or '当前平台不支持该授权方式'))
             auth_url = out.get('url')
             query = _query(_url(auth_url, 'www.trae.cn', '/authorization'), status=502)
             engine_state = out.get('state')

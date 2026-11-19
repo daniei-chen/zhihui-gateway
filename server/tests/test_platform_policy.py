@@ -37,7 +37,15 @@ class PlatformSelectionTest(unittest.TestCase):
             migrations._key_platforms(conn)
             row = conn.execute('SELECT id, name, platforms FROM api_keys').fetchone()
             self.assertEqual(row[:2], (7, 'old'))
-            self.assertEqual(json.loads(row[2]), list(platformpolicy.PLATFORMS))
+            # 历史迁移 v5 **故意**回填当时的三平台，不对齐当前 PLATFORMS：
+            #   1. 补列只该授予当时的保守集合，不能把后来新增的平台回填给历史密钥
+            #      （那是权限放大）；
+            #   2. 该步骤受 schemaver 指纹校验，原地改实现会让数据库拒绝启动。
+            # 所以这里断言的是「**回填值稳定不变**」，而不是「等于当前 PLATFORMS」。
+            self.assertEqual(json.loads(row[2]), ['workbuddy', 'qoder', 'trae'])
+            # 并且必须确认它确实**不等于**当今枚举 —— 否则上面的「故意不对齐」
+            # 就退化成一句空话，将来有人顺手对齐也没人发现。
+            self.assertNotEqual(json.loads(row[2]), list(platformpolicy.PLATFORMS))
         finally:
             conn.close()
 

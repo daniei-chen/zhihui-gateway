@@ -58,7 +58,9 @@ export function PageSectionTabs() {
   if (!here) return null;
 
   const items: SectionTabItem[] = SECTION_NAV[here.section].filter(item =>
-    item.href !== '/tasks' || platform === 'workbuddy',
+    // 「任务记录」只有真的、有签到体系的平台才显示：WorkBuddy 与豆包工作。
+    // qoder/trae 点进去只会是空的，所以不给他们长这个入口。
+    item.href !== '/tasks' || ['workbuddy', 'doubaowork'].includes(platform),
   ).map((item) => ({
     href: item.href,
     label: t(item.labelKey),

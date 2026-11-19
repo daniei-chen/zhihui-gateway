@@ -19,6 +19,7 @@ import hashlib
 import math
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -28,7 +29,7 @@ from pydantic import BaseModel
 
 from .. import manager_api
 from ..checkin_result import classify_result, reward_amount
-from ..checkin_scheduler import dispatch_checkin
+from ..checkin_scheduler import automatic_owner, dispatch_checkin
 from ..manager_session import forward_logout, wb_cookie_header
 from ..service import all_accounts, build_aggregate, now_iso, summarize, tasks_payload
 # U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
@@ -36,6 +37,18 @@ from ..service import all_accounts, build_aggregate, now_iso, summarize, tasks_p
 from ._shared import _rt
 
 router = APIRouter(prefix="/api", tags=["compat"])
+
+# 平台 → Runtime 上的适配器属性名。qoder/trae 同名，workbuddy 挂 `wb`，
+# 豆包工作挂 `dbw`。集中在这一处，避免再写
+# `rt.trae if platform == 'trae' else rt.qoder` 这种把第四平台派给 Qoder 的
+# 二元选择（那会让豆包工作的账号被拿去问 Qoder 刷新令牌）。
+_ADAPTER_ATTR = {'qoder': 'qoder', 'trae': 'trae',
+                 'workbuddy': 'wb', 'doubaowork': 'dbw'}
+
+
+def _adapter_of(rt: Any, platform: str):
+    """取该平台在 Runtime 上的适配器；未启用时返回 None（调用方须显式处理）。"""
+    return getattr(rt, _ADAPTER_ATTR.get(str(platform or ''), ''), None)
 
 
 # ------------------------------------------------------------------ 认证
@@ -105,11 +118,55 @@ def _checkin_epoch(a) -> Optional[int]:
     return today0
 
 
+def _doubaowork_checkin_epoch(rt, uid: str) -> Optional[int]:
+    """豆包工作：今天这个账号签过吗？（返回 epoch 秒）
+
+    它的签到**不走上游**、由 qtg 自己执行（`adapters/doubao_checkin.py`），
+    结果落在 `var/doubaowork_checkin.jsonl`。上游没有「签到表」可读，
+    所以那份历史是唯一事实来源。
+
+    只认 `claimed` / `already` 两种状态：`confirming`（提交了但没确认）、
+    `not_open_yet`（窗口未开）、`fail` 都不算今天签过——把「提交过」当成
+    「签成了」会让账号页显示一个假的绿勾。
+    """
+    try:
+        from ..adapters import doubao_checkin
+    except Exception:  # noqa: BLE001 - 导入失败不该拖垮账号列表
+        return None
+    data_dir = str(getattr(getattr(rt, "settings", None), "data_dir", "") or "")
+    if not data_dir:
+        return None
+    history = str(Path(data_dir) / "doubaowork_checkin.jsonl")
+    tz = dt.timezone(dt.timedelta(hours=8))
+    today = dt.datetime.now(tz).strftime("%Y-%m-%d")
+    try:
+        rows = doubao_checkin.read_history(history, days=1, limit=1000)
+    except Exception:  # noqa: BLE001
+        return None
+    for row in rows:
+        if str(row.get("uid") or "") != uid:
+            continue
+        if str(row.get("status") or "") not in ("claimed", "already"):
+            continue
+        if not str(row.get("ts") or "").startswith(today):
+            continue
+        try:
+            naive = dt.datetime.strptime(str(row["ts"])[:19], "%Y-%m-%dT%H:%M:%S")
+        except (ValueError, TypeError, KeyError):
+            return None
+        return int(naive.replace(tzinfo=tz).timestamp())
+    return None
+
+
 def _map_account(rt, a) -> Dict[str, Any]:
     now = time.time()
     expires = a.expires_at or 0
     remain = max(0, int(expires - now)) if expires else 0
     healthy = a.state == "ready"
+    # 豆包工作的签到记录不在上游，在 qtg 自己的历史文件里（见上）。
+    _checkin = _checkin_epoch(a)
+    if _checkin is None and a.platform == "doubaowork":
+        _checkin = _doubaowork_checkin_epoch(rt, a.uid)
     return {
         "file": f"{a.platform}:{a.uid}",
         "uid": a.uid,
@@ -118,7 +175,10 @@ def _map_account(rt, a) -> Dict[str, Any]:
         "expires_at": expires,
         "is_expired": a.state == "expired",
         "remain_seconds": remain,
-        "credits": a.credits_remain,
+        # 豆包工作的上游**不返回余额**。给 null 让前端显示「—」（`fmtCredit`
+        # 已经支持 null/undefined → '—'），而不是 0——0 的意思是「余额为零」，
+        # 那是另一个事实。
+        "credits": None if a.platform == "doubaowork" else a.credits_remain,
         "healthy": healthy,
         "disabled": a.state == "disabled",
         "disabled_reason": a.note or None,
@@ -142,7 +202,7 @@ def _map_account(rt, a) -> Dict[str, Any]:
         "realm": "global" if str(a.realm).lower() in ("intl", "global") else "cn",
         "state": a.state,
         # 前端 pendingCheckin / 每行「已完成」都读这个字段（null = 今天还没签）
-        "checkin_today": _checkin_epoch(a),
+        "checkin_today": _checkin,
         "checked_today": bool(getattr(a, "checked_today", False)),
     }
 
@@ -275,7 +335,9 @@ async def compat_logs(
     plat = platform_of(request)
     if plat == "workbuddy":
         return await _wb_logs(rt, days, status, page, size or limit or 20, offset)
-    if plat not in ("qoder", "trae"):
+    # 必须列出**所有**由 qtgcore 托管的平台。落进 else 的 `plat=""` 是
+    # 「不过滤」——那会让豆包工作的日志页显示全网关（Qoder/Trae/豆包）的流水。
+    if plat not in ("qoder", "trae", "doubaowork"):
         plat = ""
     rows = rt.store.list_requests(1000, platform=plat)
     since = _time.time() - max(1, min(90, days)) * 86400
@@ -373,8 +435,12 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
                           "code": None, "message": message, "earned_credit": amount,
                           "reward_status": kind})
         items.sort(key=lambda row: row['ts'], reverse=True)
-        from pathlib import Path
-        from ..checkin_scheduler import _load, _today, automatic_owner, dispatch_state
+        # 不要在函数体内 `from pathlib import Path`：那会把 Path 变成**整个函数**
+        # 的局部名，于是别的分支（如 doubaowork 的提前返回）在没走到这行时
+        # 引用 Path 会 UnboundLocalError。Path 已在模块顶部导入。
+        # `automatic_owner` 已在模块顶部导入（见文件头的 import 注释）：
+        # 在这里再 import 会让它成为**整个函数**的局部名，别的分支用不了。
+        from ..checkin_scheduler import _load, _today, dispatch_state
         try:
             state = _load(Path(rt.settings.data_dir) / 'random_checkin.json')
             scheduler_state = 'uncertain' if 'qoder' in state.get('uncertain', {}) else 'confirmed' if state.get('day') == _today() and 'qoder' in state.get('done', {}) else 'scheduled' if state.get('day') == _today() else 'unknown'
@@ -390,6 +456,39 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
                 "scheduler": {"state": scheduler_state, "automation_owner": await automatic_owner(rt, 'qoder')},
                 "evidence_source": "engine_local_activity", "history_limit": 1000,
                 "note": "引擎本地动作流水，不是上游发放凭证；零奖励不等于今日已领"}
+    # 豆包工作的签到记录**不依赖上游**：它由 qtg 自己执行（adapters/doubao_checkin.py），
+    # 结果落在本机 `var/doubaowork_checkin.jsonl`。所以必须在 `build_aggregate`
+    # **之前**返回 —— 否则上游熔断/不可达时（`UpstreamError`）会 500，
+    # 把一个「本机能回答」的问题变成错误页。2026-11-16 本机试用时实测到。
+    if plat == "doubaowork":
+        from ..adapters import doubao_checkin
+
+        history = str(Path(str(getattr(rt.settings, "data_dir", "") or "."))
+                      / "doubaowork_checkin.jsonl")
+        rows = doubao_checkin.read_history(history, days=days, limit=1000)
+        for row in rows[offset:offset + limit]:
+            status = str(row.get("status") or "")
+            items.append({
+                "id": abs(hash(str(row.get("uid")) + str(row.get("ts")))) % 100000,
+                "ts": 0,
+                "uid": str(row.get("uid") or ""),
+                "nickname": str(row.get("nickname") or ""),
+                "source": "manual",
+                "kind": "checkin",
+                "success": status in ("claimed", "success"),
+                "code": None,
+                "date": str(row.get("ts") or "")[:10],
+                "ok": 1 if status in ("claimed", "success") else 0,
+                "already": 1 if status == "already" else 0,
+                "failed": 0 if row.get("ok") else 1,
+                "message": str(row.get("message") or ""),
+            })
+        return {"total": len(items), "items": items, "local_total": len(items),
+                "auto_total": 0,
+                "scheduler": {"state": "scheduled",
+                              "automation_owner": await automatic_owner(rt, "doubaowork")},
+                "evidence_source": "qtg_local_checkin_log", "history_limit": 1000,
+                "note": "qtg 自己在豆包官方接口上执行的签到记录；不是上游发放凭证"}
     agg = await build_aggregate(rt)
     if plat == "qoder":
         for a in agg.qoder_accounts:
@@ -419,6 +518,12 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
                 "failed": int(row.get("failed") or 0),
                 "message": f"{row.get('date','')} 成功 {ok_n} · 失败 {row.get('failed',0)}",
             })
+    elif plat == "doubaowork":
+        # 这里原本有一段读本机历史的实现，但 `doubaowork` 在函数开头就已经
+        # **提前返回**了（因为它的记录不依赖上游，不该等 `build_aggregate`）。
+        # 保留分支只为说明它为何是空的：走到这里说明上面的提前返回被改坏了，
+        # 那是个 bug，不是「没有记录」。
+        pass
     else:
         for row in (agg.trae_raw.get("checkin") or []):
             if not isinstance(row, dict):
@@ -525,6 +630,8 @@ def _platform_rows(request: Request, agg) -> tuple[str, list]:
         return plat, list(agg.trae_accounts)
     if plat == "workbuddy":
         return plat, list(agg.wb_accounts)
+    if plat == "doubaowork":
+        return plat, list(agg.doubaowork_accounts)
     return "", all_accounts(agg)
 
 
@@ -668,9 +775,19 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
     disabled = body['disabled']
     adapter = _adapter_for(rt, platform)
     if adapter is None:
+        # 标出**这个平台自己的**开关名：原来四个平台都写 QTG_WB_ENGINE=off，
+        # 豆包工作的人照着去关 workbuddy，排查方向直接错。
+        env = {"workbuddy": "QTG_WB_ENGINE", "qoder": "QTG_QODER_ENGINE",
+               "trae": "QTG_TRAE_ENGINE", "doubaowork": "QTG_DOUBAOWORK_ENGINE"}.get(
+                   platform, "该平台引擎")
         return {"success": False, "disabled": not disabled,
-                "message": f"{platform} 平台未启用（QTG_WB_ENGINE=off）"}
-    res = await adapter.set_account(uid, not disabled)
+                "message": f"{platform} 平台未启用（{env}=off 或上游未接入）"}
+    try:
+        res = await adapter.set_account(uid, not disabled)
+    except ValueError as exc:
+        # 适配器的 _safe_id 会拒非法账号 id。那是**请求问题**，应当是 400，
+        # 不能让它冒成 500（前端只会显示一个红色 XHR 错误）。
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not _res_ok(res):
         detail = res if isinstance(res, dict) else {}
         msg = str(detail.get("error") or detail.get("message")
@@ -883,6 +1000,23 @@ async def compat_checkin_all(request: Request) -> Dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 results.append({"nickname": "WorkBuddy", "ok": False,
                                 "message": str(exc)[:160], "code": None})
+    if plat == "doubaowork":
+        d = getattr(rt, "dbw", None)
+        if d is None:
+            return {"total": 0, "succeeded": 0, "already": 0, "skipped": 0,
+                    "results": [], "unsupported": True, "no_reward": 0,
+                    "message": "豆包工作平台未启用（QTG_DOUBAOWORK_ENGINE=off），未执行任何签到"}
+        outcome = await d.checkin()
+        # 签到模块（adapters/doubao_checkin.py）直接返回标准契约
+        # （total/succeeded/already/failed/message/reward_total），不要再用
+        # `_batch_results` 二次包装——那会把「已签/风控/无任务」三态压平成
+        # 通用的 ok/message，丢掉 reward 与连签天数。
+        if isinstance(outcome, dict) and outcome.get("results") is not None:
+            return {**outcome,
+                    "skipped": int(outcome.get("failed") or 0),
+                    "no_reward": 0,
+                    "unsupported": bool(outcome.get("unsupported"))}
+        results += _batch_results(outcome)
     # 前端契约（lib/api.ts checkinAll）：total 只算「本次真正发起签到」的账号，
     # 今天已签的进 already、不适用的进 skipped —— 它们既不算成功也不算失败。
     already_rows = [r for r in results if r.get("already")]
@@ -920,7 +1054,12 @@ async def compat_refresh_tokens(request: Request) -> Dict[str, Any]:
     failed: List[str] = []
     for a in rows:
         file = f"{a.platform}:{a.uid}"
-        adapter = rt.trae if a.platform == "trae" else rt.qoder
+        adapter = _adapter_of(rt, a.platform)
+        if adapter is None:
+            results.append({"file": file, "nickname": a.name or a.uid, "uid": a.uid,
+                            "ok": False, "message": f"{a.platform} 适配器未启用"})
+            failed.append(file)
+            continue
         try:
             result = await adapter.refresh_account(a.uid)
             ok = _res_ok(result)
@@ -961,6 +1100,16 @@ async def compat_refresh_credits(request: Request, force: str = Query(default="t
     rt = _rt(request)
     from ..service import build_pool_snapshot
     selected = platform_of(request)
+    # **先判平台，再碰聚合层**。豆包工作没有额度接口，而 `build_pool_snapshot`
+    # 在引擎 off（默认值）时会直接抛 UpstreamError → 502「当前平台未启用」，
+    # 用户看到的是「网关崩了」，而不是「这个平台没有额度接口」。
+    # 原来的写法把判断放在 build 之后，等于没修。
+    if selected == "doubaowork":
+        enabled = getattr(rt, "dbw", None) is not None
+        return {"total": 0, "succeeded": 0, "credits": {}, "meta": {},
+                "failed": [], "unsupported": True,
+                "message": ("豆包工作上游不提供额度接口，无法刷新积分" if enabled
+                            else "豆包工作平台未启用（QTG_DOUBAOWORK_ENGINE=off）")}
     agg = await build_pool_snapshot(rt, selected, force=force.lower() == 'true')
     plat, rows = _platform_rows(request, agg)
     credits: Dict[str, Optional[float]] = {}
@@ -1062,7 +1211,10 @@ async def compat_refresh_plan_run(request: Request) -> Dict[str, Any]:
     checked = renewed = failed_n = 0
     for a in rows:
         checked += 1
-        adapter = rt.trae if a.platform == "trae" else rt.qoder
+        adapter = _adapter_of(rt, a.platform)
+        if adapter is None:
+            failed_n += 1
+            continue
         try:
             result = await adapter.refresh_account(a.uid)
             if _res_ok(result):

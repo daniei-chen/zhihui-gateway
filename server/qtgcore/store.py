@@ -436,6 +436,53 @@ class Store:
             for h in range(24)
         ]
 
+    def daily(self, days: int = 14, platform: str = "") -> List[Dict[str, Any]]:
+        """按天分桶的真实用量（数据源是本机 `proxy_requests`），与 `hourly` 同构。
+
+        为什么需要它：豆包工作的上游（doubaowork2api）**没有用量接口**，但
+        经过 qtg 的请求 qtg 自己有记录 —— 那才是「这个网关实际转发了多少」的
+        真数据。qoder/trae 仍优先用上游 usage（更权威，能覆盖不经 qtg 的调用）；
+        这个只用于「上游不给数据」的平台。
+
+        口径要说清：它是**经过 qtg 的流量**，不等于该平台的全部消费。
+        页面文案应当据此措辞，不能写成「该平台今日总用量」。
+        """
+        n = max(1, min(90, int(days)))
+        today = dt.datetime.now(_CST).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = (today - dt.timedelta(days=n - 1)).timestamp()
+        end = (today + dt.timedelta(days=1)).timestamp()
+        sql = ("SELECT epoch, prompt_tokens, completion_tokens, status FROM proxy_requests"
+               " WHERE epoch>=? AND epoch<?")
+        params: List[Any] = [start, end]
+        if platform:
+            sql += " AND platform=?"
+            params.append(platform)
+        buckets: Dict[str, Dict[str, Any]] = {}
+        for i in range(n):
+            day = (today - dt.timedelta(days=n - 1 - i)).strftime("%Y-%m-%d")
+            buckets[day] = {"day": day, "requests": 0, "prompt_tokens": 0,
+                            "completion_tokens": 0, "failed": 0, "credit": 0.0}
+        try:
+            with self._conn() as conn:
+                for row in conn.execute(sql, params).fetchall():
+                    ts = dt.datetime.fromtimestamp(float(row["epoch"] or 0), _CST)
+                    b = buckets.get(ts.strftime("%Y-%m-%d"))
+                    if b is None:
+                        continue
+                    b["requests"] += 1
+                    b["prompt_tokens"] += int(row["prompt_tokens"] or 0)
+                    b["completion_tokens"] += int(row["completion_tokens"] or 0)
+                    if int(row["status"] or 0) >= 400:
+                        b["failed"] += 1
+        except sqlite3.Error:
+            pass
+        out: List[Dict[str, Any]] = []
+        for day in sorted(buckets):
+            b = buckets[day]
+            b["total_tokens"] = b["prompt_tokens"] + b["completion_tokens"]
+            out.append(b)
+        return out
+
     def key_usage_today(self, key_id: str) -> int:
         """当日该 key 已用 token（用于 daily_limit 判断）。"""
         day_start = time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d"))

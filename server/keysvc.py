@@ -634,11 +634,17 @@ def validate(key: dict, ip: str, model: str | None,
     # "不默认全平台"。所以迁移台账保留原值，这里按请求生效平台守住边界。
     # 状态码用 400：与 realm/模型白名单同属"请求与密钥不匹配"，不是密钥本身坏了。
     from . import platformpolicy
-    if platform not in platformpolicy.PLATFORMS:
+    # `_ACCEPTED` 含已摘除的 qoder：存量密钥里可能还写着它，这里报
+    # 「未知平台」会让一条历史密钥的鉴权 400 —— 那既不是用户填错，
+    # 也不是密钥坏了。让它继续走到下游，由 `runtime.qoder is None`
+    # 给出明确的「平台已下线」。
+    if platform not in platformpolicy._ACCEPTED:
         return Rejection('未知平台', 400, 'invalid_request_error', 'invalid_platform')
     if key.get('platform_policy_valid') is False:
         return Rejection('密钥平台策略损坏，请管理员修复', 403, 'permission_error', 'invalid_key_policy')
-    platforms = key.get('platforms', list(platformpolicy.PLATFORMS))
+    # 缺 platforms 字段时退回**保守**集合（三平台），不是全集：
+    # 新增豆包工作平台后，旧行不得因"没写这一列"而自动获得它的访问权。
+    platforms = key.get('platforms', list(platformpolicy.DEFAULT_PLATFORMS))
     legacy = key.get('legacy_platforms')
     if legacy is not None:
         platforms = [p for p in platforms if p in legacy]

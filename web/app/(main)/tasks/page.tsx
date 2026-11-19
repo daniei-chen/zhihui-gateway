@@ -162,7 +162,11 @@ export default function TasksPage() {
   const {platform} = usePlatform();
   const router = useRouter();
   useEffect(() => {
-    if (platform !== 'workbuddy') router.replace('/dashboard');
+    // 签到记录页：WorkBuddy 与**豆包工作**都有签到体系（后者走豆包官方网页接口，
+    // 见 server/qtgcore/adapters/doubao_checkin.py）。qoder/trae 没有这套记录，
+    // 直接访问时回首页，而不是让人看一屏空数据。
+    const TASK_PLATFORMS: string[] = ['workbuddy', 'doubaowork'];
+    if (!TASK_PLATFORMS.includes(platform)) router.replace('/dashboard');
   }, [platform, router]);
   const {isAdmin} = useAuth();
   const {realm, label: realmName} = useRealm();

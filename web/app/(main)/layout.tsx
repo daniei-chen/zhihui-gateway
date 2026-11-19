@@ -6,6 +6,7 @@ import {ManagementBar} from '@/components/common/layout/ManagementBar';
 import {CommandPalette} from '@/components/common/layout/CommandPalette';
 import {RealmToggle} from '@/components/common/layout/RealmToggle';
 import {PlatformToggle} from '@/components/common/layout/PlatformToggle';
+import {PlatformDisabledNotice} from '@/components/common/layout/PlatformDisabledNotice';
 import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
 import {BrandHome} from '@/components/common/layout/BrandHome';
 import {ConsoleAtmosphere} from '@/components/common/layout/ConsoleAtmosphere';
@@ -62,7 +63,7 @@ export default function MainLayout({
                   <BrandHome />
                   <div className="zh-console-controls">
                     {!loading && me && <CommandPalette />}
-                    {/* 平台（WorkBuddy / Qoder / Trae）是大维度，版本是它下面的细分 */}
+                    {/* 平台（WorkBuddy / Qoder / Trae / 豆包工作）是大维度，版本是它下面的细分 */}
                     <PlatformToggle />
                     <RealmToggle />
                     <LanguageToggle />
@@ -76,6 +77,10 @@ export default function MainLayout({
                   挂载用的是 **epoch** 而不是 platform：见 lib/platform-context.tsx 的
                   说明——水合到持久化平台不算「切换」，否则首屏数据会被请求两遍。
                 */}
+                {/* 引擎未启用时说清楚「是没接入，不是账号丢了」。
+                    平台 pill 本身无条件显示（纯客户端状态），所以这句必须由
+                    服务端的 /api/platforms 来兜。 */}
+                <PlatformDisabledNotice />
                 <PlatformScope>{!loading && me ? children : null}</PlatformScope>
               </main>
             </div>

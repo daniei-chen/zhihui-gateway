@@ -381,6 +381,13 @@ export const accountApi = {
       credits: Record<string, number | null>;
       meta: Record<string, CreditsMeta>;
       failed: string[];
+      /**
+       * 后端明确表示「这个平台没有额度接口」时会置 true（豆包工作就是这种）。
+       * 前端必须读它——否则 `failed` 为空会被当成「刷新成功」，弹出绿色
+       * 「积分已刷新 0/0」，把「不提供」渲染成「已发生」。
+       */
+      unsupported?: boolean;
+      message?: string;
     }>('/api/accounts/refresh-credits?force=' + (force ? 'true' : 'false')
        + (upstreamId == null ? '' : `&upstream_id=${encodeURIComponent(String(upstreamId))}`)
        + (staleOnly ? '&stale_only=true' : '')),
@@ -398,6 +405,8 @@ export const accountApi = {
       skipped: number;
       no_reward?: number;
       message?: string;
+      /** 该平台没有签到接口（豆包工作）时为 true；此时 total=0 且 message 是原因。 */
+      unsupported?: boolean;
       results: {
         nickname: string; ok: boolean; message: string;
         code?: number; skipped?: boolean; already?: boolean;
@@ -842,4 +851,27 @@ export const pgSyncApi = {
   importData: () =>
     post<{ok: boolean; message: string; status: PgSyncStatus}>('/api/settings/pg-sync/import'),
   status: (signal?: AbortSignal) => get<PgSyncStatus>('/api/settings/pg-sync/status', undefined, signal),
+};
+
+/**
+ * 平台能力矩阵。
+ *
+ * `enabled` 是**引擎是否真的挂上了**（`QTG_*_ENGINE=off` 时为 false）：
+ * 与「这个平台有没有账号」是两件事。界面切到未启用的平台时应当说明，
+ * 否则用户会把「没接入」看成「账号全丢了」。
+ */
+export const platformApi = {
+  list: (signal?: AbortSignal) =>
+    get<{
+      platforms: {
+        id: string;
+        name: string;
+        upstream_id: number;
+        readonly: boolean;
+        enabled: boolean;
+        capabilities: Record<string, boolean | string>;
+        note: string;
+      }[];
+      total: number;
+    }>('/api/platforms', undefined, signal),
 };

@@ -482,7 +482,8 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
              'credits': {'remain': 20}}]}))
         bad = SimpleNamespace(health=AsyncMock(side_effect=RuntimeError('private-secret')), accounts=AsyncMock(return_value={}))
         with patch.object(steward_snapshot, 'local_facts', return_value={'observed_at': 1}):
-            result = await steward_snapshot.collect(SimpleNamespace(wb=good, qoder=good, trae=bad))
+            # 2026-11-19：平台列表是 (workbuddy, trae, doubaowork)，qoder 已摘除。
+            result = await steward_snapshot.collect(SimpleNamespace(wb=good, trae=good, dbw=bad))
         self.assertTrue(all_started.is_set(), 'both independent probes start before either completes')
         self.assertEqual([r['state'] for r in result['platforms']], ['up', 'up', 'unknown'])
         self.assertNotIn('must-not-leak', json.dumps(result))

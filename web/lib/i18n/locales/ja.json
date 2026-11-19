@@ -173,6 +173,7 @@
     "global": "グローバル版",
     "cnTitle": "中国版（codebuddy.cn）",
     "globalTitle": "グローバル版（workbuddy.ai）",
+    "doubaoworkNoRealm": "Doubao Work に中国版／国際版の区分はなく、この切り替えは効きません",
     "note": "現在は**グローバル版**（workbuddy.ai）を表示しています。グローバル版には**毎日チェックイン / 猫の旅行 / 新学期 / 夜猫タスク**がありません（クレジットは一度きりの trial のみ）。キープアライブとアクティビティ報告は通常どおり実行されるため、タスク記録が少なくても正常で、データ消失ではありません。"
   },
   "format": {
@@ -312,6 +313,7 @@
     "cacheHitRate": "キャッシュヒット率",
     "dailyAgg": "日次集計",
     "noUsageData": "使用量データがありません",
+    "localTrafficOnly": "このプラットフォームの上流には使用量 API がありません。ここの数字は**このゲートウェイ経由**の転送量のみで、クライアント直結は含みません。",
     "byModel": "モデル別",
     "byKey": "キー別",
     "emptyTitle": "データがありません",
@@ -393,6 +395,7 @@
     "emptyRealmTitle": "{realm}にアカウントがありません",
     "emptyRealmDesc": "アカウントプールにはアカウントがありますが、このバージョンに属するものはありません。もう一方のバージョンに切り替えてみてください。",
     "creditsRefreshed": "クレジットを更新しました",
+    "creditsUnsupported": "このプラットフォームの上流にはクレジット API がないため更新できません",
     "creditsRefreshedDetail": "{ok}/{total} 件のアカウント",
     "creditsPartial": "一部のアカウントでクレジットを取得できませんでした",
     "creditsPartialDetail": "{ok}/{total} 件成功。残りはアカウントの状態をご確認ください",
@@ -1212,6 +1215,7 @@
     "callbackPlaceholder": "認証完了後の最終アドレスを貼り付け",
     "descTrae": "Trae 公式リンクを開くかコピーし、ログイン後の最終認証結果アドレスを貼り付けてください。",
     "traeGlobalUnsupported": "現在の Trae エンジンは国際版の認証に未対応です。中国版を選択してください。WorkBuddy には転送しません。",
+    "doubaoworkImportOnly": "Doubao Work のアカウントは OAuth 認証を使いません。上流の doubaowork2api パネルでアカウント JSON を書き出し、「アカウントをアップロード」で取り込んでください。他のプラットフォームへは転送しません。",
     "requestingPlatform": "{platform} 認証セッションを作成中…",
     "waitingPlatform": "{platform} の認証待ちです。ログイン後、この画面で接続結果を確認してください。",
     "waitingCallback": "公式ページでログインし、最終アドレスを貼り付けて接続します。",
@@ -2039,7 +2043,10 @@
     "switch": "プラットフォーム切替",
     "workbuddyHint": "WorkBuddy · アカウント、モデル、使用量、認証",
     "qoderHint": "Qoder · 中国版と国際版の個別デバイス認証",
-    "traeHint": "Trae · 現在は中国版のコールバック認証に対応"
+    "traeHint": "Trae · 現在は中国版のコールバック認証に対応",
+    "doubaoworkHint": "Doubao Work（豆包工作）· サブスク枠を上流エンジンのアカウントプール経由で接続",
+    "doubaoworkShort": "Doubao Work",
+    "disabledNotice": "このプラットフォームのエンジンは有効化されていません。アカウントやデータは表示されませんが、アカウントが失われたわけではありません。"
   },
   "intake": {
     "eyebrow": "ZHIHUI · アカウント接続",

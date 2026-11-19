@@ -89,7 +89,7 @@ class KeyIn(KeyLimitsModel):
     # 版本归属：'' = 不限制（存量密钥的形态）。非 cn/global 的值由
     # keysvc._norm_realm 归一化成 ''——不报错，免得旧前端（不带该字段）被拒。
     realm: str = Field(default='', max_length=16)
-    platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
+    platforms: list[Literal['workbuddy', 'qoder', 'trae', 'doubaowork']] | None = None
 
 
 class KeyPatch(KeyLimitsModel):
@@ -107,7 +107,7 @@ class KeyPatch(KeyLimitsModel):
     daily_credit_quota: float | None = Field(default=None, ge=0, le=9_000_000_000_000, allow_inf_nan=False)
     assigned_to: str | None = Field(default=None, max_length=32)
     realm: str | None = None
-    platforms: list[Literal['workbuddy', 'qoder', 'trae']] | None = None
+    platforms: list[Literal['workbuddy', 'qoder', 'trae', 'doubaowork']] | None = None
 
     @field_validator('platforms')
     @classmethod

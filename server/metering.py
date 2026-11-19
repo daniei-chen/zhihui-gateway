@@ -160,11 +160,14 @@ def route_attribution(*, entry_platform: str = '', requested_model: str | None =
     source = ''
     upstream = upstream or {}
     name = str(upstream.get('name') or '').strip().lower()
-    if name in ('qoder', 'trae'):
+    # 直连三路（gateway._THREEWAY_SPEC）的情况：upstream.name 就是平台名。
+    # 必须与 _THREEWAY_SPEC 的键保持一致，否则该平台的请求会被记成
+    # workbuddy —— 「日志说的」与「实际走的」不一致，正是本函数要消除的问题。
+    if name in ('qoder', 'trae', 'doubaowork'):
         actual, source = name, 'threeway'
     elif entry:
         actual, source = entry, 'forced'
-    elif prefix in ('qoder', 'trae'):
+    elif prefix in ('qoder', 'trae', 'doubaowork'):
         actual, source = prefix, 'model_prefix'
     elif upstream.get('id'):
         actual, source = 'workbuddy', 'key_upstream'

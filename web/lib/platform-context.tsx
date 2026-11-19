@@ -9,7 +9,7 @@ export type {Platform};
 export {DEFAULT_PLATFORM};
 
 /**
- * 平台切换（Qoder / Trae / WorkBuddy）。
+ * 平台切换（Qoder / Trae / WorkBuddy / 豆包工作）。
  *
  * 与 `realm`（账号所在版本：国内 / 国际）是**两个独立维度**：
  *
@@ -17,7 +17,9 @@ export {DEFAULT_PLATFORM};
  *   版本 = 该平台下这个账号属于国内站还是国际站
  *
  * 顶部两个切换器并存：先选平台，再看该平台下的版本。
- * 三平台共用智汇控制面；写操作按当前平台的真实能力分流，不跨平台兜底。
+ * 四个平台共用智汇控制面；写操作按当前平台的真实能力分流，不跨平台兜底。
+ * 豆包工作（doubaowork）默认**未启用**（后端 `QTG_DOUBAOWORK_ENGINE=off`）：
+ * 切过去会看到空账号池，这是「未接入」而不是「没有账号」。
  *
  * 默认 WorkBuddy（与线上历史行为一致；审计勘误表已撤回「首访必显示 Qoder」）。
  *
@@ -87,7 +89,7 @@ export function PlatformProvider({children}: {children: React.ReactNode}) {
     () => ({
       platform,
       setPlatform,
-      label: platform === 'trae' ? 'Trae' : platform === 'workbuddy' ? 'WorkBuddy' : 'Qoder',
+      label: PLATFORM_LABEL[platform],
       epoch,
     }),
     [platform, setPlatform, epoch],
@@ -100,8 +102,29 @@ export function usePlatform(): PlatformCtx {
   const ctx = useContext(Ctx);
   const hydrated = useHydrated();
   if (!ctx) throw new Error('usePlatform must be used within PlatformProvider');
-  return hydrated ? ctx : {...ctx, platform: DEFAULT_PLATFORM, label: 'WorkBuddy', epoch: 0};
+  // 未水合时对齐 DEFAULT_PLATFORM：原来这里硬编码 'WorkBuddy'，与
+  // `platform: DEFAULT_PLATFORM` 是一份事实的两个写法，改默认值时会脱节。
+  return hydrated ? ctx : {...ctx, platform: DEFAULT_PLATFORM,
+                           label: PLATFORM_LABEL[DEFAULT_PLATFORM], epoch: 0};
 }
+
+/**
+ * 平台显示名。
+ *
+ * 用 `Record<Platform, string>` 而不是三元表达式：三元没穷尽新取值时，
+ * TypeScript 不会报错，第四个平台会被**静默显示成最后一个分支**（Qoder）——
+ * 账号页与首页的「{platform} 账号池」副标题、添加账号弹窗标题都会跟着错。
+ * 用 Record 后，新增平台时 tsc 会强制补齐这一项。
+ *
+ * 四个值都用英文专名，与其余三项保持一致（它们是产品名，不随界面语言翻译）。
+ */
+export const PLATFORM_LABEL: Record<Platform, string> = {
+  workbuddy: 'WorkBuddy',
+  qoder: 'Qoder',
+  trae: 'Trae',
+  doubaowork: 'Doubao Work',
+};
+
 
 /**
  * 按平台强制重挂载内容子树。

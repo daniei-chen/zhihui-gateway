@@ -173,6 +173,7 @@
     "global": "國際版",
     "cnTitle": "中國版（codebuddy.cn）",
     "globalTitle": "國際版（workbuddy.ai）",
+    "doubaoworkNoRealm": "豆包工作不分國內／國際版本，這個切換對它不生效",
     "note": "目前為**國際版**檢視（workbuddy.ai）。國際版**沒有簽到 / 貓貓旅行 / 開學季 / 夜貓任務**（積分只來自一次性 trial），保活與活躍回報照常執行，因此任務類頁面紀錄較少屬正常，並非資料遺失。"
   },
   "format": {
@@ -312,6 +313,7 @@
     "cacheHitRate": "快取命中率",
     "dailyAgg": "依天彙總",
     "noUsageData": "暫無用量資料",
+    "localTrafficOnly": "該平台上游不提供用量介面；這裡的數字是**經過本閘道**的轉發量，不含用戶端直連。",
     "byModel": "依模型",
     "byKey": "依金鑰",
     "emptyTitle": "暫無資料",
@@ -393,6 +395,7 @@
     "emptyRealmTitle": "{realm}沒有帳號",
     "emptyRealmDesc": "帳號池裡有帳號，但都不屬於這個版本。切到另一個版本試試——兩個版本各有自己的帳號池。",
     "creditsRefreshed": "積分已重新整理",
+    "creditsUnsupported": "該平台的上游不提供額度介面，無法重新整理積分",
     "creditsRefreshedDetail": "{ok}/{total} 個帳號",
     "creditsPartial": "部分帳號積分未取得",
     "creditsPartialDetail": "{ok}/{total} 成功，其餘見帳號狀態",
@@ -1212,6 +1215,7 @@
     "callbackPlaceholder": "貼上完成授權後網址列中的完整位址",
     "descTrae": "開啟或複製 Trae 官方連結，完成登入，再把最後的授權結果位址貼回來。",
     "traeGlobalUnsupported": "目前 Trae 引擎尚未接入國際版授權，請切換中國版；不會轉至 WorkBuddy。",
+    "doubaoworkImportOnly": "豆包工作的帳號不使用 OAuth 授權。請在上游 doubaowork2api 面板匯出帳號 JSON，再用「上傳帳號」匯入；不會轉到其他平台。",
     "requestingPlatform": "正在建立 {platform} 授權連接…",
     "waitingPlatform": "等待 {platform} 授權。完成登入後返回此處，智匯將確認連接結果。",
     "waitingCallback": "在官方頁面完成登入，再貼上最後的位址確認連線。",
@@ -2039,7 +2043,10 @@
     "switch": "切換平台",
     "workbuddyHint": "WorkBuddy · 帳號、模型、用量與授權",
     "qoderHint": "Qoder · 中國／國際獨立裝置授權",
-    "traeHint": "Trae · 目前支援中國版回呼授權"
+    "traeHint": "Trae · 目前支援中國版回呼授權",
+    "doubaoworkHint": "豆包工作 · 訂閱額度接入，帳號池與冷卻由上游引擎管理",
+    "doubaoworkShort": "豆包工作",
+    "disabledNotice": "目前平台的引擎尚未啟用，這個頁面不會顯示帳號或資料；這不代表帳號遺失。"
   },
   "intake": {
     "eyebrow": "ZHIHUI · 帳號接入",

@@ -89,10 +89,11 @@ class PanelReaderHttpTest(unittest.TestCase):
         try:
             with mock.patch.object(main.security, '_current_user', return_value={'username': 'alice', 'role': 'account_admin'}):
                 # A known read handler returns its real-shaped synthetic data.
-                for platform in ('qoder', 'trae'):
+                for platform in ('doubaowork', 'trae'):
                     with mock.patch.object(main._qcf, 'build_pool_snapshot', new=mock.AsyncMock()) as aggregate, \
                          mock.patch.object(main._qcf, '_rt'):
                         aggregate.return_value.qoder_accounts = []
+                        aggregate.return_value.doubaowork_accounts = []
                         aggregate.return_value.trae_accounts = []
                         aggregate.return_value.wb_accounts = []
                         aggregate.return_value.health = []

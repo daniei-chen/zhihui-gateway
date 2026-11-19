@@ -173,6 +173,7 @@
     "global": "Global edition",
     "cnTitle": "China edition (codebuddy.cn)",
     "globalTitle": "Global edition (workbuddy.ai)",
+    "doubaoworkNoRealm": "Doubao Work has no China/international split; this switch does not affect it",
     "note": "You are viewing the **Global edition** (workbuddy.ai). It has **no daily check-in / cat travel / back-to-school / night-cat tasks** (credits come only from the one-off trial). Keep-alive and activity reporting still run, so fewer task records are expected — nothing is missing."
   },
   "format": {
@@ -339,6 +340,7 @@
     "cacheHitRate": "Cache hit rate",
     "dailyAgg": "Aggregated daily",
     "noUsageData": "No usage data yet",
+    "localTrafficOnly": "This platform's upstream exposes no usage API; these figures count only traffic that went through this gateway, not direct client calls.",
     "byModel": "By model",
     "byKey": "By key",
     "emptyTitle": "No data",
@@ -420,6 +422,7 @@
     "emptyRealmTitle": "No accounts in {realm}",
     "emptyRealmDesc": "The pool does have accounts, but none of them belong to this realm. Try the other realm — each realm keeps its own pool.",
     "creditsRefreshed": "Credits refreshed",
+    "creditsUnsupported": "This platform's upstream does not expose a credits endpoint",
     "creditsRefreshedDetail": "{ok}/{total} accounts",
     "creditsPartial": "Some credits could not be fetched",
     "creditsPartialDetail": "{ok}/{total} succeeded; check account status for the rest",
@@ -1239,6 +1242,7 @@
     "callbackPlaceholder": "Paste the full final address after authorization",
     "descTrae": "Open or copy the official Trae link, sign in, then paste the final authorization result address here.",
     "traeGlobalUnsupported": "This Trae engine does not support international authorization yet. Select China instead; it will not redirect to WorkBuddy.",
+    "doubaoworkImportOnly": "Doubao Work accounts do not use OAuth. Export an account JSON from the upstream doubaowork2api panel and import it with \"Upload accounts\"; it will not redirect to another platform.",
     "requestingPlatform": "Creating a {platform} authorization session…",
     "waitingPlatform": "Waiting for {platform} authorization. Return here after signing in to confirm the result.",
     "waitingCallback": "Sign in on the official page, then paste the final address to confirm.",
@@ -2066,7 +2070,10 @@
     "switch": "Switch platform",
     "workbuddyHint": "WorkBuddy · Accounts, models, usage and authorization",
     "qoderHint": "Qoder · Separate China and international device authorization",
-    "traeHint": "Trae · China callback authorization is currently supported"
+    "traeHint": "Trae · China callback authorization is currently supported",
+    "doubaoworkHint": "Doubao Work · Subscription quota via the upstream engine's account pool",
+    "doubaoworkShort": "Doubao Work",
+    "disabledNotice": "This platform's engine is not enabled, so no accounts or data will appear here. That does not mean the accounts are gone."
   },
   "intake": {
     "eyebrow": "ZHIHUI · ACCOUNT CONNECTION",

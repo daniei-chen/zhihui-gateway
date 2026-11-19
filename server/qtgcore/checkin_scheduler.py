@@ -40,7 +40,18 @@ log = logging.getLogger("qtg.checkin")
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 
-WINDOWS = {"trae": ((9, 5), (20, 55)), "qoder": ((10, 5), (20, 55))}
+WINDOWS = {"trae": ((9, 5), (20, 55)), "qoder": ((10, 5), (20, 55)),
+           # 豆包工作：走豆包官方网页接口（adapters/doubao_checkin.py），服务端可跑。
+           #
+           # 窗口**不能**像别的平台那样从 9 点开始：真机取证（agent-checkin
+           # 2026-11-02 掐点实测 + DoubaoWork-Daily v1.3.4）显示签到按天开窗、
+           # 开窗时刻逐日漂移，**10:45 仍返回 710010702「尚未开放」，10:55 才放行**，
+           # 10-31 那次一直拖到 11:34。9 点触发几乎必然白跑一轮。
+           #
+           # 起点定在 11:10：即使当天最晚（11:34），后面的重试
+           # （RETRY_AFTER=300s × 最多 6 次）也能覆盖到；再早只会增加无谓的
+           # 未开放回合。上限 22:00 与其他平台一致。
+           "doubaowork": ((11, 10), (22, 0))}
 FALLBACK_HOUR = 21
 RETRY_AFTER = 300
 MAX_ATTEMPTS = 6

@@ -8,6 +8,8 @@ import {useAsyncAll} from '@/lib/use-async-data';
 import {useHeartbeat} from '@/lib/use-heartbeat';
 import {errText} from '@/lib/api';
 import {evidenceAccess} from '@/lib/operational-evidence';
+import {PLATFORM_LABEL} from '@/lib/platform-context';
+import {PLATFORMS} from '@/lib/platform-store';
 import {stewardApi, type ConversationMessage} from '@/lib/steward';
 import {conversationHistory} from '@/lib/steward-ui';
 import {Button} from '@/components/ui/button';
@@ -110,12 +112,12 @@ export function StewardPanel() {
 
     {'status' in data.errors ? <p role="alert" className="rounded-2xl border border-amber-200/60 bg-amber-50/30 p-4 text-xs">{t('steward.loadFailed')}</p> : null}
     {status?.stale ? <p role="status" className="text-xs text-amber-700">{t('steward.stale')}</p> : null}
-    <div className="grid gap-3 sm:grid-cols-3">
-      {(['workbuddy', 'qoder', 'trae'] as const).map(name => {
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {PLATFORMS.map(name => {
         const item = current?.platforms.find(row => row.name === name);
         const state = item?.state ?? 'unknown';
         return <div key={name} className="rounded-[20px] border border-border bg-background p-4">
-          <div className="flex items-center justify-between text-xs"><strong>{name === 'workbuddy' ? 'WorkBuddy' : name === 'qoder' ? 'Qoder' : 'Trae'}</strong>
+          <div className="flex items-center justify-between text-xs"><strong>{PLATFORM_LABEL[name]}</strong>
             <span className={state === 'up' ? 'text-emerald-600' : state === 'down' ? 'text-orange-600' : 'text-muted-foreground'}>{t(`steward.state.${state}`)}</span></div>
           <p className="mt-4 text-2xl tabular-nums">{item?.pool?.total ?? '—'}<span className="ml-2 text-[11px] text-muted-foreground">{t('steward.accounts')}</span></p>
           <p className="mt-2 text-[10px] text-muted-foreground">{t('steward.probeBoundary')}</p>

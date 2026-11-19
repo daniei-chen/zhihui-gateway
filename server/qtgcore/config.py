@@ -93,9 +93,27 @@ def _wb_engine_default() -> str:
     return _file_switch("/opt/workbuddy-manager/engine/var/wb_engine", ("off", "on"), "on")
 
 
+def _doubaowork_engine_default() -> str:
+    """豆包工作开关：QTG_DOUBAOWORK_ENGINE > var/doubaowork_engine > off。
+
+    **必须走 `_file_switch`**，与 wb/qoder/trae 同构。第一版只写了
+    `_env_str("doubaowork_engine", "off")`，于是文档里的回滚方式
+    （`echo off > var/doubaowork_engine` + 重启）成了**空操作**——运维以为
+    关掉了，平台其实还开着。这正是 `_wb_engine_default` 上面那条注释
+    批评过的同一个错误，不能在新平台上重犯。
+    """
+    return _file_switch("/opt/workbuddy-manager/engine/var/doubaowork_engine",
+                        ("off", "on"), "off")
+
+
 def _engine_default() -> str:
-    """qoder 数据面引擎默认值：QTG_QODER_ENGINE > /opt/workbuddy-manager/engine/var/qoder_engine > bff。"""
-    return _file_switch("/opt/workbuddy-manager/engine/var/qoder_engine", ("bff", "qoder2"), "bff")
+    """qoder 数据面引擎默认值：QTG_QODER_ENGINE > /opt/workbuddy-manager/engine/var/qoder_engine > **off**。
+
+    2026-11-19 起默认 `off`：qoder 官方不再送积分，qtg 不再接入它，
+    平台位置由豆包工作接管。写 `bff`/`qoder2` 仍可把它拉回来（回滚路径）。
+    """
+    return _file_switch("/opt/workbuddy-manager/engine/var/qoder_engine",
+                        ("off", "bff", "qoder2"), "off")
 
 
 def _trae_engine_default() -> str:
@@ -112,10 +130,11 @@ class Settings:
     log_level: str = "INFO"
 
     # ---- 上游控制面 ----
-    # qoder 数据面有两个实现，由 qoder_engine 选择（见 runtime.py）：
-    #   bff    = 自研 Go 控制面（源码已丢失，不可升级，做回滚用）
+    # qoder 数据面有三个取值（见 runtime.py）：
+    #   off    = **摘掉 qoder**（默认；官方不再送积分，qtg 不再接）
+    #   bff    = 自研 Go 控制面（源码已丢失，不可升级，仅回滚）
     #   qoder2 = shuishuipingan/qoder2api-hub（MIT，可升级，默认影子端口 8799）
-    qoder_engine: str = "bff"
+    qoder_engine: str = "off"
     qoder_base: str = "http://127.0.0.1:8791"
     qoder_password_file: str = "/opt/qoder-hub/secrets/panel_password"
     qoder_data_dir: str = "/opt/qoder-hub"
@@ -160,6 +179,20 @@ class Settings:
     # 默认保持 sqlite 是为了「不改变现网行为」；迁移完成后再改默认值。
     # 无论选哪种，失败都不得回退到另一种（否则"共享文件系统"这个前提会悄悄复活）。
     wb_read_mode: str = "sqlite"
+
+    # ---- 豆包工作（第四平台）----
+    # 对接 doubaowork2api（Python 反代引擎，默认 127.0.0.1:18789）。
+    # 默认 **off**：新增平台不得改变现网行为，启用必须显式打开，
+    # 与 wb_engine 默认 on（该引擎本就在跑）的区别在此。
+    doubaowork_engine: str = "off"
+    doubaowork_base: str = "http://127.0.0.1:18789"
+    # 上游管理面板密码（`POST /admin/login` 用）。缺失时适配器明确报
+    # 「管理密码缺失」，不会退化成匿名读取。
+    doubaowork_admin_password_file: str = "/opt/doubaowork2api/secrets/admin_password"
+    # 上游的**账号落盘目录**。豆包官方签到的凭证（sessionid + 设备 cookie）
+    # 只存在这里 —— `/admin/accounts` 的 `public_dict()` 是脱敏的，不返回 cookie。
+    # qtg 与上游同机部署，签到模块直接读这些文件（见 adapters/doubao_checkin.py）。
+    doubaowork_accounts_dir: str = "/opt/doubaowork2api/accounts"
 
     # ---- 上游访问策略 ----
     upstream_timeout_sec: float = 20.0
@@ -260,7 +293,7 @@ def load_settings() -> Settings:
         port=_env_int("port", 8795, 1, 65535),
         docs_enabled=_env_bool("docs_enabled", False),
         log_level=_env_str("log_level", "INFO"),
-        qoder_engine=(_env_str("qoder_engine", _engine_default()) or "bff").strip().lower(),
+        qoder_engine=(_env_str("qoder_engine", _engine_default()) or "off").strip().lower(),
         qoder_base=_env_str("qoder_base", "http://127.0.0.1:8791"),
         qoder_password_file=_abs(
             "qoder_password_file", "/opt/qoder-hub/secrets/panel_password"
@@ -294,6 +327,17 @@ def load_settings() -> Settings:
         wb_state_file=_abs("wb_state_file", "/opt/workbuddy2api/data/state.json"),
         wb_db=_abs("wb_db", "/opt/workbuddy-manager/data/manager.db"),
         wb_read_mode=_env_str("wb_read_mode", "sqlite"),
+        doubaowork_engine=(_env_str("doubaowork_engine", _doubaowork_engine_default()) or "off").strip().lower(),
+        doubaowork_base=_env_str("doubaowork_base", "http://127.0.0.1:18789"),
+        doubaowork_admin_password_file=_abs(
+            "doubaowork_admin_password_file",
+            "/opt/doubaowork2api/secrets/admin_password",
+        ),
+        # 故意用 `_env_str` 而不是 `_abs`：账号目录不存在只意味着「签到不可用」，
+        # 不该让整个进程拒绝启动（`_abs` 会在非 Linux 部署上直接抛）。
+        # 缺目录时适配器的 checkin() 会明确报「读不到账号凭证」。
+        doubaowork_accounts_dir=_env_str(
+            "doubaowork_accounts_dir", "/opt/doubaowork2api/accounts"),
         trae_base=_env_str("trae_base", "http://127.0.0.1:8792"),
         trae_token_file=_abs("trae_token_file", "/opt/trae-work/secrets/admin_token"),
         trae_data_dir=_abs("trae_data_dir", "/opt/trae-work"),

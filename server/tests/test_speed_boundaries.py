@@ -189,7 +189,7 @@ class PoolIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['errors'], [])
         rt.qoder.models.assert_awaited_once()
 
-    async def test_qoder_pool_does_not_wait_for_other_platforms_or_usage(self):
+    async def test_doubaowork_pool_does_not_wait_for_other_platforms_or_usage(self):
         from server.qtgcore import service
         from server.qtgcore.cache import TTLCache
         q = SimpleNamespace(accounts=AsyncMock(return_value={'accounts': []}),
@@ -214,15 +214,16 @@ class PoolIsolationTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_resolves_header_before_selecting_pool(self):
         from server.qtgcore.routers import compat_fixes
         from starlette.requests import Request
-        request = Request({'type': 'http', 'path': '/api/status', 'headers': [(b'x-qtg-platform', b'qoder')]})
-        agg = SimpleNamespace(qoder_accounts=[], trae_accounts=[object()], wb_accounts=[object()],
+        request = Request({'type': 'http', 'path': '/api/status', 'headers': [(b'x-qtg-platform', b'doubaowork')]})
+        agg = SimpleNamespace(qoder_accounts=[], doubaowork_accounts=[],
+                              trae_accounts=[object()], wb_accounts=[object()],
                               health=[SimpleNamespace(up=True)])
         with patch.object(compat_fixes, '_rt'), \
                 patch.object(compat_fixes, 'build_pool_snapshot', new=AsyncMock(return_value=agg)) as pool, \
                 patch.object(compat_fixes, 'build_aggregate', side_effect=AssertionError('all platforms fetched')):
             result = await compat_fixes.fixed_status(request)
         self.assertEqual(result['total'], 0)
-        self.assertEqual(pool.call_args.args[1], 'qoder')
+        self.assertEqual(pool.call_args.args[1], 'doubaowork')
 
 
 class CachedEndpointTests(unittest.TestCase):

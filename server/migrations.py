@@ -193,6 +193,12 @@ def _attribution_columns(conn: sqlite3.Connection) -> None:
 
 
 def _key_platforms(conn: sqlite3.Connection) -> None:
+    # 历史迁移（v5），**故意不对齐当前 PLATFORMS**：
+    #   1. 补列只该授予当时的保守集合，不能把后来新增的平台（doubaowork）
+    #      回填给历史密钥 —— 那是权限放大；
+    #   2. 迁移步骤受 schemaver 指纹校验，改实现而不升版本号会让整个
+    #      数据库拒绝启动（实测报「v5 key_platforms 应用后指纹变了」）。
+    #      要改变历史回填的语义必须新开一个迁移版本，不能原地改。
     if 'platforms' not in schemaver.columns_of(conn, 'api_keys'):
         conn.execute("ALTER TABLE api_keys ADD COLUMN platforms TEXT NOT NULL "
                      "DEFAULT '[\"workbuddy\",\"qoder\",\"trae\"]'")

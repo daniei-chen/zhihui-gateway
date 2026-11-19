@@ -182,7 +182,10 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
         return response, seen
 
     async def test_keys_scope_cannot_read_platform_data_by_header_or_query(self):
-        for platform in ('qoder', 'trae'):
+        # 覆盖**所有**由 qtgcore 托管的数据面平台：新增 doubaowork 后若这里
+        # 仍是两元组，第四个平台的 /api/accounts 会绕过权限判定落到 manager
+        # 的原生 handler（读的是 WorkBuddy 数据）。
+        for platform in ('qoder', 'trae', 'doubaowork'):
             for transport in ('header', 'query'):
                 for path in ('/api/accounts', '/api/stats/summary', '/api/models'):
                     with self.subTest(platform=platform, transport=transport, path=path):
@@ -194,12 +197,14 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_scope_can_read_accounts_but_not_write(self):
         identity = {'username': 'svc', 'role': 'viewer', 'scope': 'read'}
-        response, seen = await self.call(request('/api/accounts', platform='qoder'), identity)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(seen, ['/__qtg/api/accounts'])
-        response, seen = await self.call(request('/api/accounts', method='POST', platform='qoder'), identity)
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(seen, [])
+        for platform in ('qoder', 'doubaowork'):
+            with self.subTest(platform=platform):
+                response, seen = await self.call(request('/api/accounts', platform=platform), identity)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(seen, ['/__qtg/api/accounts'])
+                response, seen = await self.call(request('/api/accounts', method='POST', platform=platform), identity)
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(seen, [])
 
     async def test_forbidden_keeps_csrf_reason(self):
         async def handler(req):

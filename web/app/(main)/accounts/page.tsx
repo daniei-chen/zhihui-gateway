@@ -333,7 +333,11 @@ function FullAccountsPage() {
       );
       setCreditsMeta(r.meta ?? {});
       setCreditsFailed(r.failed.length > 0);
-      if (r.failed.length === 0) {
+      if (r.unsupported) {
+        // 「上游没有额度接口」既不是成功也不是部分失败。用 info + 后端原因，
+        // 不要弹绿色「积分已刷新 0/0」——那是把「不提供」说成「已刷新」。
+        notify.info(r.message || t('accounts.creditsUnsupported'));
+      } else if (r.failed.length === 0) {
         notify.ok(t('accounts.creditsRefreshed'), t('accounts.creditsRefreshedDetail', {ok: r.succeeded, total: r.total}));
       } else {
         notify.warn(t('accounts.creditsPartial'), t('accounts.creditsPartialDetail', {ok: r.succeeded, total: r.total}));
@@ -395,6 +399,10 @@ function FullAccountsPage() {
             t('accounts.checkinNothingPending'),
             t('accounts.checkinNothingPendingDetail', {n: r.already}) + note,
           );
+        } else if (r.unsupported && r.message) {
+          // 该平台根本没有签到接口（豆包工作）。直接用后端给的原因，不要
+          // 降级成「没有可签到的账号」——那是「池子里没有账号」的意思，两回事。
+          notify.info(r.message);
         } else if (r.skipped > 0 && r.message) {
           notify.info(r.message);
         } else {

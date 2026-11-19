@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-Platform = Literal["qoder", "trae", "workbuddy"]
+Platform = Literal["qoder", "trae", "workbuddy", "doubaowork"]
 AccountState = Literal["ready", "cooling", "disabled", "low", "expired", "unknown"]
 
 
@@ -56,6 +56,9 @@ class AccountsResponse(BaseModel):
     qoder: List[Account] = Field(default_factory=list)
     trae: List[Account] = Field(default_factory=list)
     workbuddy: List[Account] = Field(default_factory=list)
+    # 第四平台：豆包工作。默认空列表，而不是 None —— 前端按「无账号」渲染，
+    # 不需要为「未启用」再写一条分支。
+    doubaowork: List[Account] = Field(default_factory=list)
     summary: Dict[str, AccountSummary] = Field(default_factory=dict)
 
 
@@ -87,6 +90,12 @@ class UsageResponse(BaseModel):
     by_model: List[UsageByModel] = Field(default_factory=list)
     credits: List[Dict[str, Any]] = Field(default_factory=list)
     totals: Dict[str, Any] = Field(default_factory=dict)
+    # 各平台「上游不提供哪些指标」。目前只有豆包工作会填（它没有用量/额度接口）。
+    # 为什么需要这个字段：`points[platform] == []` 本身有两种含义——「这段时间
+    # 真的没有请求」和「这个上游根本不给数据」。前端无法区分，就会把后者画成
+    # 一条全 0 的、看起来真实的曲线。这里把区别显式带给前端。
+    unsupported: Dict[str, List[str]] = Field(default_factory=dict)
+    notes: Dict[str, str] = Field(default_factory=dict)
 
 
 class KeyInfo(BaseModel):

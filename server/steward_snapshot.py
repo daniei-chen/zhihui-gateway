@@ -167,8 +167,17 @@ async def platform_fact(name, adapter):
 
 async def collect(runtime):
     local = await joined_thread(local_facts)
+    # 必须覆盖**全部在服务的**平台：管家看不到某个平台，等于它对那个平台的
+    # 故障、额度、账号池状态一无所知，却在回答里表现得像全知。
+    # `dbw` 在引擎未启用时是 None，`platform_fact` 会如实给
+    # `state='unknown', reason='adapter_unavailable'`（不是「健康」）。
+    #
+    # 2026-11-19：qoder 已摘除（官方不再送积分），从这里一并去掉 ——
+    # 它的 `runtime.qoder` 是 None，留着只会让管家每次多报一条
+    # 「qoder: unknown」，而那不是一个故障，是「这个平台已经不存在了」。
     platforms = await asyncio.gather(*(platform_fact(name, getattr(runtime, attribute, None))
-                                       for name, attribute in (('workbuddy', 'wb'), ('qoder', 'qoder'), ('trae', 'trae'))))
+                                       for name, attribute in (('workbuddy', 'wb'),
+                                                               ('trae', 'trae'), ('doubaowork', 'dbw'))))
     return {**local, 'platforms': platforms}
 
 

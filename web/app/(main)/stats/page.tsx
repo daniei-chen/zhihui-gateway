@@ -197,7 +197,10 @@ export default function StatsPage() {
    */
   const chartData: ChartPoint[] = spec.granularity === 'hour'
     ? hourlySeries(hourly, platform === 'qoder' ? hourly[0]?.current_hour ?? undefined : nowTick?.hour)
-    : dailySeries(daily, d, platform === 'qoder' ? undefined : nowTick?.today);
+    // 空数组**不能**交给 dailySeries：它会把窗口补齐成 n 个 0 点，于是
+    // 「上游不提供用量」（豆包工作）和「这段时间确实没调用」画出来一模一样。
+    // 保持空数组，让下面的 `chartData.length` 判空走到空状态。
+    : daily.length ? dailySeries(daily, d, platform === 'qoder' ? undefined : nowTick?.today) : [];
 
   /** 今日失败总数（4xx + 5xx）。单独来自请求日志——用量汇总只含成功请求。 */
   const todayFailed =
@@ -400,6 +403,12 @@ export default function StatsPage() {
             {spec.granularity === 'hour' ? t('stats.hourlyAgg') : t('stats.dailyAgg')}
           </div>
         </div>
+        {/* 豆包工作的上游没有用量接口，图上的数字是「经过本网关」的转发量。
+            不标这一句，用户会把它当成该平台的全部消费 —— 那是另一种说谎。
+            放在固定高度容器**外面**，否则会把 260px 的图挤扁。 */}
+        {platform === 'doubaowork' && (
+          <p className="mb-2 text-[10px] leading-4 text-muted-foreground">{t('stats.localTrafficOnly')}</p>
+        )}
         <div className="h-[260px] w-full">
           {chartData.length ? (
             chartsReady ? (

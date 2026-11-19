@@ -87,8 +87,12 @@ class CountTokensAdmissionTests(unittest.TestCase):
         self.assertEqual(response.json()['error']['code'], 'ip_not_allowed')
 
     def test_platform_policy_is_still_enforced(self):
-        db.execute('UPDATE api_keys SET platforms=? WHERE id=?', (json.dumps(['qoder']), self.key['id']))
-        response = self.count()
+        # 平台判定靠 **model 前缀**（proxy.py：`prefix in PLATFORMS` 且
+        # `prefix not in key.platforms` → 403）。所以必须用带前缀的 model，
+        # 否则这条路径根本不会触发 —— 早先这条测试用的是无前缀 `model='m'`，
+        # 在 qoder 还在 PLATFORMS 里时**恰好**因为别的原因通过。
+        db.execute('UPDATE api_keys SET platforms=? WHERE id=?', (json.dumps(['workbuddy']), self.key['id']))
+        response = self.count(model='doubaowork/m')
         self.assertEqual(response.status_code, 403, response.text)
         self.assertEqual(response.json()['error']['code'], 'platform_not_allowed')
 

@@ -18,10 +18,11 @@ from typing import Any, Dict, List, Optional
 
 import datetime as dt
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .. import manager_api
+from ..errors import UpstreamError
 from ..service import all_accounts, build_aggregate, build_pool_snapshot
 # U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
 # 现在统一从 `_shared` 引入并**在此继续导出**。
@@ -29,7 +30,9 @@ from ._shared import _rt
 
 router = APIRouter(prefix="/api", tags=["compat-fixes"])
 
-PLATFORMS = ("qoder", "trae", "workbuddy")
+# 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
+# 注意顺序就是 UI 里的显示顺序 —— 豆包放在原来 qoder 的第一位。
+PLATFORMS = ("doubaowork", "trae", "workbuddy")
 
 _SERIES = (
     ("auto", "Auto"), ("qwen", "Qwen"), ("deepseek", "DeepSeek"),
@@ -211,9 +214,16 @@ def _norm_models(raw: Dict[str, Any], platform: str) -> List[Dict[str, Any]]:
 
 
 async def _load_models(rt, platform: str | None = None) -> Dict[str, Any]:
-    """取两个平台的上游模型（单项失败只记原因，不抛）。"""
-    result: Dict[str, Any] = {"qoder": [], "trae": [], "workbuddy": [], "errors": []}
-    for name, attribute in (('qoder', 'qoder'), ('trae', 'trae'), ('workbuddy', 'wb')):
+    """取各平台的模型（单项失败只记原因，不抛）。
+
+    平台集合必须与 `URL 平台枚举`一致：少一个键，使用处的 `data[plat]`
+    就会 KeyError → 500。这里同时把调用处改成 `.get(plat) or []`，
+    两道防线，避免下次再加平台时又只在一边漏。
+    """
+    result: Dict[str, Any] = {"qoder": [], "trae": [], "workbuddy": [],
+                              "doubaowork": [], "errors": []}
+    for name, attribute in (('qoder', 'qoder'), ('trae', 'trae'),
+                            ('workbuddy', 'wb'), ('doubaowork', 'dbw')):
         if platform is not None and platform != name:
             continue
         adapter = getattr(rt, attribute, None)
@@ -226,6 +236,48 @@ async def _load_models(rt, platform: str | None = None) -> Dict[str, Any]:
     return result
 
 
+# 各平台数据面密钥文件。与 `server/routers/gateway.py` 的 `_THREEWAY_SPEC`
+# **必须一致**（`test_platform_integration_guards` 会校验，防漂移）。
+# 为什么要在这里再有一份：上游列表要如实回答「这个平台的密钥配了吗」，
+# 原来写死 `has_key: True` —— 密钥文件根本不存在时也显示「已配置」，
+# 而前端正是拿它当编辑表单的 placeholder。
+_UPSTREAM_KEY_FILES = {
+    "qoder": "/opt/workbuddy-manager/engine/secrets/qoder_upstream_key",
+    "trae": "/opt/workbuddy-manager/engine/secrets/aiwork_api_key",
+    "doubaowork": "/opt/workbuddy-manager/engine/secrets/doubaowork_upstream_key",
+}
+
+
+def _key_state(platform: str) -> Dict[str, Any]:
+    """返回该平台密钥文件的真实状态。
+
+    读不到就报「未配置」，**不猜**：把「我没能确认」写成「已配置」，
+    下次排障的人会先怀疑一切别的东西。
+    """
+    path = _UPSTREAM_KEY_FILES.get(platform)
+    if not path:
+        # workbuddy 走 manager 原生实现，密钥不在这个体系里。
+        return {"has_key": True, "api_key_masked": "由 workbuddy 原面板管理"}
+    from pathlib import Path
+
+    p = Path(path)
+    try:
+        # 不只是「文件在不在」：**空文件**（或只有空白/换行）同样等于没配好。
+        # 只查存在性的话，一个 `touch` 出来的空文件会让界面显示「已配置」，
+        # 而实际请求会带一个空 API key 上去 —— 那种失败最难查。
+        exists = p.is_file() and p.stat().st_size > 0
+        if exists:
+            try:
+                exists = bool(p.read_text(encoding="utf-8", errors="ignore").strip())
+            except OSError:
+                exists = False
+    except OSError:
+        exists = False
+    if not exists:
+        return {"has_key": False, "api_key_masked": ""}
+    return {"has_key": True, "api_key_masked": f"已配置（{p.parent}）"}
+
+
 # ------------------------------------------------------------------ 上游 / 状态
 @router.get("/upstreams")
 async def fixed_upstreams(request: Request) -> Dict[str, Any]:
@@ -234,14 +286,21 @@ async def fixed_upstreams(request: Request) -> Dict[str, Any]:
     from pathlib import Path
 
     rt = _rt(request)
-    agg = await build_pool_snapshot(rt, _platform(request))
+    try:
+        agg = await build_pool_snapshot(rt, _platform(request))
+    except UpstreamError as exc:
+        # 与 /api/accounts、/api/status 保持同一套语义：平台未启用/上游不可达
+        # 是**可解释的未就绪**，用 409 + JSON detail，不要裸 500/502。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     q, t = agg.qoder_accounts, agg.trae_accounts
 
-    def row(idx: int, name: str, accounts, is_default: bool, base: str,
+    def row(idx: int, platform: str, name: str, accounts, is_default: bool, base: str,
             auth_dir: str, container: str) -> Dict[str, Any]:
+        key_state = _key_state(platform)
         return {
             "id": idx, "name": name, "base_url": base,
-            "has_key": True, "api_key_masked": "已配置（/opt/workbuddy-manager/engine/secrets）",
+            "has_key": key_state["has_key"],
+            "api_key_masked": key_state["api_key_masked"],
             "note": "", "enabled": True, "is_default": is_default,
             "auth_dir": auth_dir, "container": container, "bound_keys": 0,
             "accounts": len(accounts),
@@ -251,38 +310,51 @@ async def fixed_upstreams(request: Request) -> Dict[str, Any]:
         }
 
     w = list(agg.wb_accounts)
+    dw = list(agg.doubaowork_accounts)
     all_items = [
-        row(1, "Qoder", q, True, rt.settings.qoder_base,
+        row(1, "qoder", "Qoder", q, True, rt.settings.qoder_base,
             str(Path(rt.settings.qoder_data_dir) / "accounts"), "qoder-proxy"),
-        row(2, "Trae", t, False, rt.settings.trae_base,
+        row(2, "trae", "Trae", t, False, rt.settings.trae_base,
             str(Path(rt.settings.trae_data_dir) / "accounts"), "aiwork-server"),
-        row(3, "WorkBuddy", w, False, rt.settings.wb_api_base,
+        row(3, "workbuddy", "WorkBuddy", w, False, rt.settings.wb_api_base,
             str(rt.settings.wb_auths_dir), "workbuddy2api"),
+        # 第 4 组：豆包工作。账号目录只用于 dashboard 的「有没有账号目录」
+        # 分组筛选，qtg 实际通过 HTTP 读上游，不依赖这个路径可达。
+        row(4, "doubaowork", "豆包工作", dw, False, rt.settings.doubaowork_base,
+            "/opt/doubaowork2api/accounts", "doubaowork2api"),
     ]
     plat = _platform(request)
-    want = {"qoder": 1, "trae": 2, "workbuddy": 3}.get(plat, 1)
+    want = {"qoder": 1, "trae": 2, "workbuddy": 3, "doubaowork": 4}.get(plat, 1)
     items = [it for it in all_items if it["id"] == want]
     host = (request.headers.get("host") or "").split(":")[0]
     proto = request.headers.get("x-forwarded-proto") or "http"
-    _seg = {"qoder": "/qoder/v1", "trae": "/trae/v1", "workbuddy": "/v1"}.get(plat, "/v1")
+    _seg = {"qoder": "/qoder/v1", "trae": "/trae/v1", "workbuddy": "/v1",
+            "doubaowork": "/doubaowork/v1"}.get(plat, "/v1")
     public = f"{proto}://{host}{_seg}" if host else ""
     for it in items:
         it["public_url"] = public
     return {"items": items, "total": len(items)}
 
 
-UPSTREAM_IDS = {1: "qoder", 2: "trae", 3: "workbuddy"}
-UPSTREAM_NAMES = {1: "Qoder", 2: "Trae", 3: "WorkBuddy"}
+# 2026-11-19：豆包工作**顶替 qoder 的位置**（upstream_id=1）。
+#
+# 这是兼容层对外的编号契约：外部面板按 upstream_id 选平台。qoder 摘除后
+# 把 1 号让给豆包，而不是留个空洞或把豆包排到 4 号 —— 后者会让「1 号平台」
+# 这个位置永久缺一个，前端逐组扇出时会多一组永远空的。
+#
+# 编号**不重排**已有的 2/3：trae=2、workbuddy=3 保持不变，只有 1 号换了主人。
+UPSTREAM_IDS = {1: "doubaowork", 2: "trae", 3: "workbuddy"}
+UPSTREAM_NAMES = {1: "豆包工作", 2: "Trae", 3: "WorkBuddy"}
 
 
 def _rows_of(agg, upstream_id: Optional[int]):
-    """按 `upstream_id` 取平台账号行；None = 三个平台全给。
+    """按 `upstream_id` 取平台账号行；None = 全部平台。
 
     前端 dashboard 是逐组扇出的（每组带自己的 upstream_id），
     这里少一个分支就会让那一组永远空着。
     """
     if upstream_id == 1:
-        return list(agg.qoder_accounts)
+        return list(agg.doubaowork_accounts)
     if upstream_id == 2:
         return list(agg.trae_accounts)
     if upstream_id == 3:
@@ -291,10 +363,10 @@ def _rows_of(agg, upstream_id: Optional[int]):
 
 
 def _upstream_name(upstream_id: Optional[int]) -> str:
-    return UPSTREAM_NAMES.get(upstream_id, "Qoder / Trae / WorkBuddy")
+    return UPSTREAM_NAMES.get(upstream_id, "豆包工作 / Trae / WorkBuddy")
 
 
-_PLAT_TO_UPSTREAM = {"qoder": 1, "trae": 2, "workbuddy": 3}
+_PLAT_TO_UPSTREAM = {"doubaowork": 1, "trae": 2, "workbuddy": 3}
 
 
 def _resolve_upstream_id(request: Request, upstream_id: Optional[int]) -> Optional[int]:
@@ -312,36 +384,58 @@ def _resolve_upstream_id(request: Request, upstream_id: Optional[int]) -> Option
 
 
 _CAP_MATRIX = {
-    "qoder": {"readonly": False, "checkin": True, "refresh_account": True,
-              "set_account": True, "add_account": True, "delete_account": False,
-              "save_keys": True, "oauth": True, "agents": True, "alerts": True,
-              "note": ""},
     "trae": {"readonly": False, "checkin": True, "refresh_account": True,
              "set_account": True, "add_account": True, "delete_account": False,
              "save_keys": False, "oauth": True, "agents": False, "alerts": False,
-             "note": "API Key \u4e0e\u5ba2\u6237\u7aef\u914d\u7f6e\u5728 aiwork \u81ea\u5df1\u90a3\u8fb9\u7ef4\u62a4"},
+             "note": "API Key 与客户端配置在 aiwork 自己那边维护"},
     "workbuddy": {"readonly": True, "checkin": False, "refresh_account": False,
                   "set_account": False, "add_account": False, "delete_account": False,
                   "save_keys": False, "oauth": False, "agents": False, "alerts": True,
-                  "note": "\u7531 workbuddy \u539f\u9762\u677f\u7ba1\u7406\uff1bqtg \u53ea\u8bfb\u5408\u5e76"},
+                  "note": "由 workbuddy 原面板管理；qtg 只读合并"},
+    # 能力必须照**适配器的真实实现**写：
+    # 豆包工作**有**签到（v1 上游走 `/admin/checkin`，v0.3.0 走豆包官方网页接口），
+    # 没有 OAuth、密钥只能在它自己面板维护，但有启停与 JSON 导入。
+    #
+    # `verified` 是给外部面板看的。2026-11-16 已用真实账号端到端跑通
+    # （周一 reward_amount=400，total 700→1100，task_status 1→3，
+    # checked_in_today false→true），所以 checkin 标 true。
+    "doubaowork": {"readonly": False, "checkin": True, "refresh_account": True,
+                   "set_account": True, "add_account": True, "delete_account": False,
+                   "save_keys": False, "oauth": False, "agents": False, "alerts": False,
+                   "verified": {"checkin": True, "accounts": True},
+                   "note": "账号在上游 doubaowork2api 面板维护；签到走豆包官方接口"
+                           "（2026-11-16 真机端到端验证通过）"},
 }
-_NAME = {"qoder": "Qoder", "trae": "Trae", "workbuddy": "WorkBuddy"}
-_UPID = {"qoder": 1, "trae": 2, "workbuddy": 3}
+_NAME = {"trae": "Trae", "workbuddy": "WorkBuddy",
+         "doubaowork": "\u8c46\u5305\u5de5\u4f5c"}
+# 豆包工作顶替 qoder 的 1 号位置（见 UPSTREAM_IDS 的注释）。
+_UPID = {"doubaowork": 1, "trae": 2, "workbuddy": 3}
 
 
 @router.get("/platforms")
 async def platform_capabilities(request: Request) -> Dict[str, Any]:
-    """三平台能力矩阵（前端据此决定按钮可用性）。"""
+    """平台能力矩阵（前端与外部面板据此决定按钮可用性）。"""
     rt = _rt(request)
     items = []
     for pid in PLATFORMS:
         cap = dict(_CAP_MATRIX.get(pid) or {})
         readonly = bool(cap.pop("readonly", False))
         note = str(cap.pop("note", ""))
+        # `enabled` 是给机器读的布尔值：`note` 是中文句子，让前端去解析
+        # 「未启用」三个字既脆弱又不可翻译。外部面板也应该只看这个字段。
+        enabled = True
         if pid == "workbuddy" and getattr(rt, "wb", None) is None:
             note = "workbuddy \u5e73\u53f0\u5f53\u524d\u672a\u542f\u7528\uff08QTG_WB_ENGINE=off\uff09"
+            enabled = False
+        if pid == "doubaowork" and getattr(rt, "dbw", None) is None:
+            # 默认 doubaowork_engine=off。外部面板看到这句就知道「不是没有账号，
+            # 是引擎没挂」，而不是把空池当成 0 个账号。
+            note = "doubaowork \u5e73\u53f0\u5f53\u524d\u672a\u542f\u7528\uff08QTG_DOUBAOWORK_ENGINE=off\uff09"
+            readonly = True
+            enabled = False
         items.append({"id": pid, "name": _NAME.get(pid, pid),
                       "upstream_id": _UPID.get(pid, 0), "readonly": readonly,
+                      "enabled": enabled,
                       "capabilities": cap, "note": note})
     return {"platforms": items, "total": len(items)}
 
@@ -358,7 +452,13 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
     rt = _rt(request)
     upstream_id = _resolve_upstream_id(request, upstream_id)
     chosen = UPSTREAM_IDS.get(upstream_id)
-    agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
+    try:
+        agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
+    except UpstreamError as exc:
+        # 「平台未启用」（doubaowork_engine=off / wb_engine=off）与「上游不可达」
+        # 都是**可解释的未就绪**，不能让它们冒成裸 500 纯文本：前端拿不到 JSON
+        # 就只剩一个红色 XHR 错误，看起来像网关崩了。用 409 + 明确文案。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     rows = _rows_of(agg, upstream_id)
     accounts = []
     for a in rows:
@@ -366,6 +466,15 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
         item["ttl_seconds"] = _ttl_seconds(rt, a)
         accounts.append(item)
     up = all(h.up for h in agg.health) if agg.health else False
+    # `accounts_dir` 必须跟着平台走。原来一律返回 qoder_data_dir：切到豆包工作时
+    # 账号页拿到的是一条**指向 Qoder 目录**的路径，用它做「这个平台有没有账号目录」
+    # 之类的判断就会得到错答案。
+    _dirs = {"qoder": str(rt.settings.qoder_data_dir),
+             "trae": str(rt.settings.trae_data_dir),
+             "workbuddy": str(rt.settings.wb_auths_dir),
+             # 豆包工作的账号存在上游，qtg 侧没有对应目录；给上游的约定路径，
+             # 前端只拿它做展示，不依赖本机可达。
+             "doubaowork": "/opt/doubaowork2api/accounts"}
     return {
         "total": len(accounts),
         "accounts": accounts,
@@ -373,7 +482,7 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
         "pool_available": up,
         "upstream": {"id": upstream_id, "name": _upstream_name(upstream_id),
                      "is_default": upstream_id in (None, 1)},
-        "accounts_dir": rt.settings.qoder_data_dir,
+        "accounts_dir": _dirs.get(chosen or "", ""),
     }
 
 
@@ -383,7 +492,13 @@ async def fixed_status(request: Request, upstream_id: Optional[int] = None) -> D
     rt = _rt(request)
     upstream_id = _resolve_upstream_id(request, upstream_id)
     chosen = UPSTREAM_IDS.get(upstream_id)
-    agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
+    try:
+        agg = await build_pool_snapshot(rt, chosen) if chosen else await build_aggregate(rt)
+    except UpstreamError as exc:
+        # 「平台未启用」（doubaowork_engine=off / wb_engine=off）与「上游不可达」
+        # 都是**可解释的未就绪**，不能让它们冒成裸 500 纯文本：前端拿不到 JSON
+        # 就只剩一个红色 XHR 错误，看起来像网关崩了。用 409 + 明确文案。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     rows = _rows_of(agg, upstream_id)
     by_realm: Dict[str, Dict[str, int]] = {}
     for a in rows:
@@ -436,7 +551,8 @@ async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict
             _agg = None
         if _agg is not None:
             _rows = {"qoder": _agg.qoder_accounts, "trae": _agg.trae_accounts,
-                     "workbuddy": _agg.wb_accounts}.get(plat, [])
+                     "workbuddy": _agg.wb_accounts,
+                     "doubaowork": _agg.doubaowork_accounts}.get(plat, [])
             _ok = False
             for _a in _rows:
                 _got = str(getattr(_a, "realm", "") or "").strip().lower()
@@ -453,7 +569,7 @@ async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict
          "context_length": r["context_length"],
          "max_output_tokens": r["max_output_tokens"] or None,
          "owned_by": plat}
-        for r in data[plat]
+        for r in (data.get(plat) or [])
     ]
     return {"models": models, "source": "dynamic" if models else "static", "count": len(models)}
 
@@ -486,7 +602,8 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
             _agg = None
         if _agg is not None:
             _rows = {"qoder": _agg.qoder_accounts, "trae": _agg.trae_accounts,
-                     "workbuddy": _agg.wb_accounts}.get(plat, [])
+                     "workbuddy": _agg.wb_accounts,
+                     "doubaowork": _agg.doubaowork_accounts}.get(plat, [])
             _ok = False
             for _a in _rows:
                 _got = str(getattr(_a, "realm", "") or "").strip().lower()
@@ -504,7 +621,7 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
 
     data = await _load_models(rt, plat)
     models: List[Dict[str, Any]] = []
-    for i, r in enumerate(data[plat]):
+    for i, r in enumerate(data.get(plat) or []):
         models.append({
             "id": r["id"],
             "name": r["name"],
@@ -559,7 +676,7 @@ async def fixed_playground_models(request: Request, realm: str = Query(default="
     data = await _load_models(rt, plat)
     models = [{"id": r["id"], "name": r["name"], "efforts": r.get("efforts") or [],
                "series": r["series"]}
-              for r in data[plat]]
+              for r in (data.get(plat) or [])]
     return {
         "models": models,
         "source": "tencent" if models else "none",

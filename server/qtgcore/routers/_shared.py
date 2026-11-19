@@ -22,8 +22,24 @@ from fastapi.responses import JSONResponse
 
 
 def _rt(request: Request):
-    """取运行时对象（`app.state.rt`，由 lifespan 注入）。"""
-    return request.app.state.rt
+    """取运行时对象（`app.state.rt`，由 lifespan 注入）。
+
+    lifespan 里 `load_settings()` 抛异常时（`configcontract` 的环境变量白名单、
+    路径校验等）会**整块跳过注入**，只留一行 `logger.exception`。此前这里直接
+    `request.app.state.rt`，于是每个数据端点都冒一个 `AttributeError: 'State'
+    object has no attribute 'rt'` —— 运维看到的是 Python 堆栈，而不是
+    「配置校验没过，去查日志」。这里换成可读错误。
+    """
+    rt = getattr(request.app.state, 'rt', None)
+    if rt is None:
+        from ..errors import UpstreamError
+
+        raise UpstreamError(
+            "qtgcore 控制面未初始化：启动时的配置校验失败，四个平台的管理面都不可用。"
+            "请查服务日志里 'qoder/trae control plane failed' 那条的堆栈"
+            "（常见原因：QTG_* 环境变量未在 config-schema.json 登记、路径不是绝对路径）。"
+        )
+    return rt
 
 
 def _no(what: str, why: str = "") -> JSONResponse:

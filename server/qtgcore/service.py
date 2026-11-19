@@ -311,6 +311,64 @@ def map_trae_account(raw: Dict[str, Any]) -> Account:
     )
 
 
+def map_doubaowork_account(raw: Dict[str, Any]) -> Account:
+    """豆包工作账号（doubaowork2api 的 `Account.public_dict()`）。
+
+    这个上游**没有额度字段**：`public_dict()` 只有 id / name / remark /
+    group / enabled / available / state / cooldown_remaining_seconds /
+    last_error / error_code / device_id / web_id / in_flight。
+
+    因此 `credits_*` 一律留 0，并在 `note` 里写明「上游不提供额度」——
+    0 在这里的含义是「取不到」，不是「余额为零」。前端据此显示未知态，
+    而不是画一条看着真实、其实凭空的余量曲线。
+    """
+    enabled = bool(raw.get("enabled", True))
+    in_flight = raw.get("in_flight")
+    upstream_state = str(raw.get("state") or "").strip().lower()
+    # busy 不是异常状态，只是正在服务一个请求：归到 ready，由 in_flight 表达。
+    if upstream_state in ("ready", "busy"):
+        state = "ready"
+    elif upstream_state == "cooling":
+        state = "cooling"
+    elif upstream_state == "disabled":
+        state = "disabled"
+    else:
+        state = "unknown"
+    if not enabled:
+        state = "disabled"
+    last_error = str(raw.get("last_error") or "").strip()
+    error_code = str(raw.get("error_code") or "").strip()
+    note = last_error or ("上游不提供额度" if not error_code else "")
+    return Account(
+        platform="doubaowork",
+        uid=str(raw.get("id") or ""),
+        name=str(raw.get("name") or raw.get("id") or "")[:64],
+        # 豆包工作没有 realm（国内/国际）概念，留空而不是照抄别的平台默认值。
+        realm="",
+        enabled=enabled,
+        state=state,  # type: ignore[arg-type]
+        credits_remain=0.0,
+        credits_total=0.0,
+        credits_used=0.0,
+        expires_at=None,
+        expires_iso=None,
+        days_left=None,
+        # 上游没有签到，checked_today 恒为 False 是事实，不是「今天没签」。
+        checked_today=False,
+        last_checkin=None,
+        plan="",
+        in_flight=_i(in_flight) if in_flight is not None else None,
+        in_flight_cap=None,
+        group=str(raw.get("group") or "") or None,
+        in_cooldown=state == "cooling",
+        # 上游只给「剩余冷却秒数」，没有绝对时刻；不凭 remaining 反推一个
+        # 看起来精确的 cooldown_until。
+        cooldown_until=None,
+        errors=1 if error_code else 0,
+        note=note[:160],
+    )
+
+
 def summarize(accounts: Iterable[Account]) -> AccountSummary:
     rows = list(accounts)
     s = AccountSummary(total=len(rows))
@@ -349,6 +407,11 @@ class Aggregate:
         self.wb_raw: Dict[str, Any] = {}
         self.wb_usage: Dict[str, Any] = {}
         self.wb_settings: Dict[str, Any] = {}
+        # 豆包工作（第四平台，只读合并）
+        self.doubaowork_accounts: List[Account] = []
+        self.doubaowork_raw: Dict[str, Any] = {}
+        self.doubaowork_usage: Dict[str, Any] = {}
+        self.doubaowork_settings: Dict[str, Any] = {}
         self.health: List[HealthStatus] = []
         self.errors: List[str] = []
 
@@ -375,17 +438,23 @@ async def build_aggregate(rt: Any, *, force: bool = False,
 
     async def _build() -> Aggregate:
         agg = Aggregate()
-        q, t = rt.qoder, rt.trae
+        # qoder 现在是**可摘除**的平台（官方不再送积分，见 runtime.py）：
+        # 摘掉时 `rt.qoder is None`，这里必须跟着跳过，否则每一路都会抛
+        # AttributeError 被 `_safe` 记成错误，聚合结果里永远挂着一串假故障。
+        q = getattr(rt, 'qoder', None)
+        t = rt.trae
 
         days = max(1,min(90,int(usage_days)))
         errs = agg.errors
         selected=getattr(scope,'platform','all') if scope is not None else 'all'
-        if selected not in ('all','qoder','trae','workbuddy'):
+        if selected not in ('all','qoder','trae','workbuddy','doubaowork'):
             raise UpstreamError('invalid aggregate platform scope')
-        need_q=selected in ('all','qoder')
+        need_q=selected in ('all','qoder') and q is not None
         need_t=selected in ('all','trae')
         w=getattr(rt,'wb',None)
         need_w=selected in ('all','workbuddy') and w is not None
+        d=getattr(rt,'dbw',None)
+        need_d=selected in ('all','doubaowork') and d is not None
         async def skipped():return {}
         results = await asyncio.gather(
             (_safe(q.accounts(), {}, errs, "qoder.accounts") if need_q else skipped()),
@@ -402,6 +471,10 @@ async def build_aggregate(rt: Any, *, force: bool = False,
             (_safe(w.usage(days), {}, errs, "wb.usage") if need_w else skipped()),
             (_safe(w.settings(), {}, errs, "wb.settings") if need_w else skipped()),
             (_safe(w.health(), {}, None, "") if need_w else skipped()),
+            (_safe(d.overview(), {}, errs, "doubaowork.overview") if need_d else skipped()),
+            (_safe(d.usage(days), {}, errs, "doubaowork.usage") if need_d else skipped()),
+            (_safe(d.settings(), {}, errs, "doubaowork.settings") if need_d else skipped()),
+            (_safe(d.health(), {}, None, "") if need_d else skipped()),
             return_exceptions=False,
         )
         (
@@ -416,7 +489,9 @@ async def build_aggregate(rt: Any, *, force: bool = False,
             qh,
             th,
         ) = results[:10]
-        agg.wb_raw,agg.wb_usage,agg.wb_settings,wh=results[10:]
+        agg.wb_raw,agg.wb_usage,agg.wb_settings,wh=results[10:14]
+        (agg.doubaowork_raw, agg.doubaowork_usage,
+         agg.doubaowork_settings, dh) = results[14:]
 
         for raw in (agg.qoder_raw.get("accounts") or []):
             agg.qoder_accounts.append(map_qoder_account(raw))
@@ -426,19 +501,24 @@ async def build_aggregate(rt: Any, *, force: bool = False,
         if need_w:
             for raw in (agg.wb_raw.get("accounts") or []):
                 agg.wb_accounts.append(map_wb_account(raw))
+        if need_d:
+            for raw in (agg.doubaowork_raw.get("accounts") or []):
+                agg.doubaowork_accounts.append(map_doubaowork_account(raw))
 
-        # 两个上游都不可达时明确失败，绝不返回「全 0 的健康面板」
+        # 所有上游都不可达时明确失败，绝不返回「全 0 的健康面板」
         q_up = bool((qh or {}).get("up"))
         t_up = bool((th or {}).get("up"))
-        if not q_up and not t_up and not (wh or {}).get("up"):
-            detail = "; ".join(agg.errors[:3]) or "两个上游 BFF 均不可达"
+        d_up = bool((dh or {}).get("up"))
+        if not q_up and not t_up and not (wh or {}).get("up") and not d_up:
+            detail = "; ".join(agg.errors[:3]) or "所有上游控制面均不可达"
             raise UpstreamError(f"上游控制面不可用：{detail}")
 
         # Do not report unqueried platforms as unhealthy or gate a selected
         # platform on unrelated credentials, analytics or retry loops.
         agg.health=[]
         for platform,adapter,health,needed in (
-                ('qoder',q,qh,need_q),('trae',t,th,need_t),('workbuddy',w,wh,need_w)):
+                ('qoder',q,qh,need_q),('trae',t,th,need_t),('workbuddy',w,wh,need_w),
+                ('doubaowork',d,dh,need_d)):
             if needed:
                 fallback=getattr(rt.settings,'wb_api_base' if platform=='workbuddy' else platform+'_base','')
                 agg.health.append(HealthStatus(
@@ -461,13 +541,14 @@ async def build_aggregate(rt: Any, *, force: bool = False,
 
 async def build_pool_snapshot(rt: Any, platform: str, *, force: bool = False) -> Aggregate:
     """Read only the selected pool; unrelated analytics never gate account pages."""
-    if platform not in ('qoder', 'trae', 'workbuddy'):
+    if platform not in ('qoder', 'trae', 'workbuddy', 'doubaowork'):
         raise ValueError('known pool platform required')
     from ..services.scope import fixed
     scope = fixed(platform=platform, authority='upstream')
     async def build():
         agg = Aggregate()
-        adapter = getattr(rt, {'qoder': 'qoder', 'trae': 'trae', 'workbuddy': 'wb'}[platform], None)
+        adapter = getattr(rt, {'qoder': 'qoder', 'trae': 'trae', 'workbuddy': 'wb',
+                               'doubaowork': 'dbw'}[platform], None)
         if adapter is None:
             raise UpstreamError('当前平台未启用')
         # Account data is required. A healthy /health cannot turn a failed list
@@ -493,7 +574,8 @@ async def build_pool_snapshot(rt: Any, platform: str, *, force: bool = False) ->
         if not isinstance(raw, dict) or not isinstance(raw.get('accounts'), list):
             raise UpstreamError('当前平台账号列表暂不可用')
         mapper, field = {'qoder': (map_qoder_account, 'qoder'), 'trae': (map_trae_account, 'trae'),
-                         'workbuddy': (map_wb_account, 'wb')}[platform]
+                         'workbuddy': (map_wb_account, 'wb'),
+                         'doubaowork': (map_doubaowork_account, 'doubaowork')}[platform]
         setattr(agg, field + '_raw', raw)
         if any(not isinstance(row, dict) for row in raw['accounts']):
             raise UpstreamError('当前平台账号列表格式无效')
@@ -528,9 +610,10 @@ def _apply_pool_flags(agg: Aggregate) -> None:
 
 
 def all_accounts(agg: Aggregate) -> List[Account]:
-    """三平台账号合集。所有「全量」语义的调用点都走这里，
+    """全平台账号合集。所有「全量」语义的调用点都走这里，
     避免每加一个平台都要全局搜 `qoder + trae`。"""
-    return list(agg.qoder_accounts) + list(agg.trae_accounts) + list(agg.wb_accounts)
+    return (list(agg.qoder_accounts) + list(agg.trae_accounts)
+            + list(agg.wb_accounts) + list(agg.doubaowork_accounts))
 
 
 def accounts_payload(agg: Aggregate) -> AccountsResponse:
@@ -539,11 +622,15 @@ def accounts_payload(agg: Aggregate) -> AccountsResponse:
         qoder=agg.qoder_accounts,
         trae=agg.trae_accounts,
         workbuddy=agg.wb_accounts,
+        doubaowork=agg.doubaowork_accounts,
         summary={
             "qoder": summarize(agg.qoder_accounts),
             "trae": summarize(agg.trae_accounts),
             "workbuddy": summarize(agg.wb_accounts),
-            "all": summarize(agg.qoder_accounts + agg.trae_accounts + agg.wb_accounts),
+            "doubaowork": summarize(agg.doubaowork_accounts),
+            "all": summarize(
+                agg.qoder_accounts + agg.trae_accounts
+                + agg.wb_accounts + agg.doubaowork_accounts),
         },
     )
 
@@ -701,13 +788,22 @@ def usage_payload(agg: Aggregate, days: int = 14) -> UsageResponse:
                           + sum(p.total_tokens for p in t_points)
                           + sum(p.total_tokens for p in w_points)),
     }
+    # 豆包工作没有用量端点。points 里给它空列表，**同时**把「上游不提供」
+    # 显式带出去：只给空列表，前端分不清「真的没有请求」和「上游不给数据」，
+    # 会把它画成一条全 0 的、看起来真实的曲线。
+    _dw = agg.doubaowork_usage or {}
+    _dw_unsupported = [str(x) for x in (_dw.get("unsupported") or [])]
+    _dw_note = str(_dw.get("note") or "")
     return UsageResponse(
         generated_at=now_iso(),
         days=days,
-        points={"qoder": q_points, "trae": t_points, "workbuddy": w_points},
+        points={"qoder": q_points, "trae": t_points, "workbuddy": w_points,
+                "doubaowork": []},
         by_model=by_model,
         credits=credits,
         totals=totals,
+        unsupported={"doubaowork": _dw_unsupported} if _dw_unsupported else {},
+        notes={"doubaowork": _dw_note} if _dw_note else {},
     )
 
 
@@ -777,7 +873,8 @@ def overview_payload(agg: Aggregate, systemd_timers: List[str], random_state: Di
     tasks = tasks_payload(agg, systemd_timers)
     health = health_payload(agg)
 
-    all_accts = accounts.qoder + accounts.trae + accounts.workbuddy
+    all_accts = (accounts.qoder + accounts.trae
+                 + accounts.workbuddy + accounts.doubaowork)
     summary = summarize(all_accts)
     q_credits = summarize(accounts.qoder).credits
     t_credits = summarize(accounts.trae).credits
@@ -789,7 +886,9 @@ def overview_payload(agg: Aggregate, systemd_timers: List[str], random_state: Di
             label="账号总数",
             value=str(summary.total),
             sub=f"Qoder {len(accounts.qoder)} · Trae {len(accounts.trae)}"
-                f" · WB {len(accounts.workbuddy)}",
+                f" · WB {len(accounts.workbuddy)}"
+                # 只有真的有豆包工作账号时才显示这一节，避免默认多一个 "· 豆包 0"。
+                + (f" · 豆包 {len(accounts.doubaowork)}" if accounts.doubaowork else ""),
         ),
         StatCard(
             key="ready",
@@ -809,8 +908,11 @@ def overview_payload(agg: Aggregate, systemd_timers: List[str], random_state: Di
             key="credits",
             label="积分余额",
             value=_fmt_num(q_credits + t_credits + w_credits),
-            sub=f"Qoder {_fmt_num(q_credits)} · Trae {_fmt_num(t_credits)}"
-                f" · WB {_fmt_num(w_credits)}",
+            sub=(f"Qoder {_fmt_num(q_credits)} · Trae {_fmt_num(t_credits)}"
+                 f" · WB {_fmt_num(w_credits)}"
+                 # 豆包工作上游不返回额度。显式说明，否则用户会以为上面
+                 # 这个合计已经把它的余量算进去了（而它对合计的贡献恒为 0）。
+                 + (" · 豆包 上游不提供额度" if accounts.doubaowork else "")),
             tone="bad" if summary.low else "",
         ),
         StatCard(

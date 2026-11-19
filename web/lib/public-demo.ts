@@ -4,7 +4,9 @@ import type {AxiosAdapter} from 'axios';
 export const publicDemoAdapter: AxiosAdapter = async config => {
   const path = (config.url || '').split('?')[0];
   const platform = String(config.params?.platform || config.headers.get('X-QTG-Platform') || 'workbuddy');
-  const amount = platform === 'qoder' ? 202 : platform === 'trae' ? 303 : 101;
+  // 按平台给不同的示例金额。用映射而不是三元链：新增平台时三元会静默
+  // 落到最后一个分支（101），示例数据看起来「正常」但其实是别的平台的数字。
+  const amount = ({qoder: 202, trae: 303, doubaowork: 404} as Record<string, number>)[platform] ?? 101;
   const day = '2026-10-30';
   const dates = (days: number) => Array.from({length: days}, (_, i) =>
     new Date(Date.UTC(2026, 9, 30 - days + 1 + i)).toISOString().slice(0, 10));

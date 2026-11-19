@@ -71,6 +71,7 @@
     "emptyRealmTitle": "{realm}没有账号",
     "emptyRealmDesc": "账号池里有账号，但都不属于这个版本。切到另一个版本试试——两个版本各有自己的账号池。",
     "creditsRefreshed": "积分已刷新",
+    "creditsUnsupported": "该平台的上游不提供额度接口，无法刷新积分",
     "creditsRefreshedDetail": "{ok}/{total} 个账号",
     "creditsPartial": "部分账号积分未取到",
     "creditsPartialDetail": "{ok}/{total} 成功，其余见账号状态",
@@ -263,6 +264,7 @@
     "callbackPlaceholder": "粘贴完成授权后地址栏中的完整地址",
     "descTrae": "打开或复制 Trae 官方链接，完成登录，再把最后的授权结果地址粘贴回来。",
     "traeGlobalUnsupported": "当前 Trae 引擎尚未接入国际版授权，请切换国内版；不会转到 WorkBuddy。",
+    "doubaoworkImportOnly": "豆包工作的账号不使用 OAuth 授权。请在上游 doubaowork2api 面板导出账号 JSON，再用「上传账号」导入；不会转到其他平台。",
     "requestingPlatform": "正在创建 {platform} 授权连接…",
     "waitingPlatform": "等待 {platform} 授权。完成登录后返回此处，智汇将确认连接结果。",
     "waitingCallback": "在官方页面完成登录，再粘贴最后的地址确认连接。",
@@ -944,6 +946,7 @@
     "global": "国际版",
     "cnTitle": "国内版（codebuddy.cn）",
     "globalTitle": "国际版（workbuddy.ai）",
+    "doubaoworkNoRealm": "豆包工作不区分国内／国际版本，这个切换对它不生效",
     "note": "当前为**国际版**视图（workbuddy.ai）。国际版**没有签到 / 猫猫旅行 / 开学季 / 夜猫任务**（积分只来自一次性 trial），保活与活跃上报照常执行，因此任务类页面记录较少属正常，不是数据丢失。"
   },
   "redPacket": {
@@ -1384,6 +1387,7 @@
     "cacheHitRate": "缓存命中率",
     "dailyAgg": "按天聚合",
     "noUsageData": "暂无用量数据",
+    "localTrafficOnly": "该平台上游不提供用量接口；这里的数字是**经过本网关**的转发量，不含客户端直连。",
     "byModel": "按模型",
     "byKey": "按密钥",
     "emptyTitle": "暂无数据",
@@ -1790,7 +1794,10 @@
     "switch": "平台切换",
     "workbuddyHint": "WorkBuddy · 账号、模型、用量与授权",
     "qoderHint": "Qoder · 国内／国际独立设备授权",
-    "traeHint": "Trae · 当前支持国内版回调授权"
+    "traeHint": "Trae · 当前支持国内版回调授权",
+    "doubaoworkHint": "豆包工作 · 订阅额度接入，账号池与冷却由上游引擎管理",
+    "doubaoworkShort": "豆包工作",
+    "disabledNotice": "当前平台的引擎尚未启用，这个页面不会显示账号或数据；这不代表账号丢失。"
   },
   "intake": {
     "eyebrow": "ZHIHUI · 账号接入",

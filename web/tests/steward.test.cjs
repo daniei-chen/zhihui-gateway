@@ -28,6 +28,11 @@ function render(file, name, data, isAdmin = true, state = []) {
     '@/lib/api': {errText: error => String(error)},
     '@/lib/operational-evidence': {evidenceAccess: error => !error ? null :
       [401, 403].includes(error.response?.status) ? 'forbidden' : [404, 501].includes(error.response?.status) ? 'unavailable' : 'stale'},
+    // StewardPanel 现在按平台枚举渲染能力卡（不再写死三平台），所以会 import
+    // 这两个模块。它们都是纯数据/纯常量，直接给值即可，不需要 React 上下文。
+    '@/lib/platform-store': {PLATFORMS: ['workbuddy', 'qoder', 'trae', 'doubaowork']},
+    '@/lib/platform-context': {PLATFORM_LABEL: {
+      workbuddy: 'WorkBuddy', qoder: 'Qoder', trae: 'Trae', doubaowork: 'Doubao Work'}},
     '@/lib/steward': {stewardApi: new Proxy({}, {get: (_, key) => (...args) => {
       calls.push({key, args});
       if (data.api?.[key]) return data.api[key](...args);

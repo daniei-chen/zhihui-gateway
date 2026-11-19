@@ -4,7 +4,7 @@ import {Globe, House} from 'lucide-react';
 import {motion} from 'motion/react';
 
 import {useRealm, type Realm} from '@/lib/realm-context';
-import {usePlatform} from '@/lib/platform-context';
+import {usePlatform, type Platform} from '@/lib/platform-context';
 import {useT} from '@/lib/i18n/provider';
 import {RichText} from '@/lib/i18n/rich-text';
 import {cn} from '@/lib/utils';
@@ -21,9 +21,18 @@ export function RealmToggle({compact = false}: {compact?: boolean}) {
   const {realm, setRealm} = useRealm();
   const {platform} = usePlatform();
   const t = useT();
+  // 平台名单独算一次：原来把 `platform === 'qoder' ? 'Qoder' : 'Trae'` 内联在
+  // title 里，新增第四个平台后豆包工作会被**显示成 Trae**（三元表达式没穷尽）。
+  const platformLabel = platform === 'qoder' ? 'Qoder'
+    : platform === 'trae' ? 'Trae'
+    : platform === 'doubaowork' ? t('platform.doubaoworkShort')
+    : 'WorkBuddy';
+  // 豆包工作没有国内/国际之分：切换器仍显示（两平台共用同一个控件位），
+  // 但标题直接说明「此切换对它不生效」，而不是标注成某个版本。
+  const noRealm = platform === 'doubaowork';
   const options: {id: Realm; label: string; title: string; icon: typeof House}[] = [
-    {id: 'cn', label: t('realm.cn'), title: platform === 'workbuddy' ? t('realm.cnTitle') : `${platform === 'qoder' ? 'Qoder' : 'Trae'} · ${t('realm.cn')}`, icon: House},
-    {id: 'global', label: t('realm.global'), title: platform === 'workbuddy' ? t('realm.globalTitle') : platform === 'trae' ? t('addAccount.traeGlobalUnsupported') : `Qoder · ${t('realm.global')}`, icon: Globe},
+    {id: 'cn', label: t('realm.cn'), title: noRealm ? t('realm.doubaoworkNoRealm') : platform === 'workbuddy' ? t('realm.cnTitle') : `${platformLabel} · ${t('realm.cn')}`, icon: House},
+    {id: 'global', label: t('realm.global'), title: noRealm ? t('realm.doubaoworkNoRealm') : platform === 'workbuddy' ? t('realm.globalTitle') : platform === 'trae' ? t('addAccount.traeGlobalUnsupported') : `${platformLabel} · ${t('realm.global')}`, icon: Globe},
   ];
 
   return (
@@ -65,6 +74,20 @@ export function RealmToggle({compact = false}: {compact?: boolean}) {
 }
 
 /** 页面内的版本提示条：说明当前版本会影响哪些内容 */
+/**
+ * 国际版横幅的文案：按平台**穷尽映射**。
+ *
+ * 这里原本是三元表达式，加第四个平台后豆包工作会落进「Qoder」分支——
+ * 一个没有国内/国际概念的平台却显示「当前为 Qoder 国际版视图」。
+ * 用 Record 让 tsc 在下次扩平台时强制补齐。
+ */
+const REALM_NOTE_KEY: Record<Platform, string> = {
+  workbuddy: 'realm.note',
+  trae: 'addAccount.traeGlobalUnsupported',
+  qoder: 'realm.qoderNote',
+  doubaowork: 'realm.doubaoworkNoRealm',
+};
+
 export function RealmNote({className}: {className?: string}) {
   const {realm} = useRealm();
   const {platform} = usePlatform();
@@ -79,7 +102,7 @@ export function RealmNote({className}: {className?: string}) {
     >
       <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       {/* 加粗位置由译文自己决定：各语言语序不同，拆成多个 JSX 片段必然错位 */}
-      <RichText text={t(platform === 'workbuddy' ? 'realm.note' : platform === 'trae' ? 'addAccount.traeGlobalUnsupported' : 'realm.qoderNote')} />
+      <RichText text={t(REALM_NOTE_KEY[platform])} />
     </div>
   );
 }

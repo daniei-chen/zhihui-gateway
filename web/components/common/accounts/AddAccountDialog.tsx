@@ -36,7 +36,10 @@ export function AddAccountDialog({open, onOpenChange, onSuccess, upstreamId}: {
   const {realm, label: realmName} = useRealm();
   const {isAdmin: canManage} = useAuth();
   const workbuddy = platform === 'workbuddy';
-  const unsupported = platform === 'trae' && realm === 'global';
+  // 豆包工作没有 OAuth：它的账号是浏览器 Cookie 文档，只能从上游面板导出
+  // 再用「上传账号」导入。在打开对话框时就说明，而不是让用户点完一圈才报错。
+  const doubaoworkImportOnly = platform === 'doubaowork';
+  const unsupported = (platform === 'trae' && realm === 'global') || doubaoworkImportOnly;
   const [phase, setPhase] = useState<Phase>('loading');
   const [region, setRegion] = useState('');
   const [proxy, setProxy] = useState<string | undefined>(undefined);
@@ -127,7 +130,9 @@ export function AddAccountDialog({open, onOpenChange, onSuccess, upstreamId}: {
     setMessage(t('addAccount.requestingPlatform', {platform: platformName}));
     if (open && unsupported) {
       setPhase('error');
-      setMessage(t('addAccount.traeGlobalUnsupported'));
+      setMessage(doubaoworkImportOnly
+        ? t('addAccount.doubaoworkImportOnly')
+        : t('addAccount.traeGlobalUnsupported'));
     } else if (open && (!workbuddy || routesReady)) {
       void (async () => {
         try {
@@ -274,8 +279,14 @@ export function AddAccountDialog({open, onOpenChange, onSuccess, upstreamId}: {
         <DialogHeader>
           <DialogTitle>{t('addAccount.titlePlatform', {platform: platformName, realm: realmName})}</DialogTitle>
           <DialogDescription>
-            {t(unsupported ? 'addAccount.traeGlobalUnsupported' : platform === 'qoder' ? 'addAccount.descQoder' :
-              platform === 'trae' ? 'addAccount.descTrae' : realm === 'global' ? 'addAccount.descWbGlobal' : 'addAccount.descWbCn')}
+            {/* 豆包工作先判断：它是 unsupported 的一种，但原因与 Trae 国际版
+                完全不同。不先判会让描述说「Trae 引擎未接入国际版」，而同一
+                弹窗下方的状态文字说的是豆包工作——自相矛盾。 */}
+            {t(doubaoworkImportOnly ? 'addAccount.doubaoworkImportOnly'
+              : unsupported ? 'addAccount.traeGlobalUnsupported'
+              : platform === 'qoder' ? 'addAccount.descQoder'
+              : platform === 'trae' ? 'addAccount.descTrae'
+              : realm === 'global' ? 'addAccount.descWbGlobal' : 'addAccount.descWbCn')}
           </DialogDescription>
         </DialogHeader>
         <div className="flex w-full min-w-0 flex-col items-center gap-4 px-6 pb-6">

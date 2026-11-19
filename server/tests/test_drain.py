@@ -112,8 +112,17 @@ class ReadinessDrainingTest(unittest.TestCase):
     def test_readiness_reports_not_ok_while_draining(self) -> None:
         from server import operational
 
-        original = operational.database_writable
+        # 这个用例要验证的是「draining 会把 ok 变 False」，**不**验证账本通道健康。
+        # 但 readiness 的 ok 同时取决于 `ledger_backlog` 与 `ledger_channel_ok`：
+        # 同一进程里前面的用例若在 `data/ledger-spool` 留了积压（本仓库既有的
+        # 测试隔离问题），这里就会在 `assertTrue(readiness()['ok'])` 上假失败。
+        # 把它依赖的两项固定住，用例才真的只测 draining。
+        original = (operational.database_writable,
+                    operational._ledger_backlog,
+                    operational._ledger_channel_ok)
         operational.database_writable = lambda: True
+        operational._ledger_backlog = lambda: 0
+        operational._ledger_channel_ok = lambda: True
         try:
             self.assertTrue(operational.readiness()['ok'])
             drain.begin()
@@ -121,7 +130,9 @@ class ReadinessDrainingTest(unittest.TestCase):
             self.assertFalse(status['ok'])
             self.assertTrue(status['draining'])
         finally:
-            operational.database_writable = original
+            (operational.database_writable,
+             operational._ledger_backlog,
+             operational._ledger_channel_ok) = original
 
 
 if __name__ == '__main__':

@@ -74,7 +74,7 @@ class _Fixture(unittest.TestCase):
         fake_key = self.root / 'fake-platform-key'
         fake_key.write_text('mock-platform-key', encoding='utf-8')
         self.stack.enter_context(mock.patch.object(gateway, '_THREEWAY_SPEC', {
-            p: (f'http://{p}.mock', str(fake_key)) for p in ('qoder', 'trae')}))
+            p: (f'http://{p}.mock', str(fake_key)) for p in ('doubaowork', 'trae')}))
         self.stack.enter_context(mock.patch.object(gateway, '_REJECTION_RETRY_DELAY_S', 0))
         self.stack.enter_context(mock.patch.object(gateway, '_rejection_retry_limit', return_value=2))
         self.stack.enter_context(mock.patch.object(gateway, 'RATE_MAX_PER_MIN', 0))
@@ -130,7 +130,7 @@ class RouteIsolationTest(_Fixture):
             hosts.append(request.url.host)
             return httpx.Response(200, json=GOOD)
         with self.mock_transport(respond):
-            for platform in ('workbuddy', 'qoder', 'trae'):
+            for platform in ('workbuddy', 'doubaowork', 'trae'):
                 for protocol in PROTOCOLS:
                     for source in ('path', 'header', 'model'):
                         with self.subTest(platform=platform, protocol=protocol, source=source):
@@ -149,11 +149,11 @@ class RouteIsolationTest(_Fixture):
 
     def test_platform_and_model_scope_conflicts_fail_before_io(self):
         for protocol in PROTOCOLS:
-            key = self.key(platforms=['qoder'], models=['m'])
+            key = self.key(platforms=['doubaowork'], models=['m'])
             for params, status in (({}, 403),
-                                   ({'prefix': '/qoder', 'headers': {'X-QTG-Platform': 'trae'}}, 400),
-                                   ({'prefix': '/qoder', 'model': 'trae/m'}, 400),
-                                   ({'prefix': '/qoder', 'model': 'forbidden'}, 400)):
+                                   ({'prefix': '/doubaowork', 'headers': {'X-QTG-Platform': 'trae'}}, 400),
+                                   ({'prefix': '/doubaowork', 'model': 'trae/m'}, 400),
+                                   ({'prefix': '/doubaowork', 'model': 'forbidden'}, 400)):
                 with self.subTest(protocol=protocol, params=params):
                     result = self.post(protocol, key=key, **params)
                     self.assertEqual(result.status_code, status, result.text)
@@ -163,9 +163,9 @@ class RouteIsolationTest(_Fixture):
         empty.write_text('', encoding='utf-8')
         for keyfile in (self.root / 'missing-key', empty):
             with mock.patch.object(gateway, '_THREEWAY_SPEC', {
-                    'qoder': ('http://qoder.mock', str(keyfile))}):
+                    'doubaowork': ('http://doubaowork.mock', str(keyfile))}):
                 for protocol in PROTOCOLS:
-                    result = self.post(protocol, key=self.key(platforms=['qoder']), prefix='/qoder')
+                    result = self.post(protocol, key=self.key(platforms=['doubaowork']), prefix='/doubaowork')
                     self.assertEqual(result.status_code, 503, result.text)
 
 

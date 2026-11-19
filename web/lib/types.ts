@@ -433,7 +433,7 @@ export interface UpstreamEndpoint {
 }
 
 export interface ApiKey {
-  platforms?: Array<'workbuddy' | 'qoder' | 'trae'>;
+  platforms?: Array<'workbuddy' | 'qoder' | 'trae' | 'doubaowork'>;
   platform_policy_valid?: boolean;
   request_policy_valid?: boolean;
   request_policy_errors?: string[];

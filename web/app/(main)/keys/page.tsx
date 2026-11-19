@@ -56,6 +56,45 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
+/**
+ * 密钥编辑里的平台候选与显示名。
+ *
+ * **顺序**与导航栏切换器一致（豆包工作第一，顶替 qoder 的位置），
+ * 不是照抄后端 `PLATFORMS` 的排列 —— 这个数组只决定复选框顺序，
+ * 不影响授权语义。授权语义由后端决定。
+ *
+ * 2026-11-19：qoder 已摘除（官方不再送积分），从可选列表移除。
+ */
+const KEY_PLATFORM_OPTIONS = ['doubaowork', 'trae', 'workbuddy'] as const;
+
+/**
+ * 平台显示名。
+ *
+ * 类型是 `Partial<Record<Platform, string>>` 而不是精确的键集合 —— 因为
+ * 「可选平台」（`KEY_PLATFORM_OPTIONS`，三条）和「历史平台」（`Platform`
+ * 类型，仍含已摘除的 qoder）不是同一件事。**已存在的旧密钥**里可能还写着
+ * qoder，展示时要能回退成原始 id，不能让界面崩在 `.map` 上。
+ */
+const PLATFORM_LABELS: Partial<Record<Platform, string>> = {
+  // 专有名词保持英文，与其余两项一致（中文语境下的「豆包工作」见 i18n 的
+  // platform.doubaoworkShort，那里用于导航 pill）。
+  doubaowork: 'Doubao Work',
+  trae: 'Trae',
+  workbuddy: 'WorkBuddy',
+  // qoder 已摘除（2026-11-19）：不再出现在可选列表里，但旧密钥数据里可能仍有，
+  // 展示时保留一个名字总比露出原始 id 好。
+  qoder: 'Qoder',
+};
+
+/**
+ * 密钥**缺 `platforms` 字段**时的兜底显示集合。
+ *
+ * 必须与后端 `platformpolicy.DEFAULT_PLATFORMS` 完全一致，否则会出现
+ * 「界面画的徽章」和「后端真正允许的平台」两套口径。
+ * 2026-11-19：跟着后端改成三平台（豆包进、qoder 出）。
+ */
+const LEGACY_DEFAULT_PLATFORMS = ['doubaowork', 'trae', 'workbuddy'] as const;
+
 interface FormState {
   platforms: Platform[];
   name: string;
@@ -286,7 +325,7 @@ export default function KeysPage() {
     setEditing(k);
     setForm({
       name: k.name,
-      platforms: k.platforms ?? ['workbuddy', 'qoder', 'trae'],
+      platforms: k.platforms ?? [...LEGACY_DEFAULT_PLATFORMS],
       // 默认不改动有效期；要续期/取消过期需显式选择
       expiryMode: 'keep',
       expiresDays: '0',
@@ -725,8 +764,8 @@ export default function KeysPage() {
                     {/* 只标「绑定了上游」的行：默认上游是绝大多数，每行都标等于没标，
                         有值才说明这把钥匙走的是另一个账号池（见 server/upstreamsvc.py） */}
                     <div className="mt-1 flex flex-wrap gap-1" aria-label={t('keys.platforms')}>
-                      {(k.platforms ?? ['workbuddy', 'qoder', 'trae']).map(p => (
-                        <Badge key={p} variant="outline" className="text-[10px]">{p === 'workbuddy' ? 'WorkBuddy' : p === 'qoder' ? 'Qoder' : 'Trae'}</Badge>
+                      {(k.platforms ?? LEGACY_DEFAULT_PLATFORMS).map(p => (
+                        <Badge key={p} variant="outline" className="text-[10px]">{PLATFORM_LABELS[p] ?? p}</Badge>
                       ))}
                       {k.platform_policy_valid === false ? <span className="text-xs text-destructive">{t('keys.platformPolicyInvalid')}</span> : null}
                     </div>
@@ -934,7 +973,7 @@ export default function KeysPage() {
               <fieldset disabled={busy} aria-describedby="key-platform-help" className="space-y-2">
                 <legend className="text-xs font-medium">{t('keys.platforms')}</legend>
                 <div className="flex flex-wrap gap-4">
-                  {(['workbuddy', 'qoder', 'trae'] as const).map(p => (
+                  {KEY_PLATFORM_OPTIONS.map(p => (
                     <label key={p} className="inline-flex cursor-pointer items-center gap-2 text-sm">
                       <input type="checkbox" checked={form.platforms.includes(p)}
                         onChange={event => {
@@ -943,7 +982,7 @@ export default function KeysPage() {
                             platforms: checked ? Array.from(new Set([...previous.platforms, p])) : previous.platforms.filter(value => value !== p),
                           }));
                         }} />
-                      <span>{p === 'workbuddy' ? 'WorkBuddy' : p === 'qoder' ? 'Qoder' : 'Trae'}</span>
+                      <span>{PLATFORM_LABELS[p]}</span>
                     </label>
                   ))}
                 </div>

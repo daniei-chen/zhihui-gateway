@@ -420,14 +420,14 @@ RULES: Tuple[Rule, ...] = PUBLIC_RULES + (
     Rule(
         action="A37", title="推理调用（数据面）", methods=frozenset({"POST"}),
         paths=("/v1/chat/completions", "/v1/responses", "/v1/messages"),
-        allow=frozenset({ROLE_INFERENCE}), platform="qoder/trae",
+        allow=frozenset({ROLE_INFERENCE}), platform="qoder/trae/doubaowork",
         evidence="qtg/app/qtg/routers/proxy.py:355、routers/anthropic.py:175",
         notes="数据面不在 /api 闸门内，由 proxy 自行校验 sk-qtg- 密钥；"
               "控制面凭证不得用于数据面",
     ),
     Rule(
         action="A38", title="模型列表（数据面）", methods=frozenset({"GET"}),
-        paths=("/v1/models",), allow=frozenset({ROLE_INFERENCE}), platform="qoder/trae",
+        paths=("/v1/models",), allow=frozenset({ROLE_INFERENCE}), platform="qoder/trae/doubaowork",
         evidence="qtg/app/qtg/routers/proxy.py:325",
     ),
     # U3：Manager 专用适配器契约。机器到机器的只读通道，不接受会话 Cookie。
@@ -452,22 +452,27 @@ RULES: Tuple[Rule, ...] = PUBLIC_RULES + (
 
 
 def platform_of(request: Request) -> str:
-    """推断请求所属平台；推断不出返回「三平台」。
+    """推断请求所属平台；推断不出返回「三平台」（历史哨兵值，保留原样）。
 
     2026-10-27 R4 收敛：state/请求头的读取统一走 identity.platform_of——
     qtgcore 内从此只有那一处读 `x-qtg-platform`（中间件已把 query 入口
     归一化进 state）。query/path 兜底保留：那是「URL 自身携带平台」的
     独立语义，不属于请求头兼容层。
+
+    **平台集合必须取自 platformpolicy.PLATFORMS**：此前这里写死了三元组，
+    新增 doubaowork 后，豆包工作的请求三处都匹配不上，直接落到「三平台」
+    哨兵——那在下游被理解成「不限制」，等于把新平台当成全平台放行。
     """
+    from ..platformpolicy import PLATFORMS
     from .identity import platform_of as _identity_platform_of
     header = _identity_platform_of(request)
-    if header in ("qoder", "trae", "workbuddy"):
+    if header in PLATFORMS:
         return header
     query = (request.query_params.get("platform") or "").strip().lower()
-    if query in ("qoder", "trae", "workbuddy"):
+    if query in PLATFORMS:
         return query
     path = request.url.path
-    for name in ("qoder", "trae", "workbuddy"):
+    for name in PLATFORMS:
         if path.startswith(f"/{name}/"):
             return name
     return "三平台"
