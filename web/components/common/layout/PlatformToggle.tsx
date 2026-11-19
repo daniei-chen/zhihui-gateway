@@ -1,6 +1,6 @@
 'use client';
 
-import {Bot, Brain, Cloud, Sparkles} from 'lucide-react';
+import {Bot, Brain, Cloud} from 'lucide-react';
 import {motion} from 'motion/react';
 
 import {usePlatform, type Platform} from '@/lib/platform-context';
@@ -8,7 +8,11 @@ import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 
 /**
- * 平台切换（WorkBuddy / Qoder / Trae / 豆包工作）。WorkBuddy 排第一：它是当前主力平台。
+ * 平台切换（豆包工作 / Trae / WorkBuddy）。豆包工作排第一：它顶替了 qoder 原来的位置。
+ *
+ * 2026-11-19：qoder 官方不再送积分，qtg 不再接入它，平台位置由豆包工作接管。
+ * 这里**不再产出 qoder 选项** —— `lib/platform-store.ts` 的 `Platform` 类型里仍保留
+ * `'qoder'`，那是给历史数据与死分支用的，UI 不该再让用户切到它。
  *
  * 与右侧的版本切换（国内 / 国际）**并存**，两者是不同维度：
  * 平台决定连哪个上游网关，版本决定该平台下的账号属于国内站还是国际站。
@@ -22,20 +26,19 @@ export function PlatformToggle({compact = false}: {compact?: boolean}) {
   const t = useT();
   const options: {id: Platform; label: string; title: string; icon: typeof Bot}[] = [
     {
-      id: 'workbuddy',
-      label: 'WorkBuddy',
-      title: t('platform.workbuddyHint'),
-      icon: Cloud,
-    },
-    {id: 'qoder', label: 'Qoder', title: t('platform.qoderHint'), icon: Sparkles},
-    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
-    {
       id: 'doubaowork',
-      // 走 i18n：前三个平台名是英文专名（WorkBuddy/Qoder/Trae），中文产品名
+      // 走 i18n：前两个平台名是英文专名（Trae / WorkBuddy），中文产品名
       // 若在这里写死，en/ja/ko 界面会突然出现中文。
       label: t('platform.doubaoworkShort'),
       title: t('platform.doubaoworkHint'),
       icon: Brain,
+    },
+    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
+    {
+      id: 'workbuddy',
+      label: 'WorkBuddy',
+      title: t('platform.workbuddyHint'),
+      icon: Cloud,
     },
   ];
 
@@ -70,8 +73,9 @@ export function PlatformToggle({compact = false}: {compact?: boolean}) {
             <Icon className="relative h-3 w-3 shrink-0" />
             {!compact && (
               <>
-                {/* 窄屏只留图标：四个 pill 带文字合计约 280–300px，320px 视口
-                    （iPhone SE 一代等）会横向滚动。断点用 420px 而不是 sm(640)，
+                {/* 窄屏只留图标：三个 pill 带文字合计约 210–230px，320px 视口
+                    （iPhone SE 一代等）仍会横向滚动，所以保留收起逻辑。
+                    断点用 420px 而不是 sm(640)，
                     因为 375/390 这些常见机型放得下文字，没必要提前收起来。
                     收起时用 sr-only 保留可访问名，不能只剩一个裸图标。 */}
                 <span className="relative hidden min-[420px]:inline">{label}</span>
