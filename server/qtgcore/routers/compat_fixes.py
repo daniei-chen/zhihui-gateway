@@ -36,6 +36,20 @@ router = APIRouter(prefix="/api", tags=["compat-fixes"])
 # **不要**把它跟下面的 `UPSTREAM_IDS` 编号对齐 —— 编号是外部契约，不随显示顺序变。
 PLATFORMS = ("workbuddy", "trae", "doubaowork")
 
+# 平台 → upstream_id（**唯一来源**，别处一律引用这里）。
+#
+# 2026-11-19 修：此前 `fixed_upstreams` 自己手写了一份编号（qoder=1、
+# doubaowork=4），而 `UPSTREAM_IDS` 里豆包是 1 号 —— 两份编号打架的直接后果
+# 是前端按 id=4 取豆包账号时，`_rows_of` 没有 4 这个分支，落到
+# `all_accounts(agg)`，豆包页面显示「三个平台账号混在一起」。
+#
+# 编号契约（对外，不随显示顺序变）：
+#   doubaowork = 1  ← 顶替已摘除的 qoder，不留空洞
+#   trae       = 2  ← 保持不变
+#   workbuddy  = 3  ← 保持不变
+_UPID = {"doubaowork": 1, "trae": 2, "workbuddy": 3}
+_UPNAME = {1: "豆包工作", 2: "Trae", 3: "WorkBuddy"}
+
 _SERIES = (
     ("auto", "Auto"), ("qwen", "Qwen"), ("deepseek", "DeepSeek"),
     ("glm", "智谱 GLM"), ("kimi", "Kimi"), ("minimax", "MiniMax"),
@@ -285,7 +299,6 @@ def _key_state(platform: str) -> Dict[str, Any]:
 async def fixed_upstreams(request: Request) -> Dict[str, Any]:
     """多上游列表：必须带 `auth_dir`——dashboard 用「有没有账号目录」筛分组，
     缺这个字段会让首页永远显示 0 个账号。"""
-    from pathlib import Path
 
     rt = _rt(request)
     try:
@@ -313,21 +326,29 @@ async def fixed_upstreams(request: Request) -> Dict[str, Any]:
 
     w = list(agg.wb_accounts)
     dw = list(agg.doubaowork_accounts)
+    # 编号必须与 `UPSTREAM_IDS` 完全一致：豆包占 1 号（顶替已摘除的 qoder），
+    # Trae=2、WorkBuddy=3。
+    #
+    # 2026-11-19 修：这里原来是 row(1,qoder) / row(4,doubaowork)，
+    # 而 `UPSTREAM_IDS` 早已是 {1:doubaowork, 2:trae, 3:workbuddy}。
+    # 两处不一致的直接后果：前端拿到 id=4 的豆包分组，按 upstream_id=4 去取
+    # 账号，而 `_rows_of` 里**没有 4 这个分支**，落到 `all_accounts(agg)`
+    # —— 豆包页面显示的是「三个平台的账号混在一起」，这正是「接入不好」的根因。
+    # 同一份编号现在只有一处来源：`_UPID`（下面按名字查，不再手写常量）。
     all_items = [
-        row(1, "qoder", "Qoder", q, True, rt.settings.qoder_base,
-            str(Path(rt.settings.qoder_data_dir) / "accounts"), "qoder-proxy"),
-        row(2, "trae", "Trae", t, False, rt.settings.trae_base,
+        row(_UPID["doubaowork"], "doubaowork", "豆包工作", dw, False,
+            rt.settings.doubaowork_base, "/opt/doubaowork2api/accounts",
+            "doubaowork2api"),
+        row(_UPID["trae"], "trae", "Trae", t, False, rt.settings.trae_base,
             str(Path(rt.settings.trae_data_dir) / "accounts"), "aiwork-server"),
-        row(3, "workbuddy", "WorkBuddy", w, False, rt.settings.wb_api_base,
-            str(rt.settings.wb_auths_dir), "workbuddy2api"),
-        # 第 4 组：豆包工作。账号目录只用于 dashboard 的「有没有账号目录」
-        # 分组筛选，qtg 实际通过 HTTP 读上游，不依赖这个路径可达。
-        row(4, "doubaowork", "豆包工作", dw, False, rt.settings.doubaowork_base,
-            "/opt/doubaowork2api/accounts", "doubaowork2api"),
+        row(_UPID["workbuddy"], "workbuddy", "WorkBuddy", w, False,
+            rt.settings.wb_api_base, str(rt.settings.wb_auths_dir), "workbuddy2api"),
     ]
     plat = _platform(request)
-    want = {"qoder": 1, "trae": 2, "workbuddy": 3, "doubaowork": 4}.get(plat, 1)
-    items = [it for it in all_items if it["id"] == want]
+    want = _UPID.get(plat)
+    # 未知平台不再静默退回 1 号（那会把豆包的账号当成别人的）。返回空列表，
+    # 让前端看到「这个平台没有分组」而不是「看到一个别的平台的分组」。
+    items = [it for it in all_items if it["id"] == want] if want is not None else []
     host = (request.headers.get("host") or "").split(":")[0]
     proto = request.headers.get("x-forwarded-proto") or "http"
     _seg = {"qoder": "/qoder/v1", "trae": "/trae/v1", "workbuddy": "/v1",
@@ -338,15 +359,10 @@ async def fixed_upstreams(request: Request) -> Dict[str, Any]:
     return {"items": items, "total": len(items)}
 
 
-# 2026-11-19：豆包工作**顶替 qoder 的位置**（upstream_id=1）。
-#
-# 这是兼容层对外的编号契约：外部面板按 upstream_id 选平台。qoder 摘除后
-# 把 1 号让给豆包，而不是留个空洞或把豆包排到 4 号 —— 后者会让「1 号平台」
-# 这个位置永久缺一个，前端逐组扇出时会多一组永远空的。
-#
-# 编号**不重排**已有的 2/3：trae=2、workbuddy=3 保持不变，只有 1 号换了主人。
-UPSTREAM_IDS = {1: "doubaowork", 2: "trae", 3: "workbuddy"}
-UPSTREAM_NAMES = {1: "豆包工作", 2: "Trae", 3: "WorkBuddy"}
+# 编号契约见文件顶部 `_UPID` 的注释（唯一来源）。这两个别名保留是为了
+# 不破坏外部调用方按 `UPSTREAM_IDS` / `UPSTREAM_NAMES` 导入的既有代码。
+UPSTREAM_IDS = {v: k for k, v in _UPID.items()}
+UPSTREAM_NAMES = dict(_UPNAME)
 
 
 def _rows_of(agg, upstream_id: Optional[int]):
@@ -410,8 +426,7 @@ _CAP_MATRIX = {
 }
 _NAME = {"trae": "Trae", "workbuddy": "WorkBuddy",
          "doubaowork": "\u8c46\u5305\u5de5\u4f5c"}
-# 豆包工作顶替 qoder 的 1 号位置（见 UPSTREAM_IDS 的注释）。
-_UPID = {"doubaowork": 1, "trae": 2, "workbuddy": 3}
+# 编号来自文件顶部的 `_UPID`（唯一来源），这里不再重复定义。
 
 
 @router.get("/platforms")
