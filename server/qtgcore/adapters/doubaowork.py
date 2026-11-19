@@ -431,7 +431,15 @@ class DoubaoWorkAdapter(BaseAdapter):
         return {"data": {"auth_disabled": False, "keys": keys}}
 
     async def models(self) -> Dict[str, Any]:
-        """模型清单来自 `/admin/config`（管理会话即可读），不需要数据面 Key。"""
+        """模型清单来自 `/admin/config`（管理会话即可读），不需要数据面 Key。
+
+        2026-11-20 修：上游卡片用的字段名是 `context_window`（`/admin/config`
+        实测返回 `{"id","name","upstream_key","mode","price","description",
+        "context_window","reasoning_efforts","image_input",...}`），而
+        `compat_fixes.fixed_models` 读的是 `context_length`。不转换的直接后果
+        是模型页上每个模型的上下文长度都显示 **0** —— 用户读成「这个模型不可用」。
+        `max_output_tokens` 上游没有，保持 None（不猜一个数字出来）。
+        """
         config = await self._admin("GET", "/admin/config", required=False)
         models = config.get("models") if isinstance(config, dict) else None
         if not isinstance(models, list):
@@ -444,6 +452,16 @@ class DoubaoWorkAdapter(BaseAdapter):
                 card = {"id": str(item)}
             if not card.get("id"):
                 continue
+            # `context_window` → `context_length`：上游字段名与 qtg 契约不同名，
+            # 在这里一次性归一，别让下游各自再猜一遍。
+            if not card.get("context_length") and card.get("context_window"):
+                try:
+                    card["context_length"] = int(card["context_window"])
+                except (TypeError, ValueError):
+                    card["context_length"] = 0
+            # 上游的 `reasoning_efforts` 对应 qtg 的 `efforts`。
+            if not card.get("efforts") and card.get("reasoning_efforts"):
+                card["efforts"] = list(card["reasoning_efforts"])
             out.append(card)
         return {"data": out}
 
