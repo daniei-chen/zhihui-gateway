@@ -1367,7 +1367,6 @@ def cached_group_credits(upstream_id: int | None = Query(None),
 
 @router.post('/accounts/refresh-credits')
 async def refresh_all_credits(
-    request: Request,
     force: bool = True,
     upstream_id: int | None = Query(None),
     user: dict = Depends(security.current_user),
@@ -1397,17 +1396,17 @@ async def refresh_all_credits(
     if stale_only and force:
         raise HTTPException(status_code=400, detail='按需后台刷新不能强制绕过缓存')
 
-    # 出口闸门（2026-11-19 批量吊销事故后新增）。
-    # `force=True` 会对**每个账号**向腾讯发一次真实请求 —— 这正是事故当天
-    # 把 38 个账号打光的动作。所以只有它需要过闸门；`stale_only` 走缓存
-    # 与后台退避，不放大成上游扇出。
-    if force:
-        _dir = _require_dir(_group(upstream_id))
-        accountguard.guard_account_action(
-            request, count=len(wb2api.list_auth_accounts(_dir)),
-            what='刷新全部账号积分', batch=True,
-        )
-
+    # **不设出口闸门**（2026-11-19 修正）。
+    #
+    # 本接口是**只读查询**：向腾讯读余额，不改凭证、不换 token、不触发登录。
+    # 事故当天被吊销的是 refreshToken（`refresh token revoked`），那是**续期**
+    # 侧的动作；查询余额走的是另一条接口，不产生新的 refreshToken，
+    # 因此不具备「把账号刷死」的能力。
+    #
+    # 第一版把 `force=True` 也拦进批量闸门，结果是「点一次刷新积分就 429」——
+    # 把一个正常功能当成攻击防住了。闸门该守的是**续期/登录**这类写操作
+    # （见 `refresh-tokens` / `checkin-all` / `refresh-plan/run`），
+    # 不是读操作。这里保留的只有下面的并发上限（防止打满连接池）。
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
     # 扇出上限（issue #161）：本接口对**全部账号**并发，而它们共用同一个 httpx

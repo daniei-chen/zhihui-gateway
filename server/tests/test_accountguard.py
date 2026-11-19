@@ -164,5 +164,56 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(accountguard.AUTOMATION_TOKEN, '')
 
 
+class ReadOnlyEndpointsAreNotGatedTests(unittest.TestCase):
+    """**只读**接口不得接入闸门（2026-11-19 修正）。
+
+    第一版把 `refresh-credits`（查询余额）也拦了，结果是用户点一次
+    「刷新积分」就收到 429 —— 正常功能被防死，而那个动作根本不产生新的
+    refreshToken，不具备「把账号刷死」的能力。
+
+    这些测试直接扫源码：被 `guard_account_action` 覆盖的接口里，
+    **不允许**出现只读的余额查询。这比逐个 mock 路由更稳——
+    新加一个接入点时它会自动被检查到。
+    """
+
+    #: 只读接口的路径片段：出现即视为误拦。
+    READ_ONLY = ('/accounts/refresh-credits',)
+
+    #: 必须接入闸门的写操作（防止有人「顺手删掉」）。
+    WRITE_PATHS = ('/accounts/refresh-tokens', '/accounts/checkin-all',
+                   '/accounts/refresh-plan/run')
+
+    def _source(self) -> str:
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[1]
+        return (root / 'routers' / 'accounts.py').read_text(encoding='utf-8')
+
+    def test_refresh_credits_is_not_gated(self):
+        """余额查询是读操作，源码里不该再有它的闸门调用。"""
+        src = self._source()
+        for marker in self.READ_ONLY:
+            # 找 marker 之后的 800 字符窗口里有没有闸门调用
+            idx = src.find(marker)
+            self.assertGreater(idx, 0, f'{marker} 不见了？')
+            window = src[idx:idx + 900]
+            self.assertNotIn(
+                'guard_account_action', window,
+                f'{marker} 是只读查询，不该过批量闸门 —— '
+                '它不产生新 refreshToken，拦它只会让正常刷新积分 429',
+            )
+
+    def test_write_operations_are_gated(self):
+        """写操作必须仍然过闸门。"""
+        src = self._source()
+        for marker in self.WRITE_PATHS:
+            idx = src.find(marker)
+            self.assertGreater(idx, 0, f'{marker} 不见了？')
+            window = src[idx:idx + 2000]
+            self.assertIn(
+                'guard_account_action', window,
+                f'{marker} 是会续期/触发登录的写操作，必须过闸门',
+            )
+
+
 if __name__ == '__main__':
     unittest.main()
