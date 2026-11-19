@@ -177,11 +177,14 @@ class ReadOnlyEndpointsAreNotGatedTests(unittest.TestCase):
     """
 
     #: 只读接口的路径片段：出现即视为误拦。
-    READ_ONLY = ('/accounts/refresh-credits',)
+    #:
+    #: `checkin-all` 也在里面：签到走 `billing_base` 的 `daily-checkin`，
+    #: 只读 accessToken，不产生新 refreshToken（2026-11-20 修正）。
+    READ_ONLY = ('/accounts/refresh-credits', '/accounts/checkin-all')
 
     #: 必须接入闸门的写操作（防止有人「顺手删掉」）。
-    WRITE_PATHS = ('/accounts/refresh-tokens', '/accounts/checkin-all',
-                   '/accounts/refresh-plan/run')
+    #: 判据：会不会产生新的 refreshToken / 触发一次登录授权。
+    WRITE_PATHS = ('/accounts/refresh-tokens', '/accounts/refresh-plan/run')
 
     def _source(self) -> str:
         import pathlib

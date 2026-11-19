@@ -1511,8 +1511,7 @@ async def _checkin_with_retry(payload: dict, realm) -> tuple[int, str]:
 
 
 @router.post('/accounts/checkin-all')
-async def checkin_all(request: Request,
-                      upstream_id: int | None = Query(None),
+async def checkin_all(upstream_id: int | None = Query(None),
                       user: dict = Depends(security.require_admin)) -> dict:
     """对所有账号执行一次签到，并逐条记录结果。
 
@@ -1525,11 +1524,19 @@ async def checkin_all(request: Request,
     """
     base_dir = _require_dir(_group(upstream_id))
     accounts = wb2api.list_auth_accounts(base_dir)
-    # 出口闸门（2026-11-19 批量吊销事故后新增）：全量签到会对每个账号
-    # 打腾讯的签到接口，同样属于批量扇出。
-    accountguard.guard_account_action(
-        request, count=len(accounts), what='全部账号签到', batch=True,
-    )
+    # **不设出口闸门**（2026-11-20 修正）。
+    #
+    # 签到走的是 `billing_base` 的 `daily-checkin` 端点，**只读 accessToken**，
+    # 不调用 `/v2/plugin/auth/token/refresh`、不产生新的 refreshToken
+    # （`grep -n 'refresh_token\|refreshToken' services/tencent.py` 在签到路径上零命中）。
+    #
+    # 事故当天的错误是 `refresh token revoked` —— 那是续期侧被吊销。
+    # 签到不具备这个能力，把它拦进批量闸门只会让「全部签到」这个正常功能
+    # 在账号数超过 10 时报 400，用户以为系统坏了。
+    #
+    # 真正的保护已经有两道，都在本函数里：
+    #   · `WB_CHECKIN_CONCURRENCY`（默认 5）限制同时打腾讯的连接数
+    #   · `_checkin_with_retry` 对失败退避，不形成连续脉冲
     done_today = db.checkin_done_since(_today_start())
     sem = _checkin_semaphore()
 
