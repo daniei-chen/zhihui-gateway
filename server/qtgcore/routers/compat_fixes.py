@@ -14,6 +14,7 @@
 from __future__ import annotations
 from ..identity import platform_of
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import datetime as dt
@@ -545,8 +546,18 @@ async def fixed_status(request: Request, upstream_id: Optional[int] = None) -> D
 @router.get('/accounts/credits-cached')
 async def cached_pool_credits(request: Request) -> Dict[str, Any]:
     # Registered before compat's catch-all /accounts/{file:path} route.
-    agg = await build_pool_snapshot(_rt(request), _platform(request))
-    rows = _rows_of(agg, _PLAT_TO_UPSTREAM[_platform(request)])
+    #
+    # 2026-11-20 修：豆包工作（以及任何引擎未挂/上游不可达的平台）在这里
+    # 原本会让 `build_pool_snapshot` 抛 UpstreamError 直接冒到 ASGI 层，
+    # 返回裸 500 + 一大段 traceback。前端 `credits-cached` 是**首屏必调**的
+    # 接口，它 500 会让整个账号页显示「加载失败」——用户读成「豆包接坏了」。
+    # 语义应该与 /api/accounts、/api/status 一致：可解释的未就绪 = 409 + detail。
+    plat = _platform(request)
+    try:
+        agg = await build_pool_snapshot(_rt(request), plat)
+    except UpstreamError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    rows = _rows_of(agg, _PLAT_TO_UPSTREAM[plat])
     values = {a.uid: a.credits_remain for a in rows if a.credits_remain is not None}
     return {'total': len(rows), 'succeeded': len(values), 'credits': values,
             'meta': {uid: {'cached': True, 'cache_age': None, 'expiries': [],
