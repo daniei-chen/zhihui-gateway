@@ -607,9 +607,14 @@ async def _qtg_platform_route(request, call_next):
     # 这里列出「数据面由 qtgcore 托管」的平台。workbuddy 不在其中——它走
     # manager 自己的原生实现（accounts.py / status 等），这是历史分工。
     # doubaowork 必须在这里：它的账号/模型/统计只在 qtgcore 的 compat 层实现过，
-    # 漏掉这一项会让第四个平台的请求落到 manager 的 WorkBuddy handler 上
+    # 漏掉这一项会让豆包工作的请求落到 manager 的 WorkBuddy handler 上
     # （显示 WorkBuddy 的账号池，写操作也会写进 WorkBuddy 的目录）。
-    if platform in ("qoder", "trae", "doubaowork") and _qtg_should_route(path):
+    #
+    # 2026-11-19：qoder 已摘除（官方不再送积分），从白名单移除。它现在属于
+    # 「可识别但不可用」（`platformpolicy._ACCEPTED`），请求会落到下游由
+    # `runtime.qoder is None` 给出明确的「平台已下线」，而不是被这里静默
+    # 转发到 WorkBuddy 的 handler 上。
+    if platform in ("doubaowork", "trae") and _qtg_should_route(path):
         try:
             # Identity resolution may wait on a file/SQLite lock. Keep that
             # blocking work off the loop that also delivers inference streams.

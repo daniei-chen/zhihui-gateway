@@ -207,8 +207,21 @@ class TheMiddlewareContractTests(unittest.TestCase):
 
     def test_platform_whitelist_is_explicit(self):
         """平台头是请求方可控的。若判定放宽成「非空即路由」，
-        就能构造一个特殊值把请求导到没有函数级鉴权的实现上。"""
-        self.assertIn('("qoder", "trae")', self.src.replace("'", '"'))
+        就能构造一个特殊值把请求导到没有函数级鉴权的实现上。
+
+        2026-11-19：断言从写死的 `("qoder", "trae")` 改成**读
+        `platformpolicy.PLATFORMS` 并排除 workbuddy** —— 因为这条白名单
+        的语义是「数据面由 qtgcore 托管的平台」，而 workbuddy 走 manager
+        自己的原生实现，本来就不在里面。把 `PLATFORMS` 整个塞进来会误判。
+
+        它守的是「白名单是个显式元组，不是 `if platform:`」，
+        与枚举具体有哪些平台无关。
+        """
+        from server import platformpolicy
+        expected = tuple(p for p in platformpolicy.PLATFORMS if p != 'workbuddy')
+        rendered = repr(expected).replace("'", '"')
+        self.assertIn(rendered, self.src.replace("'", '"'),
+                      f'中间件白名单没跟上 PLATFORMS（应排除 workbuddy）：期望 {rendered}')
 
     def test_internal_prefix_cannot_be_reached_directly(self):
         self.assertIn('qtg_rewritten', self.src,

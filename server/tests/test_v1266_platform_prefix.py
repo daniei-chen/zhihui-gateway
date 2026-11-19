@@ -46,9 +46,11 @@ class MisusedPrefixIsRejectedLocallyTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
 
     def test_the_error_names_the_usable_platforms(self):
+        from server import platformpolicy
         response = gateway._misused_platform_prefix('zhihui/x')
         message = _body(response)['error']['message']
-        for platform in ('workbuddy', 'qoder', 'trae'):
+        # 从 PLATFORMS 驱动，不写死：平台集合会变（qoder 摘除、豆包加入）
+        for platform in platformpolicy.PLATFORMS:
             self.assertIn(platform, message, '错误里要直接告诉用户能用哪些')
 
     def test_the_error_code_is_stable(self):
