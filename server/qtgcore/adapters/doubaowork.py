@@ -540,6 +540,35 @@ class DoubaoWorkAdapter(BaseAdapter):
         )
         return {"ok": True, "data": data}
 
+    async def import_accounts(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """把账号文档交给**上游**导入（而不是自己往目录里写文件）。
+
+        为什么必须走上游：`accounts/*.json` 只是上游的持久化落盘，账号池在
+        进程内存里。只写文件不通知上游，账号要等上游重启才会被加载 ——
+        用户上传后立刻点「刷新积分」会看到 0 个账号，读成「上传失败」。
+
+        上游契约（`POST /admin/accounts/import`，读自 app.py）：
+            入参 {"accounts": [...]}
+            出参 {"imported": [id...], "errors": [str...],
+                  "created": n, "updated": n}
+        写路径传 `retry=False`：导入不是幂等操作，重试可能造成重复计数。
+        """
+        if not documents:
+            return {"imported": [], "errors": ["没有提供账号"], "created": 0, "updated": 0}
+        async with self._write_lock:
+            body = await self._admin(
+                "POST", "/admin/accounts/import",
+                json_body={"accounts": documents}, retry=False, required=False,
+            )
+        if not isinstance(body, dict):
+            return {"imported": [], "errors": ["上游未返回可解析的结果"], "created": 0, "updated": 0}
+        return {
+            "imported": list(body.get("imported") or []),
+            "errors": [str(e) for e in (body.get("errors") or [])],
+            "created": int(body.get("created") or 0),
+            "updated": int(body.get("updated") or 0),
+        }
+
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")

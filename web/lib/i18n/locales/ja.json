@@ -412,7 +412,7 @@
     "emptyTitle": "アカウントがありません",
     "emptyDescAdmin": "豆包工作のアカウントは QR 認証を使いません。上流の doubaowork2api パネルからアカウント JSON を書き出し、「インポート/エクスポート」からアップロードしてください",
     "emptyDescViewer": "管理者にアカウント追加を依頼してください",
-    "emptyDescDoubaowork": "豆包工作のアカウントは QR 認証を使いません。上流の doubaowork2api パネルからアカウント JSON を書き出し、「インポート/エクスポート」からアップロードしてください",
+    "emptyDescDoubaowork": "豆包工作のアカウントは JSON インポートのみ対応です（上流のオフラインスキャンは Windows 専用）。上流の doubaowork2api パネルからアカウント JSON を書き出し、「インポート/エクスポート」からアップロードしてください",
     "emptyRealmTitle": "{realm}にアカウントがありません",
     "emptyRealmDesc": "アカウントプールにはアカウントがありますが、このバージョンに属するものはありません。もう一方のバージョンに切り替えてみてください。",
     "creditsRefreshed": "クレジットを更新しました",

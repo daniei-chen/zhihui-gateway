@@ -439,7 +439,7 @@
     "emptyTitle": "No accounts yet",
     "emptyDescAdmin": "Doubao Work accounts do not use QR sign-in. Export the account JSON from the doubaowork2api panel, then upload it via Import/Export accounts",
     "emptyDescViewer": "Ask an administrator to add accounts",
-    "emptyDescDoubaowork": "Doubao Work accounts do not use QR sign-in. Export the account JSON from the doubaowork2api panel, then upload it via Import/Export accounts",
+    "emptyDescDoubaowork": "Doubao Work accounts can only be imported as JSON (the upstream offline scan is Windows-only). Export the account JSON from the doubaowork2api panel, then upload it via Import/Export accounts",
     "emptyRealmTitle": "No accounts in {realm}",
     "emptyRealmDesc": "The pool does have accounts, but none of them belong to this realm. Try the other realm — each realm keeps its own pool.",
     "creditsRefreshed": "Credits refreshed",

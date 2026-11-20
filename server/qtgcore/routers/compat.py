@@ -1335,6 +1335,17 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
             "message": "账号目录不可写：%s" % exc,
         }
 
+    # **先让上游导入**：账号池在上游进程内存里，只写文件要等它重启才生效，
+    # 用户上传后立刻点「刷新积分」会看到 0 个账号。上游不可用时才退回写文件。
+    upstream_result: Dict[str, Any] | None = None
+    adapter = getattr(rt, "dbw", None)
+    if adapter is not None and callable(getattr(adapter, "import_accounts", None)):
+        try:
+            upstream_result = await adapter.import_accounts(
+                [e for e in entries if isinstance(e, dict)])
+        except Exception:  # noqa: BLE001 - 上游失败不阻塞落盘，但要如实报
+            upstream_result = None
+
     added: List[Dict[str, Any]] = []
     overwritten: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
@@ -1372,6 +1383,17 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
         msg = "已导入 %d 个账号（新增 %d、覆盖 %d）" % (total_ok, len(added), len(overwritten))
     else:
         msg = "没有账号被导入"
+    if upstream_result is not None:
+        # 上游自己报了错误就把原话带出来，不要吞掉。
+        up_errors = upstream_result.get("errors") or []
+        if up_errors:
+            msg += "；上游报告 %d 个问题：%s" % (len(up_errors), up_errors[0][:120])
+            for item in up_errors:
+                failed.append({"file": "", "message": str(item)[:200]})
+        else:
+            msg += "；上游已加载"
+    else:
+        msg += "；上游未响应，账号已落盘，需上游重启后生效"
     if rejected:
         msg += "；%d 个被拒绝" % len(rejected)
     if failed:
