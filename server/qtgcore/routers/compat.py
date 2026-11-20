@@ -635,7 +635,30 @@ async def compat_daily_plan(request: Request) -> Dict[str, Any]:
 
 @router.get("/accounts/refresh-plan")
 async def compat_refresh_plan2(request: Request) -> Dict[str, Any]:
-    return {"enabled": False, "last_run": None, "next_run": None, "items": []}
+    """读取「令牌自动刷新」计划。
+
+    2026-11-20 修：这里原来是一个**硬编码的空实现**：
+
+        return {"enabled": False, "last_run": None, "next_run": None, "items": []}
+
+    而 `PUT /accounts/refresh-plan` 是真的走 `_read_plans/_write_plans` 落库的。
+    于是用户改了间隔（写入返回 `interval_days: 7`），一刷新页面又回到默认值 ——
+    配置**存进去了但读不出来**，等于白改。而且 `enabled` 永远显示关闭，
+    用户会以为自动刷新根本没开。
+
+    现在按保存时的同一份结构读回来，缺字段时给与写入一致的默认值。
+    """
+    rt = _rt(request)
+    plans = _read_plans(rt)
+    cur = plans.get("refresh") or {}
+    return {
+        "enabled": bool(cur.get("enabled", False)),
+        "interval_days": int(cur.get("interval_days") or 7),
+        "hour": int(cur.get("hour") or 3),
+        "last_run": cur.get("last_run"),
+        "next_run": cur.get("next_run"),
+        "items": [],
+    }
 
 
 
