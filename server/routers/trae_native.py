@@ -49,6 +49,23 @@ async def trae_native_messages(request, body, key, ip, model, mapped, ua,
     if not stream:
         try:
             resp = await client.post(url, content=raw, headers=headers)
+        except Exception as exc:  # noqa: BLE001
+            # 2026-11-20 真机事故：把 zhihui-trae 容器 stop 掉之后，
+            # Anthropic 协议的 `/v1/messages` 返回**裸 500 纯文本**
+            # 「Internal Server Error」，而同一个故障下 OpenAI 协议的
+            # `/v1/chat/completions` 返回的是 502 + 明确原因：
+            #   {"error":{"message":"上游暂时不可用，请稍后重试（本次请求的上游：…）"}}
+            # 两个协议对同一故障的可读性差了一个档次，用户从 Anthropic 客户端
+            # 看到的只有一个没有任何线索的 500。
+            #
+            # 这里补上捕获，并按 Anthropic 的错误信封返回 502。
+            # 原始异常只进日志/请求记录，不外泄（可能含内部地址或凭据）。
+            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+                            int((time.time() - started) * 1000), ua,
+                            '%s: %s' % (type(exc).__name__, str(exc)[:160]),
+                            False, session_key=session_key)
+            return _err(gateway._public_upstream_error(upstream), 502,
+                        err_type='api_error', code='upstream_unavailable')
         finally:
             await client.aclose()
         latency = int((time.time() - started) * 1000)
@@ -60,9 +77,15 @@ async def trae_native_messages(request, body, key, ip, model, mapped, ua,
     try:
         req = client.build_request('POST', url, content=raw, headers=headers)
         resp = await client.send(req, stream=True)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 流式分支同样要给出可读错误，而不是让异常冒成裸 500。
         await client.aclose()
-        raise
+        gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+                        int((time.time() - started) * 1000), ua,
+                        '%s: %s' % (type(exc).__name__, str(exc)[:160]),
+                        True, session_key=session_key)
+        return _err(gateway._public_upstream_error(upstream), 502,
+                    err_type='api_error', code='upstream_unavailable')
     if resp.status_code >= 400:
         text = await resp.aread()
         await resp.aclose()
