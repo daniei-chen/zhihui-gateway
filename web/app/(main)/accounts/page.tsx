@@ -1608,7 +1608,16 @@ function FullAccountsPage() {
           <EmptyState
             icon={Users}
             title={t('accounts.emptyTitle')}
-            description={isAdmin ? t('accounts.emptyDescAdmin') : t('accounts.emptyDescViewer')}
+            description={
+              !isAdmin
+                ? t('accounts.emptyDescViewer')
+                : platform === 'doubaowork'
+                  // 豆包工作**不走 OAuth**：它的账号在上游 doubaowork2api 面板里
+                  // 维护，只能导出 JSON 再上传。原来这里对所有平台都说「扫码授权」，
+                  // 豆包用户照着做会发现根本没有二维码 —— 一句话把人带到死路上。
+                  ? t('accounts.emptyDescDoubaowork')
+                  : t('accounts.emptyDescAdmin')
+            }
             className="flex flex-col items-center justify-center py-16 text-center"
           >
             {canAddAccounts && (
