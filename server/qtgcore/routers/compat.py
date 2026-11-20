@@ -1353,10 +1353,27 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
         if not isinstance(item, dict):
             rejected.append({"index": idx, "file": "", "message": "条目不是对象"})
             continue
+        # **`cookies` 才是豆包账号的必填项**，不是 uid。
+        #
+        # 2026-11-20 修：原来这里要求 `uid` / `id` / `device_id`，而上游
+        # `parse_account_document` 的真实契约是「cookies 必需，device_id /
+        # web_id 可选，id 可以由 cookies 的 session 身份派生」。上游面板导出的
+        # 账号 JSON 里**根本没有 uid 字段** —— 于是每一份真实数据都会被判
+        # 「缺少 uid / device_id」而拒绝，用户上传后看到「0 个被导入」。
+        cookies = item.get("cookies") or item.get("cookie") or item.get("cookie_string")
+        has_cookies = bool(cookies) and (isinstance(cookies, (dict, str)))
         uid = str(item.get("uid") or item.get("id") or item.get("device_id") or "").strip()
         if not uid:
-            rejected.append({"index": idx, "file": "", "message": "缺少 uid / device_id"})
-            continue
+            if not has_cookies:
+                rejected.append({"index": idx, "file": "",
+                                 "message": "缺少 cookies（豆包账号必须带浏览器 Cookie）"})
+                continue
+            # 没有 id 时按 cookies 派生一个稳定标识，与上游的算法同源：
+            # 上游用 sha256(cookies 的 session 身份)[:24] 生成 account-xxx。
+            # 这里只需要一个**稳定且唯一**的文件名，不必与上游 id 相同。
+            import hashlib as _hashlib
+            blob = _json.dumps(cookies, sort_keys=True, ensure_ascii=False)
+            uid = "cookie-" + _hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
         # 文件名必须可预测且安全：只留字母数字、下划线、连字符。
         safe = "".join(ch for ch in uid if ch.isalnum() or ch in "_-")[:80]
         if not safe:
