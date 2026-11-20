@@ -761,8 +761,19 @@ async def compat_account_refresh(request: Request, file: str) -> Dict[str, Any]:
     ok = _res_ok(res)
     detail = res if isinstance(res, dict) else {}
     reason = str(detail.get('error') or detail.get('message') or '').strip()
+    # 适配器自己给出的 state 优先于关键词匹配。
+    #
+    # 2026-11-20：`trae2.refresh_account` 现在会返回
+    # `{"ok": False, "state": "not_needed"|"auth_required"|"failed", "error": ...}`。
+    # 原来这里只看 `ok` 再靠中文关键词猜「无需刷新」，于是 adapter 明明说了
+    # `not_needed`，外层仍按关键词算一遍；而 `detail` 又把 adapter 的原始
+    # state 透传出去 —— 用户看到外层 `state: not_needed`、detail 里
+    # `state: failed`，两层自相矛盾。
+    adapter_state = str(detail.get('state') or '').strip()
     if ok:
         state, message = 'refreshed', '已刷新'
+    elif adapter_state in ('not_needed', 'auth_required', 'failed'):
+        state, message = adapter_state, reason or "刷新结果未确认，请核对账号状态"
     elif reason and ('无需刷新' in reason or '还没到期' in reason or '无需' in reason):
         state, message = 'not_needed', reason
     else:

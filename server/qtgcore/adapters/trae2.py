@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import Settings
-from ..errors import UpstreamError
+from ..errors import BreakerOpen, UpstreamError
 from .base import BaseAdapter
 
 
@@ -419,10 +419,66 @@ class Trae2Adapter(BaseAdapter):
                 'message': '签到任务已提交；本次完成状态待核对，历史记录不能证明本次任务完成，请勿重复提交'}]}
 
     async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
-        """`refresh_jwt` —— aiwork 里刷新某个账号 JWT 的命令（要 user_id）。"""
+        """`refresh_jwt` —— aiwork 里刷新某个账号 JWT 的命令（要 user_id）。
+
+        2026-11-20 修：原来这里用 `required=False`，而 `base._json` 在
+        `required=False` 时把 4xx **静默转成 None**。于是上游返回
+        `401 {"error":"未登录或会话已过期","ok":false}` 时，调用方只拿到
+        `{"ok": False}`（无 error 字段），前端显示「刷新结果未确认，请核对账号状态」
+        —— 真实原因（**管理面会话过期**）被吞掉，用户只会反复点重试。
+
+        这里改成自己发请求、自己读 body，把上游的 `error` 原文带出来。
+        401/403 单独识别成「需要重新登录管理面」，因为那是可操作的下一步。
+        """
         if not uid:
             return {"ok": False, "error": "缺少 user_id"}
-        return await self._cmd("refresh_jwt", {"user_id": uid}, required=False) or {"ok": False}
+        try:
+            resp = await self._request(
+                "POST", "/api/cmd/refresh_jwt",
+                json_body={"user_id": uid}, retry=False,
+            )
+        except (UpstreamError, BreakerOpen) as exc:
+            return {"ok": False, "error": str(exc)[:300]}
+        body: Any = None
+        if resp.text:
+            try:
+                body = json.loads(resp.text)
+            except json.JSONDecodeError:
+                body = None
+        upstream_error = ""
+        if isinstance(body, dict):
+            upstream_error = str(body.get("error") or "").strip()
+        if resp.status_code in (401, 403):
+            return {
+                "ok": False,
+                "state": "auth_required",
+                "error": upstream_error or "Trae 管理面会话已过期，需要重新登录 aiwork 后再刷新",
+                "hint": "请在 aiwork-server 面板重新登录，然后重试",
+            }
+        if resp.status_code >= 400:
+            # 「JWT 还没到期」上游可能用**非 2xx** 返回（实测 aiwork 会这样）。
+            # 那不是失败 —— 它在省一次无意义的刷新。必须在 4xx/5xx 分支里
+            # 也识别一次，否则同一个语义在 200 与 4xx 两条路上给出相反的结论。
+            not_needed_4xx = any(
+                word in upstream_error
+                for word in ('无需刷新', '还没到期', '无需', '尚未到期', 'not need'))
+            return {
+                "ok": False,
+                "state": "not_needed" if not_needed_4xx else "failed",
+                "error": upstream_error or ("上游 HTTP %s" % resp.status_code),
+            }
+        if not isinstance(body, dict):
+            return {"ok": False, "state": "unknown",
+                    "error": "上游未返回可解析的刷新结果"}
+        if body.get("ok") is False:
+            err = str(body.get("error") or "上游拒绝刷新")
+            # 「JWT 还没到期」不是失败 —— 上游在省一次无意义的操作。
+            # 标成 not_needed，前端才不会把它算进 failed 计数。
+            not_needed = any(word in err for word in ('无需刷新', '还没到期', '无需', '尚未到期'))
+            return {"ok": False,
+                    "state": "not_needed" if not_needed else "failed",
+                    "error": err}
+        return body
 
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
         """Serialize Manager writes; engine-side CAS is still needed for other writers."""
