@@ -1242,7 +1242,16 @@ async def compat_refresh_credits(request: Request, force: str = Query(default="t
                 "failed": [], "unsupported": True,
                 "message": ("豆包工作上游不提供额度接口，无法刷新积分" if enabled
                             else "豆包工作平台未启用（QTG_DOUBAOWORK_ENGINE=off）")}
-    agg = await build_pool_snapshot(rt, selected, force=force.lower() == 'true')
+    try:
+        agg = await build_pool_snapshot(rt, selected, force=force.lower() == 'true')
+    except UpstreamError as exc:
+        # 2026-11-20 修：上游熔断/不可达时 `build_pool_snapshot` 抛
+        # BreakerOpen（UpstreamError 的子类），这里原来没兜 —— 直接冒成
+        # **裸 500 纯文本**。实测：停掉 zhihui-trae 后
+        # `POST /api/accounts/refresh-credits` 返回 500，而同页面的
+        # `GET /api/accounts` 已经是 409 +「上游不可达」，两处可读性不一致。
+        # 用 409 与其它账号端点保持同一口径。
+        raise HTTPException(status_code=409, detail=str(exc)[:300]) from exc
     plat, rows = _platform_rows(request, agg)
     credits: Dict[str, Optional[float]] = {}
     failed: List[str] = []
