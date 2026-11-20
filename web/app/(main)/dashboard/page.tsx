@@ -200,7 +200,7 @@ async function loadGroupCredits(): Promise<CreditsResponse> {
 
 export default function DashboardPage() {
   const {realm, label: realmName} = useRealm();
-  const {label: platformName} = usePlatform();
+  const {platform, label: platformName} = usePlatform();
   const t = useT();
 
   /**
@@ -878,10 +878,18 @@ export default function DashboardPage() {
         ) : poolFailed ? null : poolPending ? <SkeletonBar className="h-32" /> : (
           // 账号那一块没取到时**什么都不说**：「暂无账号」等于告诉用户
           // 「你一个账号都没有」，而事实是没取到（顶部那条说明已经讲了）。
+          //
+          // 2026-11-20：文案按平台分流。豆包工作**没有 OAuth**（上游的
+          // 离线扫描只支持 Windows），说「扫码授权」会让人去找一个不存在的
+          // 二维码。账号页上一轮已修，仪表盘这处漏了。
           <EmptyState
             icon={Users}
             title={t('dashboard.noAccounts')}
-            description={t('dashboard.noAccountsHint')}
+            description={
+              platform === 'doubaowork'
+                ? t('accounts.emptyDescDoubaowork')
+                : t('dashboard.noAccountsHint')
+            }
             className="flex flex-col items-center justify-center py-12 text-center"
           />
         )}

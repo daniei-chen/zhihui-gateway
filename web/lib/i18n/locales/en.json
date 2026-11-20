@@ -437,7 +437,7 @@
     "clearFilters": "Clear filters",
     "unnamed": "Unnamed",
     "emptyTitle": "No accounts yet",
-    "emptyDescAdmin": "Doubao Work accounts do not use QR sign-in. Export the account JSON from the doubaowork2api panel, then upload it via Import/Export accounts",
+    "emptyDescAdmin": "Use Add account in the top right to sign in by QR code",
     "emptyDescViewer": "Ask an administrator to add accounts",
     "emptyDescDoubaowork": "Doubao Work accounts can only be imported as JSON (the upstream offline scan is Windows-only). Export the account JSON from the doubaowork2api panel, then upload it via Import/Export accounts",
     "emptyRealmTitle": "No accounts in {realm}",

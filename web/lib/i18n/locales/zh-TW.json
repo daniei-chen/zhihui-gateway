@@ -410,7 +410,7 @@
     "clearFilters": "清除篩選",
     "unnamed": "未命名",
     "emptyTitle": "暫無帳號",
-    "emptyDescAdmin": "豆包工作的帳號不走掃碼。請在上游 doubaowork2api 面板匯出帳號 JSON，再用「匯入/匯出帳號」上傳",
+    "emptyDescAdmin": "點擊右上角「新增帳號」掃碼授權",
     "emptyDescViewer": "請聯絡管理員新增帳號",
     "emptyDescDoubaowork": "豆包工作的帳號只能透過 JSON 匯入（上游離線掃描僅支援 Windows）。請在上游 doubaowork2api 面板匯出帳號 JSON，再用「匯入/匯出帳號」上傳",
     "emptyRealmTitle": "{realm}沒有帳號",

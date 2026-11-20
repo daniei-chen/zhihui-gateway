@@ -86,7 +86,7 @@
     "clearFilters": "清除筛选",
     "unnamed": "未命名",
     "emptyTitle": "暂无账号",
-    "emptyDescAdmin": "豆包工作的账号不走扫码。请在上游 doubaowork2api 面板导出账号 JSON，再用「导入/导出账号」上传",
+    "emptyDescAdmin": "点击右上角「添加账号」扫码授权",
     "emptyDescViewer": "请联系管理员添加账号",
     "emptyDescDoubaowork": "豆包工作的账号只能通过 JSON 导入（上游离线扫描仅支持 Windows）。请在上游 doubaowork2api 面板导出账号 JSON，再用「导入/导出账号」上传",
     "emptyRealmTitle": "{realm}没有账号",

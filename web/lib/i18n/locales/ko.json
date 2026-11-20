@@ -410,7 +410,7 @@
     "clearFilters": "필터 지우기",
     "unnamed": "이름 없음",
     "emptyTitle": "계정이 없습니다",
-    "emptyDescAdmin": "더우바오 워크 계정은 QR 인증을 사용하지 않습니다. 업스트림 doubaowork2api 패널에서 계정 JSON을 내보낸 뒤 「가져오기/내보내기」로 업로드하세요",
+    "emptyDescAdmin": "오른쪽 위 '계정 추가'에서 QR 코드로 인증하세요",
     "emptyDescViewer": "관리자에게 계정 추가를 요청하세요",
     "emptyDescDoubaowork": "더우바오 워크 계정은 JSON 가져오기만 지원합니다(업스트림 오프라인 스캔은 Windows 전용). 업스트림 doubaowork2api 패널에서 계정 JSON을 내보낸 뒤 「가져오기/내보내기」로 업로드하세요",
     "emptyRealmTitle": "{realm}에 계정이 없습니다",
