@@ -1396,6 +1396,19 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
     added: List[Dict[str, Any]] = []
     overwritten: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
+    # 上游导入**成功**时不要再往本地目录写文件。
+    #
+    # 2026-11-20 实测：`doubaowork_accounts_dir` 是 `/opt/doubaowork2api/accounts`，
+    # 而容器挂载的是 `/root/qtg-deploy/dbw-src/accounts` —— **两个不同目录**
+    # （inode 不同）。上游在 `/admin/accounts/import` 里会自己把账号落盘到它
+    # 真正读的目录（并重新生成 id 与文件名）。我们额外写的那一份永远躺在
+    # 容器看不到的地方，成了孤儿文件：重启不会加载，删除也不会被清理。
+    #
+    # 所以：上游导入成功 → 只报告结果；上游不可用 → 才退回写文件（那时是
+    # 唯一能让账号「至少存在于某个地方」的手段）。
+    _upstream_ok = bool(upstream_result) and bool(
+        (upstream_result or {}).get("imported") or (upstream_result or {}).get("created")
+        or (upstream_result or {}).get("updated"))
     for idx, item in enumerate(entries):
         if not isinstance(item, dict):
             rejected.append({"index": idx, "file": "", "message": "条目不是对象"})
@@ -1429,6 +1442,11 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
         fname = "%s.json" % safe
         target = root / fname
         existed = target.exists()
+        if _upstream_ok:
+            # 上游已经落盘并加载，不再写本地孤儿文件。
+            row = {"file": fname, "uid": uid, "updated": False}
+            added.append(row)
+            continue
         try:
             tmp = target.with_suffix(".json.tmp")
             tmp.write_text(_json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
