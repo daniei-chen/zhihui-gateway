@@ -301,7 +301,25 @@ class Trae2Adapter(BaseAdapter):
         """qtg 的 `map_trae_account()` 期望 `{"accounts": [...]}`；
         aiwork 的 `accounts_list` 字段名与它**完全同源**
         （user_id / remaining_credits / total_credits / credits_expire_at /
-        checked_today / cooldown_until / refresh_token_fails …），无需转换。"""
+        checked_today / cooldown_until / refresh_token_fails …），无需转换。
+
+        2026-11-20 修「停用假成功」：`accounts_list` **不返回** `disabled`
+        字段，而 `map_trae_account()` 正是靠 `raw["disabled"]` 决定
+        `state == "disabled"`。于是：
+
+            PUT /api/accounts/trae:<uid>/disabled {"disabled": true}
+            → 200 {"ok":true,"success":true,"changed":true}
+            → 但 GET /api/accounts 里 state 仍是 "ready"、disabled 仍是 false
+
+        账号**照旧被上游选中**，用户以为停用了，实际没有。这是「假成功」，
+        比报错更糟。
+
+        上游真正表达「这个账号参不参与轮询」的地方是 `pool_list` 的
+        `enabled_uids`（`set_account` 写的也是它）。所以这里把那份名单
+        合并进每一行：不在名单里 = `disabled: true`。
+        名单读不到时**不猜**——保持原样（不伪造 disabled），
+        但也不掩盖：调用方看到的就是「不知道」。
+        """
         r = await self._cmd("accounts_list", required=True)
         if r.get('ok') is False or 'data' not in r:
             raise UpstreamError('Trae 账号列表暂不可用')
@@ -310,12 +328,37 @@ class Trae2Adapter(BaseAdapter):
             rows = [rows]
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise UpstreamError('Trae 账号列表格式无效')
+        enabled_uids: Optional[List[str]] = None
+        try:
+            pool = await self._cmd("pool_list", required=False)
+            if isinstance(pool, dict):
+                data = pool.get("data")
+                if isinstance(data, dict) and isinstance(data.get("enabled_uids"), list):
+                    enabled_uids = [str(x) for x in data["enabled_uids"]]
+        except Exception:  # noqa: BLE001 - 读不到就不合并，保持上游原样
+            enabled_uids = None
+        if enabled_uids is not None:
+            allowed = set(enabled_uids)
+            merged = []
+            for row in rows:
+                uid = str(row.get("user_id") or row.get("uid") or "")
+                item = dict(row)
+                # 只有上游**没给** disabled 时才用号池名单推断；
+                # 上游自己给了就以它为准（未来 aiwork 若加上这个字段，
+                # 这里不会跟它打架）。
+                if "disabled" not in row:
+                    item["disabled"] = uid not in allowed
+                merged.append(item)
+            rows = merged
         return {"accounts": rows, "checkin": self._checkin_rows()}
 
     async def diagnostic_pool(self) -> Dict[str, Any]:
-        value = await self._cmd("accounts_list", required=True)
-        rows = value.get("data")
-        if value.get("ok") is False or not isinstance(rows, list):
+        """诊断视图。必须与 `overview()` 用**同一份** disabled 判定，
+        否则账号页说「已停用」而诊断说「ready」，两处打架。
+        这里直接复用 overview 的合并逻辑。"""
+        value = await self.overview()
+        rows = value.get("accounts")
+        if not isinstance(rows, list):
             raise ValueError("invalid_trae_pool_contract")
         return {"accounts": rows, "scope": "engine_account_list"}
 
