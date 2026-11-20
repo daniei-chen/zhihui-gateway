@@ -774,7 +774,17 @@ async def compat_account_refresh(request: Request, file: str) -> Dict[str, Any]:
     adapter = _adapter_for(rt, platform)
     if adapter is None:
         return {"ok": False, "message": f"{platform} 平台未启用", "detail": {}}
-    res = await adapter.refresh_account(uid)
+    try:
+        res = await adapter.refresh_account(uid)
+    except UpstreamError as exc:
+        # 2026-11-20 修：豆包 `refresh_account` 在上游 404 时抛 UpstreamError
+        # （实测 `POST /admin/accounts/__x__/clear-cooldown -> HTTP 404
+        # {"detail":"指定对象不存在。"}`），而这里原来没兜 —— 直接冒成
+        # **裸 500 纯文本**。账号不存在是请求问题，应当是 404 带说明。
+        text = str(exc)
+        code = 404 if ("404" in text or "不存在" in text
+                       or "not found" in text.lower()) else 502
+        raise HTTPException(status_code=code, detail=text[:300]) from exc
     # 不能恒回 ok:true —— aiwork 的 `refresh_jwt` 在「JWT 还没到期」时会返回
     # ok:false + 原因，前端要能把这句原文显示出来（审计点名的「恒回 OK」问题）。
     #

@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from ..errors import BadRequest
@@ -241,6 +241,16 @@ async def compat_account_note(request: Request, file: str) -> Dict[str, Any]:
     """账号备注：存在本端（`<data_dir>/account_notes.json`），按 uid 关联。"""
     rt = _rt(request)
     _, uid = _split(file)
+    # 2026-11-20 修：原来不校验 uid 就 `data[uid] = note`。
+    # 实测 `PUT /api/accounts/trae:../../etc/passwd/note` 返回
+    # `{"ok":true,"uid":"","note":"x"}` —— **假成功**：既没写对任何账号，
+    # 又在备注表里留下一个空字符串 key。用户看到「保存成功」，
+    # 刷新后备注却不在了（因为它挂在一个不存在的 uid 上）。
+    # 空 uid / 非法字符一律 400，让调用方知道这条请求根本没生效。
+    if not uid:
+        raise HTTPException(status_code=400, detail="账号标识为空，无法保存备注")
+    if len(uid) > 256 or not all(ch.isalnum() or ch in "_-.:@" for ch in uid):
+        raise HTTPException(status_code=400, detail="账号标识含非法字符，无法保存备注")
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
