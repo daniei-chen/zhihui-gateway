@@ -4,6 +4,7 @@ import {useEffect, useRef, useState} from 'react';
 import {Download, Loader2, Upload, UsersRound} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {useT} from '@/lib/i18n/provider';
+import {usePlatform} from '@/lib/platform-context';
 import {accountApi, errText} from '@/lib/api';
 import {notify} from '@/lib/toast';
 import type {UpstreamEndpoint} from '@/lib/types';
@@ -33,6 +34,20 @@ export function UploadAccountsButton({
   onSuccess?: () => void;
 }) {
   const t = useT();
+  /**
+   * 豆包的导入/导出与 WorkBuddy / Trae **不是一回事**，文案必须分开：
+   *   · 豆包导出的是**单个 JSON 清单**（前端 validateAccountExport 走 manifest
+   *     分支，format='manifest'），不是 ZIP —— 原文案让人去找一个不存在的 ZIP；
+   *   · 豆包的账号标识由 `cookies` 派生（上游 parse_account_document），
+   *     不是 UID —— 「同 UID 拒绝覆盖」对它是错的。
+   * 所以这里用 `doubao*` 前缀的 key，其余平台保持原文案。
+   */
+  const {platform} = usePlatform();
+  const isDoubao = platform === 'doubaowork';
+  // 注意首字母大写：词典里的 key 是 `doubaoImportExportDesc`，
+  // 不是 `doubaoimportExportDesc`。拼错的表现是界面直接显示 key 名本身。
+  const tx = (key: string) =>
+    t(isDoubao ? `accounts.doubao${key[0].toUpperCase()}${key.slice(1)}` : `accounts.${key}`);
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -127,7 +142,7 @@ export function UploadAccountsButton({
         <DialogContent className="max-w-[520px]" showCloseButton>
           <DialogHeader>
             <DialogTitle>{t('accounts.importExport')}</DialogTitle>
-            <DialogDescription>{t('accounts.importExportDesc')}</DialogDescription>
+            <DialogDescription>{tx('importExportDesc')}</DialogDescription>
           </DialogHeader>
           <div className="flex w-full flex-col gap-4 px-6 pb-6">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -137,7 +152,7 @@ export function UploadAccountsButton({
                   {t('accounts.importAccount')}
                 </div>
                 <p className="mb-4 text-xs leading-5 text-muted-foreground">
-                  {t('accounts.importAccountDesc')}
+                  {tx('importAccountDesc')}
                 </p>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <input
@@ -146,7 +161,7 @@ export function UploadAccountsButton({
                     disabled={busy}
                     onChange={(event) => setOverwrite(event.target.checked)}
                   />
-                  {t('accounts.uploadAllowOverwrite')}
+                  {tx('uploadAllowOverwrite')}
                 </label>
                 <Button
                   className="mt-4 w-full rounded-full"
@@ -163,7 +178,7 @@ export function UploadAccountsButton({
                   {t('accounts.exportAccount')}
                 </div>
                 <p className="mb-4 text-xs leading-5 text-muted-foreground">
-                  {t('accounts.exportAccountDesc')}
+                  {tx('exportAccountDesc')}
                 </p>
                 <Select value={exportGroup} onValueChange={setExportGroup} disabled={busy}>
                   <SelectTrigger className="h-9 w-full rounded-full text-xs" aria-label={t('accounts.exportGroup')}>

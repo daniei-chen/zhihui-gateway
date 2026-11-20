@@ -604,7 +604,11 @@
     "sharedInstanceTitle": "This group shares the same upstream instance as the default group",
     "sharedInstanceHint": "This group’s account files are managed by the panel on their own, but the upstream only reads the default group’s directory — so any account placed here (including ones you add by QR in this group) will keep showing “not loaded”, and will not be used for forwarding or check-in. To truly separate the pools, deploy a second workbuddy2api instance on your server and point this group’s upstream URL at it.",
     "sharedInstanceAction": "Change the URL in Settings → Upstreams",
-    "refreshFailed": "Refreshing the account list failed — what you see may be stale. Try again."
+    "refreshFailed": "Refreshing the account list failed — what you see may be stale. Try again.",
+    "doubaoImportExportDesc": "Import Doubao account JSON, or export a single JSON manifest.",
+    "doubaoImportAccountDesc": "Pick the account JSON exported from the doubaowork2api panel (multiple allowed); an account must carry cookies or it is rejected.",
+    "doubaoExportAccountDesc": "Export one JSON manifest (no credentials) for reconciliation.",
+    "doubaoUploadAllowOverwrite": "Allow overwriting the same account (matched by cookies)"
   },
   "keys": {
     "title": "API keys",

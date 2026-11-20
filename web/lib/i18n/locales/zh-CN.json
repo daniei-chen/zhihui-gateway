@@ -253,7 +253,11 @@
     "sharedInstanceTitle": "这一组和默认分组共用同一套上游实例",
     "sharedInstanceHint": "这一组的账号文件由面板单独管理，而上游只读默认分组的账号目录——所以放进这一组的账号（包括在这里新扫码加的）都会一直显示「未加载」，转发与签到也不会用到它们。要真正把账号池分开，请在服务器上再部署一套 workbuddy2api，再把这一组的「上游地址」改成那套实例。",
     "sharedInstanceAction": "去「设置 → 上游」改地址",
-    "refreshFailed": "账号列表这次刷新没成功 —— 下面可能是旧数据，点重试再取一次。"
+    "refreshFailed": "账号列表这次刷新没成功 —— 下面可能是旧数据，点重试再取一次。",
+    "doubaoImportExportDesc": "导入豆包账号 JSON，或导出为单个 JSON 清单文件。",
+    "doubaoImportAccountDesc": "选择上游 doubaowork2api 面板导出的账号 JSON（可多选）；账号必须有 cookies，缺 cookies 的条目会被拒绝。",
+    "doubaoExportAccountDesc": "导出一个 JSON 清单（不含凭据），用于对账。",
+    "doubaoUploadAllowOverwrite": "允许覆盖同账号（按 cookies 判定）"
   },
   "addAccount": {
     "title": "添加账号 · {realm}",

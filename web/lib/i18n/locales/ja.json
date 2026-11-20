@@ -577,7 +577,11 @@
     "sharedInstanceTitle": "このグループはデフォルトグループと同じ上流インスタンスを共有しています",
     "sharedInstanceHint": "このグループのアカウントファイルはパネルが独自に管理していますが、上流が読み込むのはデフォルトグループのディレクトリだけです。そのため、ここに置いたアカウント（このグループで QR から追加したものも含む）は「未読み込み」のまま表示され、転送やチェックインにも使われません。プールを本当に分けるには、サーバーにもう 1 つ workbuddy2api を配備し、このグループの「上流 URL」をそのインスタンスに変更してください。",
     "sharedInstanceAction": "「設定 → 上流」で URL を変更",
-    "refreshFailed": "アカウント一覧の更新に失敗しました。表示は古い可能性があります。再試行してください。"
+    "refreshFailed": "アカウント一覧の更新に失敗しました。表示は古い可能性があります。再試行してください。",
+    "doubaoImportExportDesc": "豆包アカウントの JSON をインポート、または単一の JSON 一覧でエクスポートします。",
+    "doubaoImportAccountDesc": "上流 doubaowork2api パネルから書き出したアカウント JSON を選択（複数可）。cookies がない項目は拒否されます。",
+    "doubaoExportAccountDesc": "照合用に単一の JSON 一覧（資格情報なし）を書き出します。",
+    "doubaoUploadAllowOverwrite": "同一アカウントの上書きを許可（cookies で判定）"
   },
   "keys": {
     "title": "API キー",

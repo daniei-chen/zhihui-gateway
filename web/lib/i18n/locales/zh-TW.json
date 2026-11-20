@@ -577,7 +577,11 @@
     "sharedInstanceTitle": "這一組和預設分組共用同一套上游實例",
     "sharedInstanceHint": "這一組的帳號檔案由面板單獨管理，而上游只讀預設分組的帳號目錄——所以放進這一組的帳號（包括在這裡新掃碼加的）都會一直顯示「未載入」，轉發與簽到也不會用到它們。要真正把帳號池分開，請在伺服器上再部署一套 workbuddy2api，再把這一組的「上游位址」改成那套實例。",
     "sharedInstanceAction": "去「設定 → 上游」改位址",
-    "refreshFailed": "帳號列表這次重新整理沒成功 —— 下面可能是舊資料，點重試再取一次。"
+    "refreshFailed": "帳號列表這次重新整理沒成功 —— 下面可能是舊資料，點重試再取一次。",
+    "doubaoImportExportDesc": "匯入豆包帳號 JSON，或匯出為單一 JSON 清單檔案。",
+    "doubaoImportAccountDesc": "選擇上游 doubaowork2api 面板匯出的帳號 JSON（可多選）；帳號必須有 cookies，缺 cookies 的項目會被拒絕。",
+    "doubaoExportAccountDesc": "匯出一個 JSON 清單（不含憑證），用於對帳。",
+    "doubaoUploadAllowOverwrite": "允許覆蓋同帳號（依 cookies 判定）"
   },
   "keys": {
     "title": "API 金鑰",
