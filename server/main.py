@@ -614,7 +614,21 @@ async def _qtg_platform_route(request, call_next):
     # 「可识别但不可用」（`platformpolicy._ACCEPTED`），请求会落到下游由
     # `runtime.qoder is None` 给出明确的「平台已下线」，而不是被这里静默
     # 转发到 WorkBuddy 的 handler 上。
-    if platform in ("doubaowork", "trae") and _qtg_should_route(path):
+    # `/api/platforms` 是**唯一**与「当前选中平台」无关的 qtg 端点：它的语义
+    # 就是「把所有平台的能力列出来」，调用方（前端 `platformApi.list()`）**从不**
+    # 带 platform 参数。
+    #
+    # 2026-11-20 修：此前它被下面那句 `platform in ("doubaowork", "trae")` 挡住 ——
+    # 没有 platform 头 → 不进 qtgcore → 落到 manager 的兜底 404。
+    # 实测 `GET /api/platforms` 返回 `{"detail":"not found"}`，而这个接口是
+    # 「平台能力矩阵」的唯一来源，前端拿不到就只能把三个平台的按钮全按默认渲染。
+    # 带参数时反而是好的（`?platform=trae` → 200），说明实现没问题，只是进不来。
+    #
+    # 这里只放行这一个精确路径，且**不改变**其它任何路径的分流结果 ——
+    # manager 侧没有 `/api/platforms` 的 handler（已 grep 确认），所以放行它
+    # 不会抢走任何既有实现，只是把一个原本 404 的端点接通。
+    _is_platform_matrix = path.rstrip("/") == "/api/platforms"
+    if (platform in ("doubaowork", "trae") or _is_platform_matrix) and _qtg_should_route(path):
         try:
             # Identity resolution may wait on a file/SQLite lock. Keep that
             # blocking work off the loop that also delivers inference streams.
