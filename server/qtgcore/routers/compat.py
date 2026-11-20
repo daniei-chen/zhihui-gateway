@@ -385,10 +385,17 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
     """
     rt = _rt(request)
     plat = platform_of(request)
+    # realm 校验提到最前面，**所有平台共用**。
+    #
+    # 2026-11-20：原来只有 `plat == "qoder"` 的分支校验 realm，Trae 走的是
+    # 另一条分支 —— 那条分支直接返回全部记录，完全不看 realm。实测：
+    #   realm=（空）/ cn / global / bogus / xyz  →  一律返回同样的 18 条
+    # 后果有两个：国际版页面会显示国内版的签到记录；非法 realm 静默通过
+    # （本该 422）。用户切版本时看到的是另一个版本的数据，而他无法察觉。
+    if realm not in ('', 'cn', 'global'):
+        raise HTTPException(status_code=422, detail='Invalid history realm')
     items: List[Dict[str, Any]] = []
     if plat == "qoder" and callable(getattr(rt.qoder, "checkin_activity", None)):
-        if realm not in ('', 'cn', 'global'):
-            raise HTTPException(status_code=422, detail='Invalid history realm')
         selected_realm = 'intl' if realm == 'global' else realm
         payload = await rt.qoder.checkin_activity()
         rows = payload.get("rows") if isinstance(payload, dict) else None
@@ -525,7 +532,22 @@ async def compat_checkin_logs(request: Request, realm: str = Query(default=""),
         # 那是个 bug，不是「没有记录」。
         pass
     else:
-        for row in (agg.trae_raw.get("checkin") or []):
+        # Trae 的签到记录来自上游 `/api/checkin` 的**按天汇总**，行里没有 uid
+        # （只有 date / ok / already / failed），所以无法逐条判断它属于哪个版本。
+        #
+        # 2026-11-20：原来这里完全不看 realm —— 切到国际版后仍显示国内版的
+        # 18 条汇总记录，用户会以为国际版也有签到历史。既然无法逐条归属，
+        # 就只能按「这个版本到底有没有账号」来决定：该版本没有账号时，
+        # 这些汇总记录**不可能**属于它，返回空列表比给出别处的数据诚实。
+        _realm_rows = {"trae": agg.trae_accounts, "workbuddy": agg.wb_accounts}.get(
+            plat, agg.trae_accounts)
+        _want = "global" if realm in ("global", "intl") else "cn"
+        _has_realm = any(
+            ("global" if str(getattr(a, "realm", "") or "").strip().lower()
+             in ("global", "intl") else "cn") == _want
+            for a in _realm_rows
+        ) if realm else True
+        for row in ([] if not _has_realm else (agg.trae_raw.get("checkin") or [])):
             if not isinstance(row, dict):
                 continue
             ok_n = int(row.get("ok") or 0)
