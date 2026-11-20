@@ -651,13 +651,22 @@ def _res_ok(res) -> bool:
 
 
 def _adapter_for(rt, platform: str):
-    """按平台取适配器。返回 None 表示该平台未启用（如 QTG_WB_ENGINE=off）。"""
+    """按平台取适配器。返回 None 表示该平台未启用（如 QTG_WB_ENGINE=off）。
+
+    2026-11-20：原来**没有 doubaowork 分支**，直接落到 `return None`。
+    后果：豆包账号页点「停用/启用」返回
+    `{"success": false, "message": "doubaowork 平台未启用（QTG_DOUBAOWORK_ENGINE=off...）"}`
+    —— 而豆包上游明明在跑（`/health` 正常、账号能列出、模型能取到）。
+    用户会照着这句去查 `QTG_DOUBAOWORK_ENGINE`，排查方向直接错。
+    """
     if platform == "qoder":
-        return rt.qoder
+        return getattr(rt, "qoder", None)
     if platform == "trae":
-        return rt.trae
+        return getattr(rt, "trae", None)
     if platform == "workbuddy":
         return getattr(rt, "wb", None)
+    if platform == "doubaowork":
+        return getattr(rt, "dbw", None)
     return None
 
 
@@ -780,7 +789,10 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
         env = {"workbuddy": "QTG_WB_ENGINE", "qoder": "QTG_QODER_ENGINE",
                "trae": "QTG_TRAE_ENGINE", "doubaowork": "QTG_DOUBAOWORK_ENGINE"}.get(
                    platform, "该平台引擎")
-        return {"success": False, "disabled": not disabled,
+        # 前端读的是 `ok`（见 lib/api.ts 的 setDisabled 类型），不是 `success`。
+        # 原来只给 success，前端拿不到 ok 就当成失败但**不显示原因**。
+        return {"ok": False, "success": False, "file": file,
+                "disabled": not disabled, "changed": False,
                 "message": f"{platform} 平台未启用（{env}=off 或上游未接入）"}
     try:
         res = await adapter.set_account(uid, not disabled)
@@ -792,8 +804,10 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
         detail = res if isinstance(res, dict) else {}
         msg = str(detail.get("error") or detail.get("message")
                   or "变更结果未确认，请核对账号状态")
-        return {"success": False, "disabled": not disabled, "message": msg}
-    return {"success": True, "disabled": disabled}
+        return {"ok": False, "success": False, "file": file,
+                "disabled": not disabled, "changed": False, "message": msg}
+    return {"ok": True, "success": True, "file": file,
+            "disabled": disabled, "changed": True}
 
 
 

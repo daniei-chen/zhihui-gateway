@@ -40,6 +40,45 @@ def _split(file: str) -> tuple[str, str]:
     return platform or "qoder", uid
 
 
+# 平台显示名。拒绝文案里不能再写死别的平台的内部名称 ——
+# 这些路由是**三平台共用**的，原来豆包用户点「设置权重」会看到
+# 「qoder-bff 的 AccountPool 没有 weight 概念」，而 Trae 用户点「清除冷却」
+# 会看到「Trae 的冷却状态在 aiwork-server 的 SQLite 里」（在 Trae 页面说 Trae
+# 还算对，但在豆包页面就是串平台）。
+_PLATFORM_LABEL = {
+    "workbuddy": "WorkBuddy",
+    "trae": "Trae",
+    "doubaowork": "豆包工作",
+    "qoder": "Qoder",
+}
+
+
+def _plat(request: Request) -> str:
+    """从请求里取平台；取不到就返回空串（文案退回通用说法）。"""
+    try:
+        from ..identity import platform_of
+        return platform_of(request) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _label(plat: str) -> str:
+    return _PLATFORM_LABEL.get(plat, plat or "本平台")
+
+
+def _unsupported(request: Request, what: str, why_by_platform: Dict[str, str],
+                 default_why: str) -> JSONResponse:
+    """按平台给出「不支持」的具体原因。
+
+    每个平台的上游实现不同（豆包是 doubaowork2api、Trae 是 aiwork-server、
+    WorkBuddy 是 workbuddy2api），同一个操作在不同平台不可用的**理由也不同**。
+    统一用一句话会把别的平台的内部细节暴露给当前用户。
+    """
+    plat = _plat(request)
+    why = why_by_platform.get(plat) or default_why
+    return _no(what, why)
+
+
 _UID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
@@ -113,8 +152,19 @@ async def compat_clear_cooling(request: Request, file: str) -> Dict[str, Any]:
     rt = _rt(request)
     platform, uid = _split(file)
     if platform != "qoder":
-        return JSONResponse(status_code=409, content={
-            "detail": "Trae 的冷却状态在 aiwork-server 的 SQLite 里，本部署不直接改它"})
+        # 原来这里写死「Trae 的冷却状态在 aiwork-server 的 SQLite 里」，
+        # 但豆包账号也会走到这条分支 —— 于是豆包页面显示的是 Trae 的内部实现。
+        return _unsupported(
+            request, "清除冷却",
+            {
+                "doubaowork": "豆包工作的冷却状态在 doubaowork2api 进程内存里，"
+                               "控制面不直接改它；请在上游侧清除或等自动冷却。",
+                "trae": "Trae 的冷却状态在 aiwork-server 内部，控制面不直接改它；"
+                        "请在上游侧清除或等自动冷却。",
+                "workbuddy": "WorkBuddy 的冷却状态由 workbuddy2api 自己维护，"
+                             "控制面不直接改它；请在上游侧清除或等自动冷却。",
+            },
+            "该平台的冷却状态由上游自己维护，控制面不直接改它。")
     path = _account_path(rt, uid)
     if not path.exists():
         return JSONResponse(status_code=404, content={"detail": "未找到该账号文件"})
@@ -148,18 +198,41 @@ async def compat_clear_cooling(request: Request, file: str) -> Dict[str, Any]:
 
 @router.put("/accounts/{file:path}/proxy")
 async def compat_account_set_proxy(request: Request, file: str) -> JSONResponse:
-    return _no("账号代理绑定", "qoder-bff 是单账号池，账号 JSON 没有 proxy 字段，数据面直连上游")
+    return _unsupported(
+        request, "账号代理绑定",
+        {
+            "doubaowork": "豆包工作的账号在上游 doubaowork2api 里维护，没有按账号绑代理的字段；"
+                           "需要改出口请在上游侧配置。",
+            "trae": "Trae 的账号由 aiwork-server 管理，没有按账号绑代理的字段；"
+                    "需要改出口请在 aiwork 侧配置。",
+            "workbuddy": "WorkBuddy 的账号文件里没有 proxy 字段，数据面直连上游；"
+                         "如需分组出口，请在「设置 → 代理」里配置。",
+        },
+        "当前平台的账号模型里没有 proxy 字段，无法按账号绑定代理。")
 
 
 @router.put("/accounts/{file:path}/weight")
 async def compat_account_set_weight(request: Request, file: str) -> JSONResponse:
-    return _no("账号权重", "qoder-bff 的 AccountPool 没有 weight 概念（选号策略固定在 BFF 内）")
+    return _unsupported(
+        request, "账号权重",
+        {
+            "doubaowork": "豆包工作的选号由上游 doubaowork2api 决定，控制面不参与打分，"
+                           "因此没有可设置的权重。",
+            "trae": "Trae 的选号策略固定在 aiwork-server 内部，控制面不参与打分，"
+                    "因此没有可设置的权重。",
+        },
+        "当前平台的上游不暴露账号权重，选号策略固定在上游内部。")
 
 
 @router.post("/accounts/{file:path}/move")
 async def compat_account_move(request: Request, file: str) -> JSONResponse:
-    return _no("账号分组", "qoder-bff 没有自定义分组（只有 realm 国内/国际维度），"
-                          "多账号池方案见 /opt/qoder-hub/docs/multi-upstream.md")
+    return _unsupported(
+        request, "账号分组",
+        {
+            "doubaowork": "豆包工作的账号没有自定义分组，只有上游的默认池。",
+            "trae": "Trae 的账号没有自定义分组，只有国内 / 国际两个版本维度。",
+        },
+        "当前平台的账号没有自定义分组。")
 
 
 # ------------------------------------------------------------------ 备注 / 强制冷却
@@ -193,10 +266,16 @@ async def compat_account_note(request: Request, file: str) -> Dict[str, Any]:
 
 @router.post("/accounts/{file:path}/force-cooling")
 async def compat_account_force_cooling(request: Request, file: str) -> JSONResponse:
-    """强制设定冷却：状态在 qoder-proxy 进程内存里，控制面只能清空（重启容器），不能设值。"""
-    return JSONResponse(status_code=409, content={
-        "detail": "本部署不支持手动设定冷却：冷却状态在 qoder-proxy 进程内存里、账号目录对控制面只读；"
-                  "请等上游自动冷却，或点「强制清除冷却」（会重启 qoder-proxy）"})
+    """强制设定冷却：状态在上游进程内存里，控制面只能清空，不能设值。"""
+    return _unsupported(
+        request, "手动设定冷却",
+        {
+            "doubaowork": "豆包工作的冷却状态在 doubaowork2api 进程内存里，控制面只能清除、"
+                           "不能设值；请等上游自动冷却，或点「清除冷却」。",
+            "trae": "Trae 的冷却状态在 aiwork-server 内部，控制面只能清除、不能设值；"
+                    "请等上游自动冷却，或点「清除冷却」。",
+        },
+        "冷却状态在上游进程内存里，控制面只能清除、不能设值。")
 
 
 # ------------------------------------------------------------------ 前端方法别名
