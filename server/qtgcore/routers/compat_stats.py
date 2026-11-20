@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..identity import platform_of
+from ..errors import UpstreamError
 from ..service import build_aggregate, usage_payload
 # U28：`_rt` 原先在本文件里有一份拷贝（与另外 4 个 compat 路由逐字节相同）。
 # 现在统一从 `_shared` 引入并**在此继续导出**。
@@ -124,7 +125,16 @@ async def _payload(request: Request, days: int = 14):
     rt = _rt(request)
     platform=_platform(request)
     from ...services.scope import fixed
-    agg = await build_aggregate(rt, usage_days=days,scope=fixed(platform,authority='upstream'))
+    # 2026-11-20：上游整个不可达时 `build_aggregate` 会抛 UpstreamError，
+    # 而所有 stats 端点都没有兜它 —— 实测（停掉 zhihui-trae 容器后）
+    # `/api/stats/summary?platform=trae` 返回**裸 500 纯文本**
+    # 「Internal Server Error」，前端只剩一个红色 XHR 错误。
+    # 同期 `/api/accounts` 已经是 409 +「上游不可达: ConnectError」，
+    # 同一个故障在两张页面上给出完全不同的可读性。
+    try:
+        agg = await build_aggregate(rt, usage_days=days,scope=fixed(platform,authority='upstream'))
+    except UpstreamError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)[:300]) from exc
     prefixes=('wb.',) if platform=='workbuddy' else (platform+'.',)
     if any(error.startswith(prefixes) for error in agg.errors):
         raise HTTPException(status_code=503, detail='用量证据不完整，不能以空数组或零值代替')
