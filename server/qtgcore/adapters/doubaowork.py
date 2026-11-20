@@ -569,6 +569,39 @@ class DoubaoWorkAdapter(BaseAdapter):
             "updated": int(body.get("updated") or 0),
         }
 
+    async def delete_accounts(self, uids: List[str]) -> Dict[str, Any]:
+        """从上游删除账号。
+
+        上游契约（`POST /admin/accounts/batch`，读自 app.py）：
+
+            {"action": "delete", "ids": [...]}
+            -> {"succeeded": [id...], "errors": []}
+
+        `delete_many` 在 `accounts.py` 里做的是「先全部 rename 到暂存名，
+        任何一个失败就全部回滚」，所以它是**批量的原子操作** —— 这里一次
+        传完，不要拆成逐个删（拆开会丢掉那个原子性）。
+
+        写路径传 `retry=False`：删除不是幂等操作，重试可能删掉别的东西
+        或把「已经删掉」报成失败。
+        """
+        if not uids:
+            return {"succeeded": [], "errors": []}
+        ids: List[str] = []
+        for uid in uids:
+            ids.append(_safe_id(uid))
+        async with self._write_lock:
+            body = await self._admin(
+                "POST", "/admin/accounts/batch",
+                json_body={"action": "delete", "ids": ids}, retry=False,
+                required=False,
+            )
+        if not isinstance(body, dict):
+            return {"succeeded": [], "errors": [{"id": "", "message": "上游未返回可解析的结果"}]}
+        return {
+            "succeeded": list(body.get("succeeded") or []),
+            "errors": list(body.get("errors") or []),
+        }
+
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")

@@ -839,14 +839,79 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
                   or "变更结果未确认，请核对账号状态")
         return {"ok": False, "success": False, "file": file,
                 "disabled": not disabled, "changed": False, "message": msg}
+    # 启停也改了账号状态，必须清缓存 —— 否则列表在 TTL（默认 15 秒）内
+    # 仍显示启停前的状态，用户会以为没生效而反复点。
+    try:
+        from ..cache import cache
+        cache.invalidate()
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "success": True, "file": file,
             "disabled": disabled, "changed": True}
 
 
-
 @router.delete("/accounts/{file:path}")
 async def compat_account_delete(request: Request, file: str) -> Dict[str, Any]:
-    return {"success": False, "message": "上游 BFF 未提供删除账号接口；请在 Qoder/Trae 面板的账号页操作"}
+    """删除账号。
+
+    2026-11-20 修：原来这里是一句写死的
+    「上游 BFF 未提供删除账号接口；请在 Qoder/Trae 面板的账号页操作」。
+    实测**豆包上游明确支持删除**：
+
+        POST /admin/accounts/batch {"action":"delete","ids":[...]}
+        -> {"succeeded":["account-xxx"],"errors":[]}
+
+    也就是说功能一直在，只是管理台告诉用户「没有」。这比不支持更糟 ——
+    用户会跑去上游面板找一个不存在的按钮。
+
+    Trae / WorkBuddy 的上游确实没有删除端点（`trae-bff` 只提供 pool_set，
+    改的是「哪些 uid 参与轮询」，不是删账号文件），所以那两个平台仍如实说明，
+    但文案改成**说清它们各自能做到什么**，而不是笼统的「未提供」。
+    """
+    rt = _rt(request)
+    platform, uid = _split_file(file)
+    adapter = _adapter_for(rt, platform)
+
+    if platform == "doubaowork" and adapter is not None:
+        delete_many = getattr(adapter, "delete_accounts", None)
+        if callable(delete_many):
+            try:
+                res = await delete_many([uid])
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001 - 上游失败如实报
+                return {"ok": False, "success": False, "file": file,
+                        "message": "上游删除失败：%s" % str(exc)[:160]}
+            detail = res if isinstance(res, dict) else {}
+            done = detail.get("succeeded") or []
+            errs = detail.get("errors") or []
+            if uid in done or (done and not errs):
+                # 同上传：写成功必须清缓存，否则列表在 TTL 内仍是旧的。
+                try:
+                    from ..cache import cache
+                    cache.invalidate()
+                except Exception:  # noqa: BLE001
+                    pass
+                return {"ok": True, "success": True, "file": file, "deleted": uid}
+            msg = ""
+            if errs:
+                first = errs[0] if isinstance(errs[0], dict) else {}
+                msg = str(first.get("message") or "")
+            return {"ok": False, "success": False, "file": file,
+                    "message": msg or "上游未确认删除结果，请核对账号列表"}
+        return {"ok": False, "success": False, "file": file,
+                "message": "当前适配器没有删除能力，请升级管理端"}
+
+    # Trae / WorkBuddy：上游确实没有删除端点。说清它们**能**做什么，
+    # 比一句「未提供」有用得多。
+    _why = {
+        "trae": "Trae 上游没有删除账号的端点（它只能设置「哪些账号参与轮询」）；"
+                "如需彻底移除，请在 aiwork 面板删除对应账号文件后重启容器。",
+        "workbuddy": "WorkBuddy 上游没有删除账号的端点；"
+                     "如需彻底移除，请在 workbuddy2api 的账号目录删除对应 JSON 后重启容器。",
+    }.get(platform, "该平台上游没有删除账号的端点。")
+    return {"ok": False, "success": False, "file": file, "message": _why}
+
 
 
 
@@ -1409,6 +1474,18 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
     _upstream_ok = bool(upstream_result) and bool(
         (upstream_result or {}).get("imported") or (upstream_result or {}).get("created")
         or (upstream_result or {}).get("updated"))
+    # 上游写成功后**必须清缓存**。
+    #
+    # 2026-11-20 真机实测：`cache_accounts_sec` 默认 15 秒，而写路径从没调用过
+    # `cache.invalidate()`。于是「上传成功」之后 15 秒内 `GET /api/accounts`
+    # 仍然返回上传前的旧列表 —— 用户看到「0 个账号」，读成「上传失败」，
+    # 反复重传。带 `Cache-Control: no-cache` 或重启后才正常。
+    if _upstream_ok:
+        try:
+            from ..cache import cache
+            cache.invalidate()
+        except Exception:  # noqa: BLE001 - 清缓存失败不该让导入报错
+            pass
     for idx, item in enumerate(entries):
         if not isinstance(item, dict):
             rejected.append({"index": idx, "file": "", "message": "条目不是对象"})
