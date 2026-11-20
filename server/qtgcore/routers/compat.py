@@ -1285,7 +1285,7 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
                 parsed = _json.loads(payload.decode("utf-8"))
             except (UnicodeDecodeError, _json.JSONDecodeError):
                 # 单个文件不合法不该让整批失败：记一条 rejected 继续。
-                rejected.append({"index": len(entries), "reason": "%s 不是合法 JSON" % name})
+                rejected.append({"file": name, "message": "%s 不是合法 JSON" % name})
                 continue
             if isinstance(parsed, list):
                 entries.extend(parsed)
@@ -1335,32 +1335,37 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
             "message": "账号目录不可写：%s" % exc,
         }
 
-    added: List[str] = []
-    overwritten: List[str] = []
+    added: List[Dict[str, Any]] = []
+    overwritten: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     for idx, item in enumerate(entries):
         if not isinstance(item, dict):
-            rejected.append({"index": idx, "reason": "条目不是对象"})
+            rejected.append({"index": idx, "file": "", "message": "条目不是对象"})
             continue
         uid = str(item.get("uid") or item.get("id") or item.get("device_id") or "").strip()
         if not uid:
-            rejected.append({"index": idx, "reason": "缺少 uid / device_id"})
+            rejected.append({"index": idx, "file": "", "message": "缺少 uid / device_id"})
             continue
         # 文件名必须可预测且安全：只留字母数字、下划线、连字符。
         safe = "".join(ch for ch in uid if ch.isalnum() or ch in "_-")[:80]
         if not safe:
-            rejected.append({"index": idx, "reason": "uid 不含可用字符"})
+            rejected.append({"index": idx, "file": "", "message": "uid 不含可用字符"})
             continue
-        target = root / ("%s.json" % safe)
+        fname = "%s.json" % safe
+        target = root / fname
         existed = target.exists()
         try:
             tmp = target.with_suffix(".json.tmp")
             tmp.write_text(_json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             tmp.replace(target)
         except OSError as exc:
-            failed.append({"uid": uid, "reason": str(exc)})
+            failed.append({"file": fname, "uid": uid, "message": str(exc)})
             continue
-        (overwritten if existed else added).append(uid)
+        # 前端把 added/overwritten 的元素当**对象**用：
+        #   `${item.file}: ${item.message}`（UploadAccountsButton 的 notify）
+        # 所以这里必须是 {file, uid, updated}，不能是裸字符串。
+        row = {"file": fname, "uid": uid, "updated": existed}
+        (overwritten if existed else added).append(row)
 
     total_ok = len(added) + len(overwritten)
     if total_ok:
