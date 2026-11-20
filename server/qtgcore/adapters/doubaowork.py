@@ -596,7 +596,13 @@ class DoubaoWorkAdapter(BaseAdapter):
                 required=False,
             )
         if not isinstance(body, dict):
-            return {"succeeded": [], "errors": [{"id": "", "message": "上游未返回可解析的结果"}]}
+            # `required=False` 时上游 4xx 会返回 None —— 不要把它报成
+            # 「未返回可解析的结果」（那读起来像上游坏了）。区分两种可能：
+            # 账号不存在（正常，删过了）vs 上游真的没应答。
+            return {"succeeded": [], "errors": [
+                {"id": ids[0] if ids else "",
+                 "message": "上游没有应答删除请求（账号可能已不存在，或管理会话已过期）"}
+            ]}
         return {
             "succeeded": list(body.get("succeeded") or []),
             "errors": list(body.get("errors") or []),
@@ -607,10 +613,26 @@ class DoubaoWorkAdapter(BaseAdapter):
             raise ValueError("enabled must be a boolean")
         account_id = _safe_id(uid)
         async with self._write_lock:
-            data = await self._admin_data(
-                "PATCH", f"/admin/accounts/{account_id}",
-                json_body={"enabled": enabled}, retry=False,
-            )
+            # 2026-11-20：`_admin_data` 默认 `required=True`，上游对不存在的
+            # 账号回 404 时会抛 UpstreamError —— 而路由层没兜，直接冒成**裸 500**
+            # （纯文本 "Internal Server Error"，前端只剩一个红色 XHR 错误）。
+            # 账号不存在是**请求问题**，应当是 404 带说明。
+            try:
+                data = await self._admin_data(
+                    "PATCH", f"/admin/accounts/{account_id}",
+                    json_body={"enabled": enabled}, retry=False,
+                )
+            except UpstreamError as exc:
+                text = str(exc)
+                if "404" in text or "不存在" in text or "not found" in text.lower():
+                    return {
+                        "ok": False,
+                        "state": "not_found",
+                        "changed": False,
+                        "error": "上游找不到该账号（可能已被删除），请刷新列表后重试",
+                        "data": None,
+                    }
+                raise
         observed = data.get("enabled") if isinstance(data, dict) else None
         # 回读是「写入成功」的唯一证据。上游没回这个字段 = 没校验过，
         # 不能把「没校验」当成「校验通过」——那会让一次静默失效显示成成功。

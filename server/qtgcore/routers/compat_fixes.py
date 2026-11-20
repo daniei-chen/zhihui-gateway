@@ -406,7 +406,8 @@ _CAP_MATRIX = {
     "trae": {"readonly": False, "checkin": True, "refresh_account": True,
              "set_account": True, "add_account": True, "delete_account": False,
              "save_keys": False, "oauth": True, "agents": False, "alerts": False,
-             "note": "API Key 与客户端配置在 aiwork 自己那边维护"},
+             "note": "API Key 与客户端配置在 aiwork 自己那边维护；"
+                     "上游没有删除账号的端点（只能设置哪些账号参与轮询）"},
     "workbuddy": {"readonly": True, "checkin": False, "refresh_account": False,
                   "set_account": False, "add_account": False, "delete_account": False,
                   "save_keys": False, "oauth": False, "agents": False, "alerts": True,
@@ -419,9 +420,9 @@ _CAP_MATRIX = {
     # （周一 reward_amount=400，total 700→1100，task_status 1→3，
     # checked_in_today false→true），所以 checkin 标 true。
     "doubaowork": {"readonly": False, "checkin": True, "refresh_account": True,
-                   "set_account": True, "add_account": True, "delete_account": False,
+                   "set_account": True, "add_account": True, "delete_account": True,
                    "save_keys": False, "oauth": False, "agents": False, "alerts": False,
-                   "verified": {"checkin": True, "accounts": True},
+                   "verified": {"checkin": True, "accounts": True, "delete": True},
                    "note": "账号在上游 doubaowork2api 面板维护；签到走豆包官方接口"
                            "（2026-11-16 真机端到端验证通过）"},
 }

@@ -12,6 +12,7 @@ WorkBuddy 期望的结构，从而不改前端也能跑起来。
 """
 from __future__ import annotations
 from ..identity import platform_of
+from ..errors import UpstreamError
 
 import secrets
 import datetime as dt
@@ -833,6 +834,15 @@ async def compat_account_disabled(request: Request, file: str) -> Dict[str, Any]
         # 适配器的 _safe_id 会拒非法账号 id。那是**请求问题**，应当是 400，
         # 不能让它冒成 500（前端只会显示一个红色 XHR 错误）。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UpstreamError as exc:
+        # 2026-11-20：上游对不存在的账号回 404 时，`set_account` 会抛
+        # UpstreamError —— 原来没人兜，直接冒成**裸 500**
+        # （纯文本 "Internal Server Error"，前端只剩红色 XHR 错误）。
+        # 账号不存在是请求问题：404 带说明，而不是 500。
+        text = str(exc)
+        code = 404 if ("404" in text or "不存在" in text
+                       or "not found" in text.lower()) else 502
+        raise HTTPException(status_code=code, detail=text[:300]) from exc
     if not _res_ok(res):
         detail = res if isinstance(res, dict) else {}
         msg = str(detail.get("error") or detail.get("message")
