@@ -346,7 +346,18 @@ export default function TasksPage() {
   );
   // 成长任务一键执行（issue #19）。仅管理员：这些操作会对账号发起真实写请求，
   // 后端也以 require_admin 兜底。国际版无成长中心体系，故不显示。
-  const runner = (realm ?? 'cn') === 'cn' ? <TaskRunnerPanel /> : null;
+  //
+  // 2026-11-20：**只有 WorkBuddy 显示**。这个面板调的是
+  // `POST /api/task-run`，而后端 `taskrun` 实际执行的是
+  // `<workbuddy2api>/scripts/task_runner.py` —— 那是 WorkBuddy 上游自带的
+  // 脚本。Trae / 豆包的上游没有这个脚本，接口却仍然返回
+  // `{"ok":true,"message":"已开始执行"}`（真机实测：豆包下 exit_code=1，
+  // 输出 `ModuleNotFoundError: No module named 'task_common'`）。
+  // 也就是说：用户在豆包页面点「预览」看到的是成功，后台跑的是一条必失败的
+  // WorkBuddy 脚本。按平台隐藏这个面板，比让他读到假成功要好。
+  const runner = (realm ?? 'cn') === 'cn' && platform === 'workbuddy'
+    ? <TaskRunnerPanel />
+    : null;
 
   // 计划任务（令牌刷新计划 + 每日任务）：到点自动跑的东西放「任务」这一页才对 ——
   // 它跟「这个账号是谁」无关，只跟「什么时候做什么」有关（用户反馈：原先挂在账号页）
