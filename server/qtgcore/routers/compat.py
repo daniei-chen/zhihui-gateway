@@ -1129,30 +1129,153 @@ async def compat_refresh_credits(request: Request, force: str = Query(default="t
 
 
 async def compat_accounts_export(request: Request) -> Response:
-    """导出账号清单（**不含任何凭据**，只给运维对账用）。"""
+    """导出账号清单（**不含任何凭据**，只给运维对账用）。
+
+    2026-11-20 修：这里原来调 `build_aggregate(rt)` **不带平台**，
+    于是 `all_accounts(agg)` 返回三个平台的账号并集 —— 豆包页面点
+    「导出账号」拿到的是 **Trae 的账号**。这不只是显示错：把这份文件
+    导进豆包，等于把 Trae 的 uid 写进豆包的账号池。
+
+    平台必须从请求里取（`X-QTG-Platform` / `?platform=`），并且只导出该平台。
+    """
     import json as _json
 
+    from ..service import build_pool_snapshot
+
     rt = _rt(request)
-    agg = await build_aggregate(rt)
+    plat = platform_of(request)
+    agg = await build_pool_snapshot(rt, plat)
+    rows = {
+        "qoder": agg.qoder_accounts,
+        "trae": agg.trae_accounts,
+        "workbuddy": agg.wb_accounts,
+        "doubaowork": agg.doubaowork_accounts,
+    }.get(plat, [])
     payload = [
         {"platform": a.platform, "uid": a.uid, "name": a.name, "realm": a.realm,
          "state": a.state, "credits": a.credits_remain, "expires_iso": a.expires_iso}
-        for a in all_accounts(agg)
+        for a in rows
     ]
     return Response(
         content=_json.dumps(payload, ensure_ascii=False, indent=2),
         media_type="application/json",
-        headers={"Content-Disposition": 'attachment; filename="accounts.json"'},
+        headers={"Content-Disposition": 'attachment; filename="accounts-%s.json"' % plat},
     )
 
 
 @router.post("/accounts/upload")
 async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
+    """豆包工作的账号导入：把上游 doubaowork2api 的账号 JSON 落到它的 accounts 目录。
+
+    为什么这个端点必须真实现：豆包工作**没有 OAuth**（`AddAccountDialog` 里已写明），
+    唯一的入池路径就是「上游面板导出 JSON → 这里上传」。原来这里硬编码
+    `ok: False, message: "文件导入暂未开放"`，等于豆包平台永远加不进账号 ——
+    用户看到的是「添加账号」按钮点了没用。
+
+    契约（与前端 `accountsApi.upload` 一致）：
+      入参  multipart 或裸 JSON body，单个对象 / 数组 / `{"accounts": [...]}` 都接受
+      出参  `{ok, uploaded[], added[], overwritten[], rejected[], failed[], message}`
+    """
+    rt = _rt(request)
+    plat = platform_of(request)
+    if plat != "doubaowork":
+        return {
+            "ok": False, "uploaded": [], "added": [], "overwritten": [],
+            "rejected": [], "failed": [],
+            "message": "该平台的账号导入请走「添加账号」的 OAuth 授权流程",
+        }
+
+    accounts_dir = str(getattr(rt.settings, "doubaowork_accounts_dir", "") or "")
+    if not accounts_dir:
+        return {
+            "ok": False, "uploaded": [], "added": [], "overwritten": [],
+            "rejected": [], "failed": [],
+            "message": "未配置豆包账号目录（QTG_DOUBAOWORK_ACCOUNTS_DIR）",
+        }
+
+    # 读取原始 body：不假设 multipart，前端两种都发得出来。
+    raw = await request.body()
+    entries: List[Any] = []
+    if raw:
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return {
+                "ok": False, "uploaded": [], "added": [], "overwritten": [],
+                "rejected": [], "failed": [],
+                "message": "上传内容不是合法 JSON：%s" % exc,
+            }
+        if isinstance(parsed, list):
+            entries = parsed
+        elif isinstance(parsed, dict):
+            if isinstance(parsed.get("accounts"), list):
+                entries = parsed["accounts"]
+            elif parsed.get("cookies") or parsed.get("sessionid"):
+                entries = [parsed]
+    if not entries:
+        return {
+            "ok": False, "uploaded": [], "added": [], "overwritten": [],
+            "rejected": [], "failed": [],
+            "message": "JSON 中没有账号条目",
+        }
+
+    from pathlib import Path as _Path
+
+    root = _Path(accounts_dir)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {
+            "ok": False, "uploaded": [], "added": [], "overwritten": [],
+            "rejected": [], "failed": [],
+            "message": "账号目录不可写：%s" % exc,
+        }
+
+    added: List[str] = []
+    overwritten: List[str] = []
+    rejected: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for idx, item in enumerate(entries):
+        if not isinstance(item, dict):
+            rejected.append({"index": idx, "reason": "条目不是对象"})
+            continue
+        uid = str(item.get("uid") or item.get("id") or item.get("device_id") or "").strip()
+        if not uid:
+            rejected.append({"index": idx, "reason": "缺少 uid / device_id"})
+            continue
+        # 文件名必须可预测且安全：只留字母数字、下划线、连字符。
+        safe = "".join(ch for ch in uid if ch.isalnum() or ch in "_-")[:80]
+        if not safe:
+            rejected.append({"index": idx, "reason": "uid 不含可用字符"})
+            continue
+        target = root / ("%s.json" % safe)
+        existed = target.exists()
+        try:
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp.replace(target)
+        except OSError as exc:
+            failed.append({"uid": uid, "reason": str(exc)})
+            continue
+        (overwritten if existed else added).append(uid)
+
+    total_ok = len(added) + len(overwritten)
+    if total_ok:
+        msg = "已导入 %d 个账号（新增 %d、覆盖 %d）" % (total_ok, len(added), len(overwritten))
+    else:
+        msg = "没有账号被导入"
+    if rejected:
+        msg += "；%d 个被拒绝" % len(rejected)
+    if failed:
+        msg += "；%d 个写入失败" % len(failed)
     return {
-        "ok": False,
-        "uploaded": [], "added": [], "overwritten": [],
-        "rejected": [], "failed": [],
-        "message": "账号导入需通过「添加账号」的 OAuth 授权流程；文件导入暂未开放",
+        "ok": total_ok > 0,
+        "uploaded": added + overwritten,
+        "added": added,
+        "overwritten": overwritten,
+        "rejected": rejected,
+        "failed": failed,
+        "message": msg,
     }
 
 
