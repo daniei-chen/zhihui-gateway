@@ -570,7 +570,14 @@ async def cached_pool_credits(request: Request) -> Dict[str, Any]:
 async def fixed_models(request: Request, realm: str = Query(default="")) -> Dict[str, Any]:
     rt = _rt(request)
     plat = _platform(request)
-    if realm in ("cn", "global", "intl"):
+    # 2026-11-20：这段「该版本下没有账号就不给模型」的前置检查**只对
+    # 按账号池拼模型列表的平台成立**（qoder / trae 的 /v1/models 是按当前
+    # 账号池返回的）。豆包工作的上游 `/v1/models` 是**静态清单**，0 个账号
+    # 时照样返回完整列表（实测 200 + 8 个模型）。
+    #
+    # 原来不区分平台，于是豆包池子空的时候模型页显示「可用模型 0」，
+    # 而它明明有 8 个模型 —— 用户读成「豆包接不进来」。
+    if plat != "doubaowork" and realm in ("cn", "global", "intl"):
         # 该版本下没有账号时不给模型列表：「有这些模型可用」是假象——
         # 上游 /v1/models 是按账号池整体返回的，不分版本。
         try:
@@ -621,7 +628,8 @@ async def fixed_model_catalog(request: Request, realm: str = Query(default=""),
     """
     rt = _rt(request)
     plat = _platform(request)
-    if realm in ("cn", "global", "intl"):
+    # 同 `fixed_models`：豆包的 /v1/models 是静态清单，不随账号池变化。
+    if plat != "doubaowork" and realm in ("cn", "global", "intl"):
         # 该版本下没有账号时不该给出「这些模型可用」的假象：
         # Qoder / Trae 的 /v1/models 是按账号池整体返回的，不分版本。
         try:
