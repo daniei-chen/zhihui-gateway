@@ -126,9 +126,25 @@ def _sessions(now):
             session = json.loads(item['value'])
         except (TypeError, ValueError):
             _deny(503, '授权会话台账异常，已暂停发起新授权')
-        if (not isinstance(session, dict) or not isinstance(session.get('expires'), (int, float))
+        if not isinstance(session, dict):
+            _deny(503, '授权会话台账异常，已暂停发起新授权')
+        # 不属于 OAuth 平台的记录**跳过**，而不是判定整本台账损坏。
+        #
+        # 2026-11-20 真机事故：`start()` 是「先写会话、再调适配器」，
+        # 而豆包工作的 `oauth_login_url()` 明确返回 ok=False（它用 Cookie
+        # JSON 导入，没有 OAuth）。于是每次有人点豆包的「添加账号」，
+        # 都会在台账里留下一条 platform=doubaowork 的 error 记录；而下面对
+        # platform 的白名单只认 qoder/trae，那条记录就让**整本台账**被判
+        # 「异常」，`_deny(503)` 把**所有平台**的新授权一起锁死 ——
+        # 包括本来好好的 Trae。
+        #
+        # 这类记录不参与任何授权决策（没有任何代码会读 doubaowork 的会话去
+        # 发授权），所以跳过它即可。其余字段的类型校验保持严格：那些才真正
+        # 意味着台账被写坏了。
+        if session.get('platform') not in ('qoder', 'trae'):
+            continue
+        if (not isinstance(session.get('expires'), (int, float))
                 or not isinstance(session.get('owner'), str)
-                or session.get('platform') not in ('qoder', 'trae')
                 or session.get('realm') not in ('cn', 'global')
                 or not isinstance(session.get('engine'), str)):
             _deny(503, '授权会话台账异常，已暂停发起新授权')

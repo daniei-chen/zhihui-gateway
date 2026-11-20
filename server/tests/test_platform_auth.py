@@ -580,5 +580,88 @@ class PlatformAuthAdapterTest(unittest.IsolatedAsyncioTestCase):
                                          params={'state': 'fixture'}, retry=False)
 
 
+class NonOauthPlatformLedgerIsolationTests(unittest.TestCase):
+    """豆包那类「没有 OAuth」的平台，不能把整本授权台账拖下水。
+
+    2026-11-20 真机事故：`platformauth.start()` 是「先写会话、再调适配器」，
+    而豆包工作的 `oauth_login_url()` 明确返回 ok=False。于是每次点豆包的
+    「添加账号」，都会留下一条 `platform=doubaowork` 的 error 记录；而
+    `_sessions()` 的白名单只认 qoder/trae，那条记录让**整本台账**被判异常，
+    `_deny(503)` 把**所有平台**的新授权一起锁死 —— 包括本来好好的 Trae。
+
+    这组测试锁住修复：非 OAuth 平台的残留记录被**跳过**，不参与判定。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.original_conn = db._conn
+        db._conn = None
+        for name, value in [('DB_PATH', Path(self.tmp.name) / 'auth.db'),
+                            ('USERS_FILE', Path(self.tmp.name) / 'users.json'),
+                            ('DATA_DIR', Path(self.tmp.name))]:
+            patch = mock.patch.object(config, name, value)
+            patch.start(); self.addCleanup(patch.stop)
+        self.addCleanup(self.close_db)
+        install_users('alice')
+        self.user = owner('alice')
+        self.trae = SimpleNamespace(oauth_login_url=mock.AsyncMock(side_effect=trae_start),
+                                    oauth_finish=mock.AsyncMock(return_value={}))
+        app = FastAPI()
+        app.include_router(accounts.router)
+        app.state.rt = SimpleNamespace(trae=self.trae)
+        app.dependency_overrides[security.current_user] = lambda: self.user
+        self.client = TestClient(app)
+        patch = mock.patch.object(security, 'audit', return_value=None)
+        patch.start(); self.addCleanup(patch.stop)
+
+    def close_db(self):
+        if db._conn is not None:
+            db._conn.close()
+        db._conn = self.original_conn
+
+    def start_trae(self):
+        return self.client.post('/api/auth/start', params={'platform': 'trae', 'realm': 'cn'},
+                                json={'realm': 'cn'})
+
+    def _write_foreign_session(self, platform='doubaowork', status='error'):
+        """模拟 start() 在「适配器说不支持」之后留下的残留记录。"""
+        import time
+        state = 'zh-' + 'a' * 48
+        platformauth._save(state, {
+            'owner': 'alice', 'owner_binding': self.user['_authorization_binding'],
+            'platform': platform, 'realm': 'cn', 'engine': 'doubaowork|http://127.0.0.1:18789|',
+            'expires': int(time.time()) + 300, 'status': status,
+            'mode': 'callback', 'auth_url': '',
+            'operation_deadline': int(time.time()) + 300,
+        })
+        return state
+
+    def test_foreign_platform_row_does_not_block_trae_authorization(self):
+        self._write_foreign_session()
+        response = self.start_trae()
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertIn('authUrl', response.json())
+
+    def test_foreign_platform_row_is_not_counted_against_session_cap(self):
+        for i in range(5):
+            self._write_foreign_session(platform='doubaowork', status='error')
+        self.assertEqual(200, self.start_trae().status_code)
+
+    def test_corrupt_oauth_platform_row_still_halts_new_authorization(self):
+        """安全保证不能被放宽：**属于 OAuth 平台**的坏记录仍然要拦住。"""
+        import time
+        platformauth._save('zh-' + 'b' * 48, {
+            'owner': 'alice', 'owner_binding': self.user['_authorization_binding'],
+            'platform': 'trae', 'realm': 'cn',
+            'engine': 12345,                      # 类型错误：engine 必须是 str
+            'expires': int(time.time()) + 300, 'status': 'waiting',
+            'mode': 'callback', 'auth_url': '',
+        })
+        response = self.start_trae()
+        self.assertEqual(503, response.status_code, response.text)
+        self.assertIn('台账异常', response.json()['detail'])
+
+
 if __name__ == '__main__':
     unittest.main()
