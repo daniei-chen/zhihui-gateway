@@ -1163,6 +1163,51 @@ async def compat_accounts_export(request: Request) -> Response:
     )
 
 
+def _split_multipart(raw: bytes, boundary: str) -> List[tuple[str, bytes]]:
+    """把 multipart/form-data 的 body 拆成 [(文件名, 内容字节)]。
+
+    为什么自己拆而不用 `python-multipart`：这个端点只接受「若干 JSON 文件」，
+    不需要流式解析、不需要临时文件。自己拆只有几十行，而且**不引入新的
+    运行时依赖**（部署包的 requirements 已经锁定哈希，加依赖要走签名流程）。
+
+    只返回有 filename 的 part；普通表单字段（`overwrite=true` 之类）忽略 ——
+    它们已经通过 query string 传了。
+    """
+    marker = ("--" + boundary).encode("latin-1")
+    parts: List[tuple[str, bytes]] = []
+    for chunk in raw.split(marker):
+        if not chunk or chunk in (b"--\r\n", b"--", b"\r\n"):
+            continue
+        if chunk.startswith(b"--"):
+            continue
+        # 头与体之间是一个空行
+        head_end = chunk.find(b"\r\n\r\n")
+        if head_end < 0:
+            continue
+        headers_blob = chunk[:head_end].decode("latin-1", "replace")
+        body = chunk[head_end + 4:]
+        # 去掉尾部的 CRLF
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+        name = ""
+        for line in headers_blob.split("\r\n"):
+            low = line.lower()
+            if low.startswith("content-disposition:"):
+                for token in line.split(";"):
+                    token = token.strip()
+                    if token.lower().startswith("filename="):
+                        name = token[len("filename="):].strip().strip('"')
+                        break
+                if not name:
+                    for token in line.split(";"):
+                        token = token.strip()
+                        if token.lower().startswith("name="):
+                            name = token[len("name="):].strip().strip('"')
+                            break
+        parts.append((name or "upload", body))
+    return parts
+
+
 @router.post("/accounts/upload")
 async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
     """豆包工作的账号导入：把上游 doubaowork2api 的账号 JSON 落到它的 accounts 目录。
@@ -1199,9 +1244,63 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
     import json as _json
 
     # 读取原始 body：不假设 multipart，前端两种都发得出来。
+    #
+    # 2026-11-20：前端 `accountsApi.upload` 实际发的是 **multipart/form-data**
+    # （字段名 `files`，可多文件），而第一版只按裸 JSON 解析 —— 真机上传必然
+    # 「上传内容不是合法 JSON」。两条路都要认：
+    #   · multipart  → 逐个 part 当 JSON 解析（每个文件一份账号，或一个数组）
+    #   · 其它       → 整体当 JSON（单个对象 / 数组 / {"accounts": [...]}）
     raw = await request.body()
     entries: List[Any] = []
-    if raw:
+    rejected: List[Dict[str, Any]] = []
+    # **不要对整条 content-type 做 .lower()**：boundary 是区分大小写的
+    # （浏览器/httpx 会生成大小写混合的随机串）。2026-11-20 踩过：
+    # 先 `.lower()` 再取 boundary，拿到的串永远匹配不上 body 里的分隔符，
+    # 于是每个 multipart 上传都返回「上传的文件里没有账号条目」。
+    ctype = request.headers.get("content-type") or ""
+    if raw and "multipart/form-data" in ctype.lower():
+        # boundary 只从**原始** ctype 里取，保持大小写原样。
+        boundary = ""
+        for part in ctype.split(";"):
+            part = part.strip()
+            if part.lower().startswith("boundary="):
+                boundary = part[len("boundary="):].strip().strip('"')
+                break
+        if not boundary:
+            return {
+                "ok": False, "uploaded": [], "added": [], "overwritten": [],
+                "rejected": [], "failed": [],
+                "message": "multipart 缺少 boundary",
+            }
+        try:
+            chunks = _split_multipart(raw, boundary)
+        except ValueError as exc:
+            return {
+                "ok": False, "uploaded": [], "added": [], "overwritten": [],
+                "rejected": [], "failed": [],
+                "message": "multipart 解析失败：%s" % exc,
+            }
+        for name, payload in chunks:
+            try:
+                parsed = _json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, _json.JSONDecodeError):
+                # 单个文件不合法不该让整批失败：记一条 rejected 继续。
+                rejected.append({"index": len(entries), "reason": "%s 不是合法 JSON" % name})
+                continue
+            if isinstance(parsed, list):
+                entries.extend(parsed)
+            elif isinstance(parsed, dict):
+                if isinstance(parsed.get("accounts"), list):
+                    entries.extend(parsed["accounts"])
+                else:
+                    entries.append(parsed)
+        if not entries and not rejected:
+            return {
+                "ok": False, "uploaded": [], "added": [], "overwritten": [],
+                "rejected": [], "failed": [],
+                "message": "上传的文件里没有账号条目",
+            }
+    elif raw:
         try:
             parsed = _json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, _json.JSONDecodeError) as exc:
@@ -1217,7 +1316,7 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
                 entries = parsed["accounts"]
             elif parsed.get("cookies") or parsed.get("sessionid"):
                 entries = [parsed]
-    if not entries:
+    if not entries and not rejected:
         return {
             "ok": False, "uploaded": [], "added": [], "overwritten": [],
             "rejected": [], "failed": [],
@@ -1238,7 +1337,6 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
 
     added: List[str] = []
     overwritten: List[str] = []
-    rejected: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     for idx, item in enumerate(entries):
         if not isinstance(item, dict):
