@@ -924,7 +924,15 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * `settingsTabFromPath` 认不出时回落到默认 Tab —— `/settings` 这一层由同级的
    * `page.tsx` 把地址换成规范路径，所以这里只是「换地址那一帧」的兜底。
    */
-  const tab: SettingsTab = settingsTabFromPath(usePathname()) ?? DEFAULT_SETTINGS_TAB;
+  const resolvedTab: SettingsTab = settingsTabFromPath(usePathname()) ?? DEFAULT_SETTINGS_TAB;
+  /**
+   * 非 WorkBuddy 平台下 `upstream` 这个 Tab 不存在（见 `tabItems` 的过滤说明），
+   * 但地址栏可能还停在 `/settings/upstream` —— 比如从 WorkBuddy 切过来、
+   * 或者直接收藏了那个地址。此时回落到 `proxy`，而不是渲染一张
+   * 满是 WorkBuddy 路径的表单。
+   */
+  const tab: SettingsTab =
+    !isWorkbuddy && resolvedTab === 'upstream' ? 'proxy' : resolvedTab;
   const independentTab = tab === 'steward' || tab === 'alerts';
 
   /**
@@ -949,11 +957,23 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     steward: {icon: <Sparkles className="h-3.5 w-3.5" />},
     alerts: {icon: <Bell className="h-3.5 w-3.5" />},
   };
-  const tabItems: SectionTabItem[] = SETTINGS_TABS.map((name) => ({
-    href: settingsTabHref(name),
-    label: t(SETTINGS_TAB_LABEL_KEYS[name]),
-    icon: TAB_META[name].icon,
-  }));
+  const tabItems: SectionTabItem[] = SETTINGS_TABS
+    // 「上游配置」Tab 只在 WorkBuddy 显示。
+    //
+    // 2026-11-20：这个 Tab 的表单来自 GET /api/settings/upstream，而那个接口
+    // 返回的是**上游 config.json 本身** —— 三个平台拿到的是同一份文件
+    // （实测 MD5 完全相同）。也就是说在豆包页面它会显示
+    //   listen: ":7863"、auth_dir: /opt/workbuddy2api/auths、
+    //   config_path: /opt/workbuddy2api/config.json
+    // 全是 WorkBuddy 的路径与端口。豆包的真实上游是
+    // http://127.0.0.1:18789（那条信息在「多上游」卡片里，是对的）。
+    // 让豆包/Trae 用户看到这张表，等于告诉他「你的上游跑在 7863」。
+    .filter((name) => isWorkbuddy || name !== 'upstream')
+    .map((name) => ({
+      href: settingsTabHref(name),
+      label: t(SETTINGS_TAB_LABEL_KEYS[name]),
+      icon: TAB_META[name].icon,
+    }));
 
   /**
    * 三份数据一次并发取。
