@@ -1193,13 +1193,18 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
             "message": "未配置豆包账号目录（QTG_DOUBAOWORK_ACCOUNTS_DIR）",
         }
 
+    # 本模块顶部没有 `import json`（只有各函数内的 `import json as _json`）。
+    # 2026-11-20：第一版直接用了裸 `json`，上传接口 500 NameError ——
+    # 与 `compat_fixes` 里那个 `Path` 未导入是同一类错误。这里显式导入。
+    import json as _json
+
     # 读取原始 body：不假设 multipart，前端两种都发得出来。
     raw = await request.body()
     entries: List[Any] = []
     if raw:
         try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            parsed = _json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, _json.JSONDecodeError) as exc:
             return {
                 "ok": False, "uploaded": [], "added": [], "overwritten": [],
                 "rejected": [], "failed": [],
@@ -1252,7 +1257,7 @@ async def compat_accounts_upload(request: Request) -> Dict[str, Any]:
         existed = target.exists()
         try:
             tmp = target.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp.write_text(_json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             tmp.replace(target)
         except OSError as exc:
             failed.append({"uid": uid, "reason": str(exc)})
