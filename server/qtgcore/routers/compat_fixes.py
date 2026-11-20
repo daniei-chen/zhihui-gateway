@@ -483,7 +483,26 @@ async def fixed_accounts(request: Request, upstream_id: Optional[int] = None) ->
         item = _map_account(rt, a)
         item["ttl_seconds"] = _ttl_seconds(rt, a)
         accounts.append(item)
+    # `all([])` 是 True —— 上游整个不可达时 `agg.health` 可能为空，于是
+    # 「已连接」被误报成 true。实测（2026-11-20）：把豆包容器 stop 掉、
+    # `/health` 连 TCP 都连不上（curl 返回 000），管理台仍然显示
+    # `connected: true` + `pool_available: true`。用户会以为「豆包是好的，
+    # 只是没有账号」，于是去查账号而不是去查容器。
+    #
+    # 判据改成：health 非空且全 up；health 为空时**显式探一次**上游存活。
     up = all(h.up for h in agg.health) if agg.health else False
+    if not agg.health:
+        _adapter = {"qoder": getattr(rt, "qoder", None),
+                    "trae": getattr(rt, "trae", None),
+                    "workbuddy": getattr(rt, "wb", None),
+                    "doubaowork": getattr(rt, "dbw", None)}.get(chosen or "")
+        _probe = getattr(_adapter, "healthz", None) if _adapter is not None else None
+        if callable(_probe):
+            try:
+                _res = await _probe()
+                up = bool(isinstance(_res, dict) and _res.get("ok"))
+            except Exception:  # noqa: BLE001 - 探针失败就是「不可达」
+                up = False
     # `accounts_dir` 必须跟着平台走。原来一律返回 qoder_data_dir：切到豆包工作时
     # 账号页拿到的是一条**指向 Qoder 目录**的路径，用它做「这个平台有没有账号目录」
     # 之类的判断就会得到错答案。
@@ -529,8 +548,23 @@ async def fixed_status(request: Request, upstream_id: Optional[int] = None) -> D
             slot["cooling"] += 1
         elif a.state in ("disabled", "expired"):
             slot["disabled"] += 1
+    # 同 `fixed_accounts`：`all([])` 是 True，上游不可达时 health 可能为空，
+    # 会把「已连接」误报成 true。health 为空时显式探一次。
+    _connected = all(h.up for h in agg.health) if agg.health else False
+    if not agg.health:
+        _ad = {"qoder": getattr(rt, "qoder", None),
+               "trae": getattr(rt, "trae", None),
+               "workbuddy": getattr(rt, "wb", None),
+               "doubaowork": getattr(rt, "dbw", None)}.get(chosen or "")
+        _p = getattr(_ad, "healthz", None) if _ad is not None else None
+        if callable(_p):
+            try:
+                _r = await _p()
+                _connected = bool(isinstance(_r, dict) and _r.get("ok"))
+            except Exception:  # noqa: BLE001
+                _connected = False
     return {
-        "connected": all(h.up for h in agg.health) if agg.health else False,
+        "connected": _connected,
         "accounts": [{"uid": a.uid, "platform": a.platform, "state": a.state,
                       "healthy": a.state == "ready", "cooling": a.state == "cooling",
                       "disabled": a.state in ("disabled", "expired")} for a in rows],
