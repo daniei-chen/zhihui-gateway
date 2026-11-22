@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
 import time
 
 from . import db, externalplatforms
@@ -24,6 +26,9 @@ TICK_SECONDS = 3600        # 积分是小时级/日级结算，一分钟一次�
 STARTUP_DELAY_SECONDS = 90
 DEFAULT_LOW_RATIO = 0.2    # 可被设置项 `credit_low_ratio` 覆盖
 CRITICAL_RATIO = 0.05
+#: WorkBuddy 账号池的「单号余额偏低」线：低于这个数就点名。
+WB_LOW_ACCOUNT = 1000
+WB_CREDIT_TIMEOUT = 90
 
 DDL = (
     "CREATE TABLE IF NOT EXISTS platform_credit_snapshots("
@@ -81,8 +86,89 @@ def _snapshot_rows() -> list:
     return rows
 
 
+def _wb_container() -> str:
+    """wb2api 容器名；没配就返回空串（本机没有 WorkBuddy 时静默跳过）。"""
+    return (os.environ.get('WB2API_CONTAINER') or '').strip()
+
+
+def _wb_pool_snapshot() -> dict | None:
+    """一次取回 WorkBuddy **整池**余额。
+
+    为什么走容器里的 `./credit`，而不是像 trae 那样逐个问上游：
+
+      · 一次 docker exec 拿 23 个账号，比 23 次独立上游请求快两个数量级；
+      · 不占用 `CREDITS_CONCURRENCY` 的名额，不会把面板的实时查询挤排队；
+      · 巡检本身不该让上游多收请求 —— 积分是钱，少打一次是一次。
+
+    只做汇总：23 个账号逐条入库，一年就是 20 万行，而趋势只需要池级数字。
+    明细放进 `raw`，需要点名某个号时仍查得到。
+
+    任何失败都返回 None，绝不抛 —— 采集挂了不该影响在线请求。
+    """
+    container = _wb_container()
+    if not container:
+        return None
+    try:
+        proc = subprocess.run(
+            ['docker', 'exec', container, 'sh', '-c',
+             'cd /app && ./credit -json 2>/dev/null'],
+            capture_output=True, timeout=WB_CREDIT_TIMEOUT, check=False)
+    except Exception as exc:  # noqa: BLE001 - 采集失败降级为「本轮跳过」
+        log.warning('workbuddy 积分采集执行失败，本轮跳过：%s', exc)
+        return None
+    if proc.returncode != 0:
+        log.warning('workbuddy 积分采集返回 %s，本轮跳过', proc.returncode)
+        return None
+    try:
+        payload = json.loads(proc.stdout.decode('utf-8', 'replace') or '{}')
+    except ValueError as exc:
+        log.warning('workbuddy 积分返回不是 JSON，本轮跳过：%s', exc)
+        return None
+    accounts = payload.get('accounts')
+    if not isinstance(accounts, list) or not accounts:
+        return None
+    total = used = remain = 0.0
+    ok_rows, failed, lows = [], [], []
+    for item in accounts:
+        if not isinstance(item, dict):
+            continue
+        if not item.get('ok'):
+            # 单个号上游拒绝（session 失效等）不影响整池统计，
+            # 但要在 raw 里留痕，否则「池子变少」会没有解释。
+            failed.append({'uid': item.get('uid'), 'nickname': item.get('nickname'),
+                           'error': str(item.get('error') or '')[:120]})
+            continue
+        size, rem, use = item.get('size'), item.get('remain'), item.get('used')
+        if not isinstance(rem, (int, float)):
+            continue
+        total += float(size or 0)
+        remain += float(rem)
+        used += float(use or 0)
+        row = {'uid': item.get('uid'), 'nickname': item.get('nickname'),
+               'remain': rem, 'used': use, 'size': size}
+        ok_rows.append(row)
+        if isinstance(rem, (int, float)) and rem < WB_LOW_ACCOUNT:
+            lows.append(row)
+    if not ok_rows:
+        return None
+    return {
+        'platform': 'workbuddy',
+        'account': 'pool',
+        'plan': '%d 个可用账号' % len(ok_rows),
+        'total': total or None,
+        'used': used or None,
+        'remain': remain,
+        'accounts_ok': len(ok_rows),
+        'accounts_failed': failed,
+        'low_accounts': lows,
+    }
+
+
 def capture_once() -> int:
     rows = _snapshot_rows()
+    wb = _wb_pool_snapshot()
+    if wb:
+        rows.append(wb)
     if not rows:
         return 0
     now = int(time.time())
@@ -97,9 +183,11 @@ def capture_once() -> int:
     return len(rows)
 
 
-def latest(platform: str = 'trae'):
+def latest(platform: str = 'trae', with_raw: bool = False):
+    cols = ('platform, account, plan, total, used, remain, captured_at'
+            + (', raw' if with_raw else ''))
     return db.query_one(
-        'SELECT platform, account, plan, total, used, remain, captured_at'
+        'SELECT ' + cols +
         ' FROM platform_credit_snapshots WHERE platform=?'
         ' ORDER BY captured_at DESC, id DESC LIMIT 1', (platform,))
 
@@ -137,6 +225,68 @@ def alerts() -> list:
         return [('account_credits_trae', True, detail)]
     return [('account_credits_trae', False,
              'trae 积分剩余 %.1f%%（阈值 %.0f%%）' % (ratio * 100, threshold * 100))]
+
+
+def workbuddy_alerts() -> list:
+    """WorkBuddy 账号池的积分告警。
+
+    与 trae 分开两个告警名：两个平台的积分体系、补充渠道、耗尽后果都不同，
+    混在一条里会让「哪一边快没了」看不出来。
+
+    池级比例看趋势，单号余额看「这一个号是不是马上要空」——
+    后者尤其重要：池子总计 15 万分时，某个号剩 600 分照样会在一次长上下文
+    请求里被打空，然后被 `skip_exhausted` 摘出池子，而总量看起来还很健康。
+    """
+    row = latest('workbuddy', with_raw=True)
+    if not row:
+        return [('account_credits_workbuddy', False, '尚无 WorkBuddy 积分快照')]
+    # `db.query_one` 返回的是 sqlite3.Row —— **它没有 .get()**，
+    # 只有下标和 .keys()。2026-11-23 首次上线时这里写成了 row.get('raw')，
+    # 采集成功、告警却在装配阶段抛 AttributeError，把后面所有告警一起跳过。
+    # 统一转成 dict，后面按下标/键取都安全。
+    row = dict(row)
+    lines = []
+    ratio = _ratio(row['remain'], row['total'])
+    if ratio is None:
+        lines.append(('account_credits_workbuddy', False,
+                      'WorkBuddy 积分口径不完整（缺 total/remain）'))
+    else:
+        threshold = low_ratio_threshold()
+        detail = ('workbuddy 池剩余 %.0f/%.0f（%.1f%%），%s'
+                  % (row['remain'] or 0, row['total'] or 0, ratio * 100,
+                     row['plan'] or '账号数未知'))
+        active = ratio < threshold
+        if ratio < CRITICAL_RATIO:
+            lines.append(('account_credits_workbuddy', True, '[即将耗尽] ' + detail))
+        elif active:
+            lines.append(('account_credits_workbuddy', True, detail))
+        else:
+            lines.append(('account_credits_workbuddy', False,
+                          'workbuddy 池剩余 %.1f%%（阈值 %.0f%%）'
+                          % (ratio * 100, threshold * 100)))
+    # 单号余额：从 raw 里取最近一次采集的明细
+    lows = []
+    try:
+        raw = json.loads(row.get('raw') or '{}') if row.get('raw') else {}
+        lows = raw.get('low_accounts') or []
+        failed = raw.get('accounts_failed') or []
+    except (ValueError, TypeError):
+        lows, failed = [], []
+    if lows:
+        names = '、'.join(str(a.get('nickname') or a.get('uid') or '?')
+                          for a in lows[:5])
+        lines.append(('workbuddy_low_accounts', True,
+                      '%d 个 WorkBuddy 账号余额低于 %d 分（%s），下一次长上下文请求就可能清零'
+                      % (len(lows), WB_LOW_ACCOUNT, names)))
+    else:
+        lines.append(('workbuddy_low_accounts', False,
+                      '所有 WorkBuddy 账号余额均高于 %d 分' % WB_LOW_ACCOUNT))
+    if failed:
+        lines.append(('workbuddy_credit_unreadable', True,
+                      '%d 个 WorkBuddy 账号余额读不到（上游拒绝）：%s'
+                      % (len(failed),
+                         '、'.join(str(a.get('nickname') or '?') for a in failed[:5]))))
+    return lines
 
 
 async def _loop() -> None:

@@ -855,6 +855,10 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         from . import credit_watch
         for _name, _active, _detail in credit_watch.alerts():
             transition(_name, _active, _detail)
+        # WorkBuddy 池的积分：与 trae 分开两条告警名（见 workbuddy_alerts 的说明）。
+        # 之前只有「账号数」告警，池子烧到只剩两成也没有信号。
+        for _name, _active, _detail in credit_watch.workbuddy_alerts():
+            transition(_name, _active, _detail)
         for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour
