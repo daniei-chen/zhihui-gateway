@@ -1017,10 +1017,17 @@ def workbuddy_alerts() -> list:
     except (ValueError, TypeError):
         lows, failed = [], []
     if lows:
-        names = '、'.join(str(a.get('nickname') or a.get('uid') or '?')
-                          for a in lows[:5])
+        # 带上余额数字：只说「低于 1000」，看不出是 990 还是 90。
+        names = '、'.join(
+            '%s %s' % (a.get('nickname') or a.get('uid') or '?',
+                       a.get('remain') if a.get('remain') is not None else '?')
+            for a in lows[:5])
+        # 每日签到给每个号 +100。只要单号日消耗低于 100，余额就会自己回升 ——
+        # 2026-11-23 实测 ì 与 慢点 的日消耗约 24 分，净增长 +76/天。
+        # 不说这一点，看告警的人会以为需要立刻处理。
         lines.append(('workbuddy_low_accounts', True,
-                      '%d 个 WorkBuddy 账号余额低于 %d 分（%s），下一次长上下文请求就可能清零'
+                      '%d 个 WorkBuddy 账号余额低于 %d 分（%s）；每日签到各 +100，'
+                      '若日消耗低于 100 会自行回升'
                       % (len(lows), WB_LOW_ACCOUNT, names)))
     else:
         lines.append(('workbuddy_low_accounts', False,
