@@ -140,6 +140,12 @@ def parse_usage(usage: object) -> Usage:
                  malformed=bad_pt or bad_ct or bad_credit)
 
 
+def _passthrough_names() -> tuple:
+    """直连上游的平台名；单一来源是 `platformpolicy.PLATFORM_SPEC`。"""
+    from .platformpolicy import passthrough_names
+    return passthrough_names()
+
+
 def route_attribution(*, entry_platform: str = '', requested_model: str | None = None,
                       resolved_model: str | None = None,
                       upstream: dict | None = None) -> dict:
@@ -163,11 +169,12 @@ def route_attribution(*, entry_platform: str = '', requested_model: str | None =
     # 直连三路（gateway._THREEWAY_SPEC）的情况：upstream.name 就是平台名。
     # 必须与 _THREEWAY_SPEC 的键保持一致，否则该平台的请求会被记成
     # workbuddy —— 「日志说的」与「实际走的」不一致，正是本函数要消除的问题。
-    if name in ('qoder', 'trae', 'doubaowork'):
+    _passthrough = _passthrough_names()
+    if name in _passthrough:
         actual, source = name, 'threeway'
     elif entry:
         actual, source = entry, 'forced'
-    elif prefix in ('qoder', 'trae', 'doubaowork'):
+    elif prefix in _passthrough:
         actual, source = prefix, 'model_prefix'
     elif upstream.get('id'):
         actual, source = 'workbuddy', 'key_upstream'

@@ -141,7 +141,9 @@ def _sessions(now):
         # 这类记录不参与任何授权决策（没有任何代码会读 doubaowork 的会话去
         # 发授权），所以跳过它即可。其余字段的类型校验保持严格：那些才真正
         # 意味着台账被写坏了。
-        if session.get('platform') not in ('qoder', 'trae'):
+        from ..platformpolicy import spec as _platform_spec
+        _s = _platform_spec(session.get('platform'))
+        if not (_s and _s.oauth_session):
             continue
         if (not isinstance(session.get('expires'), (int, float))
                 or not isinstance(session.get('owner'), str)
@@ -248,7 +250,8 @@ async def start(request, user, platform, realm, upstream_id, body):
         state = 'zh-' + secrets.token_hex(24)
         session = {'owner': user['username'], 'owner_binding': user['_authorization_binding'], 'platform': platform, 'realm': realm,
                    'engine': _engine(adapter), 'expires': now + TTL, 'status': 'starting',
-                   'mode': 'poll' if platform == 'qoder' else 'callback', 'auth_url': ''}
+                   'mode': (_platform_spec(platform).auth_mode
+                            if _platform_spec(platform) else 'callback'), 'auth_url': ''}
         session['operation_deadline'] = _operation_deadline(adapter, now)
         _save(state, session)
     try:

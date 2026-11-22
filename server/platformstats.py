@@ -17,7 +17,9 @@ MAX_COUNT = 2**53 - 1
 
 
 def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None = None) -> list[dict]:
-    if platform not in ('qoder', 'trae') or realm not in ('', 'cn', 'global'):
+    from .platformpolicy import spec as _platform_spec
+    _s = _platform_spec(platform)
+    if not (_s and _s.stats_scope) or realm not in ('', 'cn', 'global'):
         raise ValueError('invalid selected key-usage scope')
     if type(days) is not int:
         raise ValueError('invalid selected key-usage window')

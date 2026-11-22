@@ -541,14 +541,15 @@ async def build_aggregate(rt: Any, *, force: bool = False,
 
 async def build_pool_snapshot(rt: Any, platform: str, *, force: bool = False) -> Aggregate:
     """Read only the selected pool; unrelated analytics never gate account pages."""
-    if platform not in ('qoder', 'trae', 'workbuddy', 'doubaowork'):
+    from ..platformpolicy import _ACCEPTED, adapter_attr
+    if platform not in _ACCEPTED:
         raise ValueError('known pool platform required')
     from ..services.scope import fixed
     scope = fixed(platform=platform, authority='upstream')
     async def build():
         agg = Aggregate()
-        adapter = getattr(rt, {'qoder': 'qoder', 'trae': 'trae', 'workbuddy': 'wb',
-                               'doubaowork': 'dbw'}[platform], None)
+        # 适配器属性名也来自 `PLATFORM_SPEC`：此前是第二份硬编码映射。
+        adapter = getattr(rt, adapter_attr(platform), None)
         if adapter is None:
             raise UpstreamError('当前平台未启用')
         # Account data is required. A healthy /health cannot turn a failed list

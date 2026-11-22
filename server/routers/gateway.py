@@ -1381,7 +1381,8 @@ def _upstream_headers(upstream: dict | None = None) -> dict:
         # 判据必须与 `_THREEWAY_SPEC` 一致：qoder/trae/豆包工作 都是直连上游，
         # 不该收到 WorkBuddy 专属 header，也不该被打开 provider 预算逻辑。
         platform = getattr(state, 'actual_platform', None) or forced_platform.get() or up.get('name')
-        if platform not in ('qoder', 'trae', 'doubaowork'):
+        from ..platformpolicy import is_passthrough as _is_passthrough
+        if not _is_passthrough(platform):
             state.provider_budget_enabled = True
             headers['X-WB-Attempt-Budget'] = str(state.provider_attempts_remaining)
             from .. import deadline as provider_deadline
@@ -2226,7 +2227,10 @@ def _scope_models(payload: object, key: dict | None, *, platform: str = 'workbud
     # qoder/trae/豆包工作 的模型 id 不属于 workbuddy 的 cn/global realm；对它们做
     # realm 裁剪会把整张清单清空。白名单维度仍然保留（那是密钥授权）。
     # 豆包工作尤其明显：适配器的 realm 恒为空，任何 realm 过滤都会全空。
-    want = '' if platform in ('qoder', 'trae', 'doubaowork') else keysvc._norm_realm(key.get('realm'))
+    from ..platformpolicy import spec as _platform_spec
+    _plat_spec = _platform_spec(platform)
+    want = (keysvc._norm_realm(key.get('realm'))
+            if (_plat_spec is None or _plat_spec.realm_scoped) else '')
     allow = [str(x) for x in (key.get('models') or []) if str(x).strip()]
     if not want and not allow:
         return payload

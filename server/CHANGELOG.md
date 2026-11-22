@@ -3,6 +3,50 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.4.1] - 2026-11-22
+
+**平台属性的收敛版：把「有哪些平台、各自什么属性」收成一张表，加平台不用再满树找硬编码。**
+
+### 一、`PLATFORM_SPEC` 成为唯一真相
+
+此前「哪些平台」散在十余处硬编码元组里，而且彼此不一致：
+
+    qtgcore/service.py    平台快照白名单 + 引擎适配器名映射
+    routers/gateway.py    WorkBuddy 专属预算头的判据 / realm 裁剪范围
+    metering.py           路由归属（哪些上游算「直连三路」）
+    platformauth.py       授权会话台账范围 / 授权形态（回跳还是轮询）
+    platformstats.py      按密钥用量的统计范围
+    compat_stats.py       统计分支
+
+漏一处就是线上事故：实测漏掉 `qtgcore/service.py` 会让账号页直接
+`ValueError: known pool platform required`，页面全白。
+
+现在只有 `platformpolicy.PLATFORM_SPEC` 一张表，上述各处全部改为查表。
+每个平台 12 个属性：
+
+    enabled / default_grant / adapter / passthrough / realm_scoped / quota_4xx
+    auth_mode / oauth_session / qr_self_driven / stats_scope / billing / display
+
+**本版对已有平台的行为没有任何变化**，由 `server/tools/platform_selfcheck.py`
+逐项验证：判定项 × 平台名的笛卡尔积，差异必须为 0。
+
+### 二、注释与实现对齐
+
+`platformpolicy.py` 头部的说明此前停留在「只认这三个平台」之类的描述上，
+而枚举本身在 11-19 之后已经改过几轮。照着旧注释做接入一定会漏改。
+本版把注释改成描述这张表本身，不再重复列举平台个数。
+
+### 三、新增接入清单
+
+`docs/PLATFORM-ONBOARDING.md`：加一个平台要改哪些文件、哪些必改、哪些取决于
+计费与授权形态，以及验证步骤与三个已经踩过的坑。
+
+### 四、边界
+
+- 本版**没有**引入本地价格表：`credit` 仍只取上游 usage 里的 `credit` 字段。
+  不返回该字段的平台只能记 token、不扣额度。第三方 API 通常也不返回，
+  这条边界写进了 ONBOARDING 的计费一节，接入前必须先做决定。
+- 未改动任何对外行为，等价性由自检脚本与 401 项回归测试保证。
 ## [1.4.0] - 2026-11-22
 
 **平台精简与打通专版：网关从此只承载 WorkBuddy 与 Trae 两个平台，Trae 全面接入统一鉴权与账本，Qoder 正式下线。**

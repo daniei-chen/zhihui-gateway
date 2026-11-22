@@ -5,17 +5,84 @@ import json
 from contextvars import ContextVar
 from urllib.parse import quote
 
-# 2026-11-19：qoder 摘除（官方不再送积分），豆包工作顶替它的位置。
+# ── 平台属性集中在 `PLATFORM_SPEC`（2026-11-22）──────────────────────────
 #
-# **对外枚举**：UI 切换器、`/api/platforms`、`_CAP_MATRIX` 都只认这三个。
+# 此前「有哪些平台」这个事实散在 12 处硬编码元组里，彼此还不一致；加一个平台
+# 要逐个找，漏一处就是线上事故（实测漏 `qtgcore/service.py` 会让账号页直接
+# `known pool platform required`）。现在只有这一张表，其余各处从它派生。
+# 接入清单见 `docs/PLATFORM-ONBOARDING.md`。
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PlatformSpec:
+    """一个平台的静态属性。**不要在任何地方再写死平台名元组。**"""
+
+    name: str
+    enabled: bool = False          # 在营：对外枚举/UI 切换器/`/api/platforms` 只认这些
+    default_grant: bool = False    # 进 `DEFAULT_PLATFORMS`（代建/回填的保守集合）
+    adapter: str = ''              # 引擎运行时属性名 `rt.<adapter>`；空=无独立引擎
+    passthrough: bool = False      # 直连自己的上游（`_THREEWAY_SPEC` 的键集合）
+    realm_scoped: bool = True      # 受 WorkBuddy cn/global realm 裁剪
+    quota_4xx: bool = False        # 上游 4xx 可能是「账号池额度耗尽」
+    auth_mode: str = 'callback'    # `callback` 浏览器回跳 / `poll` 轮询上游会话
+    oauth_session: bool = False    # 有 OAuth 授权会话台账
+    qr_self_driven: bool = False   # 扫码由独立扫码页驱动，台账不重复 poll
+    stats_scope: bool = False      # 进「按密钥用量」统计分支
+    billing: str = 'none'          # `upstream_credit` = usage 自带 credit；`none` 不计费
+    display: str = ''              # 展示名（文案用，不参与判定）
+
+
+#: **单一真相**。顺序即对外显示顺序，也决定 `_ACCEPTED` 的顺序。
 #
-# 顺序即显示顺序：**WorkBuddy 第一**（当前主力平台，账号池最厚、在线流量最大），
-# Trae 第二，豆包工作第三（新接入，上游尚未上线）。
-#
-# 注意这跟 `compat_fixes.UPSTREAM_IDS` 的**编号**是两件事：那里 1/2/3 是
-# 外部面板的编号契约（豆包=1、Trae=2、WorkBuddy=3），**不随显示顺序重排** ——
-# 重排会让已对接的外部面板把账号归错平台。改这里只影响 UI 展示次序。
-PLATFORMS = ('workbuddy', 'trae', 'doubaowork')
+# 注意这与 `compat_fixes.UPSTREAM_IDS` 的**编号**是两件事：那里 1/2/3 是外部
+# 面板的编号契约（豆包=1、Trae=2、WorkBuddy=3），**不随显示顺序重排**。
+PLATFORM_SPEC: dict[str, PlatformSpec] = {
+    'workbuddy': PlatformSpec(
+        name='workbuddy', enabled=True, default_grant=True,
+        adapter='wb', passthrough=False, realm_scoped=True,
+        auth_mode='callback', billing='upstream_credit', display='WorkBuddy'),
+    'trae': PlatformSpec(
+        name='trae', enabled=True, default_grant=True,
+        adapter='trae', passthrough=True, realm_scoped=False, quota_4xx=True,
+        auth_mode='callback', oauth_session=True, qr_self_driven=True,
+        stats_scope=True, display='Trae'),
+    'doubaowork': PlatformSpec(
+        name='doubaowork', enabled=True, default_grant=True,
+        adapter='dbw', passthrough=True, realm_scoped=False, quota_4xx=True,
+        auth_mode='callback', qr_self_driven=True, display='Doubao Work'),
+    # 「可识别、但不可用」的历史平台：留给存量密钥/旧 users.json/迁移回填，
+    # 免得一个已不用的平台让整条鉴权链路 500。
+    'qoder': PlatformSpec(
+        name='qoder', enabled=False, adapter='qoder', passthrough=True,
+        realm_scoped=False, auth_mode='poll', oauth_session=True,
+        stats_scope=True, display='Qoder'),
+}
+
+
+def spec(name: str):
+    """按名字取平台属性；未知平台返回 None。"""
+    return PLATFORM_SPEC.get((name or '').strip().lower())
+
+
+def passthrough_names() -> tuple:
+    """直连上游的平台名（须与 `gateway._THREEWAY_SPEC` 的键一致）。"""
+    return tuple(n for n, s in PLATFORM_SPEC.items() if s.passthrough)
+
+
+def adapter_attr(name: str) -> str:
+    """引擎运行时属性名；无独立引擎返回空串。"""
+    s = spec(name)
+    return s.adapter if s else ''
+
+
+def is_passthrough(name: str) -> bool:
+    s = spec(name)
+    return bool(s and s.passthrough)
+
+
+# **对外枚举**：UI 切换器、`/api/platforms`、`_CAP_MATRIX` 都只认这些。
+PLATFORMS = tuple(n for n, s in PLATFORM_SPEC.items() if s.enabled)
 
 # **内部可解析集合**：比 `PLATFORMS` 多一个已摘除的 `qoder`。
 #
@@ -28,7 +95,7 @@ PLATFORMS = ('workbuddy', 'trae', 'doubaowork')
 # 不是「配置非法」）。
 #
 # 判断「某个平台是否还在服务」请一律用 `PLATFORMS`，不要用这个。
-_ACCEPTED = PLATFORMS + ('qoder',)
+_ACCEPTED = tuple(PLATFORM_SPEC)
 
 # 未显式声明平台时的**保守**集合：给「系统代建」路径（红包等）与历史迁移回填用。
 #
@@ -38,9 +105,9 @@ _ACCEPTED = PLATFORMS + ('qoder',)
 #
 # 新平台绝不允许自动进入这里；而任何系统代建路径都必须**显式**传本常量，
 # 否则新增平台就会静默生效——红包密钥正是这种路径（`redpacket.py` 已显式传）。
-# 2026-11-19：豆包工作加入默认授予集合，qoder 移除。
-# 顺序与 `PLATFORMS` 一致（WorkBuddy → Trae → 豆包工作）。
-DEFAULT_PLATFORMS = ('workbuddy', 'trae', 'doubaowork')
+# 从 `PLATFORM_SPEC` 派生：只有 enabled 且 default_grant 的才进。
+DEFAULT_PLATFORMS = tuple(n for n, s in PLATFORM_SPEC.items()
+                          if s.enabled and s.default_grant)
 current_platform: ContextVar[str] = ContextVar('forced_platform', default='')
 
 

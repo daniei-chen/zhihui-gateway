@@ -400,7 +400,9 @@ async def stats_by_key(request: Request, days: int = Query(default=30),
                        realm: str = Query(default="")) -> List[Dict[str, Any]]:
     """Current Manager keys, with exact recorded platform/realm attribution."""
     platform = _platform(request)
-    if platform in ('qoder', 'trae'):
+    from ...platformpolicy import spec as _platform_spec
+    _s = _platform_spec(platform)
+    if _s and _s.stats_scope:
         import sqlite3
         from starlette.concurrency import run_in_threadpool
         from ...platformstats import current_key_usage

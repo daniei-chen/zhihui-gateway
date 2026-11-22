@@ -8,7 +8,7 @@
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": true,
-  "release_id": "v1.4.0",
+  "release_id": "v1.4.1",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "43eb2d9725e982077e459366966bc616e6c2244b532bcae982b342e4f40ab57b",
@@ -20,7 +20,7 @@
     "README.en.md": "3a10c0394a223116db482b407561028f3d22acf823640e332d04fb5b7186f40d",
     "README.md": "712e21b6ac4c76e7f50955649e920cf5bfe2aacfa9ced5bd210671695bbfbfb5",
     "UPSTREAM-NOTICES.md": "ddf71fbaad6a15ecd1e7c2340da712451b4da6ff7624f316effa7e1275a9a2d0",
-    "VERSION": "78b591400c56b7b67b8cb3b2b8a8e65e9093897f02ce0878e6b5405c68620fa7",
+    "VERSION": "7d072b48526b023950e4c48db01e8c273554a6401119f5691e7589ba9bc65d9d",
     "deploy/asset_lifecycle.py": "4f4ba48947ffa619a0d5424fd9e78908b88096ff66733bf6460c668d1dd2d52e",
     "deploy/cohort_rollout.py": "bf6a76335d63dca1ed28860723eff83a4d0f56b332c3f0dc7a4fcb80cb5d2fd4",
     "deploy/create-managed-release.py": "1c647d6befd39f2204024d9f5488f9d3a1ea2be204e9fbf97485b851707d779e",
@@ -110,10 +110,10 @@
     "server/backup_application.py": "9b678a6465df9f7a222e90c4c8a412f22504980121eda81baeb3ac29db446194",
     "server/main.py": "7938617cc22f42d28dc2282091c7fb0decb324c3ae9818d8e670385f1c25e27f",
     "server/observability.py": "af881b23a9be6efc7fa060cb581c86c13cc6a98747d3e3a8b5c6772d678070f0",
-    "server/product-release.json": "fa041f12622d8ce9234395432208f9eeef5855b86104951a890f901381e9b69a",
+    "server/product-release.json": "569d406d0b8c931e5cd2913eaeeff045f9466ad7527bc94a59e6cdbb43a1c086",
     "server/relay_app.py": "7151e0f086522389d07a02b102c7e871ff8217fd79e4939e5b71337ef812913a",
     "server/rollingrelay.py": "2616a43823f1ba53888bf9a6670276d54a4e1fa78305e738b53f770de21de2ac",
-    "server/routers/gateway.py": "0024986ad5ec14c9a49a52f0d91fbf8732847a957ca9b94d29210f9b1b6670bb",
+    "server/routers/gateway.py": "5b0cff4cb6e6e6f0578c802b38a648fe2501d2d6750c379b4a4a9634ae8cd6bf",
     "server/routers/settings.py": "6686ecc8ba29b475e0e0604aa409407fa7a37151374cc9f9fb25ee91c0913871",
     "server/security.py": "e127fc326ffcd2772a599cb4b17c9c92563b5d86be628fec1d2175d1b2008ae1",
     "server/tests/test_audit_20261029_web_gate.py": "b62c4d41de274827ec6a6141fde5c6cd73660fbdbcee8e35514a787c13791df2",
@@ -142,7 +142,7 @@
     "server/tests/test_v133_release_hardening.py": "eef1b05dc0a1b8cbce0cf98541b29c0ab134c5811772551a4694ff46f05549b9",
     "server/tests/test_windows_scripts.py": "cf099bd9330375d38e9b87b7a04bf7ad668bf4046c394526e1b77ddf0c596c35",
     "server/tests/test_writer_guard_contract.py": "623e056abd0789b1ebec30f2dc5fc5598f25c53f8f3c6e84a9bbe2159bb137f5",
-    "server/writer-capabilities.json": "2c1d763f0a4458dcf550273bf44bd9d30948707cb9a8bfc2c92c7031a8e46d13",
+    "server/writer-capabilities.json": "826b48a0a3c34174bcd21a67e7e0aa3d47253f4b885f9471e4d54f5cd9f39855",
     "tools/ci_regression.py": "895f817314fe1aa40fad08e0ea26fedec0110b3bd190aa905d9dcaf39a92dd58",
     "web/app/(main)/settings/layout.tsx": "553c7150bc0b3c854d472f0c0db2b7dc829682008b423a05397f2594eba75712",
     "web/components/common/settings/ResetPasswordDialog.tsx": "9a219ecbaf704d72a6ddbbec7ae86e33f17855366f476dacd6632ef1cb2d4a61",
@@ -153,7 +153,7 @@
     "web/lib/i18n/locales/zh-TW.json": "1b6a38affe6a128adfe3812db297415bf1a008b36f42ac13c29ffe2b2d72f322",
     "web/lib/managed-user-password.test.mjs": "8e8fbeb8f93ef297bf3a4763cc0be3e05e6fd2bea1148d89606a574a3bec8d9c",
     "web/lib/managed-user-password.ts": "373c934f72ccbc0a3739ca37c16de657499c6147fb1bbeec5a3198617a65f3b0",
-    "web/lib/product.ts": "b02fc3bde4edc7597f73b9a127076b044beb88273a8b6e6b931d2edab2515e12",
+    "web/lib/product.ts": "6fdee2c165d7b5c6bc48ba6da907d1ab4399e634e3507f49817762730569174a",
     "web/package-lock.json": "a931e6ab6c6b8caa81d4ecbf9a5df02f861a47c42da6cd7db29b955ada10c7ca",
     "web/tests/reliability.test.cjs": "fb0a036b88bc98d313da66bbe461f2d8a2f7318c14ab2648795dd619d8eb02c4"
   },
@@ -162,5 +162,5 @@
   "source_commit": "d4c4f50fd0a5567fc29b8500c91034d71c886322",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
-  "version": "1.4.0"
+  "version": "1.4.1"
 }
