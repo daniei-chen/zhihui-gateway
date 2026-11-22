@@ -306,15 +306,29 @@ def usage_credit_rate(days: int = 7) -> dict | None:
         return None
     if not rows or len(rows) < 2:
         return None
-    total = 0.0
+    daily = []
     for row in rows:
         units = row['units']
-        if isinstance(units, (int, float)):
-            total += float(units) / CREDIT_UNITS_SCALE
-    if total <= 0:
+        if isinstance(units, (int, float)) and float(units) > 0:
+            daily.append(float(units) / CREDIT_UNITS_SCALE)
+    if not daily:
         return None
-    return {'per_day': total / len(rows), 'total': total,
-            'days': len(rows), 'samples': sum(int(r['n'] or 0) for r in rows)}
+    total = sum(daily)
+    mean = total / len(daily)
+    # 中位数做主口径：2026-11-16/17 两天各有约 5000 分的峰值（那两天 prompt
+    # 平均 22 万 token，是压测/大批量导入的形态），把平均数抬到 1921，
+    # 得出「只剩 40 天」；而最近三天稳定在 500~1900。用平均值会让一次突发
+    # 长期污染预判，中位数对这种尖峰不敏感。
+    ordered = sorted(daily)
+    mid = len(ordered) // 2
+    median = (ordered[mid] if len(ordered) % 2
+              else (ordered[mid - 1] + ordered[mid]) / 2.0)
+    recent = daily[-3:]
+    return {'per_day': median, 'per_day_mean': mean,
+            'per_day_recent': sum(recent) / len(recent),
+            'median': median, 'total': total, 'days': len(daily),
+            'peak': max(daily),
+            'samples': sum(int(r['n'] or 0) for r in rows)}
 
 
 def consumption_rate(platform: str = 'workbuddy', days: int = 14,
@@ -402,8 +416,12 @@ def workbuddy_alerts() -> list:
             detail += '；近 %d 天无用量' % _rate['days']
         else:
             _days = (row['remain'] or 0) / _rate['per_day']
-            detail += ('；按近 %d 天 token 计价（%.0f 分/天，上界）约可撑 %.0f 天'
-                       % (_rate['days'], _rate['per_day'], _days))
+            # 三个数字一起给：中位数（主口径）、峰值日（说明最坏情况）、
+            # 近三天（说明当前节奏）。只报一个数会让人误以为它是确定的。
+            detail += ('；按近 %d 天用量中位数 %.0f 分/天约可撑 %.0f 天'
+                       '（峰值日 %.0f 分，近三天 %.0f 分/天）'
+                       % (_rate['days'], _rate['per_day'], _days,
+                          _rate.get('peak') or 0, _rate.get('per_day_recent') or 0))
         active = ratio < threshold
         if ratio < CRITICAL_RATIO:
             lines.append(('account_credits_workbuddy', True, '[即将耗尽] ' + detail))
