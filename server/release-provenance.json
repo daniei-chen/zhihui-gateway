@@ -93,7 +93,7 @@
     "docs/images/readme/button-release-v1.2.24.svg": "efe9d0bc711b048cde188995d292600695bb77c962016fed094a33fa413f395f",
     "docs/images/readme/button-release-v1.2.25.svg": "d81ccaaffac1d8edc6118a4354221271dd4f3eaad0b91bee5637700f6b7b42a4",
     "docs/images/readme/manifest.json": "0ed8ec78d72d83001955d5f7220871a68db83e680ec10e4b51c796fd7d59fd0b",
-    "docs/protected-customizations.json": "8c4e40bd34195347fb3880ed13c6443d7558706e81e24961fbcc7515228c192f",
+    "docs/protected-customizations.json": "3c889a4a7acfdd810c8662ec95b2ae2528bebc41de907a21e982583bd36d82d7",
     "docs/release-signing.md": "d19398b8a64be22bf1b79861e673e4df1e4bd11b79f7dfc47f0e71a3d839e191",
     "ops/container-maintenance/maintenance.py": "1e779cd8772ebd2a91ac6f4cb23a4dacb0399a8729c2a3415faca6feeab41d70",
     "ops/writer-guard/host-files.json": "3a2c079e127600a49f0d78e7e18d1c12128dac949b03dd6516da01ac829f753f",
