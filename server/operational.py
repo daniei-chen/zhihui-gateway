@@ -859,6 +859,10 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # 之前只有「账号数」告警，池子烧到只剩两成也没有信号。
         for _name, _active, _detail in credit_watch.workbuddy_alerts():
             transition(_name, _active, _detail)
+        # 凭证过期：23 个账号是同一批登录的，到期时刻几乎相同 —— 失效是
+        # 「某天集体掉线」而不是慢慢变少，必须提前看日期。
+        for _name, _active, _detail in credit_watch.account_token_alerts():
+            transition(_name, _active, _detail)
         for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour

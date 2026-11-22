@@ -407,6 +407,80 @@ def consumption_rate(platform: str = 'workbuddy', days: int = 14,
             'span_hours': span / 3600.0, 'samples': len(rows)}
 
 
+def account_token_alerts(days_warn: int = 7) -> list:
+    """账号登录凭证的过期预警。
+
+    为什么单独做一条：实测 23 个账号是**同一批登录**的，到期时刻几乎相同
+    （2026-12-20 06:00）。这意味着失效不是「慢慢变少」，而是**某天集体掉线**
+    —— 没有任何渐进信号，只能提前看日期。
+
+    只读账号文件里的 `expiresAt`，不触发任何上游请求，也不改文件。
+    读不到就当作未知，不猜。
+    """
+    from pathlib import Path
+
+    auth_dir = Path(os.environ.get('WB_AUTH_DIR') or '/opt/workbuddy2api/auths')
+    if not auth_dir.is_dir():
+        return [('workbuddy_token_expiry', False,
+                 '账号目录不可读（%s），跳过凭证检查' % auth_dir)]
+    now = time.time()
+    expired, soon, unknown, total = [], [], 0, 0
+    try:
+        paths = sorted(auth_dir.glob('workbuddy-*.json'))
+    except OSError as exc:
+        return [('workbuddy_token_expiry', False,
+                 '账号目录读取失败：%s' % exc)]
+    for path in paths:
+        total += 1
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            unknown += 1
+            continue
+        auth = raw.get('auth') if isinstance(raw, dict) else None
+        exp = auth.get('expiresAt') if isinstance(auth, dict) else None
+        nick = ((raw.get('account') or {}).get('nickname')
+                if isinstance(raw, dict) else None) or path.stem[-8:]
+        if not isinstance(exp, (int, float)) or exp <= 0:
+            unknown += 1
+            continue
+        # 上游给的是秒；万一出现毫秒也能兜住。
+        if exp > 1e11:
+            exp = exp / 1000.0
+        days = (exp - now) / 86400.0
+        if days <= 0:
+            expired.append(str(nick))
+        elif days <= days_warn:
+            soon.append((str(nick), days))
+    if expired:
+        return [('workbuddy_token_expiry', True,
+                 '%d 个账号凭证**已过期**（%s），这些号已无法使用'
+                 % (len(expired), '、'.join(expired[:5])))]
+    if soon:
+        soon.sort(key=lambda x: x[1])
+        return [('workbuddy_token_expiry', True,
+                 '%d 个账号凭证将在 %d 天内过期（最近：%s 剩 %.1f 天）'
+                 % (len(soon), days_warn, soon[0][0], soon[0][1]))]
+    if not total:
+        return [('workbuddy_token_expiry', False, '账号目录为空')]
+    days_left = []
+    for path in paths:
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            exp = ((raw.get('auth') or {}).get('expiresAt'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(exp, (int, float)) and exp > 0:
+            if exp > 1e11:
+                exp = exp / 1000.0
+            days_left.append((exp - now) / 86400.0)
+    if not days_left:
+        return [('workbuddy_token_expiry', False, '凭证过期时间不可读')]
+    return [('workbuddy_token_expiry', False,
+             '%d 个账号凭证正常，最近一批约 %.0f 天后到期'
+             % (total, min(days_left)))]
+
+
 def workbuddy_alerts() -> list:
     """WorkBuddy 账号池的积分告警。
 
