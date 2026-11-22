@@ -1407,6 +1407,13 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
                 item['usage_today'] = credit_watch.usage_today(name)
             except Exception:  # noqa: BLE001
                 item['usage_today'] = None
+            # 今天签到办成了没有：成功 / 早就签过 / 失败，三个数分开。
+            # 名字用 checkin_summary 而不是 checkin_today —— 后者在账号对象上
+            # 已经表示「这个号今天签没签」（布尔/时间），层级不同但同名容易看混。
+            try:
+                item['checkin_summary'] = credit_watch.checkin_today_summary()
+            except Exception:  # noqa: BLE001
+                item['checkin_summary'] = None
             # 与上一条快照的差额：+N 基本就是签到/活动补进来的，-N 是真实消耗。
             # 这是回答「昨晚签到到底有没有生效」最直接的字段。
             item['usage_rate'] = usage_rate

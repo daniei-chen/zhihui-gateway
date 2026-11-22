@@ -493,6 +493,45 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
     return written
 
 
+def checkin_today_summary() -> dict | None:
+    """今天签到结果的汇总：多少个成功、多少失败、多少是「今天已签过」。
+
+    数据来自本端签到记录（含从上游日志同步来的那些）。`already` 单独计数，
+    因为「本次新签到拿到积分」和「今天早就签过了」对运维是两个不同的事实 ——
+    前者说明签到真的跑了，后者只能说明「今天这件事已经办过」。
+
+    今天还没有任何记录时返回 None（不是全 0 —— 「还没签」和「签了但都失败」
+    得区分开）。
+    """
+    now = time.time()
+    local = time.localtime(now)
+    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
+                                 0, 0, 0, 0, 0, -1)))
+    try:
+        rows = db.query(
+            'SELECT success, message FROM checkin_logs'
+            ' WHERE ts>=? AND kind=? ORDER BY ts DESC', (day_start, 'checkin'))
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    success = failed = already = 0
+    failed_names = []
+    for row in rows:
+        msg = str(row['message'] or '').lower()
+        if row['success']:
+            if 'already' in msg:
+                already += 1
+            else:
+                success += 1
+        else:
+            failed += 1
+            if len(failed_names) < 5:
+                failed_names.append(str(row['message'] or '')[:60])
+    return {'total': len(rows), 'success': success, 'already': already,
+            'failed': failed, 'failed_samples': failed_names}
+
+
 def usage_today(platform: str = 'workbuddy') -> dict | None:
     """今天到目前为止的积分用量，以及**昨日同一时刻**的用量。
 
