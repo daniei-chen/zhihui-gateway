@@ -47,8 +47,10 @@ PLATFORM_SPEC: dict[str, PlatformSpec] = {
         adapter='trae', passthrough=True, realm_scoped=False, quota_4xx=True,
         auth_mode='callback', oauth_session=True, qr_self_driven=True,
         stats_scope=True, display='Trae'),
+    # 2026-11-22：豆包工作下线（与生产一致）。保留在表里 = 「可识别、但不可用」：
+    # 存量密钥/旧 users.json 里可能还写着它，直接删会让鉴权链路 500。
     'doubaowork': PlatformSpec(
-        name='doubaowork', enabled=True, default_grant=True,
+        name='doubaowork', enabled=False, default_grant=False,
         adapter='dbw', passthrough=True, realm_scoped=False, quota_4xx=True,
         auth_mode='callback', qr_self_driven=True, display='Doubao Work'),
     # 「可识别、但不可用」的历史平台：留给存量密钥/旧 users.json/迁移回填，

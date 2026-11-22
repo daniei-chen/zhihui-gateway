@@ -56,9 +56,9 @@ def main() -> int:
         "adapter": pp.adapter_attr,
     }
     expect = {
-        "PLATFORMS set": set(pp.PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
+        "PLATFORMS set": set(pp.PLATFORMS) == {"workbuddy", "trae"},
         "_ACCEPTED set": set(pp._ACCEPTED) == {"workbuddy", "trae", "doubaowork", "qoder"},
-        "DEFAULT_PLATFORMS": set(pp.DEFAULT_PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
+        "DEFAULT_PLATFORMS": set(pp.DEFAULT_PLATFORMS) == {"workbuddy", "trae"},
         "passthrough_names": set(pp.passthrough_names()) == {"trae", "doubaowork", "qoder"},
     }
     bad = 0
