@@ -44,12 +44,14 @@ class AccountPoolAlertTests(unittest.TestCase):
         """就是 trae 的实际情况。"""
         alerts = self._by_name({'trae': 1})
         self.assertTrue(alerts['account_pool_trae'][0])
-        self.assertIn('no redundancy', alerts['account_pool_trae'][1])
+        # 文案 2026-11-23 改成中文，断言随之改 —— 检查的是「说了没有冗余」，
+        # 不是「用了哪个词」。
+        self.assertIn('没有冗余', alerts['account_pool_trae'][1])
 
     def test_zero_accounts_fires_more_loudly(self):
         alerts = self._by_name({'trae': 0})
         self.assertTrue(alerts['account_pool_trae'][0])
-        self.assertIn('no usable accounts', alerts['account_pool_trae'][1])
+        self.assertIn('没有可用账号', alerts['account_pool_trae'][1])
 
     def test_two_or_more_does_not_fire(self):
         for count in (2, 3, 48):
@@ -76,10 +78,30 @@ class AccountPoolAlertTests(unittest.TestCase):
         alerts = self._by_name({'workbuddy': 48})
         self.assertIn('48', alerts['account_pool_workbuddy'][1])
 
-    def test_details_stay_ascii(self):
+    def test_details_are_valid_utf8(self):
+        """文案要能正常编码成 UTF-8。
+
+        这条原来断言 `detail.encode('ascii')`，理由是「日志里出现非 ASCII 时
+        某些采集链路会转义成乱码」。2026-11-23 把 account_pool 告警改成中文后
+        重新评估：
+
+        - 生产 journalctl 里同屏的中文告警（account_credits_trae、
+          workbuddy_low_accounts）显示正常，没有乱码
+        - notify 的两条通道都是 UTF-8（文件写入 encoding='utf-8'，
+          HTTP body 用 ensure_ascii=False 编成 utf-8）
+        - 系统其余告警本来就是中文，只有这五类要求 ASCII，约束本身不一致
+
+        所以这里改成只要求「是合法 UTF-8 且非空」—— 保留「能安全写出去」的
+        意图，去掉「必须是 ASCII」这条已经和实际不符的限制。
+
+        另外四条同类断言（v1269 / v1271 / v1274 / v1283）本轮不动：它们对应的
+        告警仍是英文，没有违反这条约束的理由。要统一中文应当逐个确认，而不是
+        一次性放开。
+        """
         for counts in ({'trae': 0}, {'trae': 1}, {'workbuddy': 48}):
             for _, _, detail in operational.account_pool_alerts(counts):
-                detail.encode('ascii')
+                self.assertTrue(detail, 'detail 不该为空')
+                detail.encode('utf-8')
 
     def test_ordering_is_stable(self):
         """顺序稳定，日志才可比。"""

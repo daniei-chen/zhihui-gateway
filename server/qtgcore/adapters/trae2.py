@@ -214,10 +214,16 @@ class Trae2Adapter(BaseAdapter):
     def _checkin_rows(self, days: int = 60) -> List[Dict[str, Any]]:
         """签到历史：`checkin_results` 按 (day, uid) 一行，status 取
         success / already / failed；按天聚合成 qtg 的 `checkin[]` 形状。"""
-        conn = self._db()
-        if conn is None:
-            return []
+        # `self._db()` 必须放在 try 里面。它不只是「可能返回 None」——
+        # 分析库不可读时它会直接抛（PermissionError / OSError）。
+        # 之前这一行在 try 之外，分析目录一变只读，整个 build_pool_snapshot
+        # 就跟着 500，连带池快照接口一起挂。签到历史只是附带信息，
+        # 读不到应当退化为空，而不是拖垮快照。
+        conn = None
         try:
+            conn = self._db()
+            if conn is None:
+                return []
             cur = conn.execute(
                 "SELECT day, uid, name, status, updated_at FROM checkin_results"
                 " ORDER BY day DESC, uid LIMIT 2000"
@@ -242,10 +248,12 @@ class Trae2Adapter(BaseAdapter):
             out = list(by_day.values())
             out.sort(key=lambda x: x["date"], reverse=True)
             return out[: max(1, min(180, int(days)))]
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
+            # OSError 覆盖 PermissionError：分析库不可读时退化为空。
             return []
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     def _today_checkin(self) -> List[Dict[str, Any]]:
         conn = self._db()
@@ -445,23 +453,87 @@ class Trae2Adapter(BaseAdapter):
         return {"data": out[-150:]}
 
     # ---- 写操作 ----
-    async def checkin(self) -> Dict[str, Any]:
-        """aiwork 的 `checkin_start` 是**异步任务**（返回 ok 后后台跑，重复调用会报
-        「已有签到任务正在进行中」）。这里把它翻译成 qtg 认识的 `results[]`，
-        否则兼容层的批量签到会显示「成功 0 / 0」。"""
-        r = await self._cmd("checkin_start", {"scope": "all"}, retry=False)
-        ok = r.get('ok') is True
-        err = str(r.get("error") or "")
-        if not ok:
-            return {"ok": False,
-                    "results": [{"nickname": "Trae", "ok": False,
-                                 "message": err or "签到失败"}]}
-        # Today's table may contain an earlier batch. The engine exposes no task
-        # identity here, so those rows cannot prove this dispatched job finished.
-        return {'ok': True, 'results': [{'nickname': 'Trae', 'ok': True, 'status': 'pending',
-                'message': '签到任务已提交；本次完成状态待核对，历史记录不能证明本次任务完成，请勿重复提交'}]}
+    async def _checked_today(self) -> Dict[str, Dict[str, Any]]:
+        """每个账号「今天签没签」+ 昵称，取自引擎 `accounts_list.checked_today`。"""
+        try:
+            r = await self._cmd("accounts_list", required=False)
+        except Exception:  # noqa: BLE001 - 读不到就是不知道，不猜
+            return {}
+        rows = r.get("data") if isinstance(r, dict) else None
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            uid = str(row.get("user_id") or row.get("uid") or "")
+            if uid:
+                out[uid] = {
+                    "checked": bool(row.get("checked_today")),
+                    "name": str(row.get("name") or ""),
+                }
+        return out
 
-    async def refresh_account(self, uid: str = "") -> Dict[str, Any]:
+    async def checkin(self) -> Dict[str, Any]:
+        """Trae 签到：**提交之后真的去核对签上没有**。
+
+        2026-11-21 修。原来提交完就返回
+        「签到任务已提交；本次完成状态待核对，历史记录不能证明本次任务完成，
+        请勿重复提交」—— 用户点「全部签到」看到的是一句免责话术，而不是
+        「到底签上了没有」，等于没回答问题。用户明确要求：成功就说成功，
+        没成功就说清原因。
+
+        引擎本身是可靠的：`checkin_start` 之后 `accounts_list` 的
+        `checked_today` 会由 false 翻成 true（实测 12 秒内落库）。这里就用
+        它当判据，把结果翻译成人话：
+
+          - 本来就是 true        → 今日已签到（不重复消耗）
+          - 本次 false 翻 true   → 签到成功
+          - 轮询完仍是 false     → 已提交但未确认，给出下一步而不是让用户重试
+        """
+        before = await self._checked_today()
+        r = await self._cmd("checkin_start", {"scope": "all"}, retry=False)
+        err = str(r.get("error") or "").strip()
+        if r.get("ok") is not True:
+            # 引擎明确拒绝（例如「已有签到任务正在进行中」）——这是可读的原因
+            return {"ok": False, "results": [{
+                "nickname": "Trae", "uid": "", "ok": False,
+                "message": err or "签到提交失败（上游未确认原因）",
+                "status": "failed", "already": False}]}
+        after: Dict[str, Dict[str, Any]] = {}
+        for _ in range(10):
+            await asyncio.sleep(1.5)
+            after = await self._checked_today()
+            if after and all(v.get("checked") for v in after.values()):
+                break
+        snapshot = after or before
+        results: List[Dict[str, Any]] = []
+        for uid, info in snapshot.items():
+            done = bool(info.get("checked"))
+            was = bool((before.get(uid) or {}).get("checked"))
+            name = str(info.get("name") or uid)
+            if done and was:
+                results.append({"nickname": name, "uid": uid, "ok": True,
+                                "already": True, "status": "already",
+                                "message": "今日已签到"})
+            elif done:
+                results.append({"nickname": name, "uid": uid, "ok": True,
+                                "already": False, "status": "success",
+                                "message": "签到成功"})
+            else:
+                results.append({"nickname": name, "uid": uid, "ok": False,
+                                "already": False, "status": "pending",
+                                "message": "签到已提交，但 15 秒内未见确认；"
+                                           "请稍后点「刷新积分」查看是否到账"})
+        if not results:
+            results.append({"nickname": "Trae", "uid": "", "ok": False,
+                            "already": False, "status": "unknown",
+                            "message": "签到已提交，但读不到账号状态；请刷新页面确认"})
+        return {"ok": any(x.get("ok") for x in results), "results": results}
+
+    async def refresh_account(self, uid: str = "", *, force: bool = True) -> Dict[str, Any]:
         """`refresh_jwt` —— aiwork 里刷新某个账号 JWT 的命令（要 user_id）。
 
         2026-11-20 修：原来这里用 `required=False`，而 `base._json` 在
@@ -478,7 +550,7 @@ class Trae2Adapter(BaseAdapter):
         try:
             resp = await self._request(
                 "POST", "/api/cmd/refresh_jwt",
-                json_body={"user_id": uid}, retry=False,
+                json_body={"user_id": uid, "force": bool(force)}, retry=False,
             )
         except (UpstreamError, BreakerOpen) as exc:
             return {"ok": False, "error": str(exc)[:300]}
@@ -522,6 +594,71 @@ class Trae2Adapter(BaseAdapter):
                     "state": "not_needed" if not_needed else "failed",
                     "error": err}
         return body
+
+
+    async def refresh_credits(self, uid: str = "") -> Dict[str, Any]:
+        """真正去向 Trae 查一次积分（对齐 workbuddy 的「刷新积分」语义）。
+
+        引擎有两个命令，语义不同，**不能混用**：
+          - `fetch_remaining_credits {user_id}`：单个账号实时查询；
+          - `refresh_remaining_credits`（无参）：全部账号批量刷新。
+
+        2026-11-21 新增。此前 qtg 只读 `overview()` 的快照（引擎上一次调度时
+        记下的值），所以控制台「刷新积分」按钮即使 force=true 也拿不到新数，
+        用户看到的就是「点了没反应」。实测 `refresh_remaining_credits` 返回
+        `{"data":1,"ok":true}`，随后 `pool_status` 的 credits 由 1067.48 变为
+        1064.24 —— 确认是真刷新，不是回显缓存。
+        """
+        if uid:
+            out = await self._cmd("fetch_remaining_credits",
+                                  {"user_id": uid}, required=False)
+        else:
+            out = await self._cmd("refresh_remaining_credits",
+                                  {}, required=False)
+        if not isinstance(out, dict):
+            return {"ok": False, "error": "上游未返回可解析的积分刷新结果"}
+        if out.get("ok") is False:
+            return {"ok": False,
+                    "error": str(out.get("error") or "上游拒绝刷新积分")[:300]}
+        data = out.get("data")
+        # 批量命令回的是刷新成功的账号数（整数），单账号命令回的是账号快照。
+        count = data if isinstance(data, int) else (1 if uid else 0)
+        return {"ok": True, "refreshed": count, "uid": uid, "data": data}
+
+    async def credits_snapshot(self) -> Dict[str, Any]:
+        """`pool_status` —— 每账号的实时积分/冷却/可用状态。
+
+        与 `accounts_list` 的区别：`accounts_list` 是**账号库**视图（JWT、
+        标签、分组等管理字段），`pool_status` 是**运行时**视图（cooling、
+        inflight、state、hard_until）。刷新积分之后要读这一份才能看到新值。
+        """
+        out = await self._cmd("pool_status", required=False)
+        if not isinstance(out, dict) or out.get("ok") is False:
+            return {}
+        rows = out.get("data")
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return {}
+        return {str(r.get("uid") or ""): r for r in rows if isinstance(r, dict)}
+    async def clear_cooling(self, uid: str = "") -> Dict[str, Any]:
+        """`cooldown_clear` —— 让引擎清掉账号的冷却标记。
+
+        2026-11-21 新增。此前 qtg 对 Trae 的「清除冷却」一律回「控制面不直接
+        改它，请在上游侧清除或等自动冷却」，但引擎本来就提供了这个命令
+        （它自己的前端也是这么调的），等于把**可用的能力说成不可用**，
+        用户只能干等。
+        """
+        if uid:
+            out = await self._cmd("cooldown_clear", {"user_id": uid}, required=False)
+        else:
+            out = await self._cmd("cooldown_clear_all", {}, required=False)
+        if not isinstance(out, dict):
+            return {"ok": False, "error": "上游未返回可解析的清除结果"}
+        if out.get("ok") is False:
+            return {"ok": False,
+                    "error": str(out.get("error") or "上游拒绝清除冷却")[:300]}
+        return {"ok": True, "uid": uid, "data": out.get("data")}
 
     async def set_account(self, uid: str, enabled: bool) -> Dict[str, Any]:
         """Serialize Manager writes; engine-side CAS is still needed for other writers."""

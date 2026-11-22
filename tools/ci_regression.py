@@ -41,6 +41,12 @@ MODULES = (
     "server.tests.test_credits_snapshot",
     "server.tests.test_checkin_logs_realm",
     "server.tests.test_v1294_snapshot_age",
+    # 这两条 2026-11-23 跑出来是失败的，暴露了一个真实缺陷：
+    # trae2._checkin_rows() 把 self._db() 写在 try 外面，分析库变成只读时
+    # 会抛 PermissionError 直接掀翻 build_pool_snapshot，连带池快照接口 500。
+    # 已修（conn 进 try、except 加 OSError、finally 判空），并收进清单防止复发。
+    "server.tests.test_pool_snapshot_history_isolation",
+    "server.tests.test_v1277_account_pool_alerts",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",
     "server.tests.test_audit_gateway_boundaries",
