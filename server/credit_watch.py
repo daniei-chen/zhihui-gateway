@@ -561,6 +561,41 @@ def checkin_today_summary() -> dict | None:
 CHECKIN_FALLBACK_HOUR = 6
 
 
+#: 上游签到脚本的输出是表格，不是 `checkin xx: done` 那种日志行：
+#:
+#:   uid                                  | nick   | status  | remain | detail
+#:   032d2815-1dbf-47f5-acb0-dcff9f3ce973 | 黑木   | OK      | 3992   | ...
+#:   total=23 ok=22 already=0 fail=1
+#:
+#: v1.5.15 第一次实现时按 `checkin ` 前缀统计，结果永远是「0 行」——
+#: 签到其实成功了（余额 +2200），但记录一条都没落库。
+_SIGNIN_ROW = re.compile(
+    r'^(?P<uid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+    r'\s*\|\s*(?P<nick>[^|]*?)\s*\|\s*(?P<status>[A-Za-z]+)\s*\|'
+    r'\s*(?P<remain>\d+)?')
+
+
+def _parse_signin_output(text: str) -> list:
+    """把签到脚本的表格输出解析成记录列表。
+
+    返回 [{'uid', 'nickname', 'status', 'remain'}]；解析不出的行跳过。
+    """
+    rows = []
+    seen = set()
+    for line in text.splitlines():
+        hit = _SIGNIN_ROW.match(line)
+        if not hit:
+            continue
+        uid = hit.group('uid')
+        if uid in seen:
+            continue
+        seen.add(uid)
+        rows.append({'uid': uid, 'nickname': (hit.group('nick') or '').strip(),
+                     'status': (hit.group('status') or '').upper(),
+                     'remain': hit.group('remain')})
+    return rows
+
+
 def checkin_fallback(now: float | None = None) -> dict | None:
     """兜底签到：确认今天一笔都没签成时，主动跑一次上游签到脚本。
 
@@ -604,11 +639,28 @@ def checkin_fallback(now: float | None = None) -> dict | None:
         out = (proc.stdout or b'').decode('utf-8', 'replace')
     except Exception:  # noqa: BLE001
         out = ''
-    ok_lines = sum(1 for line in out.splitlines() if 'checkin ' in line)
-    log.warning('兜底签到已执行（退出码 %s，%d 行结果），因为今天没有任何签到记录',
-                proc.returncode, ok_lines)
-    return {'ran': True, 'returncode': proc.returncode,
-            'lines': ok_lines, 'output_tail': out[-600:]}
+    rows = _parse_signin_output(out)
+    written = 0
+    for item in rows:
+        status = item['status']
+        # OK = 本次签到成功；ALREADY = 今天已签过。两者对「今天签没签」都是肯定。
+        success = status in ('OK', 'ALREADY')
+        detail = '兜底签到：' + status + ((' remain=' + item['remain'])
+                                         if item['remain'] else '')
+        try:
+            db.add_checkin_log(item['uid'], item['nickname'], 'fallback',
+                               success, None, detail[:120])
+            written += 1
+        except Exception:  # noqa: BLE001
+            log.warning('兜底签到记录写入失败 uid=%s', item['uid'])
+    ok_count = sum(1 for i in rows if i['status'] == 'OK')
+    already_count = sum(1 for i in rows if i['status'] == 'ALREADY')
+    log.warning('兜底签到已执行（退出码 %s）：解析 %d 行，ok=%d already=%d，'
+                '写入签到记录 %d 条', proc.returncode, len(rows),
+                ok_count, already_count, written)
+    return {'ran': True, 'returncode': proc.returncode, 'parsed': len(rows),
+            'ok': ok_count, 'already': already_count, 'written': written,
+            'output_tail': out[-600:]}
 
 
 def _local_utc_offset_hours() -> int:
