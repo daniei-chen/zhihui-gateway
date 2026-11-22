@@ -140,7 +140,9 @@ class BilingualReadmeTest(unittest.TestCase):
         行数不变、路径也还在，用户照着敲就是错的。这里连方法一起比。
         """
         cn, en = _api_table_rows(self.cn), _api_table_rows(self.en)
-        self.assertGreater(len(cn), 5, '接口表没解析出来（选择器失效，守卫会变成空转）')
+        # 门槛是「能证明把表格解析出来了」，不是「表格必须足够大」。
+        # 2026-11-23 移除 Qoder 后只剩 5 行，原来的 `> 5` 反而误报成解析失败。
+        self.assertGreater(len(cn), 3, '接口表没解析出来（选择器失效，守卫会变成空转）')
         only_cn = [r for r in cn if r not in en]
         only_en = [r for r in en if r not in cn]
         self.assertEqual((only_cn, only_en), ([], []),

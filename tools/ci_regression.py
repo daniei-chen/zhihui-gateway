@@ -29,6 +29,10 @@ MODULES = (
     "server.tests.test_readme_i18n",
     "server.tests.test_docs_packaging",
     "server.tests.test_release_integrity",
+    # 这条一直没被门禁跑过。2026-11-23 单独跑它时发现早就失败了 ——
+    # `reviewed_patch_files` 里 145 个 hash 停在 v1.3.3，之后每次改文件都没更新。
+    # 测试存在但不运行，比没有测试更糟：它让人以为这块有保障。
+    "server.tests.test_release_provenance_integrity",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",
     "server.tests.test_audit_gateway_boundaries",
