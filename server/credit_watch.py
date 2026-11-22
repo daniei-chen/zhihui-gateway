@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 
@@ -226,6 +227,13 @@ def capture_once() -> int:
              row['used'], row['remain'], now,
              json.dumps(row, ensure_ascii=False)))
     _prune(now)
+    # 上游自动签到的结果只在容器日志里。每小时采集顺带同步一次，
+    # 面板上的「今日签到」才不会一直显示未签到（用户明明签过了）。
+    # 失败只跳过：这是展示层补齐，不该影响采集本身。
+    try:
+        sync_checkin_from_logs()
+    except Exception:  # noqa: BLE001
+        log.warning('签到记录同步失败（不影响采集）', exc_info=True)
     return len(rows)
 
 
@@ -405,6 +413,84 @@ def consumption_rate(platform: str = 'workbuddy', days: int = 14,
                 'samples': len(rows)}
     return {'per_day': consumed / (span / 86400.0), 'consumed': consumed,
             'span_hours': span / 3600.0, 'samples': len(rows)}
+
+
+#: 上游调度器打印的签到结果形如 `checkin 昵称(uid前8): done`。
+#: 这里只认这个形状；对不上就跳过，不去猜别的格式。
+_CHECKIN_LINE = re.compile(
+    r'checkin\s+(?P<name>\S+?)\((?P<uid8>[0-9a-f]{8})\):\s*(?P<result>.+?)\s*$')
+
+
+def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int:
+    """把 wb2api 自动签到的结果同步进本端签到记录。
+
+    为什么需要：自动签到由上游调度器自己执行，**不经过 manager**，所以面板上
+    「今日签到」一直显示未签到 —— 而用户明明签过了。唯一的信息源是容器日志。
+
+    这里只做一件事：把日志里已发生的签到结果搬进本端记录，让面板显示真实状态。
+    解析失败、容器不可用、日志为空都只跳过，不抛异常 —— 这是展示层补齐，
+    不该影响任何在线请求。
+
+    去重按 (uid8, 本地日)：同一账号同一天只记一次，避免每小时采集重复插入。
+    """
+    name = (container or os.environ.get('WB2API_CONTAINER') or '').strip()
+    if not name:
+        return 0
+    try:
+        proc = subprocess.run(
+            ['docker', 'logs', '--since', '%dh' % max(1, int(hours)), name],
+            capture_output=True, timeout=60, check=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning('签到日志读取失败，本轮跳过：%s', exc)
+        return 0
+    if proc.returncode != 0:
+        return 0
+    text = (proc.stderr or b'') + b'\n' + (proc.stdout or b'')
+    try:
+        decoded = text.decode('utf-8', 'replace')
+    except Exception:  # noqa: BLE001
+        return 0
+    local = time.localtime()
+    day = '%04d-%02d-%02d' % (local.tm_year, local.tm_mon, local.tm_mday)
+    written = 0
+    seen = set()
+    for line in decoded.splitlines():
+        hit = _CHECKIN_LINE.search(line)
+        if not hit:
+            continue
+        uid8 = hit.group('uid8')
+        if uid8 in seen:
+            continue
+        seen.add(uid8)
+        result = hit.group('result').strip()
+        low = result.lower()
+        if 'already' in low or 'skip' in low:
+            # 已签到 / 跳过：都不算失败，只是没产生新积分。
+            success = True
+        elif 'done' in low or low == 'ok' or low.startswith('ok'):
+            success = True
+        else:
+            success = False
+        try:
+            exists = db.query_one(
+                'SELECT id FROM checkin_logs WHERE uid LIKE ? AND ts>=? AND kind=?'
+                ' ORDER BY id DESC LIMIT 1',
+                (uid8 + '%', int(time.mktime((local.tm_year, local.tm_mon,
+                                              local.tm_mday, 0, 0, 0, 0, 0, -1))),
+                 'checkin'))
+        except Exception:  # noqa: BLE001
+            exists = None
+        if exists:
+            continue
+        try:
+            db.add_checkin_log(uid8, hit.group('name'), 'upstream-auto',
+                               success, None, result[:120])
+            written += 1
+        except Exception:  # noqa: BLE001
+            log.warning('签到记录写入失败 uid8=%s', uid8)
+    if written:
+        log.info('已从上游日志同步 %d 条签到记录（%s）', written, day)
+    return written
 
 
 def today_gain(platform: str = 'workbuddy') -> dict | None:
