@@ -2716,7 +2716,13 @@ def external_platform_refresh(platform: str,
     "刷新失败" —— 前者能指出下一步该做什么。
     """
     from .. import externalplatforms
-    if platform not in ('qoder', 'trae'):
+    if platform == 'qoder':
+        # 410 而不是 404：404 会被读成「路径写错了」，这里要表达的是
+        # 「这个平台存在过、我们已经主动移除」。
+        raise HTTPException(
+            status_code=410,
+            detail='Qoder 已在 2026-11-22 从智汇网关移除（官方停止每日免费积分）。')
+    if platform != 'trae':
         raise HTTPException(status_code=404, detail='未知平台')
     result = externalplatforms.refresh(platform)
     security.audit(user, 'platforms.refresh', platform, str(result.get('ok')))
@@ -2735,6 +2741,9 @@ def qoder_account_refresh(uid: str,
     容器自身的定时保活每天会重载一次；想立即生效需要重启容器。这一点写进返回。
     """
     from .. import externalplatforms
+    raise HTTPException(
+        status_code=410,
+        detail='Qoder 已在 2026-11-22 从智汇网关移除（官方停止每日免费积分）。')
     if not uid or '/' in uid or '\\' in uid or uid.startswith('.'):
         raise HTTPException(status_code=400, detail='账号标识不合法')
     result = externalplatforms.refresh_qoder_account(uid)

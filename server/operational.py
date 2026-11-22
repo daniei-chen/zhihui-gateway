@@ -328,8 +328,9 @@ def collect_account_counts() -> dict:
     | 平台 | 形态 |
     | --- | --- |
     | workbuddy | 目录下 `*.json` |
-    | qoder | 目录下 `*.json` |
-    | trae | SQLite 的 `accounts` 表 |
+    | trae | hub 引擎：JSON 账号目录；aiwork 引擎：SQLite 的 `accounts` 表 |
+
+    （qoder 于 2026-11-22 从网关移除，不再参与评估。）
 
     trae 那条用 `mode=ro` 打开 —— **绝不能用读写模式碰生产库**：它由引擎自己维护，
     这边只是数一行，任何写操作都可能和引擎抢锁。
@@ -342,9 +343,10 @@ def collect_account_counts() -> dict:
     from . import config, externalplatforms
     counts: dict[str, int] = {}
 
+    # 2026-11-22：qoder 已从网关移除，不再评估它的账号池 —— 继续报
+    # 「qoder 只有 1 个账号」等于在提醒运维去修一个已经不存在的平台。
     for platform, directory in (
-            ('workbuddy', getattr(config, 'AUTH_DIR', None)),
-            ('qoder', getattr(externalplatforms, 'QODER_ACCOUNTS_DIR', None))):
+            ('workbuddy', getattr(config, 'AUTH_DIR', None)),):
         if not directory:
             continue
         try:
@@ -352,15 +354,24 @@ def collect_account_counts() -> dict:
         except OSError:
             continue
 
+    # trae 的账号来源跟着引擎走：hub 引擎读 JSON 账号目录，aiwork 引擎读 sqlite。
+    # 以前这里写死读 sqlite，切到 hub 之后数的是历史库，告警与事实脱节。
     try:
-        db_path = getattr(externalplatforms, 'TRAE_DB', None)
-        if db_path:
-            conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=2)
-            try:
-                counts['trae'] = int(
-                    conn.execute('SELECT count(*) FROM accounts').fetchone()[0])
-            finally:
-                conn.close()
+        engine = getattr(externalplatforms, '_trae_engine', None)
+        engine = engine() if callable(engine) else ''
+        hub_dir = getattr(externalplatforms, 'TRAE_HUB_ACCOUNTS_DIR', None)
+        if engine == 'hub' and hub_dir:
+            hub_accounts = externalplatforms._trae_hub_accounts()
+            counts['trae'] = int(hub_accounts.get('count') or 0)
+        else:
+            db_path = getattr(externalplatforms, 'TRAE_DB', None)
+            if db_path:
+                conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=2)
+                try:
+                    counts['trae'] = int(
+                        conn.execute('SELECT count(*) FROM accounts').fetchone()[0])
+                finally:
+                    conn.close()
     except (sqlite3.Error, OSError, TypeError):
         pass
 
@@ -470,6 +481,18 @@ def budget_rejected_unknown_alert(count) -> tuple[bool, str]:
 
     所以这条告警只看**最近 24 小时**：历史残留不该让它长期 firing，
     但**新出现一条就说明有回归**。
+
+    ## 2026-11-22 修正：上游拒绝不算「回归」
+
+    实测发现这条告警把**另一类**也算了进来：`error_stage='upstream'` 的 400
+    （典型是 `prompt_too_long`，一次预留上千万 token）。那两条来自今天 00:24，
+    但按 `budget.py` 的既有分类它们是 `upstream_rejected` —— **本来就该保持
+    unknown**：「上游拒绝了」不等于「零计费」，不能替供应商猜账。
+
+    也就是说：判据（`terminal_state='rejected'`）与分类（`upstream_rejected`
+    保留未知）互相矛盾，凡是上游返回 4xx 就会让这条告警常亮，把真正的回归
+    信号淹没。现在只看**网关自己拒绝**的那一类：预留是网关建的，网关拒绝却
+    不归还，才是真的断链。
     """
     count = int(count or 0)
     return (count > 0,
@@ -812,10 +835,14 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         _active, _detail = model_completion_alert(row['n'], row['failed'])
         transition('model_completion', _active, _detail)
         # 被拒却留着未决预留 —— 不该存在，出现即回归（见函数说明）。
+        # 排除 error_stage='upstream'：上游拒绝（prompt_too_long / 429 限流等）
+        # 按 budget.py 的 UNKNOWN_CLASSES 属于 upstream_rejected，**本就该留在
+        # 待核对**，不能替供应商猜成零用量。这里只抓网关自己拒绝却没归还预留。
         _rejected_unknown = db.query_one(
             "SELECT count(*) n FROM budget_reservations b "
             "JOIN request_logs l ON l.request_id=b.request_id "
             "WHERE b.state='unknown' AND l.terminal_state='rejected' "
+            "AND COALESCE(l.error_stage,'')<>'upstream' "
             "AND b.created_at>=?", (now - 86400,))
         _active, _detail = budget_rejected_unknown_alert(
             _rejected_unknown['n'] if _rejected_unknown else 0)

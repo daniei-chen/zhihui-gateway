@@ -56,6 +56,22 @@ CONTAINERS = {'qoder': 'zhihui-qoder', 'trae': 'zhihui-trae'}
 TRAE_DB = Path(os.environ.get('WB_TRAE_DB',
                               '/opt/trae-work/data/data/aiwork.sqlite'))
 
+#: 2026-11-22 起 Trae 侧由 trae2api-hub 托管，账号不再落在这个 sqlite 里。
+#: 继续读它会得到一份早已停用的历史账号列表，让人误以为当前账号不可用。
+#: 所以 trae_accounts() 先看引擎开关，hub 引擎走下面的 JSON 账号目录。
+TRAE_ENGINE_SWITCH = Path(os.environ.get('WB_TRAE_ENGINE_SWITCH',
+                                         '/opt/workbuddy-manager/engine/var/trae_engine'))
+TRAE_HUB_ACCOUNTS_DIR = Path(os.environ.get('WB_TRAE_HUB_ACCOUNTS',
+                                            '/opt/trae-hub/accounts'))
+TRAE_HUB_HEALTH = os.environ.get('WB_TRAE_HUB_HEALTH',
+                                 'http://127.0.0.1:8791/health')
+TRAE_HUB_BASE = os.environ.get('WB_TRAE_HUB_BASE', 'http://127.0.0.1:8791')
+TRAE_HUB_PASSWORD = Path(os.environ.get(
+    'WB_TRAE_HUB_PASSWORD', '/opt/workbuddy-manager/engine/secrets/trae_hub_password'))
+
+#: hub 面板会话令牌的进程内缓存：'token' -> (值, 到期时间戳)
+_HUB_PANEL: dict = {}
+
 #: 过期告警阈值：剩余天数低于它就标红。
 EXPIRY_WARN_DAYS = 7
 
@@ -184,6 +200,217 @@ def _redact_trae(payload: dict, user_id: str) -> dict:
     }
 
 
+def _trae_engine() -> str:
+    """当前 Trae 引擎名；读不到就返回空串（调用方按 aiwork 旧路径处理）。"""
+    try:
+        return TRAE_ENGINE_SWITCH.read_text(encoding='utf-8').strip().lower()
+    except OSError:
+        return ''
+
+
+def _hub_health() -> dict:
+    """hub 的 /health（含 auto_refresh 心跳）。取不到返回空 dict，不抛。"""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(TRAE_HUB_HEALTH, timeout=3) as handle:
+            value = json.loads(handle.read().decode('utf-8'))
+        return value if isinstance(value, dict) else {}
+    except Exception:                   # noqa: BLE001
+        return {}
+
+
+def _redact_hub_account(raw: dict) -> dict:
+    """hub 账号文件的脱敏视图。
+
+    账号文件里既有 access/refresh token 也有绑设备用的私钥，**一个字节都不能
+    返回给前端**。这里只取「能不能用、还能用多久」相关的字段。
+    """
+    extra = raw.get('extra') if isinstance(raw.get('extra'), dict) else {}
+    profile = raw.get('account') if isinstance(raw.get('account'), dict) else {}
+    expired_at = raw.get('expired_at') or 0
+    refresh_expired_at = raw.get('refresh_expired_at') or 0
+    days = _days_left(expired_at)
+    try:
+        expired_int = int(float(expired_at)) if expired_at else None
+    except (TypeError, ValueError, OverflowError):
+        expired_int = None
+    try:
+        refresh_int = int(float(refresh_expired_at)) if refresh_expired_at else None
+    except (TypeError, ValueError, OverflowError):
+        refresh_int = None
+    return {
+        'uid': str(raw.get('uid') or ''),
+        'nickname': str(raw.get('nickname') or profile.get('username') or ''),
+        'realm': str(raw.get('realm') or ''),
+        'domain': str(raw.get('host') or ''),
+        'enabled': bool(raw.get('enabled', True)),
+        'has_refresh_token': bool(str(raw.get('refresh_token') or '').strip()),
+        'expires_at': expired_int,
+        'expires_iso': (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expired_int))
+                        if expired_int else None),
+        'refresh_expires_at': refresh_int,
+        'days_left': None if days is None else round(days, 1),
+        'expiring_soon': bool(days is not None and days < EXPIRY_WARN_DAYS),
+        'last_error': str(raw.get('last_error') or '')[:200],
+        'cooldown_until': 0,
+        # 绑设备续期是轮换式的：设备身份在，续期才能成功。运维最需要看到这一项。
+        'device_bound': bool(extra.get('privateKeyPEM') and extra.get('device_id')),
+        'device_id': str(extra.get('device_id') or ''),
+        'source': str(raw.get('source') or ''),
+    }
+
+
+def _hub_panel_token() -> str:
+    """登一次 hub 面板拿会话令牌（进程内缓存，失败返回空串）。
+
+    为什么不直接读账号文件：那些文件是 **0600 root**，而 Manager 以 10001 运行
+    —— 直读会全部失败，再被当成「没有账号」，启动告警就会报出
+    「trae has no usable accounts」这种与事实相反的结论（2026-11-22 真实发生）。
+    hub 面板接口返回的本来就是脱敏视图，用它更稳。
+    """
+    cached = _HUB_PANEL.get('token')
+    if cached and cached[1] > time.time():
+        return cached[0]
+    try:
+        password = TRAE_HUB_PASSWORD.read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+    if not password:
+        return ''
+    try:
+        import urllib.request
+        body = json.dumps({'password': password}).encode('utf-8')
+        request = urllib.request.Request(
+            TRAE_HUB_BASE + '/panel/login', data=body,
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(request, timeout=5) as handle:
+            value = json.loads(handle.read().decode('utf-8'))
+        token = str((value or {}).get('token') or '')
+    except Exception:                   # noqa: BLE001
+        return ''
+    if token:
+        _HUB_PANEL['token'] = (token, time.time() + 600)
+    return token
+
+
+def _hub_http_accounts():
+    """经 hub 面板接口取账号；任何一步失败返回 None（交给文件回退）。"""
+    token = _hub_panel_token()
+    if not token:
+        return None
+    try:
+        import urllib.request
+        request = urllib.request.Request(
+            TRAE_HUB_BASE + '/accounts', headers={'X-Panel-Token': token})
+        with urllib.request.urlopen(request, timeout=6) as handle:
+            value = json.loads(handle.read().decode('utf-8'))
+    except Exception:                   # noqa: BLE001
+        _HUB_PANEL.pop('token', None)
+        return None
+    rows = (value or {}).get('accounts')
+    if not isinstance(rows, list):
+        return None
+    entries = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        credits = row.get('credits') if isinstance(row.get('credits'), dict) else {}
+        days = _days_left(row.get('expiresAt'))
+        entries.append({
+            'uid': str(row.get('uidTail') or row.get('uid') or ''),
+            'uid_hash': str(row.get('uidHash') or ''),
+            'nickname': str((row.get('account') or {}).get('username') or ''),
+            'realm': str(row.get('realm') or ''),
+            'domain': str(row.get('host') or ''),
+            'enabled': bool(row.get('enabled', True)),
+            'status': str(row.get('status') or ''),
+            'has_refresh_token': bool(row.get('hasRefreshToken')),
+            'expires_at': row.get('expiresAt'),
+            'expires_iso': row.get('expiresIso'),
+            'expires_in': row.get('expiresIn'),
+            'refresh_expires_iso': row.get('refreshExpiresIso'),
+            'refresh_expires_in': row.get('refreshExpiresIn'),
+            'days_left': None if days is None else round(days, 1),
+            'expiring_soon': bool(days is not None and days < EXPIRY_WARN_DAYS),
+            'last_error': str(row.get('lastError') or '')[:200],
+            'cooldown_for': row.get('cooldownFor'),
+            'device_bound': bool(row.get('deviceBound')),
+            'device_id': str(row.get('deviceId') or ''),
+            'credits_remain': credits.get('remain'),
+            'credits_size': credits.get('size'),
+            'source': str(row.get('source') or ''),
+        })
+    return {'accounts': entries, 'via': 'hub-panel-api'}
+
+
+def _trae_hub_accounts() -> dict:
+    """hub 引擎下的 Trae 账号。
+
+    优先走 hub 面板接口（脱敏视图、与 hub 内存状态一致）；接口不可用
+    （未拿到会话、hub 未起）再退化为直接读 JSON 账号目录 —— 那条路需要 root。
+    """
+    via_api = _hub_http_accounts()
+    if via_api is not None:
+        health = _hub_health()
+        auto = health.get('auto_refresh') if isinstance(health.get('auto_refresh'), dict) else {}
+        rows = via_api['accounts']
+        return {
+            'available': True, 'platform': 'trae', 'engine': 'hub',
+            'via': via_api['via'],
+            'accounts': rows,
+            'count': len(rows),
+            'expiring_soon': sum(1 for row in rows if row.get('expiring_soon')),
+            'refresh_owner': 'trae2api-hub（容器内自持，每 30 分钟检查一次）',
+            'auto_refresh': {
+                'enabled': bool(auto.get('enabled')),
+                'last_check_at': auto.get('last_check_at'),
+                'last_ok_at': auto.get('last_ok_at'),
+                'last_error': str(auto.get('last_error') or ''),
+                'refreshes': int(auto.get('refreshes') or 0),
+                'next_check_at': auto.get('next_check_at'),
+            } if auto else None,
+            'note': ('账号经 hub 面板接口读取（脱敏视图，不含任何令牌）；'
+                     '续期由 hub 自己完成，网关只读不写。'),
+        }
+    directory = TRAE_HUB_ACCOUNTS_DIR
+    if not directory.is_dir():
+        return {'available': False, 'platform': 'trae', 'engine': 'hub',
+                'reason': f'账号目录不存在，面板接口也不可用：{directory}',
+                'accounts': []}
+    entries = []
+    for path in sorted(directory.glob('*.json')):
+        if path.name in ('settings.json', 'machine_identity.json'):
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            log.warning('trae hub 账号文件读取失败 %s: %s', path.name, exc)
+            continue
+        if isinstance(raw, dict) and raw.get('uid'):
+            entries.append(_redact_hub_account(raw))
+    health = _hub_health()
+    auto = health.get('auto_refresh') if isinstance(health.get('auto_refresh'), dict) else {}
+    return {
+        'available': True, 'platform': 'trae', 'engine': 'hub',
+        'accounts': entries,
+        'count': len(entries),
+        'expiring_soon': sum(1 for e in entries if e.get('expiring_soon')),
+        # 「谁在刷新」必须明确：轮换式 refresh token 只能有一个持有者，
+        # 网关若也去刷，两边会互相把对方的令牌作废。
+        'refresh_owner': 'trae2api-hub（容器内自持，每 30 分钟检查一次）',
+        'auto_refresh': {
+            'enabled': bool(auto.get('enabled')),
+            'last_check_at': auto.get('last_check_at'),
+            'last_ok_at': auto.get('last_ok_at'),
+            'last_error': str(auto.get('last_error') or ''),
+            'refreshes': int(auto.get('refreshes') or 0),
+            'next_check_at': auto.get('next_check_at'),
+        } if auto else None,
+        'note': ('账号来自 trae2api-hub 的 JSON 存储；令牌续期由 hub 自己完成，'
+                 '网关只读不写 —— 轮换式 refresh token 不允许两个持有者。'),
+    }
+
+
 def trae_accounts() -> dict:
     """读取 Trae 账号（只读）。
 
@@ -201,6 +428,9 @@ def trae_accounts() -> dict:
     所以这里只报事实字段，不给「要不要重新登录」的结论 —— 拿字段是否为空去推断
     可用性，会得出与事实相反的答案。要看可用性，请看引擎的实际响应。
     """
+    engine = _trae_engine()
+    if engine == 'hub':
+        return _trae_hub_accounts()
     path = TRAE_DB
     if not path.is_file():
         return {'available': False, 'platform': 'trae',
@@ -243,10 +473,26 @@ def trae_accounts() -> dict:
 def snapshot() -> dict:
     """两个平台的账号快照。任一个不可用时带着原因返回，绝不静默省略。"""
     return {
-        'qoder': qoder_accounts(),
+        'platforms': ['workbuddy', 'trae'],
         'trae': trae_accounts(),
         'sampled_at': int(time.time()),
         'expiry_warn_days': EXPIRY_WARN_DAYS,
+        # Qoder 已下线（2026-11-22）：官方不再提供每日领取的免费积分。
+        #
+        # 键**保留**，但给的是"已移除"的形状而不是直接删掉：前端老构建会读
+        # `data.qoder.accounts`，删键会让它拿到 undefined 直接报错。形状保持
+        # 兼容（available/accounts/count），语义交给 removed 标记。
+        'qoder': {
+            'available': False,
+            'removed': True,
+            'platform': 'qoder',
+            'accounts': [],
+            'count': 0,
+            'expiring_soon': 0,
+            'at': '2026-11-22',
+            'reason': ('Qoder 不再提供每日领取的免费积分，智汇网关已移除该平台。'
+                       '我们正在积极寻找其他免费额度的反向代理，敬请期待。'),
+        },
     }
 
 
@@ -257,8 +503,20 @@ def refresh(platform: str) -> dict:
     `refreshToken` / `expiresAt` / `lastError` / `cooldownUntil` 的配对关系，
     外部改一个字段会让它的状态机进入自相矛盾的状态。
     """
-    if platform not in CONTAINERS:
+    if platform == 'qoder':
+        return {'ok': False, 'removed': True,
+                'reason': 'Qoder 已在 2026-11-22 从智汇网关移除（官方停止每日免费积分）。'}
+    if platform != 'trae':
         return {'ok': False, 'reason': f'未知平台：{platform}'}
+    # hub 引擎下**禁止**由网关触发刷新：refresh token 是轮换式的，两个持有者
+    # 各自刷新会把对方的令牌作废（2026-11-21 已经因此毁过一次凭证）。
+    if _trae_engine() == 'hub':
+        health = _hub_health()
+        auto = health.get('auto_refresh') if isinstance(health.get('auto_refresh'), dict) else {}
+        return {'ok': True, 'triggered': False, 'engine': 'hub',
+                'reason': ('Trae 由 trae2api-hub 自持续期，网关不代刷。'
+                           '轮换式令牌只允许一个持有者。'),
+                'auto_refresh': auto or None}
     container = CONTAINERS[platform]
     if platform == 'qoder':
         code, output = _docker_exec(container, [

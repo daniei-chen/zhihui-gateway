@@ -86,18 +86,19 @@ console.log('默认值与显式选择：');
 console.log('水合：不重复请求的关键：');
 {
   // 持久化平台 ≠ 首帧默认：水合后界面值要跟着变，但 epoch 不能动
-  const storage = fakeStorage({[PLATFORM_STORAGE_KEY]: 'doubaowork'});
+  const storage = fakeStorage({[PLATFORM_STORAGE_KEY]: 'trae'});
   const store = createPlatformStore({storage});
-  check('request context sees persisted value before hydration', store.get(), 'doubaowork');
-  check('explicit before hydration reads through', store.explicit(), 'doubaowork');
+  check('request context sees persisted value before hydration', store.get(), 'trae');
+  check('explicit before hydration reads through', store.explicit(), 'trae');
   store.hydrate();
-  check('peek follows persisted value after hydration', store.peek(), 'doubaowork');
+  check('peek follows persisted value after hydration', store.peek(), 'trae');
   check('hydration does not remount subtree (epoch stays 0)', store.getEpoch(), 0);
-  check('request context and UI agree after hydration', [store.get(), store.peek()], ['doubaowork', 'doubaowork']);
+  check('request context and UI agree after hydration', [store.get(), store.peek()], ['trae', 'trae']);
 }
 {
   // 脏值：修正为默认值（并落盘），不能让非法值一路发到后端
-  const storage = fakeStorage({[PLATFORM_STORAGE_KEY]: 'DoubaoWork-Legacy'});
+  // 用已下线平台的旧值当脏值：这正是线上会残留的真实形态。
+  const storage = fakeStorage({[PLATFORM_STORAGE_KEY]: 'Qoder-Legacy'});
   const store = createPlatformStore({storage});
   check('invalid stored value ignored for requests', store.explicit(), null);
   store.hydrate();
@@ -142,10 +143,10 @@ console.log('跨标签页（storage 事件）：');
     notifications += 1;
   });
 
-  // 另一个标签页切到 doubaowork
-  storage.data[PLATFORM_STORAGE_KEY] = 'doubaowork';
+  // 另一个标签页切到 trae
+  storage.data[PLATFORM_STORAGE_KEY] = 'trae';
   store.syncFromStorage();
-  check('external change updates UI value', store.peek(), 'doubaowork');
+  check('external change updates UI value', store.peek(), 'trae');
   check('external change bumps epoch (must refetch)', store.getEpoch(), 1);
   check('external change notifies', notifications, 1);
 
@@ -174,8 +175,8 @@ console.log('存储被禁 / 无痕：');
   check('throwing getItem does not throw on explicit', store.explicit(), null);
   store.hydrate(); // 不能抛
   check('hydration survives throwing storage', store.peek(), DEFAULT_PLATFORM);
-  store.set('doubaowork'); // 写不进去也不能抛
-  check('set works in memory when storage is read-only', store.peek(), 'doubaowork');
+  store.set('trae'); // 写不进去也不能抛
+  check('set works in memory when storage is read-only', store.peek(), 'trae');
   check('set still bumps epoch without persistence', store.getEpoch(), 1);
   store.syncFromStorage(); // getItem 抛 → 回退默认值
   check('sync falls back to default when storage throws', store.peek(), DEFAULT_PLATFORM);
@@ -190,29 +191,25 @@ console.log('存储被禁 / 无痕：');
   check('null storage: hydrate keeps explicit choice', (store.hydrate(), store.peek()), 'trae');
 }
 
-console.log('第四平台（doubaowork）：');
+console.log('在营平台只有两个：');
 {
-  // 枚举扩容本身不能改变默认值：新平台进入 PLATFORMS 不等于它成为默认，
-  // 也不等于它被默认授权（授权是后端 DEFAULT_PLATFORMS 的事）。
-  check('PLATFORMS 含 doubaowork', PLATFORMS.includes('doubaowork'), true);
-  check('isPlatform 接受 doubaowork', isPlatform('doubaowork'), true);
+  // 2026-11-22：qoder 与 doubaowork 都已从 PLATFORMS 摘除。
+  // 枚举收窄本身不能改变默认值：平台减少不等于默认平台换人。
+  check('PLATFORMS 只有两个平台', PLATFORMS.length, 2);
+  check('PLATFORMS 含 workbuddy', PLATFORMS.includes('workbuddy'), true);
+  check('PLATFORMS 含 trae', PLATFORMS.includes('trae'), true);
+  check('PLATFORMS 不含 qoder（已下线）', PLATFORMS.includes('qoder'), false);
+  check('PLATFORMS 不含 doubaowork（已下线）', PLATFORMS.includes('doubaowork'), false);
+  check('isPlatform 拒绝 qoder', isPlatform('qoder'), false);
+  check('isPlatform 拒绝 doubaowork', isPlatform('doubaowork'), false);
   check('DEFAULT_PLATFORM 仍是 workbuddy', DEFAULT_PLATFORM, 'workbuddy');
 
-  const store = createPlatformStore({storage: fakeStorage()});
-  store.hydrate();
-  check('切换前默认', store.peek(), DEFAULT_PLATFORM);
-  store.set('doubaowork');
-  check('切到 doubaowork 生效', store.peek(), 'doubaowork');
-  check('切到 doubaowork 放 epoch', store.getEpoch(), 1);
-  check('切换后请求上下文一致', store.get(), 'doubaowork');
-  store.set('doubaowork');
-  check('重复设置同一平台不再放 epoch', store.getEpoch(), 1);
-
-  // 持久化里是第四平台时能水合回来，且水合不放 epoch
+  // 持久化里是已下线平台时，水合必须自愈成默认值（不能让死值一直发到后端）
   const persisted = fakeStorage();
   persisted.setItem(PLATFORM_STORAGE_KEY, 'doubaowork');
   const hydrating = createPlatformStore({storage: persisted});
-  check('水合出 doubaowork', hydrating.hydrate(), 'doubaowork');
+  check('水合把已下线平台纠正为默认', hydrating.hydrate(), DEFAULT_PLATFORM);
+  check('纠正后的值已落盘', persisted.data[PLATFORM_STORAGE_KEY], DEFAULT_PLATFORM);
   check('水合不放 epoch', hydrating.getEpoch(), 0);
 }
 
@@ -221,8 +218,8 @@ console.log('隔离性：');
   // 两个 store 实例互不影响（测试之间不共享模块级状态）
   const a = createPlatformStore({storage: fakeStorage()});
   const b = createPlatformStore({storage: fakeStorage()});
-  a.set('doubaowork');
-  check('instances are independent', [a.peek(), b.peek()], ['doubaowork', DEFAULT_PLATFORM]);
+  a.set('trae');
+  check('instances are independent', [a.peek(), b.peek()], ['trae', DEFAULT_PLATFORM]);
 }
 
 console.log(failed ? `\n${failed} failed / ${passed} passed` : `\nall passed（${passed} 条）`);

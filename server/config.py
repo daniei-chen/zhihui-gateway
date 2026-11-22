@@ -156,7 +156,12 @@ UPSTREAM_TIMEOUT = _env_int('WB_UPSTREAM_TIMEOUT', 300)
 #: 为什么不能整体下调 `UPSTREAM_TIMEOUT`：workbuddy 侧实测有 158 次首字节超过
 #: 60 秒（长 prompt 的固有 prefill），最长 186 秒。那是正常业务，切断它才是问题。
 PLATFORM_TIMEOUT = {
-    'qoder': _env_int('WB_QODER_TIMEOUT', 60),
+    # trae（2026-11-22 实测数据）：近 3 天 51 次请求，平均 1.2 秒、最大 3.7 秒。
+    # 默认 300 秒意味着一旦 hub 卡住，调用方要等五分钟才看到错误。给 120 秒：
+    # 仍比历史最大延迟高 30 倍，但「不可用」能在两分钟内变成可见的错误。
+    # 不跟随 workbuddy 下调：那边有 158 次首字节超过 60 秒（长 prompt 的固有
+    # prefill，最长 186 秒），切断它才是问题。
+    'trae': _env_int('WB_TRAE_TIMEOUT', 120),
 }
 TENCENT_TIMEOUT = _env_int('WB_TENCENT_TIMEOUT', 15)
 # 「全部签到」的并发上限：太低会拖到前端超时（几十个账号时），

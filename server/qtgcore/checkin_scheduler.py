@@ -52,6 +52,12 @@ WINDOWS = {"trae": ((9, 5), (20, 55)), "qoder": ((10, 5), (20, 55)),
            # （RETRY_AFTER=300s × 最多 6 次）也能覆盖到；再早只会增加无谓的
            # 未开放回合。上限 22:00 与其他平台一致。
            "doubaowork": ((11, 10), (22, 0))}
+
+#: 2026-11-22：这两个平台已不在营（qoder 官方停止每日免费积分并已从网关移除；
+#: doubaowork 引擎关闭）。**刻意保留在 `WINDOWS` 里**：历史 state 文件里还有
+#: 它们的 targets / uncertain，从 WINDOWS 删键会让状态校验直接抛错、调度器起不来。
+#: 真正的停用靠下面两处过滤 —— 不排新目标、不重试旧的 uncertain。
+DISABLED = frozenset({'qoder', 'doubaowork'})
 FALLBACK_HOUR = 21
 RETRY_AFTER = 300
 MAX_ATTEMPTS = 6
@@ -191,6 +197,8 @@ def _fresh_state() -> Dict[str, Any]:
     day = _today()
     st: Dict[str, Any] = {"day": day, "targets": {}, "done": {}, "attempts": {}, "last": {}}
     for name, ((sh, sm), (eh, em)) in WINDOWS.items():
+        if name in DISABLED:
+            continue
         start = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(sh, sm), TZ)
         end = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(eh, em), TZ)
         span = int((end - start).total_seconds())
@@ -204,7 +212,11 @@ def _ensure_state(state_path: Path) -> Dict[str, Any]:
         previous = st
         st = _fresh_state()
         # Midnight does not establish that yesterday's pending operation stopped.
-        st['uncertain'] = dict(previous.get('uncertain', {}))
+        # 已下线平台的 uncertain 不再重试（否则每天仍会去打一个不存在的引擎），
+        # 但保留 WINDOWS 里的键，历史 state 依旧可解析。
+        st['uncertain'] = {name: stamp
+                           for name, stamp in previous.get('uncertain', {}).items()
+                           if name not in DISABLED}
         st['dispatch_attempts'] = {name: reference
                                   for name, reference in previous.get('dispatch_attempts', {}).items()
                                   if name in st['uncertain']}
@@ -327,7 +339,21 @@ async def dispatch_checkin(rt: Any, name: str, *, uid: str | None = None,
         try:
             previous = _read_dispatch(path, name)
             if previous['phase'] != 'complete':
-                raise ValueError('unconfirmed dispatch evidence')
+                # 2026-11-21：`phase='uncertain'` 原本**永不超时**。
+                # scheduler 那条路径（random_checkin.json 的 uncertain）有
+                # UNCERTAIN_MAX_AGE 出口，手动派发这条却没有 —— 于是上游只要
+                # 一次没回确认，这个平台的「全部签到」就永久 409。实测 Trae
+                # 从 2026-10-31 卡到 11-21，整整 20 天；用户连点三次，每次只
+                # 看到「该平台上次签到未确认；未重复派发，请核对记录」，
+                # 完全不知道发生了什么。这里补上同一个出口。
+                _stale = (
+                    dt.datetime.now(TZ) - _dispatch_time(previous.get('started_at'))
+                ) >= dt.timedelta(seconds=UNCERTAIN_MAX_AGE)
+                if not _stale:
+                    raise ValueError('unconfirmed dispatch evidence')
+                log.warning(
+                    '平台 %s 的派发记录停在 %s 且已超过 %s 秒，允许重新派发',
+                    name, previous.get('phase'), UNCERTAIN_MAX_AGE)
         except FileNotFoundError:
             pass
         except (OSError, ValueError, TypeError, OverflowError):
@@ -478,7 +504,8 @@ def start(rt: Any) -> "asyncio.Task[None] | None":
     if not rt.settings.checkin_scheduler_enabled:
         log.info('每日随机签到调度已禁用')
         return None
-    log.info("每日随机签到调度已启动（trae 09:05-20:55 / qoder 10:05-20:55）")
+    log.info("每日随机签到调度已启动（在营平台：%s）",
+             " / ".join(name for name in WINDOWS if name not in DISABLED))
     return asyncio.create_task(_loop(rt), name="qtg-checkin-scheduler")
 
 

@@ -29,29 +29,24 @@
  */
 
 /**
- * 平台枚举。与后端 `X-QTG-Platform` 的取值一一对应。
- *
- * `doubaowork`（豆包工作）是后加的平台：后端 `platformpolicy.PLATFORMS` 也同步
- * 扩到了它。注意它与后端的 `DEFAULT_PLATFORMS` 不是同一件事 —— **枚举里有**
- * 不等于**默认就授权**，密钥仍须显式勾选才能用第四平台。
- */
-/**
  * 平台枚举。
  *
- * **`qoder` 仍在类型里，但不在 `PLATFORMS` 里** —— 这不是遗漏，是刻意的：
+ * **2026-11-22：`PLATFORMS` 只剩 `workbuddy` 与 `trae`** —— 在营平台就是这两个。
  *
- * - 2026-11-19 起 qoder 官方不再送积分，qtg 不再接它（后端
- *   `platformpolicy.PLATFORMS` 也同步移除了），所以 UI 不该再给出这个入口。
- * - 但类型保留它，是因为代码里还有 `platform === 'qoder'` 这类历史分支
- *   （统计口径、账号导入对话框等）。把类型也删掉会引发一大片编译错误，
- *   而那些分支在「UI 永远不产出 qoder」的前提下是**死代码**，留着无害。
+ * - `qoder` 于 2026-11-19 官方停止送积分，2026-11-22 正式从网关移除
+ *   （`/qoder/v1/*` 现在直接返回 410，后端 `platformpolicy.PLATFORMS` 只留两个）。
+ * - `doubaowork`（豆包工作）引擎长期处于关闭态，同样从枚举里摘除。
+ * - 但 `Platform` **类型**仍保留这四个，是因为代码里还有 `platform === 'qoder'`、
+ *   `doubaowork: '...'` 这类历史分支（统计口径、账号导入对话框、i18n 标签等）。
+ *   把类型也删掉会引发一大片编译错误，而那些分支在「UI 永远不产出这两个值」
+ *   的前提下是**死代码**，留着无害。
  *
  * 判断「在不在用」请一律看 `PLATFORMS`，不要看 `Platform` 类型。
  */
 export type Platform = 'qoder' | 'trae' | 'workbuddy' | 'doubaowork';
 
-// 顺序即 UI 显示顺序：WorkBuddy 第一（主力平台）、Trae 第二、豆包工作第三。
-export const PLATFORMS: readonly Platform[] = ['workbuddy', 'trae', 'doubaowork'] as const;
+// 顺序即 UI 显示顺序：WorkBuddy 第一（主力平台）、Trae 第二。
+export const PLATFORMS: readonly Platform[] = ['workbuddy', 'trae'] as const;
 
 /** 与 `PlatformProvider`、axios 拦截器共用的存储键（沿用线上既有键，不迁移）。 */
 export const PLATFORM_STORAGE_KEY = 'qtg.platform';
