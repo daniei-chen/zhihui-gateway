@@ -407,6 +407,45 @@ def consumption_rate(platform: str = 'workbuddy', days: int = 14,
             'span_hours': span / 3600.0, 'samples': len(rows)}
 
 
+def today_gain(platform: str = 'workbuddy') -> dict | None:
+    """今天（按本地日）累计的**正向增量**，用来回答「今天补进来多少」。
+
+    为什么单独算：单条快照的 `delta` 只看最近一小时。签到是每天一次、
+    补的是一整笔，只看一小时会错过 —— 早上那笔 +2300 到中午就看不到了。
+
+    只累加正数：负数（真实消耗）与正数（签到/活动）混在一起算没有意义，
+    前者由 `usage_credit_rate` 负责估算。
+
+    当天没有任何快照时返回 None（不是 0 —— 「没采集」和「没补进来」是两件事）。
+    """
+    now = time.time()
+    local = time.localtime(now)
+    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
+                                 0, 0, 0, 0, 0, -1)))
+    try:
+        rows = db.query(
+            'SELECT raw, captured_at FROM platform_credit_snapshots'
+            ' WHERE platform=? AND captured_at>=? ORDER BY captured_at ASC',
+            (platform, day_start))
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    gain = 0.0
+    events = []
+    for row in rows:
+        try:
+            raw = json.loads(row['raw'] or '{}')
+        except (ValueError, TypeError):
+            continue
+        delta = raw.get('delta')
+        if isinstance(delta, (int, float)) and delta > 0:
+            gain += float(delta)
+            events.append({'at': row['captured_at'], 'delta': float(delta)})
+    return {'gain': round(gain, 2), 'events': len(events),
+            'samples': len(rows), 'day_start': day_start}
+
+
 def account_token_alerts(days_warn: int = 7) -> list:
     """账号登录凭证的过期预警。
 
@@ -527,6 +566,11 @@ def workbuddy_alerts() -> list:
                        '（峰值日 %.0f 分，近三天 %.0f 分/天）'
                        % (_rate['days'], _rate['per_day'], _days,
                           _rate.get('peak') or 0, _rate.get('per_day_recent') or 0))
+            # 今天补进来多少：签到是每天一笔，单条快照的 delta 只看一小时会错过。
+            _gain = today_gain('workbuddy')
+            if _gain and _gain['gain'] > 0:
+                detail += '；今日已补进 %.0f 分（%d 笔）' % (
+                    _gain['gain'], _gain['events'])
         active = ratio < threshold
         if ratio < CRITICAL_RATIO:
             lines.append(('account_credits_workbuddy', True, '[即将耗尽] ' + detail))
