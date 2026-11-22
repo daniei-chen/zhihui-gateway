@@ -77,14 +77,15 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由与计量后分别访问：WorkBuddy /v1/*、Qoder /qoder/v1/*、Trae /trae/v1/*。" />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由与计量后分别访问：WorkBuddy /v1/*、Trae /trae/v1/*。" />
 </picture>
 
 | 平台 | 客户端 Base URL | 提醒 |
 | :--- | :--- | :--- |
 | WorkBuddy | `https://你的域名/v1` | Chat、Responses、Messages 适配 |
-| Qoder | `https://你的域名/qoder/v1` | 以该引擎能力和账号授权为准 |
 | Trae | `https://你的域名/trae/v1` | 以该引擎能力和账号授权为准 |
+
+> **关于 Qoder。** 我们很遗憾，Qoder 目前不再提供免费积分每日领取。我们在智汇网关中已移除 Qoder，目前正在积极寻找其他免费额度反向代理，敬请期待。
 
 | Method | Path | 说明 |
 | :--- | :--- | :--- |
@@ -92,8 +93,6 @@
 | POST | `/v1/chat/completions` | WorkBuddy 对话调用 |
 | POST | `/v1/responses` | Responses 兼容入口 |
 | POST | `/v1/messages` | Anthropic Messages 兼容入口 |
-| GET | `/qoder/v1/models` | Qoder 模型目录 |
-| POST | `/qoder/v1/chat/completions` | Qoder 对话调用 |
 | POST | `/trae/v1/chat/completions` | Trae 对话调用 |
 
 <details>

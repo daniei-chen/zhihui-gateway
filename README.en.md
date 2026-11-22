@@ -77,14 +77,15 @@ Changing the console view does not silently change a client's base URL.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="Clients pass through Zhihui authentication, routing and metering to WorkBuddy, Qoder or Trae." />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="Clients pass through Zhihui authentication, routing and metering to WorkBuddy or Trae." />
 </picture>
 
 | Platform | Client Base URL | Note |
 | :--- | :--- | :--- |
 | WorkBuddy | `https://your-domain/v1` | Chat, Responses and Messages adapters |
-| Qoder | `https://your-domain/qoder/v1` | Subject to the engine and account authorization |
 | Trae | `https://your-domain/trae/v1` | Subject to the engine and account authorization |
+
+> **About Qoder.** We regret that Qoder no longer offers free daily credits. Qoder has been removed from the Zhihui gateway while we look for other free-tier reverse proxies. Stay tuned.
 
 | Method | Path | Note |
 | :--- | :--- | :--- |
@@ -92,8 +93,6 @@ Changing the console view does not silently change a client's base URL.
 | POST | `/v1/chat/completions` | WorkBuddy chat |
 | POST | `/v1/responses` | Responses-compatible entry point |
 | POST | `/v1/messages` | Anthropic Messages-compatible entry point |
-| GET | `/qoder/v1/models` | Qoder model catalog |
-| POST | `/qoder/v1/chat/completions` | Qoder chat |
 | POST | `/trae/v1/chat/completions` | Trae chat |
 
 <details>
