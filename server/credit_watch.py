@@ -296,6 +296,12 @@ def alerts() -> list:
 #: 而同期按 token 估算要几千分）。所以拿它做**上界估算**：宁可高估消耗，
 #: 也不要因为看不到扣款就以为用不完。
 CREDIT_UNITS_SCALE = 1_000_000.0
+#: 用量估算的缓存时长。`usage_events` 上没有以 `ts` 为前缀的索引
+#: （现有的是 key+ts），实测查询计划是**全表扫描 + 临时 B 树分组**。
+#: 而告警检查是分钟级的，每次都扫几十万行纯属浪费；用量本身是日级变化，
+#: 十分钟缓存不会让数字失真。
+USAGE_RATE_TTL = 600
+_usage_rate_cache: dict = {}
 
 
 def usage_credit_rate(days: int = 7) -> dict | None:
@@ -309,8 +315,13 @@ def usage_credit_rate(days: int = 7) -> dict | None:
     这种问题，高估消耗是安全侧。
 
     数据不足返回 None（少于两天、或总额为 0）。
+    结果缓存 `USAGE_RATE_TTL` 秒 —— 全表扫描不该被分钟级的告警检查反复触发。
     """
-    since = int(time.time()) - max(1, int(days)) * 86400
+    now = time.time()
+    cached = _usage_rate_cache.get(days)
+    if cached and now - cached[0] < USAGE_RATE_TTL:
+        return cached[1]
+    since = int(now) - max(1, int(days)) * 86400
     try:
         rows = db.query(
             'SELECT date(ts, "unixepoch", "localtime") AS day,'
@@ -339,11 +350,16 @@ def usage_credit_rate(days: int = 7) -> dict | None:
     median = (ordered[mid] if len(ordered) % 2
               else (ordered[mid - 1] + ordered[mid]) / 2.0)
     recent = daily[-3:]
-    return {'per_day': median, 'per_day_mean': mean,
+    result = {'per_day': median, 'per_day_mean': mean,
             'per_day_recent': sum(recent) / len(recent),
             'median': median, 'total': total, 'days': len(daily),
             'peak': max(daily),
-            'samples': sum(int(r['n'] or 0) for r in rows)}
+            'samples': sum(int(r['n'] or 0) for r in rows),
+            'cached_at': int(now)}
+    _usage_rate_cache[days] = (now, result)
+    while len(_usage_rate_cache) > 8:
+        _usage_rate_cache.pop(next(iter(_usage_rate_cache)))
+    return result
 
 
 def consumption_rate(platform: str = 'workbuddy', days: int = 14,
