@@ -8,7 +8,7 @@
   "frontend_rebuilt": true,
   "original_frontend_commit_reproduced": false,
   "production_deployed": true,
-  "release_id": "v1.5.15",
+  "release_id": "v1.5.16",
   "repository": "daniei-chen/zhihui-gateway",
   "reviewed_patch_files": {
     ".github/workflows/quality.yml": "43eb2d9725e982077e459366966bc616e6c2244b532bcae982b342e4f40ab57b",
@@ -162,5 +162,5 @@
   "source_commit": "d4c4f50fd0a5567fc29b8500c91034d71c886322",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
-  "version": "1.5.15"
+  "version": "1.5.16"
 }

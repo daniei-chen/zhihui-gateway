@@ -426,6 +426,26 @@ def account_pool_alerts(counts: dict) -> list[tuple[str, bool, str]]:
     return alerts
 
 
+def _safe_alerts(source, label: str):
+    """把一组告警的求值单独包起来：某一组出错不影响后面几组。
+
+    为什么需要：这一整段告警求值原本共用一个 try。某一组抛异常时（历史上
+    真的发生过：sqlite3.Row 没有 .get()），**它后面所有告警会被静默跳过** ——
+    包括磁盘水位、备份健康、归档线程这些「出事时才会响」的检查。
+
+    一个 bug 把整排保险丝一起烧掉，这比那个 bug 本身严重得多。
+
+    求值失败记 warning 而不是 exception：它不代表服务异常，只代表
+    「这一组告警这次没算出来」，下一轮会重试。
+    """
+    try:
+        if callable(source):
+            source = source()
+        yield from source
+    except Exception:  # noqa: BLE001
+        log.warning('告警组 %s 求值失败（其余告警不受影响）', label, exc_info=True)
+
+
 def disk_space_alerts(free_bytes: int | None) -> list[tuple[str, bool, str]]:
     """磁盘水位分两档返回 [(告警名, 是否触发, 文案)]。
 
@@ -849,24 +869,27 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         transition('budget_rejected_unknown', _active, _detail)
         free=os.statvfs(config.DATA_DIR).f_bavail*os.statvfs(config.DATA_DIR).f_frsize if hasattr(os,'statvfs') else None
         # 两档水位，两个告警名（见 `disk_space_alerts` 的说明：名字不能共用）。
-        for _name, _active, _detail in disk_space_alerts(free):
+        # 下面每一组告警都用 `_safe_alerts` 单独包起来。原因见该函数的说明：
+        # 这段求值原本共用一个 try，某组抛异常会让它后面所有告警静默跳过。
+        for _name, _active, _detail in _safe_alerts(disk_space_alerts(free), 'disk_space'):
             transition(_name, _active, _detail)
         # 账号池冗余度：单点平台没有冗余，一次限流就全断，而此前完全没有信号。
         from . import credit_watch
-        for _name, _active, _detail in credit_watch.alerts():
+        for _name, _active, _detail in _safe_alerts(credit_watch.alerts, 'credit.alerts'):
             transition(_name, _active, _detail)
         # WorkBuddy 池的积分：与 trae 分开两条告警名（见 workbuddy_alerts 的说明）。
         # 之前只有「账号数」告警，池子烧到只剩两成也没有信号。
-        for _name, _active, _detail in credit_watch.workbuddy_alerts():
+        for _name, _active, _detail in _safe_alerts(credit_watch.workbuddy_alerts, 'workbuddy.credits'):
             transition(_name, _active, _detail)
         # 凭证过期：23 个账号是同一批登录的，到期时刻几乎相同 —— 失效是
         # 「某天集体掉线」而不是慢慢变少，必须提前看日期。
-        for _name, _active, _detail in credit_watch.account_token_alerts():
+        for _name, _active, _detail in _safe_alerts(credit_watch.account_token_alerts, 'workbuddy.tokens'):
             transition(_name, _active, _detail)
         # 签到陈旧：平台不会因此不可用，只是每天少收入 —— 不看就不会发现。
-        for _name, _active, _detail in credit_watch.checkin_stale_alert():
+        for _name, _active, _detail in _safe_alerts(credit_watch.checkin_stale_alert, 'workbuddy.checkin'):
             transition(_name, _active, _detail)
-        for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
+        for _name, _active, _detail in _safe_alerts(
+                lambda: account_pool_alerts(collect_account_counts()), 'account_pool'):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour
         # freshness guard until operations can install a more frequent job.
