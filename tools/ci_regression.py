@@ -33,6 +33,14 @@ MODULES = (
     # `reviewed_patch_files` 里 145 个 hash 停在 v1.3.3，之后每次改文件都没更新。
     # 测试存在但不运行，比没有测试更糟：它让人以为这块有保障。
     "server.tests.test_release_provenance_integrity",
+    # 2026-11-23 审计：473 个测试模块里只有 34 个被收录，439 个从没在门禁里跑过。
+    # 抽样 4 个与积分/签到/快照相关的模块全部通过 —— 说明它们是好的，只是漏了。
+    # 不一次全收：全量跑会卡在 test_upstreams 的 tearDown（阻塞），
+    # 所以按「已证明可靠」逐个收。
+    "server.tests.test_credits_flow",
+    "server.tests.test_credits_snapshot",
+    "server.tests.test_checkin_logs_realm",
+    "server.tests.test_v1294_snapshot_age",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",
     "server.tests.test_audit_gateway_boundaries",
