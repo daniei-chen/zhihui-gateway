@@ -29,6 +29,10 @@ CRITICAL_RATIO = 0.05
 #: WorkBuddy 账号池的「单号余额偏低」线：低于这个数就点名。
 WB_LOW_ACCOUNT = 1000
 WB_CREDIT_TIMEOUT = 90
+#: 快照保留天数。每小时 2 条（trae + workbuddy），30 天约 1440 行、
+#: workbuddy 那条带明细约 3KB —— 总量十几 MB，够做趋势与对账。
+#: 不设上限的话这张表会一直长，而「一年前的每小时余额」没有任何用处。
+RETENTION_DAYS = 30
 
 DDL = (
     "CREATE TABLE IF NOT EXISTS platform_credit_snapshots("
@@ -184,7 +188,25 @@ def capture_once() -> int:
             (row['platform'], row['account'], row['plan'], row['total'],
              row['used'], row['remain'], now,
              json.dumps(row, ensure_ascii=False)))
+    _prune(now)
     return len(rows)
+
+
+def _prune(now: int) -> int:
+    """删掉超过保留期的快照，返回删除行数。
+
+    顺手清理的理由：这张表每小时长 2 行，不设上限就一直涨；而「一个月前的
+    每小时余额」既不能回答趋势（粒度太细），也不该长期占着库。
+    删除失败只记一条警告 —— 清理是维护动作，不该让采集本身报错。
+    """
+    cutoff = int(now) - RETENTION_DAYS * 86400
+    try:
+        return db.execute(
+            'DELETE FROM platform_credit_snapshots WHERE captured_at < ?',
+            (cutoff,)) or 0
+    except Exception:  # noqa: BLE001
+        log.warning('历史积分快照清理失败（不影响采集）', exc_info=True)
+        return 0
 
 
 def latest(platform: str = 'trae', with_raw: bool = False):
