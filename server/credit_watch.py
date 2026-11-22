@@ -159,6 +159,10 @@ def _wb_pool_snapshot() -> dict | None:
         'used': used or None,
         'remain': remain,
         'accounts_ok': len(ok_rows),
+        # 明细整份留在 raw 里：面板要按 uid 把真实余额贴回账号列表，
+        # 而 wb2api 自己的 credits 字段滞后可达数小时（多数时候就是 0）。
+        # 23 个账号约 2KB，一小时一条完全可接受。
+        'accounts': ok_rows,
         'accounts_failed': failed,
         'low_accounts': lows,
     }

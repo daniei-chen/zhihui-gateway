@@ -539,6 +539,36 @@ async def list_accounts(upstream_id: int | None = Query(None),
     status = await wb2api.get_status(base_url=group['base_url'],
                                      api_key=upstreamsvc.forward_api_key(group))
     wb2api.merge_pool_status(accounts, status)
+    # 2026-11-23：积分改用「整池快照」覆盖。
+    #
+    # wb2api 的 `credits` 字段来自它自己的定时任务，滞后可达数小时 —— 实测
+    # 24 个号整列都是 0，看起来像「全都没积分」，其实是没刷新。真实余额只有
+    # 直接问上游才有，而 credit_watch 每小时已经整池取过一次（一次 docker exec
+    # 拿全部账号），没有理由让面板继续显示一个假的 0。
+    #
+    # 快照最多一小时旧，且 `credits_source`/`credits_at` 会如实告诉前端
+    # 「这个数字是什么时候的」—— 不让滞后值伪装成实时值。
+    # 快照不存在或解析失败时保持 wb2api 的原值，绝不把积分抹成空。
+    try:
+        from .. import credit_watch as _cw
+        _snap = _cw.latest('workbuddy', with_raw=True)
+        if _snap:
+            _raw = json.loads(_snap['raw'] or '{}')
+            _by_uid = {str(a.get('uid')): a
+                       for a in (_raw.get('accounts') or [])
+                       if isinstance(a, dict) and a.get('uid')}
+            if _by_uid:
+                for _a in accounts:
+                    _hit = _by_uid.get(str(_a.get('uid') or ''))
+                    if not _hit:
+                        continue
+                    _a['credits'] = _hit.get('remain')
+                    _a['credits_used'] = _hit.get('used')
+                    _a['credits_size'] = _hit.get('size')
+                    _a['credits_source'] = 'pool-snapshot'
+                    _a['credits_at'] = _snap['captured_at']
+    except Exception:  # noqa: BLE001 - 快照读失败不该让账号列表 500
+        logger.warning('积分快照合并失败，回退 wb2api 原值', exc_info=True)
     # 备注随列表一次带回（issue #67）：按 uid 取，没有备注的账号给空串而不是缺字段
     # —— 前端两处视图（手机卡片 / 桌面表格）都直接读它，缺字段会多一处判空。
     notes = db.account_notes()
