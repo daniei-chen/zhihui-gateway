@@ -1339,6 +1339,75 @@ def _local_uids() -> set[str]:
     return found
 
 
+@router.get('/platforms/credits')
+def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
+    """各平台积分汇总（**只读快照**，不触发任何上游查询）。
+
+    存在的理由：积分这件事此前只能从运维告警的文案里看，或者直接查库。
+    运维想问「现在还剩多少、还能撑几天」，应该有一个明确的只读端点 ——
+    面板、脚本、外部对账都能用同一份口径。
+
+    刻意读快照而不是实时查上游：
+      · 这个端点可能被轮询，实时查会把上游打热；
+      · 快照每小时更新，`captured_at` 如实告诉调用方数字有多旧；
+      · 与告警用的是同一份数据，不会出现「告警说快没了、端点说还很足」。
+    """
+    from .. import credit_watch
+    threshold = credit_watch.low_ratio_threshold()
+    rows = []
+    for name in ('trae', 'workbuddy'):
+        try:
+            snap = credit_watch.latest(name, with_raw=True)
+        except Exception:  # noqa: BLE001 - 单个平台读失败不该拖垮整个端点
+            logger.warning('积分快照读取失败 platform=%s', name, exc_info=True)
+            snap = None
+        if not snap:
+            rows.append({'platform': name, 'known': False,
+                         'reason': '尚无积分快照'})
+            continue
+        snap = dict(snap)
+        ratio = credit_watch._ratio(snap.get('remain'), snap.get('total'))
+        rate = None
+        try:
+            rate = credit_watch.consumption_rate(name)
+        except Exception:  # noqa: BLE001
+            rate = None
+        item = {
+            'platform': name,
+            'known': True,
+            'account': snap.get('account'),
+            'plan': snap.get('plan'),
+            'total': snap.get('total'),
+            'used': snap.get('used'),
+            'remain': snap.get('remain'),
+            'ratio': None if ratio is None else round(ratio, 4),
+            'captured_at': snap.get('captured_at'),
+            'low_ratio_threshold': threshold,
+            'consumption': rate,
+            'days_left': (None if not rate or not rate.get('per_day')
+                          or snap.get('remain') is None
+                          else round(float(snap['remain']) / rate['per_day'], 1)),
+        }
+        raw = {}
+        try:
+            raw = json.loads(snap.get('raw') or '{}')
+        except (ValueError, TypeError):
+            raw = {}
+        if name == 'workbuddy':
+            item['accounts_ok'] = raw.get('accounts_ok')
+            item['low_accounts'] = [
+                {'nickname': a.get('nickname'), 'uid': a.get('uid'),
+                 'remain': a.get('remain')}
+                for a in (raw.get('low_accounts') or [])]
+            item['unreadable_accounts'] = [
+                {'nickname': a.get('nickname'), 'error': a.get('error')}
+                for a in (raw.get('accounts_failed') or [])]
+        rows.append(item)
+    return {'snapshot_only': True,
+            'note': '数字来自最近一次小时级快照，不触发上游查询；captured_at 是它的时刻',
+            'platforms': rows}
+
+
 @router.get('/accounts/credits-snapshot')
 def credits_snapshot(user: dict = Depends(security.current_user)) -> dict:
     """已登记的积分快照（只读）。
@@ -2032,7 +2101,7 @@ async def refresh_all_tokens(request: Request,
     # 换 token，属于最容易触发风控的批量动作，必须先过闸门。
     accountguard.guard_account_action(
         request, count=len(wb2api.list_auth_accounts(base_dir)),
-        what='一键刷新全部 Token', batch=True,
+        what='一键刷新全部 Token', batch=True, enforce_batch_max=False,
     )
     accounts = wb2api.list_auth_accounts(base_dir)
     sem = _refresh_semaphore()
@@ -2117,7 +2186,7 @@ async def run_refresh_plan_now(request: Request,
     # 腾讯刷新接口，正是事故当天那类动作，必须过闸门。
     accountguard.guard_account_action(
         request, count=len(wb2api.list_auth_accounts(_require_dir(_group(None)))),
-        what='立即执行全量续期', batch=True,
+        what='立即执行全量续期', batch=True, enforce_batch_max=False,
     )
     stats = await renew.refresh_all(force=True)
     renew.mark_plan_ran()
