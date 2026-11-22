@@ -1414,6 +1414,11 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
                 item['checkin_summary'] = credit_watch.checkin_today_summary()
             except Exception:  # noqa: BLE001
                 item['checkin_summary'] = None
+            # 现在是不是正处在签到窗口内：区分「还没到点」和「到点但失败了」。
+            try:
+                item['checkin_window'] = credit_watch.checkin_window()
+            except Exception:  # noqa: BLE001
+                item['checkin_window'] = None
             # 与上一条快照的差额：+N 基本就是签到/活动补进来的，-N 是真实消耗。
             # 这是回答「昨晚签到到底有没有生效」最直接的字段。
             item['usage_rate'] = usage_rate

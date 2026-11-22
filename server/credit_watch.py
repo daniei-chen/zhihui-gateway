@@ -556,6 +556,59 @@ def checkin_today_summary() -> dict | None:
     return summary
 
 
+def checkin_window() -> dict | None:
+    """当前是否处在自动签到窗口内，以及窗口的起止时刻。
+
+    为什么需要：签到是「5 点这一小时内的随机时刻」，所以早上打开面板时
+    经常看到「今天还没签到」—— 这到底是「还没到点」还是「到点但失败了」，
+    光看记录分不出来。窗口状态把这两件事分开。
+
+    配置直接读上游的 config.json（`checkin_hours` + `random_delay_minutes`），
+    不在这里维护第二份时间表 —— 两边各写一份，改配置时就必然对不上。
+    """
+    path = os.environ.get('WB_UPSTREAM_CONFIG')
+    if not path:
+        return None
+    try:
+        with open(path, encoding='utf-8') as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    sch = cfg.get('schedule') if isinstance(cfg, dict) else None
+    if not isinstance(sch, dict) or not sch.get('checkin_enabled'):
+        return {'enabled': False, 'active': False,
+                'note': '上游未启用自动签到'}
+    hours = sch.get('checkin_hours')
+    if not isinstance(hours, list) or not hours:
+        return {'enabled': True, 'active': False, 'note': '未配置签到小时'}
+    try:
+        delay = int(sch.get('random_delay_minutes') or 0)
+    except (TypeError, ValueError):
+        delay = 0
+    local = time.localtime()
+    hour = local.tm_hour
+    minute = local.tm_min
+    # 窗口 = 某个签到小时 + [0, delay] 分钟。delay 可能跨到下一小时。
+    active = False
+    window_start = window_end = None
+    for h in hours:
+        try:
+            h = int(h)
+        except (TypeError, ValueError):
+            continue
+        start_min = h * 60
+        end_min = start_min + max(0, delay)
+        cur = hour * 60 + minute
+        if start_min <= cur <= end_min:
+            active = True
+            window_start = '%02d:00' % h
+            window_end = '%02d:%02d' % (end_min // 60, end_min % 60)
+            break
+    return {'enabled': True, 'active': active, 'hours': hours,
+            'delay_minutes': delay, 'window_start': window_start,
+            'window_end': window_end, 'now': '%02d:%02d' % (hour, minute)}
+
+
 def checkin_stale_alert() -> list:
     """签到陈旧告警：连着没签成会主动报，而不是等有人打开面板。
 
