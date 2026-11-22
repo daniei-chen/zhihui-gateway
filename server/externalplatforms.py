@@ -336,8 +336,14 @@ def _hub_http_accounts():
             'cooldown_for': row.get('cooldownFor'),
             'device_bound': bool(row.get('deviceBound')),
             'device_id': str(row.get('deviceId') or ''),
+            # 2026-11-22：hub 的 credits 是
+            # {plan, total, limit, used, remain, checkin, checked_in}，
+            # **没有 `size`** —— 只读 size 会让 total 恒为 None，余额占比算不出来。
             'credits_remain': credits.get('remain'),
-            'credits_size': credits.get('size'),
+            'credits_size': (credits.get('size') or credits.get('total')
+                             or credits.get('limit')),
+            'credits_used': credits.get('used'),
+            'credits_plan': credits.get('plan') or '',
             'source': str(row.get('source') or ''),
         })
     return {'accounts': entries, 'via': 'hub-panel-api'}

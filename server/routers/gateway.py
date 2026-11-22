@@ -964,6 +964,12 @@ def normalize_chat_images(body: object) -> int:
 
 
 @requestperf.timed('settlement')
+def _account_is_foreign(actual_platform) -> bool:
+    """该平台是否有自己的账号体系（不能用 WorkBuddy 的账号字段）。"""
+    from ..platformpolicy import is_passthrough
+    return is_passthrough(actual_platform)
+
+
 def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None, effort: str | None = None, session_key: str | None = None) -> None:
     # Raw usage is the authority. Caller-side legacy integer coercion must not
     # turn invalid/absent supplier values into complete zero-valued evidence.
@@ -1064,7 +1070,12 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
         'compatibility_rules': json.dumps(getattr(state, 'compatibility_rules', ())) if state else None,
         'error_stage': state.error_stage if state else None,
         'release_id': observability.RELEASE_ID,
-        'account': state.account if state else None,
+        # 2026-11-22：直连平台（threeway）的账号在**它自己的上游**里，
+        # `x-wb-account-uid` 是 WorkBuddy 专属响应头。实测 trae 的记录里出现了
+        # WorkBuddy 的账号名（同一批名字在 wb 记录里也有）。宁可留空
+        # （= 平台级单账号），也不要记一个错误的人。
+        'account': (None if _account_is_foreign(getattr(state, 'actual_platform', None))
+                    else (state.account if state else None)),
         'usage_source': 'not_applicable' if state and state.endpoint in metering.NON_BILLABLE_PATHS else 'upstream' if measured.observed else 'unknown' if stream else 'not_reported',
         'usage_complete': int(measured.complete),
         'first_byte_ms': state.first_byte_ms if state else None,

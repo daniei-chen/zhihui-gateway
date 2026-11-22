@@ -852,6 +852,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         for _name, _active, _detail in disk_space_alerts(free):
             transition(_name, _active, _detail)
         # 账号池冗余度：单点平台没有冗余，一次限流就全断，而此前完全没有信号。
+        from . import credit_watch
+        for _name, _active, _detail in credit_watch.alerts():
+            transition(_name, _active, _detail)
         for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour

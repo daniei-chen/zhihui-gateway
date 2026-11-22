@@ -127,6 +127,7 @@ async def lifespan(app: FastAPI):
     # Portal accounts use a separate store; the persisted opt-in is off by default.
     from . import portalservice
     portal_checkins = None
+    credit_watch_task = None
     # 弱口令巡检改后台线程（原 sitecustomize 猴子补丁收编进源码，2026-10-27）：
     # 每个管理员 × 常见弱口令表逐个跑 PBKDF2，实测 3 管理员要 13.7 秒，
     # 阻塞在 startup 里是当时 15 秒停机窗口的最大单项。不拒绝启动：用户需要
@@ -253,6 +254,17 @@ async def lifespan(app: FastAPI):
             logger.error('steward startup failed; status is unavailable, gateway remains serving')
         if config.BACKGROUND_JOBS:
             portal_checkins = asyncio.create_task(portalservice.automatic_loop())
+        # 积分余额快照：Trae 按积分结算，但上游不返回单次消耗（周期批量结算），
+        # 所以先把余额按小时存下来 —— 有了「用量」与「余额减少」两条序列，
+        # 才能反推换算关系。只记录，不参与任何扣费判定。
+        if config.BACKGROUND_JOBS:
+            try:
+                from . import credit_watch as _credit_watch
+                credit_watch_task = _credit_watch.start()
+                logger.info('积分余额快照采集已接线并在运行')
+            except Exception:
+                credit_watch_task = None
+                logger.exception('积分快照采集启动失败（不影响其它功能）')
         await operational.initialize_readiness()
         monitor_task = asyncio.create_task(operational.monitor())
         yield
@@ -270,6 +282,12 @@ async def lifespan(app: FastAPI):
             portal_checkins.cancel()
             try:
                 await portal_checkins
+            except asyncio.CancelledError:
+                pass
+        if credit_watch_task is not None:
+            credit_watch_task.cancel()
+            try:
+                await credit_watch_task
             except asyncio.CancelledError:
                 pass
         if getattr(app.state, 'steward', None) is not None:
