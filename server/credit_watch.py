@@ -556,6 +556,34 @@ def checkin_today_summary() -> dict | None:
     return summary
 
 
+def checkin_stale_alert() -> list:
+    """签到陈旧告警：连着没签成会主动报，而不是等有人打开面板。
+
+    为什么值得单独一条告警：`stale` 之前只是端点里的一个字段 ——
+    不打开面板就永远看不到。而「连着两天没签到」正是那种**不看就不会发现**的事：
+    平台照常能用，只是每天少收入 2300 分。
+
+    26 小时这个界与汇总里的判定共用一处，避免两处口径不一致。
+    """
+    try:
+        summary = checkin_today_summary()
+    except Exception:  # noqa: BLE001
+        return [('workbuddy_checkin_stale', False, '签到记录读取失败，跳过检查')]
+    if not summary:
+        return [('workbuddy_checkin_stale', False, '尚无签到记录')]
+    age = summary.get('last_success_age_hours')
+    if summary.get('no_record_today') and age is None:
+        return [('workbuddy_checkin_stale', False, '尚无成功签到记录')]
+    if summary.get('stale'):
+        return [('workbuddy_checkin_stale', True,
+                 '已有 %.0f 小时没有成功签到（签到每天一次，说明漏了一轮以上）'
+                 % (age or 0))]
+    if age is None:
+        return [('workbuddy_checkin_stale', False, '尚无成功签到记录')]
+    return [('workbuddy_checkin_stale', False,
+             '上次成功签到在 %.1f 小时前' % age)]
+
+
 def usage_today(platform: str = 'workbuddy') -> dict | None:
     """今天到目前为止的积分用量，以及**昨日同一时刻**的用量。
 

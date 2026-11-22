@@ -863,6 +863,9 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # 「某天集体掉线」而不是慢慢变少，必须提前看日期。
         for _name, _active, _detail in credit_watch.account_token_alerts():
             transition(_name, _active, _detail)
+        # 签到陈旧：平台不会因此不可用，只是每天少收入 —— 不看就不会发现。
+        for _name, _active, _detail in credit_watch.checkin_stale_alert():
+            transition(_name, _active, _detail)
         for _name, _active, _detail in account_pool_alerts(collect_account_counts()):
             transition(_name, _active, _detail)
         # The installed host job is daily. Keep that honest: use a 26-hour
