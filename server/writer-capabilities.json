@@ -1,8 +1,8 @@
 {
   "account_admin_routes": "account-add-only-default-deny",
   "key_daily_usage": 1,
-  "release_id": "v1.4.7",
+  "release_id": "v1.4.8",
   "role_policy": 2,
   "schema": "zhihui.writer-release",
-  "version": 1
+  "version": "1.4.8"
 }

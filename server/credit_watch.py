@@ -231,6 +231,51 @@ def alerts() -> list:
              'trae 积分剩余 %.1f%%（阈值 %.0f%%）' % (ratio * 100, threshold * 100))]
 
 
+def consumption_rate(platform: str = 'workbuddy', days: int = 14,
+                     min_span_seconds: int = 6 * 3600) -> dict | None:
+    """从快照里估算**每日积分净消耗**，用来回答「还能撑几天」。
+
+    只累加余额**下降**的相邻区间：签到、旅行领奖都会让余额回升，把回升一起
+    算进去会把消耗抹平，结论变成「永远用不完」——那是假的安全感。
+    代价是净消耗略微低估（回升部分的真实支出看不见），对「还能撑多久」这个
+    问题来说，低估消耗 = 高估天数，所以下面在文案里明确写出样本时长，
+    让人自己判断可信度。
+
+    数据不足（少于 2 条快照，或跨度短于 min_span_seconds）时返回 None，
+    绝不拿两条相邻记录外推。
+    """
+    since = int(time.time()) - max(1, int(days)) * 86400
+    try:
+        rows = db.query(
+            'SELECT remain, captured_at FROM platform_credit_snapshots'
+            ' WHERE platform=? AND remain IS NOT NULL AND captured_at>=?'
+            ' ORDER BY captured_at ASC', (platform, since))
+    except Exception:  # noqa: BLE001 - 估算失败不该影响告警
+        return None
+    if not rows or len(rows) < 2:
+        return None
+    first, last = rows[0], rows[-1]
+    span = int(last['captured_at'] or 0) - int(first['captured_at'] or 0)
+    if span < min_span_seconds:
+        return None
+    consumed = 0.0
+    prev = None
+    for row in rows:
+        remain = row['remain']
+        if not isinstance(remain, (int, float)):
+            continue
+        if prev is not None:
+            delta = float(prev) - float(remain)
+            if delta > 0:
+                consumed += delta
+        prev = remain
+    if consumed <= 0:
+        return {'per_day': 0.0, 'consumed': 0.0, 'span_hours': span / 3600.0,
+                'samples': len(rows)}
+    return {'per_day': consumed / (span / 86400.0), 'consumed': consumed,
+            'span_hours': span / 3600.0, 'samples': len(rows)}
+
+
 def workbuddy_alerts() -> list:
     """WorkBuddy 账号池的积分告警。
 
@@ -259,15 +304,25 @@ def workbuddy_alerts() -> list:
         detail = ('workbuddy 池剩余 %.0f/%.0f（%.1f%%），%s'
                   % (row['remain'] or 0, row['total'] or 0, ratio * 100,
                      row['plan'] or '账号数未知'))
+        # 「还剩多少」之外，运维真正想问的是「还能撑几天」。
+        _rate = consumption_rate('workbuddy')
+        if _rate is None:
+            detail += '；样本不足，暂不预测消耗'
+        elif _rate['per_day'] <= 0:
+            detail += '；近 %.0f 小时无净消耗' % _rate['span_hours']
+        else:
+            _days = (row['remain'] or 0) / _rate['per_day']
+            detail += ('；按近 %.0f 小时实测（%.0f 分/天）约可撑 %.1f 天'
+                       % (_rate['span_hours'], _rate['per_day'], _days))
         active = ratio < threshold
         if ratio < CRITICAL_RATIO:
             lines.append(('account_credits_workbuddy', True, '[即将耗尽] ' + detail))
         elif active:
             lines.append(('account_credits_workbuddy', True, detail))
         else:
-            lines.append(('account_credits_workbuddy', False,
-                          'workbuddy 池剩余 %.1f%%（阈值 %.0f%%）'
-                          % (ratio * 100, threshold * 100)))
+            # 健康态也给完整 detail：运维每天想看的就是「还剩多少、还能撑几天」，
+            # 不该只在快见底时才告诉他。active=False 表示不告警，文案照样有信息。
+            lines.append(('account_credits_workbuddy', False, detail))
     # 单号余额：从 raw 里取最近一次采集的明细
     lows = []
     try:
