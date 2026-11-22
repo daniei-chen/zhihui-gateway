@@ -52,8 +52,12 @@ class MiddlewareBoundaryTest(unittest.IsolatedAsyncioTestCase):
         handle = asyncio.get_running_loop().call_later(0.01, released.set)
         try:
             with mock.patch.object(security, 'current_user', side_effect=blocking_identity):
+                # 2026-11-22：这里原来用 `qoder` —— 它 2026-11-19 已从
+                # `_qtg_platform_route` 的白名单摘除（qoder 官方不再送积分），
+                # 于是请求不再被改写、断言拿到的还是 `/api/accounts`，
+                # 从那时起这个用例一直失败。平台名只是载体，换成在营的 `trae`。
                 response = await main._qtg_platform_route(
-                    request('/api/accounts', [(b'x-qtg-platform', b'qoder')]), next_response)
+                    request('/api/accounts', [(b'x-qtg-platform', b'trae')]), next_response)
             self.assertEqual(response.status_code, 204)
         finally:
             released.set()

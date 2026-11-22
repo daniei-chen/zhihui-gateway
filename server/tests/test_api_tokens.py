@@ -509,17 +509,33 @@ class ExportRequiresSessionTest(unittest.TestCase):
                           '导出接口不再要求会话管理员 —— 它会把账号凭据打包给调用方')
 
     def test_merged_export_never_includes_account_credentials(self) -> None:
+        """导出只给对账字段，**绝不带凭据**。
+
+        2026-11-22 修：这个用例在 2026-11-20 之后一直失败（`ValueError: known
+        pool platform required`）。那次修的是**实现**——导出从 `build_aggregate`
+        改成 `build_pool_snapshot(rt, platform_of(request))`，因为不带平台会把
+        三个平台的账号并集导出去（豆包页面导出会拿到 Trae 的账号）。实现改了，
+        用例还停在旧形态：request 没带平台头、mock 的还是 `build_aggregate`。
+        这里按新契约重写：请求带平台、mock `build_pool_snapshot`。
+        """
         import asyncio
         import json
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch
         from server.qtgcore.routers import compat
-        account = SimpleNamespace(platform='qoder', uid='uid', name='name', realm='cn',
+        account = SimpleNamespace(platform='trae', uid='uid', name='name', realm='cn',
                                   state='ready', credits_remain=1, expires_iso=None,
                                   access_token='must-not-export', refresh_token='must-not-export')
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(rt=object())))
-        with patch.object(compat, 'build_aggregate', new=AsyncMock(return_value={})), \
-                patch.object(compat, 'all_accounts', return_value=[account]):
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(rt=object())),
+            headers={'x-qtg-platform': 'trae'},
+            query_params={},
+            state=SimpleNamespace(),
+        )
+        aggregate = SimpleNamespace(trae_accounts=[account], qoder_accounts=[],
+                                    wb_accounts=[], doubaowork_accounts=[])
+        with patch('server.qtgcore.service.build_pool_snapshot',
+                   new=AsyncMock(return_value=aggregate)):
             response = asyncio.run(compat.compat_accounts_export(request))
         data = json.loads(response.body)
         self.assertEqual(set(data[0]), {'platform', 'uid', 'name', 'realm', 'state', 'credits', 'expires_iso'})
