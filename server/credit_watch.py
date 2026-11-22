@@ -275,6 +275,48 @@ def alerts() -> list:
              'trae 积分剩余 %.1f%%（阈值 %.0f%%）' % (ratio * 100, threshold * 100))]
 
 
+#: `usage_events.credit_units` 是**百万分之一积分**（见 ledger.SCALE）。
+#: 与 Trae 那套按天结算不同，这里是 manager 按 token 定价算出来的**应扣**，
+#: 不是上游的实扣 —— 上游结算明显滞后（快照里 remain 一夜只降 1 分，
+#: 而同期按 token 估算要几千分）。所以拿它做**上界估算**：宁可高估消耗，
+#: 也不要因为看不到扣款就以为用不完。
+CREDIT_UNITS_SCALE = 1_000_000.0
+
+
+def usage_credit_rate(days: int = 7) -> dict | None:
+    """按 token 定价估算每日积分消耗（来自 usage_events，不依赖快照）。
+
+    为什么单独存在：`consumption_rate` 读的是**余额快照**，而上游积分结算
+    严重滞后 —— 快照里 remain 可以连续几十小时不动，于是算出「几乎不消耗」。
+    那是个危险的假象：manager 自己按 token 记的应扣额度，同期是每天上千分的。
+
+    这里返回的是**上界**（应扣），实际扣款只会更少、更晚。对「还能撑多久」
+    这种问题，高估消耗是安全侧。
+
+    数据不足返回 None（少于两天、或总额为 0）。
+    """
+    since = int(time.time()) - max(1, int(days)) * 86400
+    try:
+        rows = db.query(
+            'SELECT date(ts, "unixepoch", "localtime") AS day,'
+            ' SUM(credit_units) AS units, COUNT(*) AS n'
+            ' FROM usage_events WHERE ts>=? AND credit_units>0'
+            ' GROUP BY day ORDER BY day', (since,))
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows or len(rows) < 2:
+        return None
+    total = 0.0
+    for row in rows:
+        units = row['units']
+        if isinstance(units, (int, float)):
+            total += float(units) / CREDIT_UNITS_SCALE
+    if total <= 0:
+        return None
+    return {'per_day': total / len(rows), 'total': total,
+            'days': len(rows), 'samples': sum(int(r['n'] or 0) for r in rows)}
+
+
 def consumption_rate(platform: str = 'workbuddy', days: int = 14,
                      min_span_seconds: int = 6 * 3600) -> dict | None:
     """从快照里估算**每日积分净消耗**，用来回答「还能撑几天」。
@@ -349,15 +391,19 @@ def workbuddy_alerts() -> list:
                   % (row['remain'] or 0, row['total'] or 0, ratio * 100,
                      row['plan'] or '账号数未知'))
         # 「还剩多少」之外，运维真正想问的是「还能撑几天」。
-        _rate = consumption_rate('workbuddy')
+        #
+        # 用 usage_events 的 token 定价（应扣）而不是余额快照：上游积分结算
+        # 滞后严重，快照里 remain 可以连续几十小时不动，据此会得出「几乎不消耗」
+        # 的假象。这里给出的是**上界**——高估消耗，宁可早提醒。
+        _rate = usage_credit_rate()
         if _rate is None:
-            detail += '；样本不足，暂不预测消耗'
+            detail += '；用量样本不足，暂不预测消耗'
         elif _rate['per_day'] <= 0:
-            detail += '；近 %.0f 小时无净消耗' % _rate['span_hours']
+            detail += '；近 %d 天无用量' % _rate['days']
         else:
             _days = (row['remain'] or 0) / _rate['per_day']
-            detail += ('；按近 %.0f 小时实测（%.0f 分/天）约可撑 %.1f 天'
-                       % (_rate['span_hours'], _rate['per_day'], _days))
+            detail += ('；按近 %d 天 token 计价（%.0f 分/天，上界）约可撑 %.0f 天'
+                       % (_rate['days'], _rate['per_day'], _days))
         active = ratio < threshold
         if ratio < CRITICAL_RATIO:
             lines.append(('account_credits_workbuddy', True, '[即将耗尽] ' + detail))

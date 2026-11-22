@@ -1368,10 +1368,17 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
         snap = dict(snap)
         ratio = credit_watch._ratio(snap.get('remain'), snap.get('total'))
         rate = None
+        usage_rate = None
         try:
             rate = credit_watch.consumption_rate(name)
         except Exception:  # noqa: BLE001
             rate = None
+        if name == 'workbuddy':
+            # 余额快照会因上游结算滞后而「看不出消耗」，用量表才是可靠口径。
+            try:
+                usage_rate = credit_watch.usage_credit_rate()
+            except Exception:  # noqa: BLE001
+                usage_rate = None
         item = {
             'platform': name,
             'known': True,
@@ -1396,6 +1403,11 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
         if name == 'workbuddy':
             # 与上一条快照的差额：+N 基本就是签到/活动补进来的，-N 是真实消耗。
             # 这是回答「昨晚签到到底有没有生效」最直接的字段。
+            item['usage_rate'] = usage_rate
+            item['days_left_usage'] = (
+                None if not usage_rate or not usage_rate.get('per_day')
+                or snap.get('remain') is None
+                else round(float(snap['remain']) / usage_rate['per_day'], 1))
             item['delta'] = raw.get('delta')
             item['delta_since'] = raw.get('delta_since')
             item['accounts_ok'] = raw.get('accounts_ok')
