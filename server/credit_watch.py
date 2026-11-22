@@ -825,9 +825,25 @@ def workbuddy_alerts() -> list:
     return lines
 
 
+#: 签到窗口结束后的补采时段（本地小时）。自动签到落在 05:00-05:59，
+#: 而采集周期是一小时 —— 如果签到恰好落在这轮采集之后，要再等一小时才看得到。
+#: 在 06 点这一小时内补采一次，让「今早签到成不成」在上班前就能看清。
+SUPPLEMENT_HOUR = 6
+_supplement_day: str | None = None
+
+
+def _in_supplement_window() -> str | None:
+    """在补采窗口内返回本地日字符串，否则 None。"""
+    local = time.localtime()
+    if local.tm_hour != SUPPLEMENT_HOUR:
+        return None
+    return '%04d-%02d-%02d' % (local.tm_year, local.tm_mon, local.tm_mday)
+
+
 async def _loop() -> None:
     import asyncio
     from starlette.concurrency import run_in_threadpool
+    global _supplement_day
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
     while True:
         try:
@@ -838,6 +854,17 @@ async def _loop() -> None:
             raise
         except Exception:  # noqa: BLE001
             log.exception('积分快照采集失败（不影响在线请求）')
+        # 签到窗口后的补采：一小时内只补一次，补完就恢复正常周期。
+        day = _in_supplement_window()
+        if day and day != _supplement_day:
+            try:
+                written = await run_in_threadpool(capture_once)
+                _supplement_day = day
+                log.info('签到窗口补采完成（%s，记录 %d 条）', day, written)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.warning('签到窗口补采失败（不影响主周期）', exc_info=True)
         await asyncio.sleep(TICK_SECONDS)
 
 
