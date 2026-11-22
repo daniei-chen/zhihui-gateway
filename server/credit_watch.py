@@ -421,6 +421,41 @@ _CHECKIN_LINE = re.compile(
     r'checkin\s+(?P<name>\S+?)\((?P<uid8>[0-9a-f]{8})\):\s*(?P<result>.+?)\s*$')
 
 
+#: 上游签到脚本的输出是表格，不是 `checkin xx: done` 那种日志行：
+#:
+#:   uid                                  | nick   | status  | remain | detail
+#:   032d2815-1dbf-47f5-acb0-dcff9f3ce973 | 黑木   | OK      | 3992   | ...
+#:   total=23 ok=22 already=0 fail=1
+#:
+#: v1.5.15 第一次实现时按 `checkin ` 前缀统计，结果永远是「0 行」——
+#: 签到其实成功了（余额 +2200），但记录一条都没落库。
+_SIGNIN_ROW = re.compile(
+    r'^(?P<uid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+    r'\s*\|\s*(?P<nick>[^|]*?)\s*\|\s*(?P<status>[A-Za-z]+)\s*\|'
+    r'\s*(?P<remain>\d+)?')
+
+
+def _parse_signin_output(text: str) -> list:
+    """把签到脚本的表格输出解析成记录列表。
+
+    返回 [{'uid', 'nickname', 'status', 'remain'}]；解析不出的行跳过。
+    """
+    rows = []
+    seen = set()
+    for line in text.splitlines():
+        hit = _SIGNIN_ROW.match(line)
+        if not hit:
+            continue
+        uid = hit.group('uid')
+        if uid in seen:
+            continue
+        seen.add(uid)
+        rows.append({'uid': uid, 'nickname': (hit.group('nick') or '').strip(),
+                     'status': (hit.group('status') or '').upper(),
+                     'remain': hit.group('remain')})
+    return rows
+
+
 def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int:
     """把 wb2api 自动签到的结果同步进本端签到记录。
 
@@ -488,6 +523,36 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
             written += 1
         except Exception:  # noqa: BLE001
             log.warning('签到记录写入失败 uid8=%s', uid8)
+
+    # 第二种形状：上游脚本的表格输出（`uid | nick | status | remain`）。
+    # 这条日志里到底会出现哪种形状是上游决定的，不是我们能选的 ——
+    # 2026-11-23 就因为只认第一种，兜底签到成功后一条记录都没落库。
+    # 两种都收，谁出现收谁。
+    for item in _parse_signin_output(decoded):
+        uid8 = item['uid'][:8]
+        if uid8 in seen:
+            continue
+        seen.add(uid8)
+        status = item['status']
+        success = status in ('OK', 'ALREADY')
+        try:
+            exists = db.query_one(
+                'SELECT id FROM checkin_logs WHERE uid LIKE ? AND ts>=? AND kind=?'
+                ' ORDER BY id DESC LIMIT 1',
+                (uid8 + '%', int(time.mktime((local.tm_year, local.tm_mon,
+                                              local.tm_mday, 0, 0, 0, 0, 0, -1))),
+                 'checkin'))
+        except Exception:  # noqa: BLE001
+            exists = None
+        if exists:
+            continue
+        detail = status + ((' remain=' + item['remain']) if item['remain'] else '')
+        try:
+            db.add_checkin_log(uid8, item['nickname'], 'upstream-auto',
+                               success, None, detail[:120])
+            written += 1
+        except Exception:  # noqa: BLE001
+            log.warning('签到记录写入失败 uid8=%s（表格）', uid8)
     if written:
         log.info('已从上游日志同步 %d 条签到记录（%s）', written, day)
     return written
@@ -559,41 +624,6 @@ def checkin_today_summary() -> dict | None:
 #: 兜底签到的触发时刻（本地小时）。自动签到落在 05:00-05:59，如果上游调度器
 #: 整轮没跑，今天这 23 笔（约 2300 分）就白丢了。06 点的补采时段正好可以做一次兜底。
 CHECKIN_FALLBACK_HOUR = 6
-
-
-#: 上游签到脚本的输出是表格，不是 `checkin xx: done` 那种日志行：
-#:
-#:   uid                                  | nick   | status  | remain | detail
-#:   032d2815-1dbf-47f5-acb0-dcff9f3ce973 | 黑木   | OK      | 3992   | ...
-#:   total=23 ok=22 already=0 fail=1
-#:
-#: v1.5.15 第一次实现时按 `checkin ` 前缀统计，结果永远是「0 行」——
-#: 签到其实成功了（余额 +2200），但记录一条都没落库。
-_SIGNIN_ROW = re.compile(
-    r'^(?P<uid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
-    r'\s*\|\s*(?P<nick>[^|]*?)\s*\|\s*(?P<status>[A-Za-z]+)\s*\|'
-    r'\s*(?P<remain>\d+)?')
-
-
-def _parse_signin_output(text: str) -> list:
-    """把签到脚本的表格输出解析成记录列表。
-
-    返回 [{'uid', 'nickname', 'status', 'remain'}]；解析不出的行跳过。
-    """
-    rows = []
-    seen = set()
-    for line in text.splitlines():
-        hit = _SIGNIN_ROW.match(line)
-        if not hit:
-            continue
-        uid = hit.group('uid')
-        if uid in seen:
-            continue
-        seen.add(uid)
-        rows.append({'uid': uid, 'nickname': (hit.group('nick') or '').strip(),
-                     'status': (hit.group('status') or '').upper(),
-                     'remain': hit.group('remain')})
-    return rows
 
 
 def checkin_fallback(now: float | None = None) -> dict | None:
