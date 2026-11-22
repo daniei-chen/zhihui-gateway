@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.4.0 · one controlled route for WorkBuddy and Trae." />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.4.2 · one controlled route for WorkBuddy and Trae." />
   </picture>
 </a>
 
@@ -16,18 +16,32 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.0.svg" width="166" height="44" alt="Read the 1.4.0 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.2.svg" width="166" height="44" alt="Read the 1.4.2 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#140--platform-consolidation-and-end-to-end-wiring) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#142--credits-become-visible-platforms-consolidated) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.4.0 · Platform consolidation and end-to-end wiring
+## 1.4.2 · Credits become visible, platforms consolidated
+
+**Current product version: `v1.4.2`.** The gateway now carries exactly two platforms, **WorkBuddy** and **Trae**, and starts recording platform credit balances hourly — a low balance raises an alert early.
+
+- **Two platforms.** Doubao Work is retired. It is still recognised (stored keys will not break), but it is no longer an available platform.
+- **Balances are visible.** Previously there was only a redundancy alert ("this platform has a single account") and nothing about balances — while running out of credits takes the platform down with no advance notice. Now a low balance raises an alert, and below 5% it is marked as about to run out.
+- **Why record first, bill later.** Some platforms settle in credits, but the upstream does not report how many credits a single request consumed — consecutive requests leave the balance unchanged, so settlement is batched. Recording balances hourly builds the two series ("usage" and "balance drop") needed to derive the conversion.
+- **A field that skewed statistics, fixed.** Records for direct-upstream platforms used to carry another platform's account name, which made per-account statistics wrong. It is now left empty, meaning "single account at platform level".
+- **Platform attributes live in one place.** Adding a platform no longer means editing a dozen separate checks — one description line, and the rest follows.
+
+**Release boundary:** this release changes no billing behaviour — no quota consumption, no cost calculation, only an extra balance snapshot; the conversion still has to be determined after enough data accumulates.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.2)
+
+<br />
+
+## 1.4.0 · Platform consolidation and end-to-end wiring (historical)
 
 **Current product version: `v1.4.0`.** The gateway now carries exactly two platforms, **WorkBuddy** and **Trae**: Trae is fully wired into the shared authentication, rate limiting, budget and ledger, and Qoder is formally retired.
 

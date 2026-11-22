@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.4.0 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.4.2 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,18 +16,32 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.0.svg" width="166" height="44" alt="查看 1.4.0 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.2.svg" width="166" height="44" alt="查看 1.4.2 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#140--平台精简与打通专版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#142--积分可见与平台收敛) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.4.0 · 平台精简与打通专版
+## 1.4.2 · 积分可见与平台收敛
+
+**本次版本：`v1.4.2`**。网关现在只承载 **WorkBuddy** 与 **Trae** 两个平台，并开始按小时记录平台积分余额——余额偏低会提前告警。
+
+- **平台收敛为两个。** 豆包工作下线。它仍可被识别（存量密钥不会因此报错），但不再是可用平台。
+- **余额看得见了。** 此前只有「这个平台只有一个账号」这类冗余度告警，没有任何余额告警；而余额耗尽会让平台直接不可用，且无人知情。现在余额低于阈值就会提示，低于 5% 时标记为「即将耗尽」。
+- **为什么先记录、不扣费。** 有的平台按积分结算，但上游不返回单次请求消耗多少积分——连续几次请求后余额一动不动，说明这类结算是批量发生的。先把余额按小时存下来，等攒够「用量」与「余额减少」的对照，换算关系就能反推出来。
+- **修掉一个会让统计失真的字段。** 直连平台的记录此前会带上另一个平台的账号名，按账号统计时会失真。现在如实留空，表示平台级单账号。
+- **平台属性集中到一处。** 新增平台不再需要在十几个地方分别改判断——加一行描述即可，其余各处自动跟随。
+
+**发布边界如实列出。** 本版不改变任何计费行为：不扣额度、不算费用，只多一份余额快照；换算关系仍需数据积累后确定。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.2)
+
+<br />
+
+## 1.4.0 · 平台精简与打通专版（历史版本）
 
 **本次版本：`v1.4.0`**。网关从此只承载 **WorkBuddy** 与 **Trae** 两个平台：Trae 全面接入统一鉴权、限流、预算与账本，Qoder 正式下线。
 
