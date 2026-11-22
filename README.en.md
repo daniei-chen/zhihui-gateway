@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.4.2 · one controlled route for WorkBuddy and Trae." />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway · one controlled route for WorkBuddy and Trae." />
   </picture>
 </a>
 
@@ -16,99 +16,14 @@ Accounts, models, keys and usage stay together while platform authorization, bou
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.2.svg" width="166" height="44" alt="Read the 1.4.2 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-changelog.svg" width="166" height="44" alt="Read the changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#142--credits-become-visible-platforms-consolidated) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[Changelog](CHANGELOG.md) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
-
-<br />
-
-## 1.4.2 · Credits become visible, platforms consolidated
-
-**Current product version: `v1.4.2`.** The gateway now carries exactly two platforms, **WorkBuddy** and **Trae**, and starts recording platform credit balances hourly — a low balance raises an alert early.
-
-- **Two platforms.** Doubao Work is retired. It is still recognised (stored keys will not break), but it is no longer an available platform.
-- **Balances are visible.** Previously there was only a redundancy alert ("this platform has a single account") and nothing about balances — while running out of credits takes the platform down with no advance notice. Now a low balance raises an alert, and below 5% it is marked as about to run out.
-- **Why record first, bill later.** Some platforms settle in credits, but the upstream does not report how many credits a single request consumed — consecutive requests leave the balance unchanged, so settlement is batched. Recording balances hourly builds the two series ("usage" and "balance drop") needed to derive the conversion.
-- **A field that skewed statistics, fixed.** Records for direct-upstream platforms used to carry another platform's account name, which made per-account statistics wrong. It is now left empty, meaning "single account at platform level".
-- **Platform attributes live in one place.** Adding a platform no longer means editing a dozen separate checks — one description line, and the rest follows.
-
-**Release boundary:** this release changes no billing behaviour — no quota consumption, no cost calculation, only an extra balance snapshot; the conversion still has to be determined after enough data accumulates.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.2)
-
-<br />
-
-## 1.4.0 · Platform consolidation and end-to-end wiring (historical)
-
-**Current product version: `v1.4.0`.** The gateway now carries exactly two platforms, **WorkBuddy** and **Trae**: Trae is fully wired into the shared authentication, rate limiting, budget and ledger, and Qoder is formally retired.
-
-- **We regret that Qoder no longer offers a daily free-credit claim. Qoder has been removed from Zhihui Gateway, and we are actively looking for other free-quota reverse proxies. Please stay tuned.**
-- **Qoder is no longer "temporarily unavailable":** `/qoder/v1/*` now returns 410 with an explanation. It used to return 502 "upstream temporarily unavailable, retry in 5 seconds" — which told callers to wait, the opposite of the truth, and only pushed them to retry a platform that will never come back.
-- **Trae accounts are visible:** the account view reads through `trae2api-hub`'s redacted API and returns state, remaining days, device binding and credits; **tokens and device private keys never leave the process**.
-- **Refresh ownership is explicit:** refresh tokens rotate, so exactly one holder is allowed. The gateway no longer refreshes on its own and reports `triggered: false`; two refreshers invalidate each other's tokens — that is not hypothetical, it already happened once.
-- **Timeouts follow measurement:** Trae's last three days averaged 1.2 s with a 3.7 s maximum, so its timeout drops from the 300 s default to 120 s; WorkBuddy keeps 300 s because it genuinely has very long first bytes (up to 186 s).
-- **Alerts stop lying:** requests rejected by the upstream (for example an over-long prompt) stay in the review bucket by design and are no longer reported as "unsettled reservations"; pool alerts only count live platforms.
-- **Backups really restore again:** two broken links were fixed — the release manifest no longer disagrees with disk, and dangling portal pool mappings are gone — so backups return to `restore_check=ok`.
-
-**Release boundary:** this release does not claim to be defect-free; Trae still has a single account, which is a single point of failure that only another account can remove. A full frontend tree rebuild was not part of this round, but the platform allow-list and version number are synced into both source and build output.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.0)
-
-<br />
-
-## 1.2.25 · Rootless upstreams and request-body admission (historical)
-
-**Current product version: `v1.2.25`.** This release keeps the relay admission fix and moves the production Qoder data plane to the signed `1.9.9` rootless unit, with the launcher, systemd isolation contract and production audit receipt in source control.
-
-- **Consistent request limits:** relay locations use the 128 MB edge limit, a 60-second request-body timeout, rate/concurrency protection, and the shared error pages; Manager still enforces its own 64 MB forwarding limit.
-- **Streaming remains safe:** relay request buffering stays off and upstream retries stay disabled, so accepted streams are never replayed.
-- **The large-request path is verified:** a 4 MiB request on the domestic server reached authentication through Nginx and relay and returned 401 instead of 413; the post-fix observation window added zero 413 responses.
-- **Qoder runs rootless:** production `1.9.9` serves on `127.0.0.1:8799` as `10001:10001` with `CapEff=0`, `NoNewPrivileges=1` and seccomp mode 2; the signed broker still owns release verification, atomic activation and rollback.
-- **Runtime evidence is recorded:** SQLite integrity checks passed, and the Manager, relay, Qoder and Trae boundary evidence is captured in the [production audit](docs/PRODUCTION-AUDIT-2026-11-14.md).
-
-**Release boundary:** this release covers the request-body fix and Qoder rootless data-plane cutover; off-host disaster recovery is still unconfigured, and the historical 503/502 events need a separate upstream-availability review.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [Production audit](docs/PRODUCTION-AUDIT-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.25)
-
-<br />
-
-## 1.2.23 · Route handoff permissions and rootless acceptance (previous release)
-
-**Current product version: `v1.2.23`.** This release hardens the local Qoder/Trae route handoff: only trusted parents are accepted, and root-authored route files are published as `root:10001` with mode `0640`; Qoder Hub 1.9.9 also passed a private rootless start and restart-recovery canary without being declared production.
-
-- **Route permissions are explicit:** atomic replacement is followed by file and directory sync, so the rootless data plane can read the handoff while other local users cannot.
-- **The candidate is host-shaped:** Qoder 1.9.9 ran from a read-only release with external state and logs as `10001:10001`, zero effective capabilities, `NoNewPrivileges=1`, and seccomp mode 2.
-- **The upgrade boundary remains honest:** production stays on Qoder 1.9.8 until the persistent unit, real route switch/rollback, and authenticated data-plane acceptance are controlled by the release publisher.
-
-**Release boundary:** the Qoder rootless canary received no public traffic, and a source release does not claim that the engine has been upgraded in production.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.23)
-
-<br />
-
-## 1.2.22 · Relay startup and cutover contract (previous release)
-
-**Current product version: `v1.2.22`.** This release fixes the relay systemd contract on hosts that keep UID `10001` numeric without a passwd entry: a trusted launcher performs the one-way handoff, then the application runs as `10001:10001` with zero effective capabilities and `NoNewPrivileges`; Manager data, budgets and ledger state are unchanged.
-
-- **The relay can start on the actual host:** it no longer depends on a passwd user named `10001`.
-- **Cutover stays bounded:** route epochs remain monotonic, accepted streams are never replayed, and only declared loopback backends and inference paths are allowed.
-- **The test is host-shaped:** the unit contract is covered by regression tests and a private domestic-server canary checks identity and route switching.
-
-**Release boundary:** the domestic server does not currently enable the relay systemd unit, and this canary did not receive public traffic. A source release does not claim that production has switched.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.22)
-
-<br />
-
-## 1.2.21 · Ownership handoff, startup reliability and locked inputs (previous release)
-
-**Previous product version: `v1.2.21`.** Building on v1.2.20, this release made the root-to-UID-10001 data handoff explicit before startup, preventing a root-owned `users.json` from turning login into HTTP 500; it did not infer zero billing or mutate budget state.
-
-- **Reliable ownership handoff:** the trusted launcher normalizes the data directory, `users.json` and the initial-password file before dropping to UID/GID 10001; unsafe paths or failed repairs block startup before serving.
-- **Safer operations:** housekeeping waits up to 180 seconds for the backup producer and still fails closed if the lock never clears.
-- **Locked supply chain:** the release workflow checks the upstream source archive size and SHA256 before unpacking it.
-- **Transparent upstream state:** current WorkBuddy Manager, Qoder Hub and TraeWorkAssistant observations are recorded separately from production runtime provenance.
-- **Evidence boundary:** supplier rejection remains diagnostic evidence only; it is not treated as a zero-usage receipt.
-
-**Release boundary:** the GitHub Release is visible only after Ubuntu checks, artifact hashes and the draft release have been reviewed. A source release does not claim that the domestic production server has already switched.[Full changelog](CHANGELOG.md) · [Upstream review](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.21)
-
-> [!NOTE]
-> Test counts belong to a specific build. Release acceptance uses the Ubuntu gates, artifact digests and a separate production runtime check; synthetic fixtures do not represent every client or provider.
 
 <br />
 

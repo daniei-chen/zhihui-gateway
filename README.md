@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.4.2 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
   </picture>
 </a>
 
@@ -16,99 +16,14 @@
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.2.svg" width="166" height="44" alt="查看 1.4.2 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-changelog.svg" width="166" height="44" alt="查看更新日志" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#142--积分可见与平台收敛) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[更新日志](CHANGELOG.md) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
-
-<br />
-
-## 1.4.2 · 积分可见与平台收敛
-
-**本次版本：`v1.4.2`**。网关现在只承载 **WorkBuddy** 与 **Trae** 两个平台，并开始按小时记录平台积分余额——余额偏低会提前告警。
-
-- **平台收敛为两个。** 豆包工作下线。它仍可被识别（存量密钥不会因此报错），但不再是可用平台。
-- **余额看得见了。** 此前只有「这个平台只有一个账号」这类冗余度告警，没有任何余额告警；而余额耗尽会让平台直接不可用，且无人知情。现在余额低于阈值就会提示，低于 5% 时标记为「即将耗尽」。
-- **为什么先记录、不扣费。** 有的平台按积分结算，但上游不返回单次请求消耗多少积分——连续几次请求后余额一动不动，说明这类结算是批量发生的。先把余额按小时存下来，等攒够「用量」与「余额减少」的对照，换算关系就能反推出来。
-- **修掉一个会让统计失真的字段。** 直连平台的记录此前会带上另一个平台的账号名，按账号统计时会失真。现在如实留空，表示平台级单账号。
-- **平台属性集中到一处。** 新增平台不再需要在十几个地方分别改判断——加一行描述即可，其余各处自动跟随。
-
-**发布边界如实列出。** 本版不改变任何计费行为：不扣额度、不算费用，只多一份余额快照；换算关系仍需数据积累后确定。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.2)
-
-<br />
-
-## 1.4.0 · 平台精简与打通专版（历史版本）
-
-**本次版本：`v1.4.0`**。网关从此只承载 **WorkBuddy** 与 **Trae** 两个平台：Trae 全面接入统一鉴权、限流、预算与账本，Qoder 正式下线。
-
-- **我们很遗憾，Qoder 目前不再提供免费积分每日领取。我们在智汇网关中已移除 Qoder，目前正在积极寻找其他免费额度反向代理，敬请期待。**
-- **Qoder 不再「暂时不可用」**：`/qoder/v1/*` 现在直接返回 410 并说明原因。以前这里回的是 502「上游暂时不可用，请等 5 秒后重试」—— 那是在告诉调用方「等等就好」，与事实相反，只会让人反复重试一个永远不会回来的平台。
-- **Trae 的账号看得见**：账号视图经 `trae2api-hub` 的脱敏接口读取，返回状态、剩余天数、是否绑定设备与积分；**令牌与设备私钥一个字节都不外传**。
-- **续期归属讲清楚**：refresh token 是轮换式的，只允许一个持有者。网关侧不再代刷，接口如实返回 `triggered: false` —— 两边各自刷新会把对方的令牌作废，这不是假设，已经发生过一次。
-- **超时按实测收敛**：Trae 近 3 天实测延迟平均 1.2 秒、最大 3.7 秒，超时从默认 300 秒收到 120 秒；WorkBuddy 保持 300 秒，因为它确实有超长首字节（最长 186 秒）。
-- **告警不再骗人**：被上游拒绝（例如 prompt 过长）的请求按设计留在待核对，不再被当成「预留未归还」长期报警；账号池只统计在营平台。
-- **备份真的能恢复**：修好了发布清单与磁盘不一致、门户库悬空映射这两处断链，备份重新做到 `restore_check=ok`。
-
-**发布边界如实列出。** 本版不声称「绝对无漏洞、零缺陷」；Trae 目前只有一个账号，是单点，需要再加账号才能真正消除。控制台的整树重建没有在本轮做，平台白名单与版本号已同步到源码与构建产物。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.0)
-
-<br />
-
-## 1.2.25 · rootless 上游与请求体门禁（历史版本）
-
-**本次版本：`v1.2.25`**。这一版在修复 413 请求体门禁的基础上，把 Qoder 生产数据面切到签名 broker 验证后的 `1.9.9` rootless unit，并把 rootless 启动器、systemd 隔离合同和线上审计证据纳入源码。
-
-- **请求体边界一致**：relay 入口使用 128 MB 边缘上限、60 秒请求体超时、限流/并发保护和统一错误页；Manager 自身继续执行 64 MB 转发上限。
-- **流式行为保留**：relay 仍关闭请求体缓冲、禁止失败重试，已接受的流不会被重复发送。
-- **真实大请求已回归**：国内服务器 4 MiB 请求已穿过 Nginx 和 relay 到达鉴权层，返回 401 而不是 413；修复后观测窗口新增 413 为 0。
-- **Qoder 数据面已降权**：生产 `1.9.9` 在 `127.0.0.1:8799` 运行，实际 UID/GID 为 `10001:10001`，`CapEff=0`、`NoNewPrivileges=1`、seccomp 2；签名 broker 仍负责 release 校验、原子激活和失败回滚。
-- **数据库与运行时已复核**：SQLite 完整性检查通过，Manager、relay、Qoder 和 Trae 的边界证据写入[线上审计报告](docs/PRODUCTION-AUDIT-2026-11-14.md)。
-
-**发布边界如实列出。** 这次完成的是网关请求体修复和 Qoder rootless 数据面切换；离机灾备仍未配置，历史 503/502 仍需单独做上游可用性复盘。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [线上审计](docs/PRODUCTION-AUDIT-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.25)
-
-<br />
-
-## 1.2.23 · 路由交接权限与 rootless 验收（历史版本）
-
-**本次版本：`v1.2.23`**。这一版收紧 Qoder/Trae 本机路由交接：只允许受信父目录，root 写入的路由文件固定为 `root:10001`、`0640`，并完成 Qoder Hub v1.9.9 的私有 rootless 启动与重启恢复验收；不把候选引擎误报成生产升级。
-
-- **路由权限可验证**：原子替换后同步文件和目录，rootless 数据面可读，其他本机用户不可读写。
-- **候选启动更接近生产**：Qoder 1.9.9 在只读 release、外置状态与外置日志下以 `10001:10001`、零 capability、`NoNewPrivileges=1`、seccomp 2 运行。
-- **升级边界明确**：生产仍保持 Qoder 1.9.8；持久化 unit、真实路由切换/回退及认证数据面还要由受控发布器完成后才提升。
-
-**发布边界如实列出。** 本版 Qoder rootless canary 未接入公网流量，源码版本不能替代国内服务器的独立受控验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.23)
-
-<br />
-
-## 1.2.22 · Relay 启动与切流合同修复（历史版本）
-
-**本次版本：`v1.2.22`**。这一版修正推理 relay 在固定数字 UID 宿主上的 systemd 启动合同：先由受信入口完成一次性身份交接，再让实际应用以 `10001:10001`、零有效 capability 和 `NoNewPrivileges` 运行；不改变现网 Manager 的用户、额度或账本状态。
-
-- **relay 能真正启动**：不再假设宿主存在名为 `10001` 的 passwd 用户，避免 systemd `217/USER`。
-- **切流边界可核验**：保留 route epoch 单调、流请求不重放、仅允许 loopback backend 和推理白名单。
-- **验证更接近生产**：增加 unit 合同回归，并在国内服务器私有端口完成真实 relay 身份与切换 canary。
-
-**发布边界如实列出。** 当前服务器没有启用 relay systemd unit，本版私有 canary 未接入公网流量；源码版本不能替代国内服务器运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.22)
-
-<br />
-
-## 1.2.21 · 权限交接、启动可靠性与供应链锁定（历史版本）
-
-**上一版本：`v1.2.21`**。这一版在 v1.2.20 的运维恢复和供应链锁定基础上，修复 root 维护流程与 UID 10001 应用之间的敏感数据权限交接，避免 `users.json` 漂移导致登录 500；不自动改动额度、扣费或账本状态。
-
-- **权限交接可靠**：受信启动器在降权前收敛数据目录、`users.json` 和初始密码文件的属主与权限；不安全路径或无法修复时先阻断启动，避免服务带着隐蔽的 500 运行。
-- **运维恢复更稳**：housekeeping 获取备份生产锁时最多等待 180 秒，锁长期不释放仍失败关闭，不绕过备份生产者。
-- **供应链可复核**：release workflow 在解压前核对 upstream-src 的固定 SHA256 与字节数，浮动或被替换的资产直接阻断。
-- **上游状态透明**：记录当前观察到的 WorkBuddy Manager、Qoder Hub、TraeWorkAssistant 提交；上游新版本不会被误写成生产已升级。
-- **证据边界不变**：供应商拒绝只改善诊断分类，不被推断为零计费，也不会触发自动结清。
-
-**发布边界如实列出。** GitHub Release 需等待 Ubuntu CI、产物摘要和草稿 Release 核对；本次源码版本不能替代国内服务器当前运行版本的独立验收。[完整更新日志](CHANGELOG.md) · [上游复核](docs/UPSTREAM-REVIEW-2026-11-14.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.2.21)
-
-> [!NOTE]
-> 测试数量必须对应具体构建。发布前以 GitHub Ubuntu 门禁、构建产物摘要和服务器运行核验为验收口径；合成夹具不冒充所有客户端版本或供应商推理基准。
 
 <br />
 
