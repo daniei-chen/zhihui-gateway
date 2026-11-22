@@ -4,6 +4,6 @@
   "server/observability.py": "00b935e18152d1b11f0e14aa2a607dbe9ea5d71043f211882f08f9a98794c834",
   "server/pooledhttp.py": "b79057de5ec19e27fa54f648e5dc02543b539754e88413180623b30a0cc21938",
   "server/upstreamschema.py": "6852b8357d2192f55ab97a72e551a4656df0e9c2ac35b0b803b4af1254989363",
-  "server/routers/gateway.py": "c8ca6c76845c91d954a37ff21ef5bd7941cb645d9a139f46a6d667290c0639ed",
+  "server/routers/gateway.py": "5b0cff4cb6e6e6f0578c802b38a648fe2501d2d6750c379b4a4a9634ae8cd6bf",
   "server/services/wb2api.py": "487c5dc32cff5288e2209e8ee50b9414d04f40464c0daa62ef38ec2fad3522c5"
 }

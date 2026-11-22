@@ -28,8 +28,6 @@ def _load_policy():
     return module
 
 
-pp = _load_policy()
-
 #: 覆盖在营 + 历史 + 未知。
 PLAT = ("workbuddy", "trae", "doubaowork", "qoder", "unknown")
 
@@ -43,36 +41,37 @@ OLD = {
     "adapter": {"qoder": "qoder", "trae": "trae", "workbuddy": "wb", "doubaowork": "dbw"},
 }
 
-#: 现在的查表判定。
-NEW = {
-    "passthrough": pp.is_passthrough,
-    "stats_scope": lambda n: bool(pp.spec(n) and pp.spec(n).stats_scope),
-    "oauth_session": lambda n: bool(pp.spec(n) and pp.spec(n).oauth_session),
-    "realm_skip": lambda n: not (pp.spec(n) is None or pp.spec(n).realm_scoped),
-    "poll_mode": lambda n: bool(pp.spec(n) and pp.spec(n).auth_mode == "poll"),
-    "adapter": pp.adapter_attr,
-}
-
-EXPECT = {
-    "PLATFORMS set": set(pp.PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
-    "_ACCEPTED set": set(pp._ACCEPTED) == {"workbuddy", "trae", "doubaowork", "qoder"},
-    "DEFAULT_PLATFORMS": set(pp.DEFAULT_PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
-    "passthrough_names": set(pp.passthrough_names()) == {"trae", "doubaowork", "qoder"},
-}
-
 
 def main() -> int:
+    # **延迟加载**：本模块可能被测试收集器或其它工具 import，import 时不得有
+    # 任何副作用（不注册 sys.modules、不读盘、不改全局状态）。
+    pp = _load_policy()
+
+    new = {
+        "passthrough": pp.is_passthrough,
+        "stats_scope": lambda n: bool(pp.spec(n) and pp.spec(n).stats_scope),
+        "oauth_session": lambda n: bool(pp.spec(n) and pp.spec(n).oauth_session),
+        "realm_skip": lambda n: not (pp.spec(n) is None or pp.spec(n).realm_scoped),
+        "poll_mode": lambda n: bool(pp.spec(n) and pp.spec(n).auth_mode == "poll"),
+        "adapter": pp.adapter_attr,
+    }
+    expect = {
+        "PLATFORMS set": set(pp.PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
+        "_ACCEPTED set": set(pp._ACCEPTED) == {"workbuddy", "trae", "doubaowork", "qoder"},
+        "DEFAULT_PLATFORMS": set(pp.DEFAULT_PLATFORMS) == {"workbuddy", "trae", "doubaowork"},
+        "passthrough_names": set(pp.passthrough_names()) == {"trae", "doubaowork", "qoder"},
+    }
     bad = 0
     for key, old_value in OLD.items():
         for name in PLAT:
             old = old_value.get(name, "") if key == "adapter" else name in old_value
-            new = NEW[key](name)
-            if old != new:
+            got = new[key](name)
+            if old != got:
                 bad += 1
-                print("DIFF %-15s %-11s old=%r new=%r" % (key, name, old, new))
+                print("DIFF %-15s %-11s old=%r new=%r" % (key, name, old, got))
         print("%-15s 等价（%d 个平台名）" % (key, len(PLAT)))
     print()
-    for key, ok in EXPECT.items():
+    for key, ok in expect.items():
         print("%-18s %s" % (key, ok))
         if not ok:
             bad += 1
