@@ -493,6 +493,49 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
     return written
 
 
+def usage_today(platform: str = 'workbuddy') -> dict | None:
+    """今天到目前为止的积分用量，以及**昨日同一时刻**的用量。
+
+    为什么要跟「昨日同期」比，而不是跟「昨日全天」比：现在是凌晨四点，
+    拿半天用量去比全天会显得一切正常；只有对齐到同一个时刻，才能回答
+    「今天是不是突然用得多」。
+
+    数据来自 request_logs 的 credit 字段（按 token 定价的应扣），
+    与用量估算同源。表上有 ts 索引，两个范围查询都很轻。
+    """
+    now = time.time()
+    local = time.localtime(now)
+    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
+                                 0, 0, 0, 0, 0, -1)))
+    elapsed = int(now) - day_start
+    try:
+        today = db.query_one(
+            'SELECT SUM(credit) AS credits, COUNT(*) AS n FROM request_logs'
+            ' WHERE platform=? AND ts>=?', (platform, day_start))
+        yesterday = db.query_one(
+            'SELECT SUM(credit) AS credits, COUNT(*) AS n FROM request_logs'
+            ' WHERE platform=? AND ts>=? AND ts<?',
+            (platform, day_start - 86400, day_start - 86400 + elapsed))
+    except Exception:  # noqa: BLE001 - 估算失败不该影响告警
+        return None
+    if not today:
+        return None
+    # `db.query_one` 返回 sqlite3.Row —— **它没有 .get()**，只有下标和 .keys()。
+    # 2026-11-23 第二次踩这个坑（第一次在 workbuddy_alerts）。凡是要按「可能
+    # 不存在的键」取值的地方，先转 dict，别再直接对 Row 调 .get()。
+    today = dict(today)
+    yesterday = dict(yesterday) if yesterday else {}
+    t_credits = float(today['credits'] or 0)
+    y_credits = float(yesterday['credits'] or 0)
+    ratio = None
+    if y_credits > 0:
+        ratio = round(t_credits / y_credits, 2)
+    return {'credits': round(t_credits, 2), 'requests': int(today['n'] or 0),
+            'yesterday_same_time': round(y_credits, 2),
+            'yesterday_requests': int(yesterday['n'] or 0),
+            'ratio': ratio, 'elapsed_hours': round(elapsed / 3600.0, 2)}
+
+
 def today_gain(platform: str = 'workbuddy') -> dict | None:
     """今天（按本地日）累计的**正向增量**，用来回答「今天补进来多少」。
 

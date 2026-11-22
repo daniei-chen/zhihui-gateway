@@ -1401,6 +1401,12 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
         except (ValueError, TypeError):
             raw = {}
         if name == 'workbuddy':
+            # 今天到目前为止的用量，以及昨日同一时刻的对比 —— 只比「昨日全天」
+            # 在凌晨会显得一切正常，对齐到同一时刻才能回答「今天是不是突然多」。
+            try:
+                item['usage_today'] = credit_watch.usage_today(name)
+            except Exception:  # noqa: BLE001
+                item['usage_today'] = None
             # 与上一条快照的差额：+N 基本就是签到/活动补进来的，-N 是真实消耗。
             # 这是回答「昨晚签到到底有没有生效」最直接的字段。
             item['usage_rate'] = usage_rate
