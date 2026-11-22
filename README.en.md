@@ -3,31 +3,47 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.2.25 · one controlled route for WorkBuddy, Qoder and Trae." />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway 1.4.0 · one controlled route for WorkBuddy and Trae." />
   </picture>
 </a>
 
 <br />
 
-**One workspace, three clear paths.**
+**One workspace, two clear paths.**
 
 Accounts, models, keys and usage stay together while platform authorization, boundaries and records remain explicit.
 
 **English** · [简体中文](README.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="Open the Zhihui product site" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.25.svg" width="166" height="44" alt="Read the 1.2.25 changelog" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.0.svg" width="166" height="44" alt="Read the 1.4.0 changelog" /></a>
 <a href="#development-and-deployment"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="Read development and controlled deployment guidance" /></a>
 
 <br /><br />
 
-[This release](#1225--rootless-upstreams-and-request-body-admission) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
+[This release](#140--platform-consolidation-and-end-to-end-wiring) · [Workspace](#clear-and-usable) · [Routes](#one-entry-separate-routes) · [Boundaries](#state-support-and-limits-clearly) · [Development](#development-and-deployment)
 
 </div>
 
 <br />
 
-## 1.2.25 · Rootless upstreams and request-body admission
+## 1.4.0 · Platform consolidation and end-to-end wiring
+
+**Current product version: `v1.4.0`.** The gateway now carries exactly two platforms, **WorkBuddy** and **Trae**: Trae is fully wired into the shared authentication, rate limiting, budget and ledger, and Qoder is formally retired.
+
+- **We regret that Qoder no longer offers a daily free-credit claim. Qoder has been removed from Zhihui Gateway, and we are actively looking for other free-quota reverse proxies. Please stay tuned.**
+- **Qoder is no longer "temporarily unavailable":** `/qoder/v1/*` now returns 410 with an explanation. It used to return 502 "upstream temporarily unavailable, retry in 5 seconds" — which told callers to wait, the opposite of the truth, and only pushed them to retry a platform that will never come back.
+- **Trae accounts are visible:** the account view reads through `trae2api-hub`'s redacted API and returns state, remaining days, device binding and credits; **tokens and device private keys never leave the process**.
+- **Refresh ownership is explicit:** refresh tokens rotate, so exactly one holder is allowed. The gateway no longer refreshes on its own and reports `triggered: false`; two refreshers invalidate each other's tokens — that is not hypothetical, it already happened once.
+- **Timeouts follow measurement:** Trae's last three days averaged 1.2 s with a 3.7 s maximum, so its timeout drops from the 300 s default to 120 s; WorkBuddy keeps 300 s because it genuinely has very long first bytes (up to 186 s).
+- **Alerts stop lying:** requests rejected by the upstream (for example an over-long prompt) stay in the review bucket by design and are no longer reported as "unsettled reservations"; pool alerts only count live platforms.
+- **Backups really restore again:** two broken links were fixed — the release manifest no longer disagrees with disk, and dangling portal pool mappings are gone — so backups return to `restore_check=ok`.
+
+**Release boundary:** this release does not claim to be defect-free; Trae still has a single account, which is a single point of failure that only another account can remove. A full frontend tree rebuild was not part of this round, but the platform allow-list and version number are synced into both source and build output.[Full changelog](CHANGELOG.md) · [GitHub Release](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.0)
+
+<br />
+
+## 1.2.25 · Rootless upstreams and request-body admission (historical)
 
 **Current product version: `v1.2.25`.** This release keeps the relay admission fix and moves the production Qoder data plane to the signed `1.9.9` rootless unit, with the launcher, systemd isolation contract and production audit receipt in source control.
 
@@ -95,7 +111,7 @@ A calm workspace keeps the account pool, models, keys and usage in one place.
 
 <p align="center"><sub>Console rendering with synthetic data; it is not a production ledger.</sub></p>
 
-- **One workspace:** WorkBuddy, Qoder and Trae share the control surface while keeping their routes separate.
+- **One workspace:** WorkBuddy and Trae share the control surface while keeping their routes separate.
 - **Bounded authorization:** ordinary administrators see redacted information and add authorized accounts; super administrators manage keys, quotas, roles and system settings.
 - **Truthful usage:** missing provider evidence stays unknown instead of becoming a fabricated zero.
 - **Separate user space:** each user manages bound accounts, check-in batches, keys and request history within their own scope.

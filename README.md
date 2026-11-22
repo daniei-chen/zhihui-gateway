@@ -3,31 +3,47 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.2.25 · 让灵感出发，让工作向前。WorkBuddy、Qoder、Trae，独立授权与路由。" />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 1.4.0 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
   </picture>
 </a>
 
 <br />
 
-**一个工作台，三条清晰的路径。**
+**一个工作台，两条清晰的路径。**
 
 账号、模型、密钥与用量在一起；平台的授权、边界与记录不混在一起。
 
 **中文** · [English](README.en.md)
 
 <a href="https://zhihui.kaogong.art/"><img src="docs/images/readme/button-home.svg" width="144" height="44" alt="访问智汇产品首页" /></a>
-<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.2.25.svg" width="166" height="44" alt="查看 1.2.25 版本说明" /></a>
+<a href="CHANGELOG.md"><img src="docs/images/readme/button-release-v1.4.0.svg" width="166" height="44" alt="查看 1.4.0 版本说明" /></a>
 <a href="#开发与部署"><img src="docs/images/readme/button-develop.svg" width="154" height="44" alt="阅读开发与受控部署指南" /></a>
 
 <br /><br />
 
-[本次更新](#1225--rootless-上游与请求体门禁) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
+[本次更新](#140--平台精简与打通专版) · [工作台](#看得清也用得顺) · [接入](#统一入口各有其路) · [能力边界](#把支持与不支持都讲清楚) · [开发与部署](#开发与部署)
 
 </div>
 
 <br />
 
-## 1.2.25 · rootless 上游与请求体门禁
+## 1.4.0 · 平台精简与打通专版
+
+**本次版本：`v1.4.0`**。网关从此只承载 **WorkBuddy** 与 **Trae** 两个平台：Trae 全面接入统一鉴权、限流、预算与账本，Qoder 正式下线。
+
+- **我们很遗憾，Qoder 目前不再提供免费积分每日领取。我们在智汇网关中已移除 Qoder，目前正在积极寻找其他免费额度反向代理，敬请期待。**
+- **Qoder 不再「暂时不可用」**：`/qoder/v1/*` 现在直接返回 410 并说明原因。以前这里回的是 502「上游暂时不可用，请等 5 秒后重试」—— 那是在告诉调用方「等等就好」，与事实相反，只会让人反复重试一个永远不会回来的平台。
+- **Trae 的账号看得见**：账号视图经 `trae2api-hub` 的脱敏接口读取，返回状态、剩余天数、是否绑定设备与积分；**令牌与设备私钥一个字节都不外传**。
+- **续期归属讲清楚**：refresh token 是轮换式的，只允许一个持有者。网关侧不再代刷，接口如实返回 `triggered: false` —— 两边各自刷新会把对方的令牌作废，这不是假设，已经发生过一次。
+- **超时按实测收敛**：Trae 近 3 天实测延迟平均 1.2 秒、最大 3.7 秒，超时从默认 300 秒收到 120 秒；WorkBuddy 保持 300 秒，因为它确实有超长首字节（最长 186 秒）。
+- **告警不再骗人**：被上游拒绝（例如 prompt 过长）的请求按设计留在待核对，不再被当成「预留未归还」长期报警；账号池只统计在营平台。
+- **备份真的能恢复**：修好了发布清单与磁盘不一致、门户库悬空映射这两处断链，备份重新做到 `restore_check=ok`。
+
+**发布边界如实列出。** 本版不声称「绝对无漏洞、零缺陷」；Trae 目前只有一个账号，是单点，需要再加账号才能真正消除。控制台的整树重建没有在本轮做，平台白名单与版本号已同步到源码与构建产物。[完整更新日志](CHANGELOG.md) · [GitHub Release ↗](https://github.com/daniei-chen/zhihui-gateway/releases/tag/v1.4.0)
+
+<br />
+
+## 1.2.25 · rootless 上游与请求体门禁（历史版本）
 
 **本次版本：`v1.2.25`**。这一版在修复 413 请求体门禁的基础上，把 Qoder 生产数据面切到签名 broker 验证后的 `1.9.9` rootless unit，并把 rootless 启动器、systemd 隔离合同和线上审计证据纳入源码。
 
@@ -89,13 +105,13 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="site/home/preview/dashboard-mobile.jpg" />
-    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="智汇实际控制台构建预览：三平台切换、冰蓝趋势图、数据卡片与浮动 Dock。全部数字为合成数据，不是线上账单。" />
+    <img src="site/home/preview/dashboard-desktop.jpg" width="100%" alt="智汇实际控制台构建预览：双平台切换、冰蓝趋势图、数据卡片与浮动 Dock。全部数字为合成数据，不是线上账单。" />
   </picture>
 </a>
 
 <p align="center"><sub>实际控制台构建渲染 · 合成数据 · 非当前生产状态截图</sub></p>
 
-- **管理不割裂。** WorkBuddy、Qoder、Trae 共用工作台，保留平台切换、明暗主题、浮动 Dock 与五语界面。
+- **管理不割裂。** WorkBuddy 与 Trae 共用工作台，保留平台切换、明暗主题、浮动 Dock 与五语界面。
 - **授权有边界。** 普通管理员可浏览脱敏信息、添加授权账号；超级管理员维护密钥额度、用户权限与系统设置。
 - **用量不猜测。** 查看缓存命中、输出速度和请求记录；缺少可靠用量时显示未知，不包装成零消耗。
 - **用户有自己的空间。** 独立工作台管理绑定账号、签到批次、密钥与请求记录；财务策略以已批准配置和可核验证据为准。
@@ -121,7 +137,7 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/capabilities-mobile.svg" />
-  <img src="docs/images/readme/capabilities.svg" width="100%" alt="接入、授权、核对：三平台独立路由，按需授权，不把缺失用量当作零。" />
+  <img src="docs/images/readme/capabilities.svg" width="100%" alt="接入、授权、核对：双平台独立路由，按需授权，不把缺失用量当作零。" />
 </picture>
 
 <br />
@@ -216,7 +232,7 @@ cd zhihui-gateway
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [安全审查报告](docs/SECURITY-AUDIT.md) |
 | 用户文档 | [使用](docs/usage.md) · [功能](docs/features.md) · [截图](docs/screenshots.md) · [开发](docs/DEVELOPMENT.md) · [安全说明](docs/security-notes.md) · [API Token](docs/api-tokens.md) · [账号出口](docs/account-proxy-routes.md) · [审计报告](docs/SECURITY-AUDIT.md) · [发布签名](docs/release-signing.md) |
 
-本地开发不是一键安装完整三平台服务。引擎、账号授权、认证与持久化需要单独配置，静态导出也不包含后端。
+本地开发不是一键安装完整双平台服务。引擎、账号授权、认证与持久化需要单独配置，静态导出也不包含后端。
 
 ```text
 固定来源 → 构建与隔离测试 → 哈希、签名与回执 → 受控发布 → 运行核验
