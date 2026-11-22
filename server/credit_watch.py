@@ -513,8 +513,11 @@ def checkin_today_summary() -> dict | None:
             ' WHERE ts>=? AND kind=? ORDER BY ts DESC', (day_start, 'checkin'))
     except Exception:  # noqa: BLE001
         return None
+    # 今天一条记录都没有时**仍然返回**（不再是 None）：上一次成功签到距今多久
+    # 这个信息跟「今天有没有」无关，恰恰在「今天一条都没有」时最有用 ——
+    # 它能区分「签到还没到点」和「连着两天没签成」。
     if not rows:
-        return None
+        rows = []
     success = failed = already = 0
     failed_names = []
     for row in rows:
@@ -528,8 +531,29 @@ def checkin_today_summary() -> dict | None:
             failed += 1
             if len(failed_names) < 5:
                 failed_names.append(str(row['message'] or '')[:60])
-    return {'total': len(rows), 'success': success, 'already': already,
-            'failed': failed, 'failed_samples': failed_names}
+    summary = {'total': len(rows), 'success': success, 'already': already,
+               'failed': failed, 'failed_samples': failed_names,
+               'no_record_today': not rows}
+    # 上一次成功签到距今多久。单看「今天签到成功」不够 —— 如果某个环节坏了，
+    # 每天都是 0 成功，而面板只显示今天的 0，看起来像「今天还没到点」。
+    # 有一个「距上次成功已经 N 小时」的数，才能发现「连着几天没签成」。
+    try:
+        last = db.query_one(
+            'SELECT ts FROM checkin_logs WHERE success=1 AND kind=?'
+            ' ORDER BY ts DESC LIMIT 1', ('checkin',))
+    except Exception:  # noqa: BLE001
+        last = None
+    if last and last['ts']:
+        age = (now - float(last['ts'])) / 3600.0
+        summary['last_success_at'] = int(last['ts'])
+        summary['last_success_age_hours'] = round(age, 1)
+        # 超过 26 小时没成功签到，说明至少漏了一轮（签到是每天一次）。
+        summary['stale'] = bool(age > 26)
+    else:
+        summary['last_success_at'] = None
+        summary['last_success_age_hours'] = None
+        summary['stale'] = False
+    return summary
 
 
 def usage_today(platform: str = 'workbuddy') -> dict | None:
