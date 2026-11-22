@@ -3,6 +3,41 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.5.21] - 2026-11-23
+
+**账号池告警改成中文 —— 它是整套告警里唯一一条英文。**
+
+### 一、问题
+
+同一屏日志里是这样混着的：
+
+```
+operational alert name=account_credits_trae     detail=trae 积分剩余 527.9/3796.0（13.9%）...
+operational alert name=account_pool_trae        detail=trae has exactly 1 account; there is no redundancy...
+operational alert name=workbuddy_low_accounts   detail=2 个 WorkBuddy 账号余额低于 1000 分...
+```
+
+**两条中文中间夹一条英文。** 而且「no redundancy」「takes the whole platform down」
+这种说法，中文运维者要在大脑里翻译一次才能判断严重性。
+
+### 二、改后
+
+```
+trae 没有可用账号：该平台的请求会全部失败，直到补进一个账号
+trae 只有 1 个账号，没有冗余 —— 一次限流或凭证过期就会让整个平台不可用
+trae 有 5 个账号
+```
+
+**「凭证过期」比「token expiry」更贴这个系统的实际用语**（账号文件里叫凭证，
+告警名也叫 `workbuddy_token_expiry`）。
+
+### 三、三条文案的判据没变
+
+- 0 个账号 → 不可用，请求必失败
+- 1 个账号 → 单点，一次限流就全断
+- ≥2 → 正常，不告警
+
+只报 0 与 1：「两个账号也不算宽裕」是扩容判断，不是「现在就有风险」的事实。
 ## [1.5.20] - 2026-11-23
 
 **低余额告警说清楚「要不要紧」。**

@@ -409,20 +409,21 @@ def account_pool_alerts(counts: dict) -> list[tuple[str, bool, str]]:
         count = counts[platform]
         if count is None:
             continue
+        # 文案一律中文：这里原本是英文，和同一屏里其它告警混在一起很扎眼，
+        # 而且「no usable accounts / no redundancy」这种说法对中文运维者要翻译一次。
         if count <= 0:
             alerts.append((
                 f'account_pool_{platform}', True,
-                f'{platform} has no usable accounts; every request on this platform '
-                f'will fail until one is added'))
+                f'{platform} 没有可用账号：该平台的请求会全部失败，直到补进一个账号'))
         elif count == 1:
             alerts.append((
                 f'account_pool_{platform}', True,
-                f'{platform} has exactly 1 account; there is no redundancy, so a single '
-                f'rate limit or token expiry takes the whole platform down'))
+                f'{platform} 只有 1 个账号，没有冗余 —— 一次限流或凭证过期'
+                f'就会让整个平台不可用'))
         else:
             alerts.append((
                 f'account_pool_{platform}', False,
-                f'{platform} has {count} accounts'))
+                f'{platform} 有 {count} 个账号'))
     return alerts
 
 
