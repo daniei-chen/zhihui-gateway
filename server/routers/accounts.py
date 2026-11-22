@@ -1394,6 +1394,10 @@ def platforms_credits(user: dict = Depends(security.current_user)) -> dict:
         except (ValueError, TypeError):
             raw = {}
         if name == 'workbuddy':
+            # 与上一条快照的差额：+N 基本就是签到/活动补进来的，-N 是真实消耗。
+            # 这是回答「昨晚签到到底有没有生效」最直接的字段。
+            item['delta'] = raw.get('delta')
+            item['delta_since'] = raw.get('delta_since')
             item['accounts_ok'] = raw.get('accounts_ok')
             item['low_accounts'] = [
                 {'nickname': a.get('nickname'), 'uid': a.get('uid'),

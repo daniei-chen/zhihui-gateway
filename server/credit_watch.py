@@ -172,10 +172,32 @@ def _wb_pool_snapshot() -> dict | None:
     }
 
 
+def _last_remain(platform: str):
+    """上一条快照的 (remain, captured_at)；读失败返回 (None, None)。"""
+    try:
+        row = db.query_one(
+            'SELECT remain, captured_at FROM platform_credit_snapshots'
+            ' WHERE platform=? ORDER BY id DESC LIMIT 1', (platform,))
+    except Exception:  # noqa: BLE001
+        return None, None
+    if not row:
+        return None, None
+    return row['remain'], row['captured_at']
+
+
 def capture_once() -> int:
     rows = _snapshot_rows()
     wb = _wb_pool_snapshot()
     if wb:
+        # 与上一条的差额：这是回答「昨晚签到到底有没有生效」最直接的证据。
+        # 余额上升只可能来自签到/活动/领奖，下降才是真实消耗 ——
+        # 之前只有「剩余多少」，看不出中间发生过什么。
+        prev_remain, prev_at = _last_remain('workbuddy')
+        if isinstance(prev_remain, (int, float)) and wb.get('remain') is not None:
+            wb['delta'] = round(float(wb['remain']) - float(prev_remain), 2)
+            wb['delta_since'] = prev_at
+            log.info('workbuddy 余额 %+.0f（%s → %s 分）',
+                     wb['delta'], prev_remain, wb['remain'])
         rows.append(wb)
     if not rows:
         return 0
