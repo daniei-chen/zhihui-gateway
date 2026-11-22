@@ -556,6 +556,61 @@ def checkin_today_summary() -> dict | None:
     return summary
 
 
+#: 兜底签到的触发时刻（本地小时）。自动签到落在 05:00-05:59，如果上游调度器
+#: 整轮没跑，今天这 23 笔（约 2300 分）就白丢了。06 点的补采时段正好可以做一次兜底。
+CHECKIN_FALLBACK_HOUR = 6
+
+
+def checkin_fallback(now: float | None = None) -> dict | None:
+    """兜底签到：确认今天一笔都没签成时，主动跑一次上游签到脚本。
+
+    为什么不信任上游调度器：它只在启动日志里说「签到已启用：[5] 点」，
+    **没有任何执行记录**（2026-11-23 实测 05:00-05:59 窗口内一条 checkin
+    日志都没有）。签到这件事每天只有一次机会，不能把结果完全押在一个
+    看不见的调度器上。
+
+    触发条件全部满足才动手：
+      1. 处于兜底时段（06 点这一小时）
+      2. 今天签到记录里 success + already 都为 0
+      3. 容器与签到脚本都可用
+
+    重复调用的保护：签到脚本本身对「今天已签」返回 already，不会重复领；
+    而且这里以本端签到记录为前提，签过一次就不会再进。
+    """
+    moment = time.localtime(now)
+    if moment.tm_hour != CHECKIN_FALLBACK_HOUR:
+        return None
+    try:
+        summary = checkin_today_summary()
+    except Exception:  # noqa: BLE001
+        return None
+    if not summary:
+        return None
+    if (summary.get('success') or 0) + (summary.get('already') or 0) > 0:
+        return None
+    name = (os.environ.get('WB2API_CONTAINER') or '').strip()
+    if not name:
+        return None
+    try:
+        proc = subprocess.run(
+            ['docker', 'exec', name, 'sh', '-c',
+             'cd /app && ./signin.sh 2>&1 | tail -40'],
+            capture_output=True, timeout=300, check=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning('兜底签到执行失败：%s', exc)
+        return {'ran': False, 'reason': str(exc)}
+    out = ''
+    try:
+        out = (proc.stdout or b'').decode('utf-8', 'replace')
+    except Exception:  # noqa: BLE001
+        out = ''
+    ok_lines = sum(1 for line in out.splitlines() if 'checkin ' in line)
+    log.warning('兜底签到已执行（退出码 %s，%d 行结果），因为今天没有任何签到记录',
+                proc.returncode, ok_lines)
+    return {'ran': True, 'returncode': proc.returncode,
+            'lines': ok_lines, 'output_tail': out[-600:]}
+
+
 def checkin_window() -> dict | None:
     """当前是否处在自动签到窗口内，以及窗口的起止时刻。
 
@@ -910,6 +965,18 @@ async def _loop() -> None:
         # 签到窗口后的补采：一小时内只补一次，补完就恢复正常周期。
         day = _in_supplement_window()
         if day and day != _supplement_day:
+            # 先兜底签到，再补采 —— 顺序不能反：补采里会同步签到日志，
+            # 若先补采再兜底，刚补签出来的结果要多等一小时才可见。
+            try:
+                outcome = await run_in_threadpool(checkin_fallback)
+                if outcome and outcome.get('ran'):
+                    log.warning('今日无任何签到记录，已执行兜底签到（退出码 %s）',
+                                outcome.get('returncode'))
+                    await asyncio.sleep(5)   # 给签到脚本一点时间落日志
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.warning('兜底签到异常（不影响补采）', exc_info=True)
             try:
                 written = await run_in_threadpool(capture_once)
                 _supplement_day = day
