@@ -611,6 +611,18 @@ def checkin_fallback(now: float | None = None) -> dict | None:
             'lines': ok_lines, 'output_tail': out[-600:]}
 
 
+def _local_utc_offset_hours() -> int:
+    """本地相对 UTC 的小时偏移（Asia/Shanghai 为 +8）。
+
+    上游配置里的 `*_hours` 是按 **UTC** 解析的 —— 依据：`travel_hours=[9,21]`
+    在 48 小时里只在日志时间 09 点和 21 点执行，而容器日志时间戳本身是 UTC。
+
+    不换算就直接拿本地小时去比，会把窗口整体错开 8 小时：配置写 21 点，
+    本地 21 点会被算成窗口内，实际那是 UTC 21 点的 8 小时之后。
+    """
+    return int(-(time.altzone if time.daylight else time.timezone) / 3600)
+
+
 def checkin_window() -> dict | None:
     """当前是否处在自动签到窗口内，以及窗口的起止时刻。
 
@@ -643,9 +655,13 @@ def checkin_window() -> dict | None:
     local = time.localtime()
     hour = local.tm_hour
     minute = local.tm_min
+    offset = _local_utc_offset_hours()
     # 窗口 = 某个签到小时 + [0, delay] 分钟。delay 可能跨到下一小时。
+    # 上游按 UTC 解析小时，因此比较前先把「本地当前时刻」换成 UTC 小时；
+    # 报告给调用方的窗口起止则换算回本地，方便人看懂。
     active = False
     window_start = window_end = None
+    utc_minute_now = ((hour - offset) % 24) * 60 + minute
     for h in hours:
         try:
             h = int(h)
@@ -653,11 +669,13 @@ def checkin_window() -> dict | None:
             continue
         start_min = h * 60
         end_min = start_min + max(0, delay)
-        cur = hour * 60 + minute
-        if start_min <= cur <= end_min:
+        if start_min <= utc_minute_now <= end_min:
             active = True
-            window_start = '%02d:00' % h
-            window_end = '%02d:%02d' % (end_min // 60, end_min % 60)
+            local_start = (h + offset) % 24
+            local_end_min = end_min + offset * 60
+            window_start = '%02d:00' % local_start
+            window_end = '%02d:%02d' % ((local_end_min // 60) % 24,
+                                        local_end_min % 60)
             break
     return {'enabled': True, 'active': active, 'hours': hours,
             'delay_minutes': delay, 'window_start': window_start,
