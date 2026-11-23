@@ -21,12 +21,22 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from server import db  # noqa: E402
 from server.routers import stats  # noqa: E402
 
 
 def _day(offset: int) -> str:
-    """相对今天的日期串（offset 为负表示往前）——与后端同一本地时区口径。"""
-    return time.strftime('%Y-%m-%d', time.localtime(time.time() + offset * 86400))
+    """相对今天的日期串（offset 为负表示往前）。
+
+    **必须走 `db.day_of`（固定 UTC+8），不能 `time.localtime`。** 后者跟着进程
+    时区走，而生产口径是固定的：`routers/stats.py` 里 `today = db.day_of(...)`，
+    注释还专门警告过「用 time.strftime 会跟着进程时区走」。
+
+    2026-11-24 早上就因此红了一次：为了门禁确定，我把 TZ 设成 UTC，于是测试算出
+    11-23、生产算出 11-24，「今日」整体差一天。这类缺陷只在本地 00:00–08:00
+    这段窗口出现，白天跑永远是绿的。
+    """
+    return db.day_of(time.time() + offset * 86400)
 
 
 class CreditsFlowShapingTest(unittest.TestCase):

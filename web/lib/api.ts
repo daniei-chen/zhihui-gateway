@@ -742,6 +742,9 @@ export interface TrafficRecord extends Record<string, unknown> {
   diff?: {path: string; before: unknown; after: unknown; change?: string}[];
   response?: unknown;
   key?: {name?: string; prefix?: string};
+  truncated?: boolean;
+  /** 被裁剪的字段路径。正文过长时网关只保留头尾，这里说明哪些字段看不全。 */
+  truncated_fields?: string[];
 }
 
 export const trafficApi = {

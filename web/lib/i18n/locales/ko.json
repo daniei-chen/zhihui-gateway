@@ -2240,6 +2240,7 @@
     "diffBefore": "변경 전",
     "diffAfter": "변경 후",
     "noDiff": "게이트웨이가 요청을 바꾸지 않았습니다",
-    "response": "업스트림 응답"
+    "response": "업스트림 응답",
+    "truncatedHint": "다음 필드는 너무 길어 시작과 끝만 보관했습니다:"
   }
 }

@@ -176,18 +176,112 @@ def _diff(before, after, path: str = '$', out: list | None = None, limit: int = 
     return out
 
 
+# ── 裁剪 ──────────────────────────────────────────────────────────────────
+#
+# 2026-11-24 改进：原先超过上限就 `raw[:LIMIT_BYTES]`，把 JSON **砍断**。
+# 真实数据立刻打脸 —— 上线第一天 156 条记录里 124 条（79%）被砍，而这个功能
+# 的意义恰恰是「看清当时到底发了什么」；砍断后 JSON 非法，前端展开不了，
+# 等于在最需要它的长上下文场景下什么都看不到。
+#
+# 现在改成**逐字段裁剪，保持 JSON 始终合法**：超长的字符串保留头尾、中间标注
+# 省略了多少，消息条数过多时保留首尾、中间插一条说明。代价是单个字段看不全，
+# 换来的是结构、顺序、条数与其余所有字段都完整可读。
+
+#: 单个字符串字段的上限。32 KB 足够看清一段 prompt 或一段代码的轮廓。
+FIELD_LIMIT = 32 * 1024
+#: 整体兜底上限（字段裁剪后仍超，就裁剪消息列表）。
+LIST_LIMIT = 256 * 1024
+#: 消息列表裁剪时保留的头部与尾部条数。
+LIST_HEAD = 8
+LIST_TAIL = 4
+
+
+def _shrink_text(text: str, limit: int = FIELD_LIMIT) -> tuple[str, bool]:
+    """保留头尾、中间标注省略。按字节判断，但按字符边界切，不切坏多字节。"""
+    encoded = text.encode('utf-8')
+    if len(encoded) <= limit:
+        return text, False
+    half = max(limit // 2, 64)
+    head = encoded[:half].decode('utf-8', 'ignore')
+    tail = encoded[-half:].decode('utf-8', 'ignore')
+    omitted = len(encoded) - len(head.encode('utf-8')) - len(tail.encode('utf-8'))
+    marker = f'\n……（此处省略 {omitted} 字节，共 {len(encoded)} 字节）……\n'
+    return head + marker + tail, True
+
+
+def _shrink(node, path: str, found: list) -> None:
+    """就地裁剪一个子树里的超长字符串，把被裁剪的路径记进 `found`。"""
+    if isinstance(node, dict):
+        for key in list(node):
+            value = node[key]
+            if isinstance(value, str):
+                shrank, was = _shrink_text(value)
+                if was:
+                    node[key] = shrank
+                    found.append(f'{path}.{key}')
+            else:
+                _shrink(value, f'{path}.{key}', found)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            if isinstance(value, str):
+                shrank, was = _shrink_text(value)
+                if was:
+                    node[index] = shrank
+                    found.append(f'{path}[{index}]')
+            else:
+                _shrink(value, f'{path}[{index}]', found)
+
+
+def _shrink_messages(section: dict, path: str, found: list) -> bool:
+    """消息条数太多时保留首尾、中间插一条说明。返回是否动过。
+
+    为什么需要这层：字段裁剪只解决「单条太长」，解决不了「几千条消息」。
+    后者如果继续整体砍字节，JSON 又会非法 —— 所以这里按**条**裁剪，
+    结构仍然是合法的 JSON。
+    """
+    messages = section.get('messages')
+    if not isinstance(messages, list) or len(messages) <= LIST_HEAD + LIST_TAIL + 1:
+        return False
+    dropped = len(messages) - LIST_HEAD - LIST_TAIL
+    placeholder = {
+        'role': 'system',
+        'content': f'……（此处省略 {dropped} 条消息，共 {len(messages)} 条）……',
+        '_traffic_placeholder': True,
+    }
+    section['messages'] = messages[:LIST_HEAD] + [placeholder] + messages[-LIST_TAIL:]
+    found.append(f'{path}.messages（省略 {dropped} 条）')
+    return True
+
+
+def _prepare(payload: dict) -> bytes:
+    """裁剪到可落盘尺寸，返回要写的字节。保证 JSON 合法。"""
+    found: list[str] = []
+    for section_name in ('client', 'gateway', 'response'):
+        section = payload.get(section_name)
+        if isinstance(section, (dict, list)):
+            _shrink(section, section_name, found)
+
+    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+    if len(raw) > LIST_LIMIT:
+        # 字段都裁过了还超限，说明是条数问题。只动请求侧的消息列表。
+        for section_name in ('client', 'gateway'):
+            section = payload.get(section_name)
+            if isinstance(section, dict) and _shrink_messages(section, section_name, found):
+                break
+        raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+
+    payload['truncated'] = bool(found)
+    payload['truncated_fields'] = found[:40]
+    if payload['truncated']:
+        _STATS['truncated'] += 1
+    return json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+
+
 # ── 写入 ──────────────────────────────────────────────────────────────────
 
 def _write_payload(payload: dict) -> None:
     """真正落盘。只在后台线程里执行。"""
-    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
-    truncated = False
-    if len(raw) > LIMIT_BYTES:
-        # 截断而不是拒写：能看到前 256 KB 也比什么都没有强，且明确标记过。
-        raw = raw[:LIMIT_BYTES]
-        truncated = True
-        _STATS['truncated'] += 1
-    payload['truncated'] = truncated
+    raw = _prepare(payload)
 
     root = base_dir()
     day = time.strftime('%Y-%m-%d', time.gmtime(payload['ts']))
@@ -207,7 +301,8 @@ def _write_payload(payload: dict) -> None:
         'key': (payload.get('key') or {}).get('name'),
         'latency_ms': payload.get('latency_ms'),
         'size': len(raw),
-        'truncated': truncated,
+        'truncated': payload.get('truncated', False),
+        'truncated_fields': payload.get('truncated_fields', []),
         'file': f'{day}/{name}',
     }
     with (root / 'index.jsonl').open('a', encoding='utf-8') as handle:
@@ -444,11 +539,21 @@ def render_html(record: dict) -> str:
         for item in record.get('diff') or []
     ) or '<tr><td colspan="3">（与客户端请求一致，网关未改写）</td></tr>'
     title = '抓包 ' + text(record.get('request_id'))
+    # 裁剪说明要写进导出文件：这份文件是要发给别人看的，不说明的话对方会以为
+    # 原始请求就只有这么短，比不记录更误导。
+    fields = record.get('truncated_fields') or []
+    truncated_note = ''
+    if fields:
+        items = '、'.join(text(item) for item in fields)
+        truncated_note = (f'<div class="note">以下字段因过长被省略，只保留了开头与结尾：'
+                          f'<code>{items}</code></div>')
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>{title}</title>
 <style>
 body{{font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px;background:#0f1115;color:#e6e6e6}}
 h1{{font-size:18px;margin:0 0 4px}} .meta{{color:#8b93a1;font-size:13px;margin-bottom:20px}}
+.note{{margin:0 0 18px;padding:10px 12px;border:1px solid #6b4b16;background:#2a2113;color:#f0d9a8;font-size:12px;border-radius:8px}}
+.note code{{display:block;margin-top:6px;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:#ffd591}}
 section{{margin:0 0 22px;border:1px solid #262b34;border-radius:8px;overflow:hidden}}
 h2{{font-size:13px;margin:0;padding:9px 12px;background:#171b22;color:#9aa4b2;font-weight:600;letter-spacing:.04em}}
 pre{{margin:0;padding:12px;overflow:auto;max-height:520px;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}}
@@ -457,7 +562,7 @@ td{{border-top:1px solid #262b34;padding:8px 10px;vertical-align:top}}
 td:first-child{{width:26%;color:#8bb7ff;font-family:ui-monospace,Menlo,Consolas,monospace}}
 </style></head><body>
 <h1>智汇网关 · 调用轨迹</h1>
-<div class="meta">{text(record.get('request_id'))} ｜ {text(record.get('path'))} ｜ 状态 {text(record.get('status'))} ｜ {text(record.get('latency_ms'))} ms ｜ 流式 {text(record.get('stream'))}</div>
+<div class="meta">{text(record.get('request_id'))} ｜ {text(record.get('path'))} ｜ 状态 {text(record.get('status'))} ｜ {text(record.get('latency_ms'))} ms ｜ 流式 {text(record.get('stream'))}</div>{truncated_note}
 <section><h2>客户端请求</h2><pre>{dump(record.get('client'))}</pre></section>
 <section><h2>网关发往上游</h2><pre>{dump(record.get('gateway'))}</pre></section>
 <section><h2>差异</h2><table>{diff_rows}</table></section>

@@ -206,6 +206,16 @@ export default function TrafficPage() {
 
           <div className="space-y-5 overflow-y-auto px-4 pb-6">
             {detailError ? <LoadError message={detailError} /> : null}
+            {detail?.truncated_fields?.length ? (
+              // 正文太长时网关只保留头尾，中间那段是真的没存下来。
+              // 不说明的话，用户会以为请求本来就这么短 —— 那样比不记录更误导。
+              <div className="rounded-md border border-amber-300/60 bg-amber-50/60 px-3 py-2 text-[12px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                <p className="font-medium">{t('traffic.truncatedHint')}</p>
+                <p className="mt-1 font-mono text-[11px] break-all">
+                  {detail.truncated_fields.join('、')}
+                </p>
+              </div>
+            ) : null}
             {detail ? (
               <>
                 <section>

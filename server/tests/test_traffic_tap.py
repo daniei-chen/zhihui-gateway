@@ -267,5 +267,115 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn('<script>alert(1)</script>', html)
 
 
+class ShrinkTest(unittest.TestCase):
+    """裁剪必须保持 JSON 合法。
+
+    2026-11-24 上线第一天就撞上：156 条真实记录里 124 条（79%）被「截断」，
+    而原实现是 `raw[:LIMIT_BYTES]` —— 把 JSON 字节串直接砍断。前端拿到的是
+    半个对象，`JSON.parse` 报错，于是这个功能在最需要的长上下文场景下
+    什么都看不到，只剩一个「已截断」的标记。
+
+    核心断言因此是：**裁剪之后 `json.loads` 必须成功**。
+    """
+
+    def _prepare(self, payload: dict) -> dict:
+        return json.loads(traffic._prepare(payload))
+
+    def _base(self, **sections) -> dict:
+        payload = {'request_id': 'r1', 'ts': 1, 'status': 200, 'stream': False,
+                   'latency_ms': 5, 'diff': [], 'response': {}}
+        payload.update(sections)
+        return payload
+
+    def test_small_payload_untouched(self) -> None:
+        payload = self._base(client={'model': 'm', 'messages': [
+            {'role': 'user', 'content': '你好'}]})
+        out = self._prepare(payload)
+        self.assertFalse(out['truncated'])
+        self.assertEqual(out['truncated_fields'], [])
+        self.assertEqual(out['client']['messages'][0]['content'], '你好')
+
+    def test_long_text_keeps_head_and_tail_and_stays_valid(self) -> None:
+        big = 'A' * 100_000 + '尾部标记'
+        payload = self._base(client={'messages': [{'role': 'user', 'content': big}]})
+        out = self._prepare(payload)
+        content = out['client']['messages'][0]['content']
+        self.assertTrue(out['truncated'])
+        self.assertIn('此处省略', content)
+        self.assertTrue(content.startswith('A'), '头部被丢了')
+        self.assertIn('尾部标记', content, '尾部被丢了')
+        self.assertLess(len(content.encode()), len(big.encode()))
+        self.assertEqual(out['truncated_fields'],
+                         ['client.messages[0].content'])
+
+    def test_structure_survives_shrinking(self) -> None:
+        """裁剪只动字符串，键、条数、其它字段都必须原样。"""
+        payload = self._base(
+            client={'model': 'glm', 'temperature': 0.2, 'messages': [
+                {'role': 'system', 'content': 'B' * 80_000},
+                {'role': 'user', 'content': '短'}]},
+            gateway={'model': 'cn:glm', 'messages': [
+                {'role': 'user', 'content': '短'}]})
+        out = self._prepare(payload)
+        self.assertEqual(out['client']['model'], 'glm')
+        self.assertEqual(out['client']['temperature'], 0.2)
+        self.assertEqual(len(out['client']['messages']), 2)
+        self.assertEqual(out['client']['messages'][1]['content'], '短')
+        self.assertEqual(out['gateway']['model'], 'cn:glm')
+
+    def test_many_messages_are_trimmed_by_count(self) -> None:
+        """条数问题靠裁条解决：保留首尾，中间插一条说明，JSON 仍然合法。"""
+        messages = [{'role': 'user', 'content': 'x' * 2000} for _ in range(2000)]
+        payload = self._base(client={'messages': list(messages)},
+                             gateway={'messages': list(messages)})
+        out = self._prepare(payload)
+        kept = out['client']['messages']
+        self.assertEqual(len(kept), traffic.LIST_HEAD + 1 + traffic.LIST_TAIL)
+        self.assertTrue(kept[traffic.LIST_HEAD].get('_traffic_placeholder'))
+        self.assertIn('省略', kept[traffic.LIST_HEAD]['content'])
+        self.assertTrue(any('messages' in item for item in out['truncated_fields']))
+
+    def test_diff_is_never_shrunk(self) -> None:
+        """差异是摘要，逐条都很短；裁它等于毁掉最该看的东西。"""
+        payload = self._base(
+            client={'messages': [{'role': 'user', 'content': 'A' * 90_000}]},
+            diff=[{'path': '$.messages[0].content', 'before': 'A' * 90_000,
+                   'after': 'A' * 90_000}])
+        out = self._prepare(payload)
+        self.assertEqual(out['diff'][0]['before'], 'A' * 90_000)
+
+    def test_truncated_flag_is_in_the_written_payload(self) -> None:
+        """回归：`truncated` 曾经在 json.dumps **之后**才赋值，所以落盘的记录里
+        根本没这个字段 —— 索引里有、正文里没有，对不上。"""
+        payload = self._base(client={'messages': [
+            {'role': 'user', 'content': 'A' * 90_000}]})
+        out = self._prepare(payload)
+        self.assertIn('truncated', out)
+        self.assertIs(out['truncated'], True)
+        self.assertIn('truncated_fields', out)
+
+    def test_multibyte_is_not_split(self) -> None:
+        """按字节判断、按字符边界切：切坏的多字节会让解码后留下乱码。"""
+        payload = self._base(client={'messages': [
+            {'role': 'user', 'content': '汉' * 40_000}]})
+        out = self._prepare(payload)
+        content = out['client']['messages'][0]['content']
+        self.assertNotIn('\ufffd', content, '裁剪切坏了多字节字符')
+        self.assertIn('此处省略', content)
+
+    def test_export_html_states_what_was_trimmed(self) -> None:
+        """导出文件要写明哪些字段被裁 —— 它是要转发给别人的，不说明会误导。"""
+        record = {'request_id': 'r1', 'ts': 1, 'status': 200, 'stream': False,
+                  'latency_ms': 1, 'path': '/x', 'client': {}, 'gateway': {},
+                  'diff': [], 'response': {},
+                  'truncated_fields': ['client.messages[0].content']}
+        html = traffic.render_html(record)
+        self.assertIn('只保留了开头与结尾', html)
+        self.assertIn('client.messages[0].content', html)
+        clean = dict(record)
+        clean['truncated_fields'] = []
+        self.assertNotIn('只保留了开头与结尾', traffic.render_html(clean))
+
+
 if __name__ == '__main__':
     unittest.main()

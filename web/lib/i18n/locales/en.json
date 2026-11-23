@@ -2267,6 +2267,7 @@
     "diffBefore": "Before",
     "diffAfter": "After",
     "noDiff": "The gateway did not rewrite this request",
-    "response": "Upstream response"
+    "response": "Upstream response",
+    "truncatedHint": "These fields were too long and were trimmed to their start and end:"
   }
 }

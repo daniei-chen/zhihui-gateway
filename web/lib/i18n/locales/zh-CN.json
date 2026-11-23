@@ -1989,6 +1989,7 @@
     "diffBefore": "改前",
     "diffAfter": "改后",
     "noDiff": "网关未改写请求",
-    "response": "上游响应"
+    "response": "上游响应",
+    "truncatedHint": "以下字段因过长被省略，只保留了开头与结尾："
   }
 }

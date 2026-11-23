@@ -20,8 +20,12 @@ from server import config, db, keysvc, security  # noqa: E402
 
 
 def _day(offset: int) -> str:
-    """相对今天 offset 天的日期串（负数 = 过去）。"""
-    return time.strftime('%Y-%m-%d', time.localtime(time.time() + offset * 86400))
+    """相对今天 offset 天的日期串（负数 = 过去）。
+
+    与生产同口径：固定 UTC+8 的 `db.day_of`，不用 `time.localtime`
+    （后者跟着进程时区走，只在本地午夜到早上八点这段窗口与生产岔开）。
+    """
+    return db.day_of(time.time() + offset * 86400)
 
 
 class UsageEndpointTest(unittest.TestCase):
