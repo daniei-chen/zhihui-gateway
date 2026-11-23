@@ -24,13 +24,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import subprocess
 import sys
 import traceback
 from pathlib import Path
 
-TRUST = Path('/opt/workbuddy-manager/release-trust-ed25519.pem')
+#: 信任公钥。允许用环境变量覆盖：发布镜像里没有这个路径（它是宿主文件），
+#: 需要挂到别处再指过来。硬编码过一次，结果门禁在容器里根本跑不起来 ——
+#: 而容器正是切换指针前唯一能跑 python 的地方。
+TRUST = Path(os.environ.get('WB_RELEASE_TRUST',
+                           '/opt/workbuddy-manager/release-trust-ed25519.pem'))
 
 
 def _step(label, fn):
@@ -44,6 +49,29 @@ def _step(label, fn):
 
 
 def _openssl(manifest: Path, signature: Path) -> str:
+    """校验分离签名：**cryptography 优先，宿主 openssl 回退**。
+
+    为什么不能只调 openssl：发布镜像（alpine）里没有它，而门禁必须在
+    **切换指针之前**就能跑 —— 那正是容器里唯一能跑 python 的地方。
+    两套实现都是「对原始字节做 Ed25519 验签」，结论等价；签名本身是确定性
+    的，不存在「一边过一边不过」。
+
+    装了 cryptography 却验签失败时**直接报错**，不回退 —— 否则会变成
+    「库说不对，那就当它对」，把失败吞掉。
+    """
+    data = manifest.read_bytes()
+    sig = signature.read_bytes()
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    except ImportError:
+        pass
+    else:
+        try:
+            load_pem_public_key(TRUST.read_bytes()).verify(sig, data)
+        except InvalidSignature:
+            raise AssertionError(f'signature rejected: {signature.name}') from None
+        return 'Signature Verified (cryptography)'
     proc = subprocess.run(
         ['/usr/bin/openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(TRUST),
          '-rawin', '-in', str(manifest), '-sigfile', str(signature)],
