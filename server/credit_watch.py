@@ -62,6 +62,20 @@ def _ratio(remain, total):
     return None if total <= 0 else remain / total
 
 
+def _local_day_start(now: float | None = None) -> int:
+    """本地当天零点的 unix 秒。
+
+    **不要用 SQL 的 `strftime('%s','now','start of day','localtime')`** ——
+    实测它给出的不是本地零点，会让「今日用量」虚高一个量级（曾出现 254 对
+    28.74 的偏差）。这里在 Python 侧用年月日拼本地零点，行为明确。
+
+    抽成函数前，这段计算在四个地方各写了一遍，改一处漏三处的风险太高。
+    """
+    local = time.localtime(now)
+    return int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
+                            0, 0, 0, 0, 0, -1)))
+
+
 def _snapshot_rows() -> list:
     """从平台视图取带积分字段的账号；任何失败都返回空列表，绝不抛。"""
     rows = []
@@ -510,8 +524,7 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
             exists = db.query_one(
                 'SELECT id FROM checkin_logs WHERE uid LIKE ? AND ts>=? AND kind=?'
                 ' ORDER BY id DESC LIMIT 1',
-                (uid8 + '%', int(time.mktime((local.tm_year, local.tm_mon,
-                                              local.tm_mday, 0, 0, 0, 0, 0, -1))),
+                (uid8 + '%', _local_day_start(),
                  'checkin'))
         except Exception:  # noqa: BLE001
             exists = None
@@ -539,8 +552,7 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
             exists = db.query_one(
                 'SELECT id FROM checkin_logs WHERE uid LIKE ? AND ts>=? AND kind=?'
                 ' ORDER BY id DESC LIMIT 1',
-                (uid8 + '%', int(time.mktime((local.tm_year, local.tm_mon,
-                                              local.tm_mday, 0, 0, 0, 0, 0, -1))),
+                (uid8 + '%', _local_day_start(),
                  'checkin'))
         except Exception:  # noqa: BLE001
             exists = None
@@ -569,9 +581,7 @@ def checkin_today_summary() -> dict | None:
     得区分开）。
     """
     now = time.time()
-    local = time.localtime(now)
-    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
-                                 0, 0, 0, 0, 0, -1)))
+    day_start = _local_day_start(now)
     try:
         rows = db.query(
             'SELECT success, message FROM checkin_logs'
@@ -705,6 +715,105 @@ def _local_utc_offset_hours() -> int:
     return int(-(time.altzone if time.daylight else time.timezone) / 3600)
 
 
+def checkin_retry_failed(now: float | None = None) -> dict | None:
+    """对今天签到失败的账号单独重试一次。
+
+    ## 为什么需要它
+
+    2026-11-23 实测：签到在 UTC 整点触发后一口气打完 23 个账号，
+    其中 4 个吃到上游限流：
+
+        user-resource 带个糖给你(1df31610): upstream soft_rate (http 429)
+        user-resource 192****6832(3084fd29): upstream soft_rate (http 429)
+
+    **失败的不是账号，是节奏** —— 打太快。而失败代价是当天这 100 分拿不到。
+
+    ## 怎么做
+
+    把失败的 uid 挑出来，软链到容器内的临时目录，隔一会儿只对这几个打一次。
+    单个账号的签到路径已验证可用（`signin.sh <dir>` 只遍历该目录下的 json）。
+
+    ## 触发条件
+
+    只在「今天有成功记录、同时有失败记录」时动手。完全没签到的情况由
+    `checkin_fallback` 负责，两者不重叠。
+
+    返回 None 表示「不需要重试」；返回 dict 表示确实跑过。
+    """
+    summary = checkin_today_summary()
+    if summary.get('no_record_today'):
+        return None            # 完全没记录 → 交给 checkin_fallback
+    if not summary.get('failed'):
+        return None            # 没有失败 → 什么都不用做
+    if not (summary.get('success') or summary.get('already')):
+        return None            # 全失败 → 全量重签更合适，交给 fallback
+
+    # 从今天的签到记录里取失败账号的完整 uid
+    day_start = _local_day_start(now)
+    rows = db.query(
+        'SELECT DISTINCT uid FROM checkin_logs WHERE kind=? AND ts>=? AND success=0',
+        ('checkin', day_start))
+    failed_uids = []
+    for row in rows:
+        row = dict(row)
+        uid = str(row.get('uid') or '')
+        if uid:
+            failed_uids.append(uid)
+    if not failed_uids:
+        return None
+
+    name = _wb_container()
+    delay = 30
+    log.warning('今日有 %d 个账号签到失败，%d 秒后单独重试：%s',
+                len(failed_uids), delay, '、'.join(u[:8] for u in failed_uids[:6]))
+    time.sleep(delay)
+
+    # 建临时目录，只放失败账号
+    # 注意：checkin_logs 里存的是 8 位 uid，而 auths 目录里的文件名是完整
+    # uuid（workbuddy-<uuid>.json）。用前缀通配匹配，不要直接拼全名 ——
+    # 拼全名会一个文件都链不上，重试变成空转。
+    setup = 'mkdir -p /tmp/retry && rm -f /tmp/retry/*.json'
+    for uid in failed_uids:
+        setup += (' && for f in /app/auths/workbuddy-%s*.json; do '
+                  '[ -e "$f" ] && ln -sf "$f" /tmp/retry/; done' % uid)
+    try:
+        subprocess.run(['docker', 'exec', name, 'sh', '-c', setup],
+                       capture_output=True, timeout=60)
+        proc = subprocess.run(
+            ['docker', 'exec', name, 'sh', '-c', 'cd /app && ./signin.sh /tmp/retry 2>&1'],
+            capture_output=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning('重试签到执行失败：%r', exc)
+        return {'retried': len(failed_uids), 'recovered': 0, 'error': repr(exc)}
+    finally:
+        try:
+            subprocess.run(['docker', 'exec', name, 'sh', '-c', 'rm -rf /tmp/retry'],
+                           capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    out = (proc.stdout or b'').decode('utf-8', 'replace')
+    parsed = _parse_signin_output(out)
+    recovered = 0
+    for item in parsed:
+        if item['status'] not in ('OK', 'ALREADY'):
+            continue
+        try:
+            db.add_checkin_log(item['uid'][:8], item['nickname'], 'retry',
+                               True, None, ('重试成功：' + item['status'])[:120])
+            recovered += 1
+        except Exception:  # noqa: BLE001
+            log.warning('重试记录写入失败 uid=%s', item['uid'][:8])
+    still = len(failed_uids) - recovered
+    if recovered:
+        log.warning('失败重试完成：%d 个里 %d 个补签成功，%d 个仍失败',
+                    len(failed_uids), recovered, still)
+    else:
+        log.warning('失败重试完成：%d 个全部仍失败', len(failed_uids))
+    return {'retried': len(failed_uids), 'recovered': recovered,
+            'still_failed': still, 'output_tail': out[-400:]}
+
+
 def checkin_window() -> dict | None:
     """当前是否处在自动签到窗口内，以及窗口的起止时刻。
 
@@ -803,9 +912,7 @@ def usage_today(platform: str = 'workbuddy') -> dict | None:
     与用量估算同源。表上有 ts 索引，两个范围查询都很轻。
     """
     now = time.time()
-    local = time.localtime(now)
-    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
-                                 0, 0, 0, 0, 0, -1)))
+    day_start = _local_day_start(now)
     elapsed = int(now) - day_start
     try:
         today = db.query_one(
@@ -847,9 +954,7 @@ def today_gain(platform: str = 'workbuddy') -> dict | None:
     当天没有任何快照时返回 None（不是 0 —— 「没采集」和「没补进来」是两件事）。
     """
     now = time.time()
-    local = time.localtime(now)
-    day_start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
-                                 0, 0, 0, 0, 0, -1)))
+    day_start = _local_day_start(now)
     try:
         rows = db.query(
             'SELECT raw, captured_at FROM platform_credit_snapshots'
@@ -1084,6 +1189,18 @@ async def _loop() -> None:
                 raise
             except Exception:  # noqa: BLE001
                 log.warning('兜底签到异常（不影响补采）', exc_info=True)
+            # 再补失败的那几个：上游对连续签到会限流，全量里总有几个吃 429。
+            # 放在兜底之后、补采之前 —— 补采会同步日志，顺序反了刚补签的
+            # 结果要多等一小时才可见。
+            try:
+                retried = await run_in_threadpool(checkin_retry_failed)
+                if retried and retried.get('recovered'):
+                    log.warning('失败重试补签了 %d 个账号', retried['recovered'])
+                    await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.warning('失败重试异常（不影响补采）', exc_info=True)
             try:
                 written = await run_in_threadpool(capture_once)
                 _supplement_day = day
