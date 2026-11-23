@@ -296,6 +296,12 @@ def alerts() -> list:
     平台直接不可用且无提前通知，所以要按余额比例单独告警。
     数据缺失时不告警 —— 宁可不说，也不制造假信号。
     """
+    # Trae 于 2026-11-23 下线。原先这里写死 `latest('trae')`，平台停用后仍然
+    # 每小时拿旧快照算比例并告警 —— 等于提醒运维去修一个已经不存在的平台。
+    # 平台是否在营一律看统一的平台表，不在这里写死名字。
+    from . import platformpolicy as _pp
+    if 'trae' not in _pp.PLATFORMS:
+        return [('account_credits_trae', False, 'Trae 已从网关移除，不再评估')]
     row = latest('trae')
     if not row:
         return [('account_credits_trae', False, '尚无积分快照')]

@@ -356,6 +356,12 @@ def collect_account_counts() -> dict:
 
     # trae 的账号来源跟着引擎走：hub 引擎读 JSON 账号目录，aiwork 引擎读 sqlite。
     # 以前这里写死读 sqlite，切到 hub 之后数的是历史库，告警与事实脱节。
+    #
+    # 2026-11-23：Trae 下线后这里仍在数它的 1 个账号，于是「trae 只有 1 个账号」
+    # 这条告警一直挂着。与 qoder 同样处理 —— 平台不在营就不评估它的池子。
+    from . import platformpolicy as _pp
+    if 'trae' not in _pp.PLATFORMS:
+        return counts
     try:
         engine = getattr(externalplatforms, '_trae_engine', None)
         engine = engine() if callable(engine) else ''
