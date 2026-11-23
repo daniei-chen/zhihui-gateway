@@ -1,0 +1,30 @@
+test(frontend): 平台收窄后同步改写 platform-store 测试
+
+## 背景
+
+Trae 下线后 `PLATFORMS` 只剩 `workbuddy`，但 `lib/platform-store.test.mjs`
+仍在按「两个平台」断言，并把 `trae` 当作「另一个合法平台」来测切换逻辑。
+CI 的 frontend job 因此 24 个用例失败（本地跑的是后端的门禁，没有覆盖到这一层）。
+
+## 改法
+
+`trae` / `qoder` / `doubaowork` 的角色从「另一个合法平台」变成「历史残留值」，
+正好用来钉两条原本测不到的不变量：
+
+1. **已下线平台的值出现在存储里时必须自愈**
+   水合读到 `trae` / `qoder` / `doubaowork` → 纠正为 `workbuddy` 并落盘，
+   不能让死值一路发到后端。覆盖四种历史残留形态。
+
+2. **`set()` 收到已下线平台时必须静默拒绝且不 bump epoch**
+   无效操作触发整棵子树重挂载 = 白掉一次首屏请求。
+
+原来的「切换会 bump epoch」改用「未水合时 set 默认平台」来验证 —— 此时
+memory 从 null 变成具体值，是真实的取值变化，语义一致。
+
+## 结果
+
+    node --test lib/platform-store.test.mjs   75 条全过（原 24 失败）
+    node --test lib/*.test.mjs                66 条全过
+    node --test tests/*.test.cjs              178 条全过
+    npm run typecheck                         通过
+    npm run lint                              0 errors（84 warnings 为既有）
