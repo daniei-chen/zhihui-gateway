@@ -151,3 +151,56 @@ sudo rm -rf /opt/workbuddy-manager/releases/vX.Y.Z
 
 控制台产物（`/var/www/zhihui-console-releases/`）同理，但要注意
 `/var/www/zhihui-console-current` 指向的那一份不能删。
+
+2026-11-23 执行过一轮：版本目录 42 → 8（保留 v1.5.29 起的 8 个 + current +
+previous），1.7G → 319M；控制台产物 13 → 1 份，89M → 6.5M。
+
+---
+
+## 6. 恢复演练（真正做了什么、还缺什么）
+
+### 生产备份现状
+
+| 载体 | 位置 | 状态 |
+|---|---|---|
+| 日常备份 | `/root/backups/workbuddy-daily/recovery-*.tar.gz` | **可用**，每份约 397 MB |
+| 收据 | `/var/lib/zhihui-retention/backup-*.json` | 每日一份，含 sha256 与自检结果 |
+| 加密快照 | `/root/backups/zhihui-v2/snapshots/*/snapshot.part-*.age` | **当前不可恢复**（见下） |
+| 保留策略 | `zhihui-backup-retention.timer` | 每日 06:47，只留最新 |
+
+### 演练步骤（不需要停服务、不碰生产数据）
+
+```bash
+F=$(ls -t /root/backups/workbuddy-daily/recovery-*.tar.gz | head -1)
+EXPECTED=$(sudo python3 -c '' 2>/dev/null; sudo grep -o '"sha256": "[a-f0-9]*"' \
+  /root/backups/workbuddy-daily/latest.json | head -1 | cut -d'"' -f4)
+echo "$EXPECTED" | grep -q . || echo "从 latest.json 里取 sha256 失败"
+sudo sha256sum "$F"          # 必须与 latest.json 的 sha256 一致
+sudo tar -tzf "$F" | head    # 必须能列出（说明归档未损坏）
+sudo tar -tzf "$F" | grep -E 'manager\.db$'   # 必须找得到数据库
+```
+
+判据：摘要一致、归档可列、`paired-ledgers/manager.db` 与 `manager/data/manager.db`
+都存在（两份是成对账本的设计，缺一份就不算完整）。
+
+`deploy/restore_drill.py` 是**加密快照**的演练脚本，不是这份 tar.gz 的；
+它需要 `/opt/workbuddy-manager/keys/recovery.agekey`。
+
+### 2026-11-23 演练结果
+
+- 最新备份 `recovery-20261123-152107.tar.gz`：sha256 与收据**一致**，归档可列，
+  两份数据库都在，账号凭据文件也在。`latest.json` 里 `restore_check: ok`、
+  `request_rows: 361024`、签名与版本一致。
+- 结论：**日常备份是可信的**。
+
+### 三个尚未解决的缺口
+
+1. **加密快照没有密钥。** 全盘找不到 `*.agekey`，所以
+   `/root/backups/zhihui-v2/snapshots/` 下的 `.age` 文件目前**解不开**——
+   它们占着空间但提供不了任何恢复能力。要么找回密钥（可能在离线介质），
+   要么停掉这条快照链路，避免「以为有第二副本」。
+2. **没有异地副本。** `latest.json` 里 `offsite: false`，备份与数据在**同一块盘**
+   （`/dev/vda2`）。磁盘故障或误删会同时带走两者。这是当前最大的单点。
+3. **恢复演练只做到「验证备份可读」，没有做过真实还原。** 真实还原需要停服务、
+   清空数据目录、解包、校验，风险高，必须挑时段并先拍一份现行数据的快照。
+
