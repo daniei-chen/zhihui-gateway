@@ -55,8 +55,27 @@ if (gallery) {
   addEventListener('pagehide', () => { active = false; sync(); });
   addEventListener('pageshow', () => { active = true; sync(); });
   if ('IntersectionObserver' in window) {
-    const preload = new IntersectionObserver(entries => { if (entries[0].isIntersecting) { load(); preload.disconnect(); } }, { rootMargin: '400px' });
-    preload.observe(gallery);
+    // 2026-11-23：改为「点击开启」。
+    // 原先 rootMargin '400px' 会在视口外 400px 就下载 10.5 MB 模型，
+    // 在约 4 Mbps 出网带宽下要 20 秒以上，把整站带宽占满，工作台也跟着卡。
+    // 现在进入视口只把状态改成可点击，用户主动点了才下载。
+    const prompt = new IntersectionObserver(entries => {
+      if (!entries[0].isIntersecting) return;
+      prompt.disconnect();
+      active = true;
+      visible = true;
+      sync();
+      if (viewer || loading || failed) return;
+      gallery.dataset.state = 'idle';
+      if (status) status.textContent = '点击开启三维视图（约 10 MB）';
+      host.style.cursor = 'pointer';
+      host.addEventListener('click', function onFirstClick() {
+        host.removeEventListener('click', onFirstClick);
+        host.style.cursor = '';
+        if (!viewer && !loading && !failed) load();
+      });
+    }, { rootMargin: '0px' });
+    prompt.observe(gallery);
     new IntersectionObserver(entries => { visible = entries[0].isIntersecting; sync(); }, { threshold: 0 }).observe(host);
   } else { visible = true; load(); }
   sync();
