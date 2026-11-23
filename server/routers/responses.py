@@ -624,6 +624,30 @@ def text_format_to_response_format(body: dict) -> dict | None:
         + ' / '.join(_TEXT_FORMAT_TYPES) + '）', 'unsupported_text_format')
 
 
+#: `text.verbosity` 允许的取值。与官方 Responses 文档列出的三档一致；
+#: **不要**在这里加 `off` / `xhigh` 之类的上游档位名 —— verbosity 是「详略」，
+#: 不是思考档位，两者混用会让客户端误以为改 verbosity 能控制思考深度。
+_VERBOSITY_VALUES = ('low', 'medium', 'high')
+
+
+def text_verbosity(body: dict) -> str | None:
+    """把 Responses 的 `text.verbosity` 取出来（无则 None）。
+
+    只有 `text` 是对象、`verbosity` 是字符串且属于允许集合时才返回；其余情况
+    （缺省、类型不对、值不认识）一律返回 None —— 由调用方决定「不带这个字段」。
+    """
+    if not isinstance(body, dict):
+        return None
+    text = body.get('text')
+    if not isinstance(text, dict):
+        return None
+    value = text.get('verbosity')
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value if value in _VERBOSITY_VALUES else None
+
+
 def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
                     bridge: _ToolBridge | None = None) -> dict:
     """Responses 请求体 → Chat Completions 请求体。"""
@@ -971,6 +995,17 @@ def to_chat_request(body: dict, custom_tool_names: set[str] | None = None,
     response_format = text_format_to_response_format(body)
     if response_format is not None:
         out['response_format'] = response_format
+
+    # `text.verbosity` → 上游的 `verbosity`。和 `text.format` 是同一个对象里的
+    # 两个独立字段，此前只映射了 format —— 客户端显式调了详略程度，网关却丢掉，
+    # 表现为「设了没用」，且没有任何迹象说明它被丢了。
+    #
+    # 只透传上游明确支持的 `low` / `medium` / `high` 三个值（与官方选项一致）；
+    # 其他值一律**不带这个字段**，也不报错：它是「表达偏好」而不是「约束输出」，
+    # 为一个拼错的值把整个请求打回，比忽略它对用户更糟。
+    verbosity = text_verbosity(body)
+    if verbosity is not None:
+        out['verbosity'] = verbosity
 
     # 只透传**上游认识**的字段。`store` / `include` 这些 OpenAI 专有、上游不消费；
     # `reasoning` 也不整个透传——上游不认识这个对象，它的档位已按上面转成

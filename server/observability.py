@@ -676,6 +676,47 @@ def _bounded(value: object, limit: int, *, ascii_only: bool = False) -> str | No
     return None
 
 
+#: 输出预算耗尽的对外文案。三个协议入口共用同一句，免得同一件事在三处
+#: 给出三种说法（客户端要能按这句话决定「换策略」而不是「原样重试」）。
+BUDGET_EXHAUSTED_MESSAGE = (
+    '上游输出预算在产出任何正文与工具调用之前耗尽（思考占满了预算），'
+    '本次没有可交付的内容'
+)
+
+
+def budget_exhausted_response(data):
+    """聚合响应是否属于「预算耗尽、什么都没交付」。
+
+    判据与流式的 `StreamAudit.budget_exhausted` 完全一致：
+    `finish_reason == 'length'`，且没有**非空白**正文、没有工具调用。
+
+    放在这里而不是转发层，有两个理由：
+      · 三条协议、流式与聚合四个入口必须共用同一判据 —— 只有一个落点才不会
+        改一处漏三处；
+      · 转发层（`routers/gateway.py`）的信条是「不读也不改工具分片」，由
+        `test_gateway_passthrough` 守着。判定放在观察层，转发层仍只做透传。
+    """
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    if str(choice.get("finish_reason") or "") != "length":
+        return False
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        message = choice.get("delta")
+    if not isinstance(message, dict):
+        # 既没有 `message` 也没有 `delta`：**信息不足，不下结论**。把「不知道」
+        # 判成「耗尽」会让一个畸形响应被报成预算不足，排障时走错方向。
+        return False
+    text = message.get("content")
+    if isinstance(text, str) and text.strip():
+        return False
+    return not (message.get("tool_calls") or message.get("function_call"))
+
+
 def sse_error(message, *, code: object = None, hint: object = None,
               upstream_request_id: object = None, leading_separator: bool = False):
     """OpenAI 形状的流中错误帧（`error` 事件 + 终止 `[DONE]`）。
@@ -722,6 +763,15 @@ class StreamAudit:
         self.finish_seen = False
         self.saw_useful = False
         self.first_useful = None
+        # 「预算耗尽」判定用的三个事实（口径见 `budget_exhausted`）：
+        #   · finish_reason 的具体值 —— 只有 `length` 才算耗尽；
+        #   · 是否交付过**非空白**正文 —— 纯空白不算交付；
+        #   · 是否出现过工具增量 —— 有工具调用就不算「什么都没产出」。
+        # `saw_useful` 不能替代：它把 `reasoning_content` 也算进去了，而思考
+        # 占满预算正是要识别的场景 —— 拿它判定等于永远判不出来。
+        self.finish_reason = None
+        self.saw_visible_text = False
+        self.saw_tool_delta = False
         self.error = None
         self.error_stage = None
         self.error_hint = None
@@ -730,6 +780,21 @@ class StreamAudit:
     @property
     def completed(self):
         return (self.done_seen or self.finish_seen) and self.error is None
+
+    @property
+    def budget_exhausted(self):
+        """上游把输出预算用完，却没有任何可交付内容。
+
+        `finish_reason: "length"` 本身只表示「被截断了」，仍可能是「已交出半句
+        正文」—— 那属于正常截断，客户端能拿到东西，不该报错。真正要报的是
+        「思考吃满预算、正文和工具一个都没有」：此时客户端收到的是一个**空回答
+        加成功终止**，它会原样无限重试，且每次都付费。
+
+        三个入口用同一判据（Chat / Responses / Messages），免得同一件事在三条
+        协议上给出三种结论。
+        """
+        return (self.finish_reason == 'length' and not self.saw_visible_text
+                and not self.saw_tool_delta and self.error is None)
 
     #: 拆粘帧用的解码器。**不要**改用 `json.loads` 整段解析：一条 `data:` 行里
     #: 并列多个完整 JSON 对象的写法在上游真实出现过，`json.loads` 会抛错并把整条
@@ -795,12 +860,21 @@ class StreamAudit:
             for choice in choices:
                 if not isinstance(choice, dict):
                     continue
-                if choice.get("finish_reason") is not None:
+                finish = choice.get("finish_reason")
+                if finish is not None:
                     self.finish_seen = True
+                    self.finish_reason = str(finish)
                 delta = choice.get("delta") or choice.get("message") or {}
                 if isinstance(delta, dict) and any(delta.get(k) for k in (
                         "content", "reasoning_content", "reasoning", "tool_calls", "function_call")):
                     self.saw_useful = True
+                # 逐字判断是否真的交了东西出去（`saw_useful` 含推理，不够用）。
+                if isinstance(delta, dict):
+                    text = delta.get("content")
+                    if isinstance(text, str) and text.strip():
+                        self.saw_visible_text = True
+                    if any(delta.get(key) for key in ("tool_calls", "function_call")):
+                        self.saw_tool_delta = True
 
     def _consume(self, text):
         self.pending += text

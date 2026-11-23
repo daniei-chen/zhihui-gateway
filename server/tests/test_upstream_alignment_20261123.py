@@ -30,6 +30,7 @@ from server.routers.anthropic import (  # noqa: E402
     to_anthropic_response,
     to_openai_request,
 )
+from server.routers.responses import to_chat_request  # noqa: E402
 
 
 def _feed(*chunks):
@@ -262,6 +263,106 @@ class BudgetExhaustionWiringTest(unittest.TestCase):
             leading_separator=True).split(b'data: ')[1].split(b'\n')[0])
         self.assertEqual(payload['error']['code'], 'output_budget_exhausted')
         self.assertIn('预算', payload['error']['message'])
+
+
+class VerbosityMappingTest(unittest.TestCase):
+    """Responses 的 `text.verbosity` → 上游 `verbosity`。"""
+
+    def test_known_values_mapped(self) -> None:
+        for value in ('low', 'medium', 'high'):
+            with self.subTest(value=value):
+                out = to_chat_request({'model': 'm', 'input': 'hi',
+                                       'text': {'verbosity': value}})
+                self.assertEqual(out.get('verbosity'), value)
+
+    def test_value_is_normalised(self) -> None:
+        out = to_chat_request({'model': 'm', 'input': 'hi',
+                               'text': {'verbosity': ' HIGH '}})
+        self.assertEqual(out.get('verbosity'), 'high')
+
+    def test_unknown_value_is_dropped_not_rejected(self) -> None:
+        """不认识的详略度不报错：它是偏好表达，不是输出约束。"""
+        for value in ('loud', '', 'off', 'xhigh', 3, None, True):
+            with self.subTest(value=value):
+                out = to_chat_request({'model': 'm', 'input': 'hi',
+                                       'text': {'verbosity': value}})
+                self.assertNotIn('verbosity', out)
+
+    def test_absent_text_means_absent_field(self) -> None:
+        out = to_chat_request({'model': 'm', 'input': 'hi'})
+        self.assertNotIn('verbosity', out)
+
+    def test_verbosity_and_format_are_independent(self) -> None:
+        """同一个 `text` 对象里的两个字段互不影响（此前只映射了 format）。"""
+        out = to_chat_request({
+            'model': 'm', 'input': 'hi',
+            'text': {'verbosity': 'low',
+                     'format': {'type': 'json_schema', 'name': 'r',
+                                'schema': {'type': 'object'}}},
+        })
+        self.assertEqual(out['verbosity'], 'low')
+        self.assertEqual(out['response_format']['type'], 'json_schema')
+
+
+class ChatBudgetParityTest(unittest.TestCase):
+    """Chat 聚合与两条协议同一口径：预算耗尽且无产出 → 不算成功。"""
+
+    @staticmethod
+    def _body(*, text=None, finish='length', calls=None) -> dict:
+        message: dict = {}
+        if text is not None:
+            message['content'] = text
+        if calls is not None:
+            message['tool_calls'] = calls
+        return {'choices': [{'message': message, 'finish_reason': finish}]}
+
+    def test_reasoning_only_is_exhaustion(self) -> None:
+        body = self._body(text=None)
+        body['choices'][0]['message']['reasoning_content'] = '想了很久'
+        self.assertTrue(observability.budget_exhausted_response(body))
+
+    def test_whitespace_only_is_exhaustion(self) -> None:
+        self.assertTrue(observability.budget_exhausted_response(self._body(text='  \n')))
+
+    def test_visible_text_is_not_exhaustion(self) -> None:
+        self.assertFalse(observability.budget_exhausted_response(self._body(text='半句')))
+
+    def test_tool_calls_are_not_exhaustion(self) -> None:
+        self.assertFalse(observability.budget_exhausted_response(self._body(
+            calls=[{'id': 'c1', 'type': 'function',
+                    'function': {'name': 'f', 'arguments': '{}'}}])))
+
+    def test_other_finish_reasons_untouched(self) -> None:
+        for finish in ('stop', 'tool_calls', None):
+            with self.subTest(finish=finish):
+                self.assertFalse(observability.budget_exhausted_response(
+                    self._body(finish=finish)))
+
+    def test_malformed_bodies_are_not_exhaustion(self) -> None:
+        for body in (None, {}, {'choices': []}, {'choices': 'x'},
+                     {'choices': [None]}, {'choices': [{'finish_reason': 'length'}]}):
+            with self.subTest(body=body):
+                self.assertFalse(observability.budget_exhausted_response(body))
+
+    def test_stream_and_aggregate_agree(self) -> None:
+        """流式审计与聚合判定必须给出同一个结论（同一件事不能两种口径）。"""
+        streaming = observability.StreamAudit(1 << 20)
+        streaming.feed(b'data: {"choices":[{"delta":{"reasoning_content":"\xe6\x83\xb3"}}]}\n\n')
+        streaming.feed(b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n')
+        streaming.finish()
+        aggregate = self._body(text=None)
+        aggregate['choices'][0]['message']['reasoning_content'] = '想'
+        self.assertEqual(streaming.budget_exhausted,
+                         observability.budget_exhausted_response(aggregate))
+        self.assertTrue(streaming.budget_exhausted)
+
+    def test_error_envelope_suppresses_exhaustion(self) -> None:
+        """上游已经给了错误信封时，不再叠加「预算耗尽」（那是另一回事）。"""
+        audit = observability.StreamAudit(1 << 20)
+        audit.feed(b'data: {"error":{"message":"boom"}}\n\n')
+        audit.feed(b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n')
+        audit.finish()
+        self.assertFalse(audit.budget_exhausted)
 
 
 if __name__ == '__main__':

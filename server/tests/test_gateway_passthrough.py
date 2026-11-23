@@ -107,7 +107,18 @@ class GatewayPassthroughTest(unittest.TestCase):
         # are unrelated to response bytes and must not count as SSE rewrites.
         forwarding_src = inspect.getsource(gateway._chat)
         yields = [ln.strip() for ln in forwarding_src.splitlines() if ln.strip().startswith('yield ')]
-        self.assertEqual(yields, ['yield chunk','yield observability.sse_error(error_text, leading_separator=True)','yield observability.sse_error(error_text, leading_separator=True)'],
+        # 三处，且只有三处：
+        #   · `yield chunk` —— 上游字节原样出去；
+        #   · 统一终止分支里的错误帧（两条路径：流内失败、收尾判定失败）。
+        # 判定「预算耗尽」时**不重写任何一帧**：直接跳过上游尾部（`continue`），
+        # 收尾时补一条错误事件。所以 yield 的形态没有增加，正文与工具分片仍然
+        # 一个字节都不改。
+        expected = [
+            'yield chunk',
+            'yield observability.sse_error(error_text, leading_separator=True,',
+            'yield observability.sse_error(error_text, leading_separator=True,',
+        ]
+        self.assertEqual(yields, expected,
                          f'转发热路径出现了非透传的 yield：{yields}')
 
     def test_no_tool_calls_handling_anywhere(self) -> None:

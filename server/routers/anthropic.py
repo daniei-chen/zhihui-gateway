@@ -39,6 +39,7 @@ from ..outputlimits import bounded_events, OutputLimitExceeded, output_limit_fai
 from ..inputcontent import UnsupportedContentError
 
 from .. import config, db, iputil, keysvc, upstreamsvc
+from .. import observability
 from .. import deadline as deadline_mod
 # responses 只为复用推理凭据的编解码（`_encode_credential` / `_decode_credential`）：
 # Anthropic 的 `signature` 与 Responses 的 `encrypted_content` 语义完全相同——
@@ -730,11 +731,9 @@ def _thinking_block(text: str) -> dict:
 
 
 #: 预算耗尽时的对外文案。流式（错误事件）与非流式（400 响应体）共用同一句，
-#: 免得同一件事在两条路径上给出两种说法。
-BUDGET_EXHAUSTED_MESSAGE = (
-    '上游输出预算在产出任何正文与工具调用之前耗尽（思考占满了预算），'
-    '本次没有可交付的内容'
-)
+#: 免得同一件事在两条路径上给出两种说法。真正的定义在 `observability`，
+#: 三个协议入口共用一份。
+BUDGET_EXHAUSTED_MESSAGE = observability.BUDGET_EXHAUSTED_MESSAGE
 
 
 class OutputBudgetExhausted(ValueError):

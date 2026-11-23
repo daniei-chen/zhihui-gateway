@@ -2848,6 +2848,17 @@ async def _chat(request: Request, upstream_path: str):
                             latency, ua, str(exc), False, usage=usage,
                             effort=effort, session_key=session_key)
                     return _oai_error('上游返回了无法解析的响应', 502, 'api_error', 'upstream_invalid_body')
+                if observability.budget_exhausted_response(data):
+                    # 聚合路径同样不能把「空回答 + finish_reason=length」当成功：
+                    # 客户端会原样重试，且每次都付费。这里**不进上面的 except** ——
+                    # 那会调 `_mark_invalid_response()` 把健康账号推进冷却，而上游
+                    # 与账号都是好的，只是这一次预算不够。
+                    message = observability.BUDGET_EXHAUSTED_MESSAGE
+                    await _record_async(key, ip, requested_model or '', mapped or '', 400, pt, ct,
+                            latency, ua, message, False, usage=usage,
+                            effort=effort, session_key=session_key)
+                    return _oai_error(message, 400, 'invalid_request_error',
+                                      'output_budget_exhausted')
             error = None if resp.status_code < 400 else (str(data)[:500] if data is not None else resp.text[:500])
             if error:
                 # U21：上游业务码优先（`error.code`，如 11102 / no_healthy_account）。
@@ -2992,6 +3003,8 @@ async def _chat(request: Request, upstream_path: str):
         first_token_ms = None
         cancelled = False
         error_bytes = bytearray()
+        # 是否已因「预算耗尽」开始屏蔽上游尾部（见循环里的说明）。
+        budget_suppressed = False
         state = observability.current.get()
         if state:
             state.account = (getattr(resp,'headers',{}) or {}).get('x-wb-account-uid')
@@ -3017,17 +3030,41 @@ async def _chat(request: Request, upstream_path: str):
                         first_token_ms=int((time.time()-started)*1000)
                         from .. import requestperf
                         requestperf.mark('first_useful')
+                    # 预算耗尽（思考吃满、正文与工具都没有）：**不发**带 finish_reason
+                    # 的终止帧，也不发它后面的 `[DONE]` —— 客户端看到「终止 + 哨兵」
+                    # 就会把空回答当成功并原样重试，每次都要付费。抹掉这一段之后由
+                    # 下面的统一终止分支发错误事件，客户端据此才知道该换策略。
+                    #
+                    # 只抹终止帧之后的字节，前面已发的正文帧不动：真有正文时
+                    # `budget_exhausted` 为假，这里根本不会命中。
+                    if budget_suppressed or audit.budget_exhausted:
+                        budget_suppressed = audit.budget_exhausted
+                        continue
                 yield chunk
             if status_code < 400:
                 audit.finish()
                 error_text=audit.error
+                # 上游已经随流下发过错误事件时，错误对客户端**已经可见** ——
+                # 再补一帧只会变成两条互相矛盾的消息。只有「我们自己判定出来的
+                # 失败」（流提前结束、预算耗尽）才需要在这里补发。
+                need_error_frame = not audit.error
+                if not error_text and audit.budget_exhausted:
+                    # 复用的正是这个统一终止分支：状态码已是 200、正文一帧未发，
+                    # 这里补一条错误事件就是客户端唯一能看到的信号。
+                    error_text = observability.BUDGET_EXHAUSTED_MESSAGE
+                    audit.error = error_text
+                    audit.error_stage = 'upstream'
+                    audit.error_code = 'output_budget_exhausted'
+                    logger.warning('output budget exhausted request_id=%s',
+                                   state.request_id if state else None)
                 if not audit.completed and not error_text:
                     error_text='上游流提前结束：未收到可信终止事件'
-                if error_text and not audit.error:
+                if error_text and need_error_frame:
                     observability.set_stream_error_detail(
                         code=audit.error_code, hint=audit.error_hint,
                         upstream_request_id=upstream_request_id)
-                    yield observability.sse_error(error_text, leading_separator=True)
+                    yield observability.sse_error(error_text, leading_separator=True,
+                                                  code=audit.error_code)
         except (asyncio.CancelledError,GeneratorExit):
             cancelled=True
             raise
@@ -3056,7 +3093,8 @@ async def _chat(request: Request, upstream_path: str):
             observability.set_stream_error_detail(
                 code=audit.error_code, hint=audit.error_hint,
                 upstream_request_id=upstream_request_id)
-            yield observability.sse_error(error_text, leading_separator=True)
+            yield observability.sse_error(error_text, leading_separator=True,
+                                          code=audit.error_code)
         finally:
             cancelled=cancelled or isinstance(sys.exc_info()[1],(asyncio.CancelledError,GeneratorExit))
             observability.set_stream_state(audit,error_text,cancelled)
