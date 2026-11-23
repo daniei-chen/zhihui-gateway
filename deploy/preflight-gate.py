@@ -217,6 +217,27 @@ def main(argv) -> int:
 
     ok &= _step('前端闭包签名与逐文件', check_web)
 
+    def check_pointer():
+        """`releases/current` 必须解析到**本目录**。
+
+        这条检查是因为一次真实事故才加的：切换指针时把容器内的挂载路径
+        （`/rel/v1.5.32`）写进了符号链接，宿主上不存在该路径，服务启动被拒 ——
+        而当时上面七项全部通过。内容全对、指针指错，是这个门禁原先的盲区。
+        """
+        pointer = root.parent / 'current'
+        if not pointer.is_symlink():
+            return '跳过（current 不是符号链接）'
+        raw = os.readlink(pointer)
+        try:
+            target = pointer.resolve(strict=True)
+        except FileNotFoundError:
+            raise AssertionError(f'current -> {raw} 解析失败（目标不存在）') from None
+        if target != root:
+            raise AssertionError(f'current -> {raw} 指向 {target}，不是 {root}')
+        return f'current -> {raw}'
+
+    ok &= _step('发布指针指向本目录', check_pointer)
+
     print()
     print('== 全部通过，可以切换发布指针 ==' if ok else '== 有失败项，不要切换发布指针 ==')
     return 0 if ok else 1

@@ -346,9 +346,20 @@ class SwitchTest(unittest.TestCase):
     def test_switch_is_atomic_and_remembers_previous(self) -> None:
         previous = release_tool._switch(self.root / 'current', 'v1.0.1')
         self.assertEqual(previous, 'v1.0.0')
-        self.assertEqual(os.readlink(self.root / 'current'), str(self.root / 'v1.0.1'))
+        self.assertEqual(os.readlink(self.root / 'current'), 'v1.0.1')
         # 切换不应留下临时链接
         self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('.')], [])
+
+    def test_switch_writes_relative_target(self) -> None:
+        """链接目标必须是**相对名**。
+
+        本工具在容器里跑（`--root /rel`），链接在宿主上被解析。写绝对路径会把
+        `/rel/v1.5.32` 烙进去 —— 宿主上没有这个路径，服务立刻起不来。真实踩过。
+        """
+        release_tool._switch(self.root / 'current', 'v1.0.1')
+        target = os.readlink(self.root / 'current')
+        self.assertEqual(target, 'v1.0.1', f'链接目标是 {target!r}，应为相对名')
+        self.assertFalse(Path(target).is_absolute())
 
     def test_activate_verifies_before_switching(self) -> None:
         """「先跑门禁、再切指针」是这条流程的核心不变量。
@@ -361,13 +372,13 @@ class SwitchTest(unittest.TestCase):
             release_tool.cmd_activate(release_tool.argparse.Namespace(
                 root=str(self.root), version='v1.0.1', trust='t'))
         verify.assert_called_once()
-        self.assertEqual(os.readlink(self.root / 'current'), str(self.root / 'v1.0.1'))
+        self.assertEqual(os.readlink(self.root / 'current'), 'v1.0.1')
 
     def test_rollback_returns_to_previous(self) -> None:
         previous = release_tool._switch(self.root / 'current', 'v1.0.1')
         (self.root / '.previous').write_text((previous or '') + '\n', encoding='utf-8')
         release_tool.cmd_rollback(release_tool.argparse.Namespace(root=str(self.root)))
-        self.assertEqual(os.readlink(self.root / 'current'), str(self.root / 'v1.0.0'))
+        self.assertEqual(os.readlink(self.root / 'current'), 'v1.0.0')
 
     def test_rollback_without_history_refused(self) -> None:
         with self.assertRaises(release_tool.ReleaseError):

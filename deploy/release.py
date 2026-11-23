@@ -444,14 +444,20 @@ def cmd_verify(args) -> int:
 def _switch(pointer: Path, version: str) -> str | None:
     """原子切换指针，返回切换前的目标名（用于回滚）。
 
-    先在同目录建临时符号链接再 `os.replace` —— `ln -sfn` 不是原子的，中间
-    存在「指针不存在」的瞬间，而那一刻正好有请求进来就会 502。
+    两条都试过才定下来的：
+
+    1. **必须原子**：`ln -sfn` 不是原子的，中间存在「指针不存在」的瞬间，
+       那一刻正好有请求进来就会 502。这里先在同一目录建临时链接再 `os.replace`。
+    2. **目标必须写相对名**：本工具在容器里跑，`--root` 是容器内的挂载路径
+       （`/rel`），而链接是在**宿主**上被解析的。写绝对路径会把
+       `/rel/v1.5.32` 烙进符号链接 —— 宿主上没有这个路径，服务立刻起不来。
+       相对名（`v1.5.32`）在两侧解析结果一致。这个坑真实踩过。
     """
     previous = _previous(pointer.parent)
     stage = pointer.with_name(f".{pointer.name}.{os.getpid()}.next")
     if stage.exists() or stage.is_symlink():
         stage.unlink()
-    stage.symlink_to(pointer.parent / version, target_is_directory=True)
+    stage.symlink_to(version, target_is_directory=True)
     os.replace(stage, pointer)
     return previous
 
