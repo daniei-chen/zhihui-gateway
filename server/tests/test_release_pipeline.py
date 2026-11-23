@@ -198,13 +198,20 @@ class ExtractSafetyTest(unittest.TestCase):
             release_tool.extract(archive, self.root / 'out')
         self.assertIn('越界路径', str(ctx.exception))
 
-    def test_leading_slash_cannot_escape(self) -> None:
-        """tar 会去掉前导 `/`，于是绝对路径成员变成树内相对路径 —— 关键是它
-        **不能写到 dest 之外**。真正需要拦的是 `..`（上一个用例）。"""
+    def test_leading_slash_is_never_trusted(self) -> None:
+        """带前导 `/` 的成员各有各的处理，但**绝不能写到 dest 之外**。
+
+        tarfile 在两套平台上的行为不同：POSIX 保留前导 `/`（我们直接拒绝，
+        因为绝对路径没有合法用途），Windows 会把它去掉、变成树内相对路径。
+        所以断言写成「拒绝，或落在树内」，两种都安全，唯一不允许的是逃出去。
+        """
         archive = self._tar([('/etc/evil.py', 'file')])
         out = self.root / 'out'
-        written = release_tool.extract(archive, out)
-        self.assertTrue(written)
+        try:
+            written = release_tool.extract(archive, out)
+        except release_tool.ReleaseError:
+            self.assertFalse((self.root / 'etc').exists())
+            return
         for name in written:
             self.assertFalse(Path(name).is_absolute(), name)
             self.assertTrue((out / name).is_file(), name)
@@ -343,9 +350,22 @@ class SwitchTest(unittest.TestCase):
         # 切换不应留下临时链接
         self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('.')], [])
 
+    def test_activate_verifies_before_switching(self) -> None:
+        """「先跑门禁、再切指针」是这条流程的核心不变量。
+
+        测试里把门禁替换掉（fixture 没有真密钥，签不出合法清单），只断言
+        **它被调用过** —— 顺序反了就等于回到「直接 ln -sfn 然后重启」。
+        """
+        from unittest import mock
+        with mock.patch.object(release_tool, 'cmd_verify') as verify:
+            release_tool.cmd_activate(release_tool.argparse.Namespace(
+                root=str(self.root), version='v1.0.1', trust='t'))
+        verify.assert_called_once()
+        self.assertEqual(os.readlink(self.root / 'current'), str(self.root / 'v1.0.1'))
+
     def test_rollback_returns_to_previous(self) -> None:
-        release_tool.cmd_activate(release_tool.argparse.Namespace(
-            root=str(self.root), version='v1.0.1', key='k', trust='t'))
+        previous = release_tool._switch(self.root / 'current', 'v1.0.1')
+        (self.root / '.previous').write_text((previous or '') + '\n', encoding='utf-8')
         release_tool.cmd_rollback(release_tool.argparse.Namespace(root=str(self.root)))
         self.assertEqual(os.readlink(self.root / 'current'), str(self.root / 'v1.0.0'))
 
