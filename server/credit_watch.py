@@ -19,6 +19,8 @@ import re
 import subprocess
 import time
 
+from pathlib import Path
+
 from . import db, externalplatforms
 
 log = logging.getLogger('server.credit_watch')
@@ -1051,6 +1053,62 @@ def account_token_alerts(days_warn: int = 7) -> list:
     return [('workbuddy_token_expiry', False,
              '%d 个账号凭证正常，最近一批约 %.0f 天后到期'
              % (total, min(days_left)))]
+
+
+def portal_account_consistency_alert() -> list:
+    """门户账号与凭证文件的一致性：`[(告警名, 是否触发, 文案)]`。
+
+    ## 为什么需要它
+
+    2026-11-23 的实际情况：`portal_accounts` 里有 3 个账号
+    `status='active'`、`initial_state='confirmed'`，而它们的凭证文件早已不在
+    `auths/` 下。代码只在 active+confirmed 时才使用这些账号 —— 也就是说，
+    **用户花时间绑定它们，请求必然失败，而管理界面上一切正常**。
+
+    这个状态是怎么被发现的？备份连续失败 10 小时，报错栈里才露出文件名。
+    备份成了唯一能发现它的哨兵 —— 这是很糟糕的依赖关系。
+
+    ## 判据
+
+    对每个 `portal_pool_links` 映射（它决定「哪个账号对应哪个凭证文件」）：
+    凭证文件必须存在。缺失即告警，点名到账号，不让它安静地躺着。
+
+    portal 库只读打开，读不到就跳过（读不到 ≠ 没有账号）。
+    """
+    import sqlite3
+    data_dir = Path(os.environ.get('WB_DATA_DIR') or '/opt/workbuddy-manager/data')
+    portal_db = data_dir / 'user-portal.sqlite3'
+    if not portal_db.is_file():
+        return []
+    auth_dir = Path(os.environ.get('WB_AUTH_DIR', '/opt/workbuddy2api/auths'))
+    missing = []
+    try:
+        conn = sqlite3.connect('file:%s?mode=ro' % portal_db, uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                'SELECT p.filename, a.status, a.label, a.provider_uid'
+                ' FROM portal_pool_links p JOIN portal_accounts a ON a.id=p.account_id'
+                ' WHERE a.status=?', ('active',)).fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return []
+    for row in rows:
+        row = dict(row)
+        name = str(row.get('filename') or '')
+        if not name:
+            continue
+        if not (auth_dir / name).is_file():
+            label = str(row.get('label') or row.get('provider_uid') or '?')
+            missing.append(label)
+    if not missing:
+        return [('portal_account_files', False,
+                 '门户账号与凭证文件一致（%d 个映射全部可解析）' % len(rows))]
+    return [('portal_account_files', True,
+             '%d 个门户账号状态为可用、但凭证文件已不存在（%s）；'
+             '用户绑定这些账号后请求必然失败，应当移除或补回凭证'
+             % (len(missing), '、'.join(missing[:5])))]
 
 
 def workbuddy_alerts() -> list:

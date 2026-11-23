@@ -889,6 +889,11 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # 签到陈旧：平台不会因此不可用，只是每天少收入 —— 不看就不会发现。
         for _name, _active, _detail in _safe_alerts(credit_watch.checkin_stale_alert, 'workbuddy.checkin'):
             transition(_name, _active, _detail)
+        # 门户账号与凭证文件的一致性。2026-11-23：3 个账号 active 却无凭证，
+        # 最后是被「备份失败」的报错栈暴露出来的 —— 不该依赖备份当哨兵。
+        for _name, _active, _detail in _safe_alerts(
+                credit_watch.portal_account_consistency_alert, 'portal.account_files'):
+            transition(_name, _active, _detail)
         for _name, _active, _detail in _safe_alerts(
                 lambda: account_pool_alerts(collect_account_counts()), 'account_pool'):
             transition(_name, _active, _detail)
