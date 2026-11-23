@@ -112,6 +112,7 @@ MODULES = (
     "server.tests.test_steward_watchdog",
     "server.tests.test_writer_guard_contract",
     "server.tests.test_upstream_alignment_20261123",
+    "server.tests.test_usage_token_protocol",
 )
 
 

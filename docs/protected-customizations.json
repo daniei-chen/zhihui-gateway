@@ -3,7 +3,7 @@
   "server/ledger.py": "5aeb2ff0b269d44a84e28db37c44f221dfef651791a05a06a5f8ffdbfa2167ab",
   "server/observability.py": "2df1cbce952ba47b06d8a2f77906da71cef5ecfc614d262404d132e702011986",
   "server/pooledhttp.py": "b79057de5ec19e27fa54f648e5dc02543b539754e88413180623b30a0cc21938",
-  "server/routers/gateway.py": "98fd60463d02ef81d631eeb1cdc91cbfb347b7efbbabebbd81ea8bc38fbb78c9",
+  "server/routers/gateway.py": "30104a9ba58b2fad2c43740e89a8f7333d63c866c32f87d9b57177ed7ca5d556",
   "server/services/wb2api.py": "487c5dc32cff5288e2209e8ee50b9414d04f40464c0daa62ef38ec2fad3522c5",
   "server/upstreamschema.py": "6852b8357d2192f55ab97a72e551a4656df0e9c2ac35b0b803b4af1254989363"
 }

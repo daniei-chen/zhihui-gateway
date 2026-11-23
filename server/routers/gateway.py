@@ -1714,8 +1714,7 @@ def key_usage(request: Request):
 # 列表按密钥的版本归属过滤：国际版密钥只看到 `global:` 条目、国内版密钥只看到
 # 其余条目（限定了版本的密钥看不到另一版本，免得挑出一个注定 403 的模型）。
 # 未限定版本的密钥（存量）照旧看到全部——它们本来就两版都能调。
-# ── 按密钥用量查询 /v1/usage ──────────────────────────────────────────────
-#
+# ── 按密钥用量查询 /v1/usage ──────────────────────────────────────────────#
 # 给密钥持有者一个自助查用量的入口：带自己的密钥即可查当天 / 近 7 天 / 近 30 天
 # 的请求数、Token 用量与缓存命中率。**不返回实付（credit）**——那是内部口径，
 # 对外只回答"用了多少"。
@@ -1726,6 +1725,41 @@ def key_usage(request: Request):
 # 只保留"密钥本身有效"这一层：resolve + 停用 / 过期。
 # 数据口径与 /api/stats 完全一致（同一张 usage_daily 表、同一套 day 过滤），
 # 保证"用户自查"与"控制台看到"的数字一致。
+
+
+async def _authorize_usage_key(request):
+    """密钥自查类端点的**统一**鉴权：返回 `(key, ip, ua, reason)`。
+
+    `reason` 为 None 表示通过；否则是 `missing_key` / `invalid_key` /
+    `ip_blocked` / `key_disabled` / `key_expired` 之一。
+
+    为什么只回原因、不回响应对象：两个调用方的对外形状不同 —— `/v1/usage`
+    给 OpenAI 形状的 `error`，余额协议给 new-api 形状的 `success/message`。
+    把「判定」与「表达」拆开，判定只有一份，形状各随其协议。
+
+    鉴权刻意比 chat 轻（理由见上方注释）：配额用尽的密钥也要能查到「我还剩
+    多少」——那正是最需要这个答案的时刻。
+    """
+    ip = iputil.client_ip(request)
+    ua = request.headers.get('user-agent')
+    token = _bearer(request)
+    if not token:
+        _log_ip(ip, request.url.path, True, ua, 'missing_key')
+        return None, ip, ua, 'missing_key'
+    key = keysvc.resolve(token)
+    if not key:
+        _log_ip(ip, request.url.path, True, ua, 'invalid_key')
+        return None, ip, ua, 'invalid_key'
+    if _global_ip_blocked(ip):
+        _log_ip(ip, request.url.path, True, ua, 'ip_blocked')
+        observability.mark_error('ip_blocked')
+        await _record_async(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+        return key, ip, ua, 'ip_blocked'
+    if not key['enabled']:
+        return key, ip, ua, 'key_disabled'
+    if key['expires_at'] and key['expires_at'] < time.time():
+        return key, ip, ua, 'key_expired'
+    return key, ip, ua, None
 
 
 def _usage_since(days: int) -> str:
@@ -1890,25 +1924,17 @@ async def usage_v1(request: Request):
     响应恒含 by_model（规范模型 → today/last_7d/last_30d 全窗口拆分）与
     live_by_model（规范模型 → 实时速度），新模型自动出现。
     """
-    ip = iputil.client_ip(request)
-    ua = request.headers.get('user-agent')
-    token = _bearer(request)
-    if not token:
-        _log_ip(ip, request.url.path, True, ua, 'missing_key')
+    key, ip, ua, reason = await _authorize_usage_key(request)
+    if reason == 'missing_key':
         return _oai_error('缺少 API Key，请在 Authorization 头中提供 Bearer 令牌', 401,
                           'authentication_error', 'missing_api_key')
-    key = keysvc.resolve(token)
-    if not key:
-        _log_ip(ip, request.url.path, True, ua, 'invalid_key')
+    if reason == 'invalid_key':
         return _oai_error('API Key 无效', 401, 'authentication_error', 'invalid_api_key')
-    if _global_ip_blocked(ip):
-        _log_ip(ip, request.url.path, True, ua, 'ip_blocked')
-        observability.mark_error('ip_blocked')
-        await _record_async(key, ip, '', '', 403, 0, 0, 0, ua, 'IP 被拦截', False)
+    if reason == 'ip_blocked':
         return _oai_error('来源 IP 被安全策略拦截', 403, 'permission_error', 'ip_blocked')
-    if not key['enabled']:
+    if reason == 'key_disabled':
         return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
-    if key['expires_at'] and key['expires_at'] < time.time():
+    if reason == 'key_expired':
         return _oai_error('密钥已过期', 403, 'permission_error', 'key_expired')
     today = time.strftime('%Y-%m-%d')
     # 实时速度窗口可调（秒）：默认 3 秒——请求完成瞬间数字尖跳，轮询越快越动感。
@@ -1938,7 +1964,119 @@ async def usage_v1(request: Request):
     for _name in resp['by_model']:
         resp['live_by_model'].setdefault(
             _name, {'window_seconds': live_window, 'tokens': 0, 'tokens_per_second': 0.0})
+    # 额度自查（只增字段，向后兼容）：密钥持有者最常问的第二件事是「我还剩多少」。
+    # 此前只能从控制台看到，而用密钥接入的第三方客户端没有会话，拿不到这个数字。
+    resp['quota'] = _quota_view(key)
     return resp
+
+
+def _quota_view(key):
+    """密钥的额度自查视图（`/v1/usage` 用）。
+
+    **只用 token 口径，不出现任何 credit 字段** —— 这是既有的对外契约
+    （`test_usage_endpoint.test_response_has_no_credit`）：`/v1/usage` 回答
+    「用了多少」，实付口径不外泄。
+
+    需要给出「余额」的是另一条契约（new-api 的余额协议），它有自己的视图
+    `_balance_view` —— 两者字段名与语义都不同，不能合并成一个函数。
+    """
+    granted = float(key.get('quota') or 0)
+    used = float(key.get('used_tokens') or 0)
+    unlimited = granted <= 0
+    return {
+        'unlimited': unlimited,
+        'unit': 'token',
+        'granted': int(granted) if not unlimited else 0,
+        'used': int(used),
+        'available': int(max(0.0, granted - used)) if not unlimited else 0,
+        'daily_token_quota': int(key.get('daily_token_quota') or 0),
+        'daily_used_tokens': int(key.get('daily_used_tokens') or 0),
+        'expires_at': int(key.get('expires_at') or 0),
+        'models': list(key.get('models') or []),
+    }
+
+
+def _balance_view(key):
+    """密钥的**余额**视图（new-api 余额协议用）。
+
+    单位优先级：配了积分总额就用积分，否则用 token 总额，都没配就是不限额。
+    **同一份响应里不会混用两种单位**，也不给出两者之间的换算 —— 那是内部定价
+    口径；对面只需要知道「授予 / 已用 / 可用」三个自洽的数字。
+    """
+    granted = float(key.get('quota_credit') or 0)
+    used = float(key.get('used_credit') or 0)
+    unit = 'credit'
+    if granted <= 0:
+        granted = float(key.get('quota') or 0)
+        used = float(key.get('used_tokens') or 0)
+        unit = 'token'
+    unlimited = granted <= 0
+    return {
+        'unlimited': unlimited,
+        'unit': unit,
+        'granted': round(granted, 6) if not unlimited else 0,
+        'used': round(used, 6),
+        'available': round(max(0.0, granted - used), 6) if not unlimited else 0,
+        'expires_at': int(key.get('expires_at') or 0),
+        'models': list(key.get('models') or []),
+    }
+
+
+@router.get('/api/usage/token')
+@router.get('/api/usage/token/')
+async def usage_token(request: Request):
+    """new-api 兼容的令牌余额协议：`GET /api/usage/token`。
+
+    形状按 new-api 官方文档（`docs.newapi.pro/docs/api/token-usage`）：
+
+        {"code": true, "message": "ok",
+         "data": {"object": "token_usage", "name": …,
+                  "total_granted": …, "total_used": …, "total_available": …,
+                  "unlimited_quota": false, "model_limits": {…},
+                  "model_limits_enabled": false, "expires_at": 0}}
+
+    为什么要有这个端点：new-api 一类的中转面板按这套协议显示「上游余额」。
+    没有它，用户在这些面板里只能看到「未知」，而我们的密钥额度其实是清楚的。
+
+    ## 单位
+
+    new-api 的 `total_*` 不声明单位，只要求「授予 / 已用 / 可用」三个自洽的数字。
+    我们按密钥自己的额度口径给：配了积分总额就给积分，配了 token 总额就给 token，
+    两者都没配就标 `unlimited_quota: true`。**同一响应里不会混用两种单位**。
+
+    ## 错误形状
+
+    这条路径必须用 new-api 的 `success/message`（而不是 OpenAI 的 `error`）：
+    面板解析不了别家的错误信封，只会显示「连接失败」，用户无从判断是密钥错
+    还是地址错。这也是它与 `/v1/usage` 共用判定、但不共用表达的原因。
+    """
+    key, _ip, _ua, reason = await _authorize_usage_key(request)
+    message = {
+        'missing_key': 'No Authorization header',
+        'invalid_key': 'token not found',
+        'ip_blocked': 'request blocked by security policy',
+        'key_disabled': 'token disabled',
+        'key_expired': 'token expired',
+    }.get(reason)
+    if message:
+        status = 401 if reason in ('missing_key', 'invalid_key') else 403
+        return JSONResponse({'success': False, 'message': message}, status_code=status)
+
+    quota = _balance_view(key)
+    data = {
+        'object': 'token_usage',
+        'name': key['name'],
+        'total_granted': quota['granted'],
+        'total_used': quota['used'],
+        'total_available': quota['available'],
+        'unlimited_quota': quota['unlimited'],
+        'model_limits': {name: True for name in quota['models']},
+        'model_limits_enabled': bool(quota['models']),
+        # new-api 约定：永不过期用 0（不是 -1）。我们的 expires_at 本来就以 0
+        # 表示不过期，直接透传。
+        'expires_at': quota['expires_at'],
+    }
+    return {'code': True, 'message': 'ok', 'data': data}
 
 
 @router.get('/v1/models')
