@@ -1,21 +1,21 @@
 1:"$Sreact.fragment"
 2:"static/chunks/4716-f1bfe501b4e90a5c.js"
 3:"static/chunks/6609-d828c87ffe266439.js"
-4:"static/chunks/7509-c5cb0ee2d01a8982.js"
-5:"static/chunks/2279-5c983e06e3327ede.js"
-6:"static/chunks/app/layout-0afd154c384c82c4.js"
+4:"static/chunks/7509-c2b69a20845ce643.js"
+5:"static/chunks/2279-bd8ff25a8d0c308b.js"
+6:"static/chunks/app/layout-c1f90e4bb8c04503.js"
 7:I[74866,["4716","$2","6609","$3","7509","$4","2279","$5","7177","$6"],"ThemeProvider"]
 8:I[15437,["4716","$2","6609","$3","7509","$4","2279","$5","7177","$6"],"I18nProvider"]
 9:I[9726,["4716","$2","6609","$3","7509","$4","2279","$5","7177","$6"],"AuthProvider"]
 a:I[57121,[],""]
 b:"static/chunks/9778-58f1d9d810485a01.js"
 c:"static/chunks/78-baaa9387bd018dbe.js"
-d:"static/chunks/app/error-ef9c61dd83455bf4.js"
+d:"static/chunks/app/error-b2118838cb6e5690.js"
 e:I[87460,["9778","$b","7509","$4","78","$c","8039","$d"],"default"]
 f:I[74581,[],""]
 10:"static/chunks/6109-859fb63e735c4da8.js"
 11:"static/chunks/8500-63a4afbeacab3b52.js"
-12:"static/chunks/app/not-found-e680847d6b023b55.js"
+12:"static/chunks/app/not-found-7a984726de108252.js"
 13:I[83850,["9778","$b","6109","$10","8500","$11","7509","$4","4345","$12"],"default"]
 14:I[61549,["4716","$2","6609","$3","7509","$4","2279","$5","7177","$6"],"Toaster"]
 16:"ClientSegmentRoot"
@@ -26,18 +26,18 @@ f:I[74581,[],""]
 1b:"static/chunks/4100-e0e1395caf0cf50f.js"
 1c:"static/chunks/5869-133207c96d47f61f.js"
 1d:"static/chunks/47-4f06f92de940cdf1.js"
-1e:"static/chunks/3161-90a91a0d5e14c059.js"
+1e:"static/chunks/8530-893b768397b1d2bb.js"
 1f:"static/chunks/467-bccf69dd7a42f5ad.js"
 20:"static/chunks/7877-0f0f37ac1ade3be4.js"
 21:"static/chunks/5558-fd7cddc25b085881.js"
-22:"static/chunks/app/(main)/layout-c59e21b506dadc77.js"
-23:I[77362,["9778","$b","6109","$10","4716","$2","8211","$18","6609","$3","9336","$19","8500","$11","8061","$1a","4100","$1b","5869","$1c","47","$1d","3161","$1e","7509","$4","2279","$5","78","$c","467","$1f","7877","$20","5558","$21","2076","$22"],"default"]
-24:"static/chunks/app/(main)/error-8b0cb779c0b4cc24.js"
+22:"static/chunks/app/(main)/layout-ccd5f3199c47f346.js"
+23:I[77362,["9778","$b","6109","$10","4716","$2","8211","$18","6609","$3","9336","$19","8500","$11","8061","$1a","4100","$1b","5869","$1c","47","$1d","8530","$1e","7509","$4","2279","$5","78","$c","467","$1f","7877","$20","5558","$21","2076","$22"],"default"]
+24:"static/chunks/app/(main)/error-eaefb56f2874bffb.js"
 25:I[2797,["9778","$b","7509","$4","78","$c","5956","$24"],"default"]
 28:"static/chunks/9287-8abe4fe4b3a77f8a.js"
 29:"static/chunks/3593-104bb5973903e40b.js"
 2a:"static/chunks/1561-8c0a0eabb6ca98ee.js"
-2b:"static/chunks/app/(main)/settings/layout-34af079fb44495ac.js"
+2b:"static/chunks/app/(main)/settings/layout-c3ff4e0a18227ead.js"
 2c:I[26150,["9778","$b","6109","$10","4716","$2","8211","$18","6609","$3","9336","$19","8500","$11","8061","$1a","4100","$1b","5869","$1c","9287","$28","3593","$29","7509","$4","2279","$5","78","$c","1561","$2a","467","$1f","7877","$20","66","$2b"],"default"]
 31:I[90484,[],"OutletBoundary"]
 32:"$Sreact.suspense"
@@ -46,18 +46,18 @@ f:I[74581,[],""]
 37:"MetadataBoundary"
 38:I[90484,[],"$37"]
 3a:I[27123,[],"default",1]
-:HL["/_next/static/css/b80377fcb8c7b601.css","style"]
+:HL["/_next/static/css/742faecbbe748e33.css","style"]
 :HL["/_next/static/css/b21ef941d767d6ce.css","style"]
 2f:X
 30:[["children",{"s":"__PAGE__","h":512,"d":{"r":["$","$1","c",{"children":[null,null,["$","$L31",null,{"children":["$","$32",null,{"name":"Next.MetadataOutlet","children":"$@33"}]}]]}],"p":false,"v":null}}]]
 2e:[["children",{"s":"changelog","h":512,"d":{"r":["$","$1","c",{"children":[null,["$","$La",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$Lf",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]]}],"p":false,"v":"$2f"},"c":"$Q30"}]]
 27:[["children",{"s":"settings","h":512,"d":{"r":["$","$1","c",{"children":[null,["$","$L17",null,{"Component":"$2c","slots":{"children":["$","$La",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$Lf",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]},"serverProvidedParams":{"params":"$15:0:1:d:r:props:children:1:props:serverProvidedParams:params","promises":["$@2d"]}}]]}],"p":false,"v":null},"c":"$Q2e"}]]
 15:[["children",{"s":"(main)","h":512,"d":{"r":["$","$1","c",{"children":[null,["$","$L17",null,{"Component":"$23","slots":{"children":["$","$La",null,{"parallelRouterKey":"children","error":"$25","errorStyles":[],"errorScripts":null,"template":["$","$Lf",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]},"serverProvidedParams":{"params":{},"promises":["$@26"]}}]]}],"p":false,"v":null},"c":"$Q27"}]]
-0:{"P":null,"c":["","settings","changelog",""],"q":"","i":false,"t":{"t":{"s":"","h":528,"d":{"r":["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/b80377fcb8c7b601.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}],["$","link","1",{"rel":"stylesheet","href":"/_next/static/css/b21ef941d767d6ce.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]],["$","html",null,{"lang":"zh-CN","style":{"--font-noto-sans-sc":"\"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Hiragino Sans GB\", \"Source Han Sans SC\", \"Noto Sans CJK SC\", system-ui, -apple-system, \"Segoe UI\", sans-serif"},"className":"__variable_a918ff hide-scrollbar font-sans","suppressHydrationWarning":true,"children":["$","body",null,{"className":"__variable_a918ff hide-scrollbar font-sans antialiased","children":["$","$L7",null,{"attribute":"class","defaultTheme":"system","enableSystem":true,"disableTransitionOnChange":true,"children":["$","$L8",null,{"children":["$","$L9",null,{"children":[["$","$La",null,{"parallelRouterKey":"children","error":"$e","errorStyles":[],"errorScripts":null,"template":["$","$Lf",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","$L13",null,{}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}],["$","$L14",null,{}]]}]}]}]}]}]]}],"p":false,"v":null},"c":"$Q15"},"h":{"r":["$","$1","h",{"children":[null,["$","$L35",null,{"children":"$L36"}],["$","$L38",null,{"children":[["$","div",null,{"hidden":true,"children":["$","$32",null,{"name":"Next.Metadata","children":"$L39"}]}],null]}],null]}],"p":false,"v":null}},"m":"$undefined","G":["$3a",[]],"S":true,"r":"$undefined","s":"$undefined","a":"$undefined","l":"$undefined","p":"$undefined","d":"$undefined","b":"t-q2szFRAZI1-GwHNSvvQ"}
+0:{"P":null,"c":["","settings","changelog",""],"q":"","i":false,"t":{"t":{"s":"","h":528,"d":{"r":["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/742faecbbe748e33.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}],["$","link","1",{"rel":"stylesheet","href":"/_next/static/css/b21ef941d767d6ce.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]],["$","html",null,{"lang":"zh-CN","style":{"--font-noto-sans-sc":"\"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Hiragino Sans GB\", \"Source Han Sans SC\", \"Noto Sans CJK SC\", system-ui, -apple-system, \"Segoe UI\", sans-serif"},"className":"__variable_a918ff hide-scrollbar font-sans","suppressHydrationWarning":true,"children":["$","body",null,{"className":"__variable_a918ff hide-scrollbar font-sans antialiased","children":["$","$L7",null,{"attribute":"class","defaultTheme":"system","enableSystem":true,"disableTransitionOnChange":true,"children":["$","$L8",null,{"children":["$","$L9",null,{"children":[["$","$La",null,{"parallelRouterKey":"children","error":"$e","errorStyles":[],"errorScripts":null,"template":["$","$Lf",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","$L13",null,{}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}],["$","$L14",null,{}]]}]}]}]}]}]]}],"p":false,"v":null},"c":"$Q15"},"h":{"r":["$","$1","h",{"children":[null,["$","$L35",null,{"children":"$L36"}],["$","$L38",null,{"children":[["$","div",null,{"hidden":true,"children":["$","$32",null,{"name":"Next.Metadata","children":"$L39"}]}],null]}],null]}],"p":false,"v":null}},"m":"$undefined","G":["$3a",[]],"S":true,"r":"$undefined","s":"$undefined","a":"$undefined","l":"$undefined","p":"$undefined","d":"$undefined","b":"wa5dTzJg7LQJKKTrEAZB2"}
 2f:C
 26:"$15:0:1:d:r:props:children:1:props:serverProvidedParams:params"
 2d:"$15:0:1:d:r:props:children:1:props:serverProvidedParams:params"
 36:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
 3b:I[86869,[],"IconMark"]
 33:null
-39:[["$","title","0",{"children":"智汇网关"}],["$","meta","1",{"name":"description","content":"智汇网关 - Qoder / Trae / WorkBuddy / 豆包工作 多平台账号池与网关控制台"}],["$","link","2",{"rel":"manifest","href":"/favicon/zhihui-z-20261029/site.webmanifest","crossOrigin":"$undefined"}],["$","link","3",{"rel":"shortcut icon","href":"/favicon/zhihui-z-20261029/favicon.ico"}],["$","link","4",{"rel":"icon","href":"/favicon.ico?e8d796c6872762d9","type":"image/x-icon","sizes":"16x16"}],["$","link","5",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon-32x32.png","sizes":"32x32","type":"image/png"}],["$","link","6",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon-16x16.png","sizes":"16x16","type":"image/png"}],["$","link","7",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon.svg","sizes":"any","type":"image/svg+xml"}],["$","link","8",{"rel":"apple-touch-icon","href":"/favicon/zhihui-z-20261029/apple-touch-icon.png"}],["$","$L3b","9",{}]]
+39:[["$","title","0",{"children":"智汇网关"}],["$","meta","1",{"name":"description","content":"智汇网关 - WorkBuddy 账号池与网关控制台"}],["$","link","2",{"rel":"manifest","href":"/favicon/zhihui-z-20261029/site.webmanifest","crossOrigin":"$undefined"}],["$","link","3",{"rel":"shortcut icon","href":"/favicon/zhihui-z-20261029/favicon.ico"}],["$","link","4",{"rel":"icon","href":"/favicon.ico?e8d796c6872762d9","type":"image/x-icon","sizes":"16x16"}],["$","link","5",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon-32x32.png","sizes":"32x32","type":"image/png"}],["$","link","6",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon-16x16.png","sizes":"16x16","type":"image/png"}],["$","link","7",{"rel":"icon","href":"/favicon/zhihui-z-20261029/favicon.svg","sizes":"any","type":"image/svg+xml"}],["$","link","8",{"rel":"apple-touch-icon","href":"/favicon/zhihui-z-20261029/apple-touch-icon.png"}],["$","$L3b","9",{}]]

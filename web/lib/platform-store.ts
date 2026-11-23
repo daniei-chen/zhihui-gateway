@@ -31,22 +31,23 @@
 /**
  * 平台枚举。
  *
- * **2026-11-22：`PLATFORMS` 只剩 `workbuddy` 与 `trae`** —— 在营平台就是这两个。
+ * **2026-11-23：`PLATFORMS` 只剩 `workbuddy`** —— 网关收敛到一条线。
  *
- * - `qoder` 于 2026-11-19 官方停止送积分，2026-11-22 正式从网关移除
- *   （`/qoder/v1/*` 现在直接返回 410，后端 `platformpolicy.PLATFORMS` 只留两个）。
- * - `doubaowork`（豆包工作）引擎长期处于关闭态，同样从枚举里摘除。
- * - 但 `Platform` **类型**仍保留这四个，是因为代码里还有 `platform === 'qoder'`、
- *   `doubaowork: '...'` 这类历史分支（统计口径、账号导入对话框、i18n 标签等）。
- *   把类型也删掉会引发一大片编译错误，而那些分支在「UI 永远不产出这两个值」
- *   的前提下是**死代码**，留着无害。
+ * - `qoder` 于 2026-11-19 官方停止送积分，2026-11-22 从网关移除。
+ * - `trae` 于 2026-11-23 主动下线，把精力集中到 WorkBuddy
+ *   （`/trae/v1/*` 与 `/qoder/v1/*` 一样返回 410，后端 `platformpolicy.PLATFORMS`
+ *   只留 `workbuddy`）。
+ * - `doubaowork`（豆包工作）引擎长期处于关闭态，从未进入枚举。
+ * - 但 `Platform` **类型**仍保留这些历史值，是因为代码里还有 `platform === 'trae'`
+ *   这类分支（统计口径、账号导入对话框、i18n 标签等）。把类型也删掉会引发一大片
+ *   编译错误，而那些分支在「UI 永远不产出这些值」的前提下是**死代码**，留着无害。
  *
  * 判断「在不在用」请一律看 `PLATFORMS`，不要看 `Platform` 类型。
  */
 export type Platform = 'qoder' | 'trae' | 'workbuddy' | 'doubaowork';
 
-// 顺序即 UI 显示顺序：WorkBuddy 第一（主力平台）、Trae 第二。
-export const PLATFORMS: readonly Platform[] = ['workbuddy', 'trae'] as const;
+// 顺序即 UI 显示顺序。2026-11-23 起只剩 WorkBuddy。
+export const PLATFORMS: readonly Platform[] = ['workbuddy'] as const;
 
 /** 与 `PlatformProvider`、axios 拦截器共用的存储键（沿用线上既有键，不迁移）。 */
 export const PLATFORM_STORAGE_KEY = 'qtg.platform';

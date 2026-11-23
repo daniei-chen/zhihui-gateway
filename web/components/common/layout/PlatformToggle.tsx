@@ -1,6 +1,6 @@
 'use client';
 
-import {Bot, Brain, Cloud} from 'lucide-react';
+import {Cloud, type LucideIcon} from 'lucide-react';
 import {motion} from 'motion/react';
 
 import {usePlatform, type Platform} from '@/lib/platform-context';
@@ -8,40 +8,33 @@ import {useT} from '@/lib/i18n/provider';
 import {cn} from '@/lib/utils';
 
 /**
- * 平台切换（WorkBuddy / Trae / 豆包工作）。WorkBuddy 排第一：它是当前主力平台，
- * 账号池最厚、在线流量最大。
+ * 平台切换。
  *
- * 2026-11-19：qoder 官方不再送积分，qtg 不再接入它，平台位置由豆包工作接管。
- * 这里**不再产出 qoder 选项** —— `lib/platform-store.ts` 的 `Platform` 类型里仍保留
- * `'qoder'`，那是给历史数据与死分支用的，UI 不该再让用户切到它。
+ * **2026-11-23：只剩 WorkBuddy 一个平台，切换器实际上不再需要。**
+ * 这里仍保留组件与渲染逻辑，是因为它还被多处引用；当选项只有一个时
+ * 直接返回 `null` —— 一个只有一项的「切换器」对用户是纯噪音。
  *
- * 与右侧的版本切换（国内 / 国际）**并存**，两者是不同维度：
- * 平台决定连哪个上游网关，版本决定该平台下的账号属于国内站还是国际站。
+ * 历史沿革：`qoder` 于 2026-11-19 停止送积分、11-22 从网关移除；`trae` 于
+ * 2026-11-23 主动下线。两者的 `Platform` 类型值仍保留（历史数据与死分支），
+ * 但 UI 不再产出这些选项。
  *
- * 豆包工作没有「国内 / 国际」之分，切到它时版本切换器不产生实际影响。
- *
- * 样式与 RealmToggle 保持一致（同一套 pill + layoutId 弹簧滑动）。
+ * 注意：这个 `options` 数组是**独立维护**的，不读 `lib/platform-store.ts` 的
+ * `PLATFORMS`。改那边不会自动影响这里 —— 两处都要改。
  */
 export function PlatformToggle({compact = false}: {compact?: boolean}) {
   const {platform, setPlatform} = usePlatform();
   const t = useT();
-  const options: {id: Platform; label: string; title: string; icon: typeof Bot}[] = [
+  const options: {id: Platform; label: string; title: string; icon: LucideIcon}[] = [
     {
       id: 'workbuddy',
       label: 'WorkBuddy',
       title: t('platform.workbuddyHint'),
       icon: Cloud,
     },
-    {id: 'trae', label: 'Trae', title: t('platform.traeHint'), icon: Bot},
-    {
-      id: 'doubaowork',
-      // 走 i18n：前两个平台名是英文专名（Trae / WorkBuddy），中文产品名
-      // 若在这里写死，en/ja/ko 界面会突然出现中文。
-      label: t('platform.doubaoworkShort'),
-      title: t('platform.doubaoworkHint'),
-      icon: Brain,
-    },
   ];
+
+  // 只有一个平台时不渲染切换器：没有可切换的东西。
+  if (options.length <= 1) return null;
 
   return (
     <div

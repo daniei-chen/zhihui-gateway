@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway · one controlled route for WorkBuddy and Trae." />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="Zhihui Gateway · one controlled route for WorkBuddy." />
   </picture>
 </a>
 
@@ -40,7 +40,7 @@ A calm workspace keeps the account pool, models, keys and usage in one place.
 
 <p align="center"><sub>Console rendering with synthetic data; it is not a production ledger.</sub></p>
 
-- **One workspace:** WorkBuddy and Trae share the control surface while keeping their routes separate.
+- **One workspace:** the WorkBuddy control surface with light/dark themes, a floating dock and five locales.
 - **Bounded authorization:** ordinary administrators see redacted information and add authorized accounts; super administrators manage keys, quotas, roles and system settings.
 - **Truthful usage:** missing provider evidence stays unknown instead of becoming a fabricated zero.
 - **Separate user space:** each user manages bound accounts, check-in batches, keys and request history within their own scope.
@@ -77,15 +77,16 @@ Changing the console view does not silently change a client's base URL.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="Clients pass through Zhihui authentication, routing and metering to WorkBuddy or Trae." />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="Clients pass through Zhihui authentication, routing and metering to WorkBuddy." />
 </picture>
 
 | Platform | Client Base URL | Note |
 | :--- | :--- | :--- |
 | WorkBuddy | `https://your-domain/v1` | Chat, Responses and Messages adapters |
-| Trae | `https://your-domain/trae/v1` | Subject to the engine and account authorization |
 
 > **About Qoder.** We regret that Qoder no longer offers free daily credits. Qoder has been removed from the Zhihui gateway while we look for other free-tier reverse proxies. Stay tuned.
+>
+> **About Trae.** Trae has been removed from the Zhihui gateway so we can focus on WorkBuddy. The former `/trae/v1/*` endpoints no longer serve requests.
 
 | Method | Path | Note |
 | :--- | :--- | :--- |
@@ -93,7 +94,6 @@ Changing the console view does not silently change a client's base URL.
 | POST | `/v1/chat/completions` | WorkBuddy chat |
 | POST | `/v1/responses` | Responses-compatible entry point |
 | POST | `/v1/messages` | Anthropic Messages-compatible entry point |
-| POST | `/trae/v1/chat/completions` | Trae chat |
 
 <details>
 <summary><b>Minimal call example</b> — use a model and gateway key you already authorized</summary>

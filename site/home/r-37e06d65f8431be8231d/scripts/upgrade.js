@@ -26,8 +26,6 @@
 
   const platforms = {
     workbuddy: { label: 'WorkBuddy', prefix: '/v1/*', engine: 'workbuddy2api', path: 'netA', text: 'WorkBuddy 专用入口。国内与国际版本独立授权。' },
-    qoder: { label: 'Qoder', prefix: '/qoder/v1/*', engine: 'qoder2', path: 'netC', text: 'Qoder 专用入口，独立引擎与账号资源。' },
-    trae: { label: 'Trae', prefix: '/trae/v1/*', engine: 'aiwork-server', path: 'netB', text: 'Trae 专用入口，独立账号池与调用记录。' },
   };
   let selected = 'workbuddy';
   let format = 'curl';

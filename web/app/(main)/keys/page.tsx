@@ -63,9 +63,10 @@ import {
  * 不是照抄后端 `PLATFORMS` 的排列 —— 这个数组只决定复选框顺序，
  * 不影响授权语义。授权语义由后端决定。
  *
- * 2026-11-19：qoder 已摘除（官方不再送积分），从可选列表移除。
+ * 2026-11-19：qoder 已摘除（官方不再送积分）。2026-11-23：trae 主动下线。
+ * 现在只剩 WorkBuddy —— 复选框实际只渲染一项。
  */
-const KEY_PLATFORM_OPTIONS = ['workbuddy', 'trae', 'doubaowork'] as const;
+const KEY_PLATFORM_OPTIONS = ['workbuddy'] as const;
 
 /**
  * 平台显示名。
@@ -91,10 +92,10 @@ const PLATFORM_LABELS: Partial<Record<Platform, string>> = {
  *
  * 必须与后端 `platformpolicy.DEFAULT_PLATFORMS` 完全一致，否则会出现
  * 「界面画的徽章」和「后端真正允许的平台」两套口径。
- * 2026-11-19：跟着后端改成三平台（豆包进、qoder 出），顺序与
- * `platformpolicy.DEFAULT_PLATFORMS` 对齐（WorkBuddy → Trae → 豆包工作）。
+ * 2026-11-23：与后端 `platformpolicy.DEFAULT_PLATFORMS` 对齐 —— 只剩 WorkBuddy
+ * （trae 已下线，doubaowork 从未启用）。
  */
-const LEGACY_DEFAULT_PLATFORMS = ['workbuddy', 'trae', 'doubaowork'] as const;
+const LEGACY_DEFAULT_PLATFORMS = ['workbuddy'] as const;
 
 interface FormState {
   platforms: Platform[];

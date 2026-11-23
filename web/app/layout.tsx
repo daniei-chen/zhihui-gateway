@@ -62,7 +62,7 @@ export const metadata: Metadata = {
   // 站点描述是构建期写死的明文，无法跟随运行时语言（见上一条注释）。
   // 平台名逐个列出：这是给搜索引擎/分享卡片看的，写清楚比写「多平台」更有信息量；
   // 新增平台时需要同步这里（漏改只是文案过期，不影响功能）。
-  description: '智汇网关 - Qoder / Trae / WorkBuddy / 豆包工作 多平台账号池与网关控制台',
+  description: '智汇网关 - WorkBuddy 账号池与网关控制台',
   // 图标 / 清单的 URL 也要带部署前缀（PR #60 评审补漏）：Next 只给 `_next`
   // 静态资源与 next/link 跳转补 basePath，**不会**改写 metadata 里的这些字符串
   // ——实测子路径部署下产物里仍是 `href="/favicon/..."`，会被请求到域名根（通常是

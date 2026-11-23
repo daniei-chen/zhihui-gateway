@@ -3,7 +3,7 @@
 <a href="https://zhihui.kaogong.art/">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/images/readme/cover-mobile-v0.0.10.svg" />
-  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 · 让灵感出发，让工作向前。WorkBuddy 与 Trae，独立授权与路由。" />
+  <img src="docs/images/readme/cover-v0.0.10.svg" width="100%" alt="智汇网关 · 让灵感出发，让工作向前。一条受控的 WorkBuddy 授权与路由。" />
   </picture>
 </a>
 
@@ -40,7 +40,7 @@
 
 <p align="center"><sub>实际控制台构建渲染 · 合成数据 · 非当前生产状态截图</sub></p>
 
-- **管理不割裂。** WorkBuddy 与 Trae 共用工作台，保留平台切换、明暗主题、浮动 Dock 与五语界面。
+- **管理不割裂。** WorkBuddy 工作台保留明暗主题、浮动 Dock 与五语界面。
 - **授权有边界。** 普通管理员可浏览脱敏信息、添加授权账号；超级管理员维护密钥额度、用户权限与系统设置。
 - **用量不猜测。** 查看缓存命中、输出速度和请求记录；缺少可靠用量时显示未知，不包装成零消耗。
 - **用户有自己的空间。** 独立工作台管理绑定账号、签到批次、密钥与请求记录；财务策略以已批准配置和可核验证据为准。
@@ -77,15 +77,16 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/images/readme/routing-mobile.svg" />
-  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由与计量后分别访问：WorkBuddy /v1/*、Trae /trae/v1/*。" />
+  <img src="docs/images/readme/routing.svg" width="100%" alt="客户端经智汇鉴权、路由与计量后访问 WorkBuddy /v1/*。" />
 </picture>
 
 | 平台 | 客户端 Base URL | 提醒 |
 | :--- | :--- | :--- |
 | WorkBuddy | `https://你的域名/v1` | Chat、Responses、Messages 适配 |
-| Trae | `https://你的域名/trae/v1` | 以该引擎能力和账号授权为准 |
 
 > **关于 Qoder。** 我们很遗憾，Qoder 目前不再提供免费积分每日领取。我们在智汇网关中已移除 Qoder，目前正在积极寻找其他免费额度反向代理，敬请期待。
+>
+> **关于 Trae。** 智汇网关已移除 Trae 接入，把精力集中到 WorkBuddy 这一条线上。原有的 `/trae/v1/*` 端点不再提供服务。
 
 | Method | Path | 说明 |
 | :--- | :--- | :--- |
@@ -93,7 +94,6 @@
 | POST | `/v1/chat/completions` | WorkBuddy 对话调用 |
 | POST | `/v1/responses` | Responses 兼容入口 |
 | POST | `/v1/messages` | Anthropic Messages 兼容入口 |
-| POST | `/trae/v1/chat/completions` | Trae 对话调用 |
 
 <details>
 <summary><b>一个最小调用示例</b> — 使用自己已授权的模型和网关密钥</summary>

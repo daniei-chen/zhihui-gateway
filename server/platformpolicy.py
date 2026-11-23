@@ -26,39 +26,39 @@ class PlatformSpec:
     realm_scoped: bool = True      # 受 WorkBuddy cn/global realm 裁剪
     quota_4xx: bool = False        # 上游 4xx 可能是「账号池额度耗尽」
     auth_mode: str = 'callback'    # `callback` 浏览器回跳 / `poll` 轮询上游会话
-    oauth_session: bool = False    # 有 OAuth 授权会话台账
+    oauth_session: bool = False    # 有 OAuth 授权会话台账（workbuddy 走密码登录，没有）
     qr_self_driven: bool = False   # 扫码由独立扫码页驱动，台账不重复 poll
     stats_scope: bool = False      # 进「按密钥用量」统计分支
     billing: str = 'none'          # `upstream_credit` = usage 自带 credit；`none` 不计费
     display: str = ''              # 展示名（文案用，不参与判定）
 
 
-#: **单一真相**。顺序即对外显示顺序，也决定 `_ACCEPTED` 的顺序。
-#
-# 注意这与 `compat_fixes.UPSTREAM_IDS` 的**编号**是两件事：那里 1/2/3 是外部
-# 面板的编号契约（豆包=1、Trae=2、WorkBuddy=3），**不随显示顺序重排**。
+#: **单一真相**。顺序即对外显示顺序。
 PLATFORM_SPEC: dict[str, PlatformSpec] = {
     'workbuddy': PlatformSpec(
         name='workbuddy', enabled=True, default_grant=True,
         adapter='wb', passthrough=False, realm_scoped=True,
         auth_mode='callback', billing='upstream_credit', display='WorkBuddy'),
+    # 2026-11-23：Trae 主动下线，网关收敛到 WorkBuddy 一条线。
+    # 与 qoder 同样处理 —— `enabled=False` 让它从 `PLATFORMS` / `DEFAULT_PLATFORMS`
+    # / `/api/platforms` / UI 切换器里一并消失，但保留在 `PLATFORM_SPEC` 中，
+    # 这样存量密钥若还写着 'trae'，`normalize()` 仍能解析（否则整条鉴权链路 500），
+    # 真正的请求会因运行时没有该引擎而得到明确的「平台已下线」错误。
     'trae': PlatformSpec(
-        name='trae', enabled=True, default_grant=True,
+        name='trae', enabled=False, default_grant=False,
         adapter='trae', passthrough=True, realm_scoped=False, quota_4xx=True,
-        auth_mode='callback', oauth_session=True, qr_self_driven=True,
-        stats_scope=True, display='Trae'),
-    # 2026-11-22：豆包工作下线（与生产一致）。保留在表里 = 「可识别、但不可用」：
-    # 存量密钥/旧 users.json 里可能还写着它，直接删会让鉴权链路 500。
-    'doubaowork': PlatformSpec(
-        name='doubaowork', enabled=False, default_grant=False,
-        adapter='dbw', passthrough=True, realm_scoped=False, quota_4xx=True,
-        auth_mode='callback', qr_self_driven=True, display='Doubao Work'),
+        auth_mode='callback', oauth_session=True, qr_self_driven=True, stats_scope=True,
+        billing='none', display='Trae'),
     # 「可识别、但不可用」的历史平台：留给存量密钥/旧 users.json/迁移回填，
     # 免得一个已不用的平台让整条鉴权链路 500。
     'qoder': PlatformSpec(
         name='qoder', enabled=False, adapter='qoder', passthrough=True,
         realm_scoped=False, auth_mode='poll', oauth_session=True,
         stats_scope=True, display='Qoder'),
+    'doubaowork': PlatformSpec(
+        name='doubaowork', enabled=False, adapter='dbw', passthrough=True,
+        realm_scoped=False, quota_4xx=True, auth_mode='poll',
+        qr_self_driven=True, display='Doubao Work'),
 }
 
 
