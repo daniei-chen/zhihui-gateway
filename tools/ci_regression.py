@@ -60,6 +60,20 @@ MODULES = (
     "server.tests.test_audit_regressions",
     "server.tests.test_control_plane_stability",
     "server.tests.test_automatic_zero_evidence",
+    # 积分 / 账本 / 配额主题补收（2026-11-23 全部单独跑通后入清单）。
+    # 这批是「钱」相关的不变量：预授权、日额度、结算真相、并发原子性。
+    # 之前一条都没在门禁里跑过，等于账本逻辑没有自动守卫。
+    "server.tests.test_daily_key_quota",
+    "server.tests.test_budget_batch_bounds",
+    "server.tests.test_budget_kill_closure",
+    "server.tests.test_daily_plan",
+    "server.tests.test_daily_replay_boundaries",
+    "server.tests.test_attempt_billing_facts",
+    "server.tests.test_audit_stats_reconcile",
+    "server.tests.test_audit_finance_repairs",
+    "server.tests.test_audit_dailyplan_lifecycle",
+    "server.tests.test_closure_contracts",
+    "server.tests.test_concurrency_and_atomicity",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",
     "server.tests.test_audit_gateway_boundaries",
