@@ -136,7 +136,7 @@ sudo systemctl daemon-reload && sudo systemctl restart workbuddy-web
 | 项 | 频率 | 为什么手动 |
 |---|---|---|
 | 回滚演练 | 每季度 | 会短暂中断服务，需要挑时段；做法见第 2 节，来回各一次重启 |
-| 恢复演练（`deploy/restore_drill.py`） | 每月 | 要确认备份文件真实可用；脚本只读演练，不碰生产数据 |
+| 备份可用性确认 | 每月 | 只做摘要比对与归档可列，见第 6 节；**真实还原已定不做** |
 | releases 目录清理 | 磁盘 > 80% 时 | 删除不可逆。保留最近 5 个版本 + 回滚目标 + 当前 |
 
 ### releases 清理的安全做法
@@ -157,50 +157,61 @@ previous），1.7G → 319M；控制台产物 13 → 1 份，89M → 6.5M。
 
 ---
 
-## 6. 恢复演练（真正做了什么、还缺什么）
+## 6. 备份：已定策略与一个不能踩的坑
 
-### 生产备份现状
+### 已定策略（2026-11-24 决策）
+
+| 项 | 决定 |
+|---|---|
+| 异地备份 | **不做** |
+| 还原演练（真实还原 / 定期 drill） | **不做** |
+| 本地日常备份 | **保留**，见下 |
+
+### 事实：异地备份本来就不存在
+
+`/usr/local/sbin/wb-backup-mirror.sh`（cron 05:50）名字像异地，实际是**同文件系统的
+硬链接**（`ln -f`，零额外占用），只防误删，防不了磁盘故障。脚本自己的注释也写着
+「真正的异地仍需 offsite.json」，而那个文件不存在。所以「不做异地备份」不需要
+关闭任何东西——从来没有过。
+
+### 坑：加密恢复点与日常备份是同一个脚本产出的
+
+```
+zhihui-recovery.timer (04:16)
+  └─ /opt/zhihui-release/recovery/recovery_v3.py --local-only
+       ├─ /root/backups/zhihui-v2/snapshots/<stamp>/snapshot.part-*.age   ← 加密恢复点（1.3G）
+       └─ /root/backups/workbuddy-daily/recovery-*.tar.gz + latest.json   ← 整机恢复包（397M）
+```
+
+**不要为了「去掉还原点」而 `systemctl disable zhihui-recovery.timer`** ——
+它会同时停掉右边那份整机恢复包，那是目前**唯一可用的恢复手段**。
+
+真要彻底去掉加密快照，得改 `recovery_v3.py` 的产出逻辑（让它不写 `snapshots/`），
+不能停 timer。
+
+### 现在这套备份的状态
 
 | 载体 | 位置 | 状态 |
 |---|---|---|
-| 日常备份 | `/root/backups/workbuddy-daily/recovery-*.tar.gz` | **可用**，每份约 397 MB |
-| 收据 | `/var/lib/zhihui-retention/backup-*.json` | 每日一份，含 sha256 与自检结果 |
-| 加密快照 | `/root/backups/zhihui-v2/snapshots/*/snapshot.part-*.age` | **当前不可恢复**（见下） |
-| 保留策略 | `zhihui-backup-retention.timer` | 每日 06:47，只留最新 |
+| 整机恢复包 | `/root/backups/workbuddy-daily/recovery-*.tar.gz` | **可用**，每日一份，保留 latest |
+| 本地镜像 | `/root/backups/workbuddy-mirror/` | 硬链接，只留最近 7 份 |
+| 收据 | `/var/lib/zhihui-retention/backup-*.json` | 每日，含 sha256 与自检结果 |
+| 加密恢复点 | `/root/backups/zhihui-v2/snapshots/` | 2 份约 1.3G，**无密钥、解不开** |
 
-### 演练步骤（不需要停服务、不碰生产数据）
+加密恢复点这一栏是纯占空间：全盘找不到 `*.agekey`，`.age` 分片无法解密。它不影响
+日常备份的可用性，所以不必急着删；但要知道它提供不了任何恢复能力。
+
+### 手动确认备份还活着（约 30 秒，不需要停服务）
 
 ```bash
 F=$(ls -t /root/backups/workbuddy-daily/recovery-*.tar.gz | head -1)
-EXPECTED=$(sudo python3 -c '' 2>/dev/null; sudo grep -o '"sha256": "[a-f0-9]*"' \
-  /root/backups/workbuddy-daily/latest.json | head -1 | cut -d'"' -f4)
-echo "$EXPECTED" | grep -q . || echo "从 latest.json 里取 sha256 失败"
-sudo sha256sum "$F"          # 必须与 latest.json 的 sha256 一致
-sudo tar -tzf "$F" | head    # 必须能列出（说明归档未损坏）
-sudo tar -tzf "$F" | grep -E 'manager\.db$'   # 必须找得到数据库
+sudo sha256sum "$F"                     # 与 latest.json 里的 sha256 比对
+sudo tar -tzf "$F" | grep -E 'manager\.db$'   # 两份成对数据库都要在
 ```
 
-判据：摘要一致、归档可列、`paired-ledgers/manager.db` 与 `manager/data/manager.db`
-都存在（两份是成对账本的设计，缺一份就不算完整）。
+判据：摘要一致、`paired-ledgers/manager.db` 与 `manager/data/manager.db` 都存在
+（两份是成对账本的设计，缺一份就不算完整）。
 
-`deploy/restore_drill.py` 是**加密快照**的演练脚本，不是这份 tar.gz 的；
-它需要 `/opt/workbuddy-manager/keys/recovery.agekey`。
+**这条只是「确认备份没坏」，不是还原演练**，可以随时做。真实还原不做（已定）。
 
-### 2026-11-23 演练结果
-
-- 最新备份 `recovery-20261123-152107.tar.gz`：sha256 与收据**一致**，归档可列，
-  两份数据库都在，账号凭据文件也在。`latest.json` 里 `restore_check: ok`、
-  `request_rows: 361024`、签名与版本一致。
-- 结论：**日常备份是可信的**。
-
-### 三个尚未解决的缺口
-
-1. **加密快照没有密钥。** 全盘找不到 `*.agekey`，所以
-   `/root/backups/zhihui-v2/snapshots/` 下的 `.age` 文件目前**解不开**——
-   它们占着空间但提供不了任何恢复能力。要么找回密钥（可能在离线介质），
-   要么停掉这条快照链路，避免「以为有第二副本」。
-2. **没有异地副本。** `latest.json` 里 `offsite: false`，备份与数据在**同一块盘**
-   （`/dev/vda2`）。磁盘故障或误删会同时带走两者。这是当前最大的单点。
-3. **恢复演练只做到「验证备份可读」，没有做过真实还原。** 真实还原需要停服务、
-   清空数据目录、解包、校验，风险高，必须挑时段并先拍一份现行数据的快照。
 
