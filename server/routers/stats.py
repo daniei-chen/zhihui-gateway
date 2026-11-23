@@ -843,7 +843,10 @@ def credits_flow(days: int = 30, realm: str | None = None,
     """
     d = _clamp_days(days, 30)
     since = _since(d)
-    today = time.strftime('%Y-%m-%d')
+    # today 必须与 since/daily 同口径（固定 UTC+8）。用 time.strftime 会跟着
+    # 进程时区走：服务器在 UTC 时，daily 的最后一天与 today 会差一天，
+    # 「今日」合计永远是 0。CI 跑在 UTC，这个错就露出来了。
+    today = db.day_of(time.time())
 
     # 支出：usage_daily 带 realm 列，可直接筛
     rf = ' AND realm = ?' if _norm_realm(realm) else ''
@@ -858,8 +861,11 @@ def credits_flow(days: int = 30, realm: str | None = None,
     }
     income = _credit_income_by_day(since, realm)
 
-    # 补齐每一天（含无数据的日子），折线才不会断成两截
-    start = datetime.date(*time.localtime(db.day_start_ts(since))[:3])
+    # 补齐每一天（含无数据的日子），折线才不会断成两截。
+    # 这里**不能**再用 time.localtime 去解释 since 的零点 —— since 已是
+    # UTC+8 口径的日期串，再经本地时区一转换，非 UTC+8 机器上会整体前移一天。
+    # 直接按日期串解析，与口径无关。
+    start = datetime.date(*map(int, since.split('-')))
     daily: list[dict] = []
     for i in range(d):
         day = (start + datetime.timedelta(days=i)).isoformat()
