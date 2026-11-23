@@ -143,7 +143,7 @@
     "server/tests/test_windows_scripts.py": "cf099bd9330375d38e9b87b7a04bf7ad668bf4046c394526e1b77ddf0c596c35",
     "server/tests/test_writer_guard_contract.py": "623e056abd0789b1ebec30f2dc5fc5598f25c53f8f3c6e84a9bbe2159bb137f5",
     "server/writer-capabilities.json": "32f2166f2277e6d51d7417eea45581e6c9a1b3be3bc3956fa33a26f042768859",
-    "tools/ci_regression.py": "19661d263ddd68c047aaf5edc2c2464f50fc71b37eee546f236f861c815a8366",
+    "tools/ci_regression.py": "d336c8a58840bac6f524f63f93706fd5f1425ae600c529d414b3bf0c8761a52b",
     "web/app/(main)/settings/layout.tsx": "ffea5a94aa2ddaa0efdcf07eca9e6e18df7e5f992dc5e04c5872d3e3de53445d",
     "web/components/common/settings/ResetPasswordDialog.tsx": "9a219ecbaf704d72a6ddbbec7ae86e33f17855366f476dacd6632ef1cb2d4a61",
     "web/lib/i18n/locales/en.json": "183bf19a6ad3ed335070e749010098766a1aedd65017c0cfc0278cb6c0cc2ce3",
@@ -159,7 +159,7 @@
   },
   "schema": 1,
   "signed": false,
-  "source_commit": "45e8c1b13ed276916c1c62a4b3e35517586bbfda",
+  "source_commit": "513aaacf08e14d87bc09edc17c472ee0f896e715",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
   "version": "1.5.22"

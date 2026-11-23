@@ -74,6 +74,16 @@ MODULES = (
     "server.tests.test_audit_dailyplan_lifecycle",
     "server.tests.test_closure_contracts",
     "server.tests.test_concurrency_and_atomicity",
+    # 协议兼容主题补收（2026-11-23 全部单独跑通后入清单）。
+    # Anthropic Messages 兼容、SSE 错误流、首字延迟、body 上限这些
+    # 是「用户能直接感觉到」的部分，之前同样没在门禁里跑过。
+    "server.tests.test_anthropic_messages",
+    "server.tests.test_anthropic_stream_errors",
+    "server.tests.test_anthropic_session_routing",
+    "server.tests.test_adapter_resolution",
+    "server.tests.test_count_tokens_admission",
+    "server.tests.test_first_token",
+    "server.tests.test_wirebody",
     "server.tests.test_windows_scripts",
     "server.tests.test_config_contract",
     "server.tests.test_audit_gateway_boundaries",
