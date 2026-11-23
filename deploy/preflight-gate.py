@@ -218,25 +218,32 @@ def main(argv) -> int:
     ok &= _step('前端闭包签名与逐文件', check_web)
 
     def check_pointer():
-        """`releases/current` 必须解析到**本目录**。
+        """发布指针的健康检查。
 
-        这条检查是因为一次真实事故才加的：切换指针时把容器内的挂载路径
-        （`/rel/v1.5.32`）写进了符号链接，宿主上不存在该路径，服务启动被拒 ——
-        而当时上面七项全部通过。内容全对、指针指错，是这个门禁原先的盲区。
+        三种情况要分开，因为它们的含义完全不同：
+
+        · **写成绝对路径** → 失败。本门禁常在容器里跑（`--root /rel`），绝对名
+          会把容器路径烙进宿主文件系统；发布机重启后服务解析不到目标。真实事故。
+        · **解析失败** → 失败。目标目录不存在，指针已经坏了。
+        · **指向另一个版本** → 只有提示。切换前跑本检查时指针本来就指着旧版本，
+          这属于正常流程，不能因此拦住发布。
         """
         pointer = root.parent / 'current'
         if not pointer.is_symlink():
             return '跳过（current 不是符号链接）'
         raw = os.readlink(pointer)
+        if os.path.isabs(raw):
+            raise AssertionError(
+                f'current -> {raw} 写成了绝对路径；应写相对名，否则容器与宿主解析不一致')
         try:
             target = pointer.resolve(strict=True)
         except FileNotFoundError:
             raise AssertionError(f'current -> {raw} 解析失败（目标不存在）') from None
         if target != root:
-            raise AssertionError(f'current -> {raw} 指向 {target}，不是 {root}')
+            return f'current -> {raw}（尚未切换到本目录，正常）'
         return f'current -> {raw}'
 
-    ok &= _step('发布指针指向本目录', check_pointer)
+    ok &= _step('发布指针', check_pointer)
 
     print()
     print('== 全部通过，可以切换发布指针 ==' if ok else '== 有失败项，不要切换发布指针 ==')

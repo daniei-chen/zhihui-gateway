@@ -468,13 +468,19 @@ def cmd_activate(args) -> int:
     target = root / version
     if not target.is_dir():
         raise ReleaseError(f"目标不存在：{target}")
+    target_root = target.resolve()
 
     cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust))
 
     print(f"== activate {version} ==")
     previous = _switch(root / "current", version)
+    # 切换后立刻复核指针：这是唯一能发现「链接写到别处」的时刻。
+    target = (root / "current").resolve(strict=True)
+    if target != target_root:
+        _switch(root / "current", previous or version)
+        raise ReleaseError(f"指针复核失败：current 指向 {target}，应为 {target_root}；已切回")
     (root / ".previous").write_text((previous or "") + "\n", encoding="utf-8")
-    print(f"   指针 {previous or '(无)'} → {version}")
+    print(f"   指针 {previous or '(无)'} → {version}（已复核）")
     print("   **下一步必须在宿主执行**（容器里没有 systemd）：")
     print("     sudo systemctl restart workbuddy-web")
     print("     curl -s http://127.0.0.1:7866/api/release")
