@@ -8,6 +8,7 @@ import {
   KeyRound,
   Boxes,
   ScrollText,
+  Activity,
   TrendingUp,
   ShieldCheck,
   Settings,
@@ -616,6 +617,14 @@ export function ManagementBar() {
       title: t('nav.logs'),
       icon: <ScrollText {...IconOptions} />,
       href: '/logs',
+      groupKey: 'governance',
+    },
+    {
+      // 调用轨迹紧挨日志：它回答的正是「日志里那一条到底发生了什么」，
+      // 两者之间来回跳是排障时最常见的动作。
+      title: t('nav.traffic'),
+      icon: <Activity {...IconOptions} />,
+      href: '/traffic',
       groupKey: 'governance',
     },
     {

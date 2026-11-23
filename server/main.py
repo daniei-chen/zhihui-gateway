@@ -15,13 +15,14 @@ import asyncio
 import threading
 import time
 
-from . import archiveworker, config, db, drain, redpacket, security
+from . import archiveworker, config, db, drain, redpacket, security, traffic
 from .iputil import client_ip
 from .stdio_utf8 import force_utf8_stdio
 from .routers import (
     accounts, anthropic, auth, engine, gateway, keys, logs, models, playground,
     pgsync as pgsync_router, read_api, redpackets, responses,
-    security as security_router, proxies, settings, stats, system, tokens, upstreams, steward,
+    security as security_router, proxies, settings, stats, system, tokens,
+    traffic as traffic_router, upstreams, steward,
 )
 from .services import accountlog, cooling, dailyplan, pgsync, renew, tasklog, taskrun
 from .services.asyncwork import joined_thread
@@ -107,6 +108,23 @@ async def lifespan(app: FastAPI):
     # 启动——monitor 循环会继续重放，且就绪判定会因积压>0 保持失败。
     _recover_primary_state()
     from . import budget
+
+    async def _traffic_housekeeping(interval_s: int = 3600):
+        """抓包目录的保留期清理。
+
+        与转发路径无关：请求只往队列里放，写盘与删除都在别的线程。这里失败也
+        只是「过期记录多留一会儿」，不影响服务 —— 所以只记警告，不重试风暴。
+        """
+        while True:
+            try:
+                result = await asyncio.to_thread(traffic.sweep)
+                if result.get('removed'):
+                    logger.info('traffic sweep removed=%s kept=%s',
+                                result['removed'], result['kept'])
+            except Exception:  # noqa: BLE001 - 清理失败不该影响任何请求
+                logger.warning('traffic sweep failed', exc_info=True)
+            await asyncio.sleep(interval_s)
+
     async def budget_heartbeat():
         while True:
             await asyncio.sleep(10)
@@ -163,6 +181,9 @@ async def lifespan(app: FastAPI):
         # 只能从它的容器日志里读出来再按时间对回去（见 accountlog 的说明）。
         accountlog.start_collector()
         archiveworker.start()
+        # 抓包目录的过期清理。启动跑一次，之后每小时一次；放在线程里执行，
+        # 因为它要遍历并删除文件，不该占住事件循环。
+        traffic_housekeeping = asyncio.create_task(_traffic_housekeeping())
         # PostgreSQL 定时备份（用户反馈：怕服务器暴雷丢数据）。默认关闭 ——
         # 只有配好连接、打开开关并设了间隔才会真的推数据出去。
         pgsync.start_scheduler()
@@ -490,6 +511,8 @@ app.include_router(redpackets.router)
 # 抽奖：**公开端点**（收到链接的人不需要账号），单独挂便于区分边界
 app.include_router(redpackets.claim_router)
 app.include_router(logs.router)
+# 调用轨迹（抓包）。默认关闭，开启后正文落本地独立目录，不进数据库。
+app.include_router(traffic_router.router)
 app.include_router(stats.router)
 app.include_router(security_router.router)
 # 管理面作用域化 API Token（见 docs/api-tokens.md）；接口本身只接受会话鉴权

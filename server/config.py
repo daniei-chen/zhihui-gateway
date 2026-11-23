@@ -203,6 +203,16 @@ TRUSTED_PROXY_CIDRS = [
 # 是否暴露 /docs、/openapi.json、/redoc。生产环境建议关闭（默认关闭）。
 ENABLE_DOCS = _env('WB_ENABLE_DOCS', '0') == '1'
 
+# 调用抓包总开关（默认关闭）。
+#
+# 开启后会把**请求与响应的正文**落到 data/traffic/（本地独立目录，不进数据库）。
+# 正文属于用户内容，所以这里刻意为「显式开启」：默认关闭时热路径只剩一次布尔
+# 判断，不读取、不缓存、不落盘任何正文。
+#
+# 这是**总开关**：置 0 时数据库里的 traffic.tap 也不生效，避免「以为自己关着、
+# 其实还在记」。
+TRAFFIC_TAP = _env_bool('WB_TRAFFIC_TAP', False)
+
 # 后台作业总开关（2026-10-27 零停机发布改造）：
 # 主实例（systemd 管理）保持默认开启；零停机发布的过渡实例以
 # WB_BACKGROUND_JOBS=0 启动——只对外服务请求，不运行签到/任务/巡检等

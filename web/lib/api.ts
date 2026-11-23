@@ -702,6 +702,60 @@ export const logApi = {
   clear: () => post<{ok: boolean}>('/api/logs/clear'),
 };
 
+/* ── 调用轨迹（抓包） ──────────────────────────────── */
+//
+// 抓包默认关闭；关闭时列表为空、`status.enabled` 为 false。正文只存本机，
+// 默认保留 24 小时，过期后详情接口返回 404（所以旧链接打不开是预期的）。
+export interface TrafficRecordSummary {
+  request_id: string;
+  ts: number;
+  status: number | null;
+  model?: string | null;
+  mapped?: string | null;
+  stream?: boolean;
+  key?: string | null;
+  latency_ms?: number | null;
+  size: number;
+  truncated: boolean;
+  file: string;
+}
+
+export interface TrafficStatus {
+  enabled: boolean;
+  setting?: boolean | null;
+  retention_hours: number;
+  max_records: number;
+  limit_bytes: number;
+  counter: Record<string, number>;
+  queued: number;
+  dir: string;
+}
+
+export interface TrafficRecord extends Record<string, unknown> {
+  request_id: string;
+  status: number | null;
+  latency_ms: number | null;
+  path?: string;
+  stream?: boolean;
+  client?: unknown;
+  gateway?: unknown;
+  diff?: {path: string; before: unknown; after: unknown; change?: string}[];
+  response?: unknown;
+  key?: {name?: string; prefix?: string};
+}
+
+export const trafficApi = {
+  status: () => get<TrafficStatus>('/api/traffic/status'),
+  list: (limit = 50) =>
+    get<{enabled: boolean; records: TrafficRecordSummary[]}>('/api/traffic', {limit}),
+  read: (id: string) => get<TrafficRecord>(`/api/traffic/${encodeURIComponent(id)}`),
+  setEnabled: (enabled: boolean) =>
+    post<{setting: boolean; effective: boolean; detail?: string; blocked_by?: string}>(
+      '/api/traffic/setting', {enabled}),
+  /** 导出是服务端渲染的整页 HTML，直接新窗口打开即可（带 cookie 鉴权）。 */
+  exportUrl: (id: string) => `${BASE_PATH}/api/traffic/${encodeURIComponent(id)}/export`,
+};
+
 /* ── 用量统计 ───────────────────────────────────────── */
 export const statsApi = {
   /** realm 非空时只统计该版本（界面按版本切换时传） */

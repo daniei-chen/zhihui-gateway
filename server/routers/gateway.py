@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
-from .. import observability, requestperf, metering
+from .. import observability, requestperf, metering, traffic
 from ..outputlimits import OutputLimitExceeded
 from ..requestbody import (BodyReadTimeout, BodyReadWindow, BodyEncodingError,
                           BodySizeExceeded, body_frames, content_encoding)
@@ -2816,6 +2816,11 @@ async def _chat(request: Request, upstream_path: str):
     if err:
         return err
 
+    # 抓包：快照**必须**在任何改写之前取。下面几步（注入会话键、模型映射、
+    # 图片归一、补齐 stream_options）都会动 body，晚一步「客户端原样」就没了。
+    # 关闭抓包时 trace 为 None，后续三处调用各自立即返回。
+    trace = traffic.begin(body, request, upstream_path=upstream_path)
+
     _inject_session_key(body, request)
     # 观测：把最终会话键的 sha256 前 16 位落库，用于验证「同会话是否固定账号」。
     session_key = _session_key_digest(body) if isinstance(body, dict) else None
@@ -2832,6 +2837,8 @@ async def _chat(request: Request, upstream_path: str):
     key, ip, err = _authorize(request, requested_model, mapped=mapped)
     if err:
         return err
+    # 抓包记录里只留密钥名与前缀（不留凭据本身）。
+    traffic.key_for(request, key)
 
     if mapped:
         body['model'] = mapped
@@ -2899,6 +2906,9 @@ async def _chat(request: Request, upstream_path: str):
     wire = await _prepare_forward_async(key,body, request=request)
     if isinstance(wire, JSONResponse):
         return wire
+    # 抓包：此刻 body 已是最终形态（映射、归一、流式补全都做完了），
+    # 记下来的就是真正发出去的内容。
+    traffic.forwarded(trace, body)
     started = time.time()
     # K21：五类时间预算（连接 / 首包 / 流中空闲 / 总时长 / 客户端取消）。
     # 默认值不改变线上行为（见 deadline.Budgets.from_config 的说明）。
@@ -2973,6 +2983,9 @@ async def _chat(request: Request, upstream_path: str):
                 usage = _response_usage(data)
             except Exception:
                 data = None
+            # 抓包：上游回什么就记什么（含错误体）。放在这里而不是各个 return
+            # 之前 —— 下面有六七条返回分支，逐条加必然漏。
+            traffic.response(trace, status=resp.status_code, data=data)
             pt = observability.usage_int(usage.get('prompt_tokens'))
             ct = observability.usage_int(usage.get('completion_tokens'))
             if resp.status_code < 400:
@@ -3236,6 +3249,10 @@ async def _chat(request: Request, upstream_path: str):
         finally:
             cancelled=cancelled or isinstance(sys.exc_info()[1],(asyncio.CancelledError,GeneratorExit))
             observability.set_stream_state(audit,error_text,cancelled)
+            # 抓包：流式只存聚合视图（终止原因、工具调用、用量、错误），不存逐帧
+            # 原文 —— 那是几 MB 的字节，排障用不上。放在 finally 里覆盖成功、
+            # 提前结束、预算耗尽、异常四条路径，且只记一次。
+            traffic.response_stream(trace, status=status_code, audit=audit, error=error_text)
             try:
                 # U13：取消关闭窗口 = budgets.client_cancel_s（三条协议同一口径）。
                 await observability.close_stream(
