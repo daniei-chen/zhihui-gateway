@@ -27,6 +27,9 @@ MODULES = (
     "server.tests.test_product_origin",
     "server.tests.test_changelog",
     "server.tests.test_readme_i18n",
+    # 前端 i18n 守卫。长期没进门禁，于是「403 文案带变量、短语表匹配不上」
+    # 这类只有切语言才看得见的问题一直潜伏（2026-11-23 修复后纳入）。
+    "server.tests.test_web_i18n",
     "server.tests.test_docs_packaging",
     "server.tests.test_release_integrity",
     # 这条一直没被门禁跑过。2026-11-23 单独跑它时发现早就失败了 ——
@@ -115,6 +118,7 @@ MODULES = (
     "server.tests.test_usage_token_protocol",
     "server.tests.test_release_pipeline",
     "server.tests.test_traffic_tap",
+    "server.tests.test_promptprep",
 )
 
 

@@ -21,11 +21,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from server import observability  # noqa: E402
 from server.routers import gateway  # noqa: E402
 
 
 def _data(obj) -> str:
-    return 'data: ' + json.dumps(obj, ensure_ascii=False) + '\n'
+    # 事件分隔符是空行（`\n\n`）。只有单个换行时，多帧会被拼成同一个事件而解析
+    # 失败 —— 症状是「怎么都不算首字」。
+    return 'data: ' + json.dumps(obj, ensure_ascii=False) + '\n\n'
 
 
 # 上游新形态：首帧带 name，后续帧**没有 name 键**只有 arguments 片段
@@ -41,52 +44,64 @@ TOOL_PARALLEL = _data({'choices': [{'delta': {'tool_calls': [
      'function': {'name': 'Read', 'arguments': ''}}]}}]})
 
 
-class ScanSseToolCallsTest(unittest.TestCase):
-    """`_scan_sse` 不得依赖 tool_calls 的形态 —— 它只做统计，不参与转发。"""
+class StreamAuditToolCallsTest(unittest.TestCase):
+    """审计对象不得依赖工具调用的形态 —— 它只做统计，不参与转发。
 
-    def test_tool_frames_do_not_break_scan(self) -> None:
-        pending = ''
-        for frame in (TOOL_FIRST, TOOL_ARG_FRAME, TOOL_ARG_FRAME2, TOOL_PARALLEL):
-            pending, _ = gateway._scan_sse(pending + frame, {})
-        self.assertEqual(pending, '', '残留缓冲应为空（每帧都以换行结束）')
+    2026-11-23 之前这里测的是一个 `_scan_sse` 辅助函数，而生产路径从来不用它
+    （真正的判定在 `observability.StreamAudit`）。那种测试守的是死代码，且它与
+    生产口径相反：它说「工具帧不算首字」，线上把工具帧也算进去。现在直接测
+    生产用的那一份，并把这个口径写在断言里。
+    """
 
-    def test_tool_frames_are_not_counted_as_content(self) -> None:
-        """工具调用帧不含正文，不能当作「首字」——否则首字延迟会偏小。
+    def _audit(self, *frames) -> object:
+        audit = observability.StreamAudit()
+        for frame in frames:
+            audit.feed(frame.encode() if isinstance(frame, str) else frame)
+        audit.finish()
+        return audit
 
-        这是真实语义：模型先决定调用工具，正文要等工具结果回来之后才产生。
-        把 tool_calls 当首字会让「上游多久开始回话」这个指标失真。
+    def test_tool_frames_parse_without_error(self) -> None:
+        audit = self._audit(TOOL_FIRST, TOOL_ARG_FRAME, TOOL_ARG_FRAME2, TOOL_PARALLEL)
+        self.assertIsNone(audit.error)
+        self.assertTrue(audit.completed is False or audit.completed is True)
+
+    def test_tool_frame_counts_as_useful_but_not_visible_text(self) -> None:
+        """工具帧算「上游开始交付」，但不算「交付了可见正文」。
+
+        两个口径服务不同目的：首字延迟想知道「上游多久开始回话」（工具调用也算
+        回话）；预算耗尽判定要求「真的给出正文或工具增量」，两者不能混用。
         """
-        for frame in (TOOL_FIRST, TOOL_ARG_FRAME, TOOL_PARALLEL):
-            _, saw = gateway._scan_sse(frame, {})
-            self.assertFalse(saw, f'工具帧不应计为正文：{frame[:60]}')
+        audit = self._audit(TOOL_FIRST)
+        self.assertTrue(audit.saw_useful)
+        self.assertFalse(audit.saw_visible_text)
+        self.assertTrue(audit.saw_tool_delta)
 
-    def test_tool_frame_with_empty_name_is_ignored(self) -> None:
+    def test_tool_frame_with_empty_name_is_harmless(self) -> None:
         """上游后续帧若带空串 name（旧形态），也不能影响统计。"""
         frame = _data({'choices': [{'delta': {'tool_calls': [
             {'index': 0, 'function': {'name': '', 'arguments': 'x'}}]}}]})
-        pending, saw = gateway._scan_sse(frame, {})
-        self.assertEqual(pending, '')
-        self.assertFalse(saw)
+        audit = self._audit(frame)
+        self.assertIsNone(audit.error)
+        self.assertTrue(audit.saw_tool_delta)
 
-    def test_usage_extracted_from_tool_frames(self) -> None:
+    def test_usage_extracted_from_tool_stream(self) -> None:
         """工具调用流的末帧同样要能取到 usage（否则用量统计漏记）。"""
-        usage: dict = {}
-        frame = _data({'choices': [], 'usage': {'prompt_tokens': 7, 'completion_tokens': 3}})
-        _, _ = gateway._scan_sse(frame, usage)
-        self.assertEqual(usage['prompt_tokens'], 7)
-        self.assertEqual(usage['completion_tokens'], 3)
+        audit = self._audit(TOOL_FIRST, _data(
+            {'choices': [], 'usage': {'prompt_tokens': 7, 'completion_tokens': 3}}))
+        self.assertEqual(audit.usage.get('prompt_tokens'), 7)
+        self.assertEqual(audit.usage.get('completion_tokens'), 3)
 
-    def test_scan_does_not_mutate_payload(self) -> None:
-        """扫描必须是只读的：它拿到的对象不能被改（改了会污染转发内容）。
+    def test_feed_return_value_is_never_used(self) -> None:
+        """`audit.feed()` 的返回值**不得**被用到转发路径上。
 
-        这里直接传 dict 进去，断言扫描后原对象不变。
+        审计内部会解析出工具调用等结构用于统计，它的返回值只对记账有意义。
+        一旦有人写 `x = audit.feed(chunk)` 再把 x 发出去，就等于让审计层参与
+        改写 —— 那是这套透传约束最怕的形态。这里直接查源码钉住。
         """
-        obj = {'choices': [{'delta': {'tool_calls': [
-            {'index': 0, 'function': {'name': 'Bash', 'arguments': 'x'}}]}}]}
-        snapshot = json.dumps(obj, sort_keys=True)
-        gateway._scan_sse(_data(obj), {})
-        self.assertEqual(json.dumps(obj, sort_keys=True), snapshot,
-                         '_scan_sse 修改了传入对象 —— 它必须是只读的')
+        src = (Path(__file__).resolve().parents[2] / 'server' / 'routers' / 'gateway.py'
+               ).read_text(encoding='utf-8')
+        for pattern in ('= audit.feed(', 'if audit.feed(', '=audit.feed(', 'yield audit.feed('):
+            self.assertNotIn(pattern, src, f'审计返回值被用到了：{pattern}')
 
 
 class GatewayPassthroughTest(unittest.TestCase):

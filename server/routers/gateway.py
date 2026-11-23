@@ -1572,43 +1572,6 @@ def _stamp_route(upstream: dict | None, requested_model: str | None,
     state.upstream_ref = info['upstream_ref']
 
 
-def _scan_sse(pending: str, usage: dict) -> tuple[str, bool]:
-    """扫描 SSE 文本片段：提取 usage，并判断是否已出现首个正文。
-
-    返回 (未处理完的残留缓冲, 本次是否见到正文 delta)。
-    为什么要单独判断「正文」：OpenAI 流的第一块通常只有 role、content 为空，
-    若用「收到首块」当首字，会把连接建立时间也算进去，数字偏小且失真。
-    """
-    saw_content = False
-    while '\n' in pending:
-        line, pending = pending.split('\n', 1)
-        line = line.strip()
-        if not line.startswith('data:'):
-            continue
-        payload = line[5:].strip()
-        if not payload or payload == '[DONE]':
-            continue
-        try:
-            obj = json.loads(payload)
-        except Exception:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if isinstance(obj.get('usage'), dict):
-            observability.merge_usage(usage, obj['usage'])
-        choices = obj.get('choices')
-        if isinstance(choices, list):
-            for choice in choices:
-                if not isinstance(choice, dict):
-                    continue
-                delta = choice.get('delta') or choice.get('message') or {}
-                if isinstance(delta, dict) and (
-                    delta.get('content') or delta.get('reasoning_content')
-                ):
-                    saw_content = True
-    return pending, saw_content
-
-
 # ── 密钥自查用量（issue #137）─────────────────────────────
 # 拿密钥自身鉴权、只回这把密钥自己的数字，**只读面板已记录的值、不触发任何上游请求**
 # （否则「查一下还剩多少」会变成一次真实调用，反过来加剧额度消耗与限流）。
@@ -2876,6 +2839,14 @@ async def _chat(request: Request, upstream_path: str):
     # 图片 part 归一（issue #134）：input_image / image_url 字符串 / Anthropic
     # source 形态改写成上游认的标准形态；认不出的原样保留。
     normalize_chat_images(body)
+    # 开头连续的 system 消息合并成一条：官方客户端只发一条，并列多条是最明显的
+    # 「非官方客户端」特征。只合并纯文本且无额外键的那些（见 promptprep 的说明），
+    # 是无损变换。合并结果会出现在抓包的差异里，可事后核对。
+    if isinstance(body, dict):
+        from .. import promptprep
+        collapsed = promptprep.collapse_leading_system(body)
+        if collapsed:
+            logger.debug('collapsed leading system messages count=%s', collapsed)
     # 思考强度（reasoning_effort）：仅用于日志展示，不改写请求体。
     effort = None
     if isinstance(body, dict):

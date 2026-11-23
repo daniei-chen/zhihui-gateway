@@ -1926,7 +1926,9 @@
     "用户管理仅对超级管理员开放": "User management is restricted to super administrators.",
     "只有超级管理员本人可以分配密钥归属": "Only a super administrator session can assign key ownership.",
     "仅超级管理员admin本人会话可赠送积分": "Only a human session for the super administrator admin can grant credits",
-    "用户端写操作需要同源请求": "User workspace changes require a same-origin request"
+    "用户端写操作需要同源请求": "User workspace changes require a same-origin request",
+    "检测到自动化客户端，批量账号操作已被禁止。该限制在 2026-11-19 批量吊销事故后加入 —— 一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN 并在请求头 X-Automation-Token 中携带。": "An automated client was detected, so bulk account operations are blocked. This limit was added after the 2026-11-19 mass-revocation incident — a single bulk fan-out hits many upstream accounts at once and is the main trigger for the risk controls. To proceed, operate manually in the UI, or set WB_ACCOUNT_AUTOMATION_TOKEN and send it in the X-Automation-Token header.",
+    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "The automation token is missing or does not match, so the bulk account operation was rejected."
   },
   "redPacket": {
     "title": "Red packets",

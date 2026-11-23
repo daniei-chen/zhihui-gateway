@@ -66,12 +66,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from collections import deque
 from typing import Deque
 
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 # ── 默认参数（全部可用环境变量覆盖，便于不同部署调松紧）───────────────
 
@@ -176,18 +179,23 @@ def guard_account_action(
     # 1. 自动化客户端不得触发批量动作（本次事故的直接诉求）。
     if batch and _is_automation(request):
         if not AUTOMATION_TOKEN:
+            # 403 的 detail 必须是**固定句子**：这些文案由前端按整串精确匹配翻译，
+            # 带变量的句子永远匹配不上，英文界面下会静默退回中文原文。具体是哪个
+            # 动作（`what`）记进日志，用户看正文已经知道该怎么做。
+            logger.warning('账号批量动作被拒 scope=%s reason=automation_client', what)
             raise HTTPException(
                 status_code=403,
-                detail=(f'{what}：检测到自动化客户端，批量账号操作已被禁止。'
+                detail=('检测到自动化客户端，批量账号操作已被禁止。'
                         '该限制在 2026-11-19 批量吊销事故后加入 —— '
                         '一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。'
                         '如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN '
                         '并在请求头 X-Automation-Token 中携带。'),
             )
         if request.headers.get('x-automation-token') != AUTOMATION_TOKEN:
+            logger.warning('账号批量动作被拒 scope=%s reason=automation_token_mismatch', what)
             raise HTTPException(
                 status_code=403,
-                detail=f'{what}：自动化令牌缺失或不匹配，批量账号操作被拒绝。',
+                detail='自动化令牌缺失或不匹配，批量账号操作被拒绝。',
             )
 
     # 2. 单次批量不得超过批大小上限。

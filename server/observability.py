@@ -762,7 +762,10 @@ class StreamAudit:
         self.done_seen = False
         self.finish_seen = False
         self.saw_useful = False
-        self.first_useful = None
+        # 首字时刻**不**记在这里：判定「上游开始交付」之后由调用方取一次时间戳
+        # （见 gateway 里 `if audit.saw_useful and first_token_ms is None`）。
+        # 这里曾有一个 `first_useful` 字段，从未被赋值过 —— 保留它只会让下一个
+        # 读代码的人以为存在「精确的首字时刻」，而实际上没有。
         # 「预算耗尽」判定用的三个事实（口径见 `budget_exhausted`）：
         #   · finish_reason 的具体值 —— 只有 `length` 才算耗尽；
         #   · 是否交付过**非空白**正文 —— 纯空白不算交付；

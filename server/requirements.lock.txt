@@ -25,3 +25,4 @@ watchfiles==1.2.0
 websockets==17.1
 python-multipart==0.0.32
 socksio==1.0.0
+tzdata==2026.5
