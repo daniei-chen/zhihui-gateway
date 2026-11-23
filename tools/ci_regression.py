@@ -119,6 +119,9 @@ MODULES = (
     "server.tests.test_release_pipeline",
     "server.tests.test_traffic_tap",
     "server.tests.test_promptprep",
+    # 环境变量契约：读到的必须登记。2026-11-23 因漏登记 WB_TRAFFIC_TAP 导致
+    # 设置即宕机（连重启 10 次后放弃，全站 502），这条链路必须有守卫。
+    "server.tests.test_config_contract",
 )
 
 

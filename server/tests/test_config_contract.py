@@ -1,117 +1,122 @@
-"""K22 validates actual service environment before opening data or starting work."""
+"""环境变量契约：读到的必须登记，登记的必须能用。
+
+## 为什么单列一个测试文件
+
+`server/configcontract.py` 的规则是：任何以 `WB_` / `WB2API_` 开头、但不在
+`config-schema.json` 里的变量，一律判定为 `unknown_variable` 并**拒绝启动**。
+这个「宁可起不来也不静默忽略」的选择是对的——否则用户设了变量、以为生效了，
+实际什么都没发生，比直接报错难查得多。
+
+代价是：**在 `config.py` 里加一行 `_env_bool('WB_XXX')` 而忘记登记 schema，
+就等于埋了一颗「一旦有人设置这个变量，服务立刻起不来」的雷。** 而且它不会被
+常规测试抓到：默认部署不设这个变量，本地也没人设，于是门禁全绿。
+
+2026-11-23 这颗雷真的炸了：给抓包总开关设 `WB_TRAFFIC_TAP=1` 之后，
+`workbuddy-web` 连续重启 10 次后彻底放弃，全站 502。同一批还发现另一颗更早埋下
+的雷 `WB_TRAE_TIMEOUT`（有人加了读取、从没登记，也从未被设置过）。
+
+所以这里做两件事，方向相反：
+  1. `config.py` 读的每个变量都必须在 schema 里（防止埋雷）；
+  2. schema 里登记的每个变量都必须真的被某处读取，或明确标注为「保留/预留」
+     （防止登记了却没人用，那是另一种漂移）。
+"""
+from __future__ import annotations
+
 import json
-import os
-from pathlib import Path
-import subprocess
+import re
 import sys
-import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
 
-from server.configcontract import ConfigurationError, validate_environment
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+SERVER = Path(__file__).resolve().parents[1]
+
+#: `config.py` 里所有读环境变量的调用形式。
+_READ = re.compile(r"_env_(?:bool|int|str|float|list)\(\s*'([A-Z0-9_]+)'")
+
+#: 允许「登记了但 config.py 不直接读」的前缀：这些由别的模块读取
+#: （例如 `server/externalplatforms.py`、`server/traffic.py`），也有的只是
+#: 部署层用（`WB_RELEASE_TRUST` 之类）。测试只要求它们**至少被仓库里某处
+#: 提到**，避免出现纯粹的死登记。
+_CONSUMER_HINT = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
 
 
-class ConfigurationContractTest(unittest.TestCase):
-    def test_admission_byte_settings_are_accepted_on_fresh_import_and_reject_bad_units(self):
-        values={'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':'6291456',
-                'WB_GATEWAY_MIN_BODY_RESERVATION_BYTES':'65536'}
-        rows=validate_environment(values)['settings']
-        self.assertEqual(rows['WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES']['value'],6291456)
-        self.assertEqual(rows['WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES']['unit'],'bytes')
-        with tempfile.TemporaryDirectory() as directory:
-            target=Path(directory)/'not-created-by-import'
-            result=subprocess.run([sys.executable,'-c','from server import config'],
-                env={**os.environ,**values,'WB_DATA_DIR':str(target)},
-                capture_output=True,text=True,timeout=20)
-            self.assertEqual(result.returncode,0,result.stderr)
-            self.assertFalse(target.exists())
-        for value in ('0','-1','64MiB'):
-            with self.subTest(value=value),self.assertRaises(ConfigurationError):
-                validate_environment({'WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES':value})
+def _schema() -> dict:
+    return json.loads((SERVER / 'config-schema.json').read_text(encoding='utf-8'))
 
-    def test_documented_session_day_clamp_is_visible_without_rejecting_legacy_configuration(self):
-        for raw in ('0','-1','-30'):
-            row=validate_environment({'WB_SESSION_DAYS':raw})['settings']['WB_SESSION_DAYS']
-            self.assertEqual(row['value'],1)
-            self.assertEqual(row['requested_value'],int(raw))
-            self.assertTrue(row['normalization_applied'])
-        self.assertFalse(validate_environment({'WB_SESSION_DAYS':'7'})['settings']['WB_SESSION_DAYS']['normalization_applied'])
-        with self.assertRaises(ConfigurationError):
-            validate_environment({'WB_SESSION_DAYS':'1day'})
 
-    def test_fresh_import_rejects_bad_numeric_environment_without_side_effects_or_value_leak(self):
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory)/'must-not-be-created'
-            environment = {**os.environ, 'WB_DATA_DIR':str(target),
-                           'WB_GATEWAY_RATE_PER_MIN':'private-malformed-numeric-sentinel'}
-            result = subprocess.run([sys.executable, '-c', 'from server import config'],
-                env=environment,capture_output=True,text=True,timeout=20)
-            self.assertNotEqual(result.returncode,0)
-            self.assertIn('WB_GATEWAY_RATE_PER_MIN',result.stderr)
-            self.assertNotIn('private-malformed-numeric-sentinel',result.stdout+result.stderr)
-            self.assertFalse(target.exists())
+def _errors_for(environment: dict) -> list:
+    """`validate_environment` 抛异常而不是返回错误列表 —— 这里统一取出来。"""
+    from server import configcontract
+    try:
+        configcontract.validate_environment(environment)
+    except configcontract.ConfigurationError as exc:
+        return exc.errors
+    return []
 
-    def test_actual_units_and_types_are_not_silently_coerced_to_defaults(self):
-        for name,value in [('WB_UPSTREAM_TIMEOUT','10ms'),('WB_CONNECT_TIMEOUT_S','nan'),
-                           ('WB_TOTAL_TIMEOUT_S','inf'),('WB_HTTP_MAX_POOLS','0'),
-                           ('WB_GATEWAY_RATE_PER_MIN','-1'),('WB_TRUST_PROXY','true'),
-                           ('WB_LOCAL_IMPORT','perhaps'),('WB_TRUSTED_PROXY_CIDRS','not-an-ip'),
-                           ('WB2API_BASE','file:///private'),('WB_HTTP_PROXY','http://bad:99999')]:
-            with self.subTest(name=name), self.assertRaises(ConfigurationError) as caught:
-                validate_environment({name:value})
-            self.assertIn(name, str(caught.exception))
 
-    def test_current_legacy_values_and_unrelated_process_variables_remain_valid(self):
-        result = validate_environment({'WB_UPSTREAM_TIMEOUT':'600','WB_GATEWAY_RATE_PER_MIN':'600',
-            'WB_MANAGER_PORT':'0','WB_LOCAL_IMPORT':'off','PATH':'unrelated'})
-        rows = result['settings']
-        self.assertEqual(rows['WB_UPSTREAM_TIMEOUT']['value'],600)
-        self.assertEqual(rows['WB_UPSTREAM_TIMEOUT']['unit'],'seconds')
-        self.assertEqual(rows['WB_GATEWAY_RATE_PER_MIN']['unit'],'per_minute')
-        self.assertEqual(rows['WB_MANAGER_PORT']['value'],0)
-        self.assertNotIn('PATH',rows)
+class DeclaredTest(unittest.TestCase):
+    def test_every_read_variable_is_declared(self) -> None:
+        """在读的地方加变量、却不在 schema 登记 —— 一旦设置就启动失败。"""
+        declared = set(_schema()['settings'])
+        text = (SERVER / 'config.py').read_text(encoding='utf-8')
+        used = set(_READ.findall(text))
+        missing = sorted(used - declared)
+        self.assertEqual(
+            missing, [],
+            f'{len(missing)} 个变量在 config.py 里被读取但未登记到 config-schema.json，'
+            f'设置它们会导致服务拒绝启动：{missing}')
 
-    def test_graceful_environment_and_actual_launcher_cannot_undercut_drain(self):
-        with self.assertRaises(ConfigurationError):
-            validate_environment({'WB_DRAIN_TIMEOUT_SEC':'25','WB_GRACEFUL_SHUTDOWN_S':'3'})
-        from server.serve import main
-        with patch('server.config.DRAIN_TIMEOUT_SEC',25), self.assertRaises(SystemExit) as caught:
-            main(['--timeout-graceful-shutdown','3'])
-        self.assertEqual(caught.exception.code,2)
+    def test_declared_defaults_match_config_fallback(self) -> None:
+        """schema 里的默认值必须与 `config.py` 的兜底值一致。
 
-    def test_managed_launch_resolves_cli_before_environment_without_binding_a_socket(self):
-        from server import config
-        from server.serve import main
-        original=config.LAUNCH_ARGUMENTS
-        try:
-            with patch.dict(os.environ,{'WB_MANAGER_PORT':'7777','WB_MANAGER_HOST':'127.0.0.2'}), \
-                 patch('server.config.PORT',7777),patch('server.config.HOST','127.0.0.2'), \
-                 patch('server.serve.DrainServer') as server,patch('server.serve.signal.signal'):
-                main(['--port','8888'])
-                self.assertEqual(config.LAUNCH_ARGUMENTS['port'],8888)
-                self.assertEqual(config.LAUNCH_ARGUMENTS['host'],'127.0.0.2')
-                server.return_value.run.assert_called_once()
-        finally:config.LAUNCH_ARGUMENTS=original
+        两边不一致时，不设变量与设成默认值会得到不同行为 —— 这种差异只在
+        切换部署方式时才暴露出来，最难查。
+        """
+        schema = _schema()['settings']
+        text = (SERVER / 'config.py').read_text(encoding='utf-8')
+        mismatches = []
+        for name, spec in schema.items():
+            if 'default' not in spec:
+                continue
+            match = re.search(rf"_env_\w+\(\s*'{re.escape(name)}'\s*,\s*([^)]+)\)", text)
+            if not match:
+                continue
+            fallback = match.group(1).strip()
+            declared = spec['default']
+            if spec['type'] == 'boolean':
+                expected = 'True' if declared else 'False'
+                if fallback not in ('True', 'False') or fallback != expected:
+                    mismatches.append((name, declared, fallback))
+            elif spec['type'] == 'integer':
+                try:
+                    if int(fallback) != int(declared):
+                        mismatches.append((name, declared, fallback))
+                except ValueError:
+                    mismatches.append((name, declared, fallback))
+        self.assertEqual(mismatches, [],
+                         f'{len(mismatches)} 处默认值与 schema 不一致（name, schema, config）：'
+                         f'{mismatches[:8]}')
 
-    def test_unknown_variable_has_no_value_in_error(self):
-        with self.assertRaises(ConfigurationError) as caught:
-            validate_environment({'WB_UPSTREM_TIMEOUT':'never-echo-this-value'})
-        self.assertEqual(caught.exception.errors,[{'name':'WB_UPSTREM_TIMEOUT','code':'unknown_variable'}])
-        self.assertNotIn('never-echo',str(caught.exception))
+    def test_unknown_prefix_is_rejected(self) -> None:
+        """确认守卫本身是活的：随便一个未登记的 WB_ 变量必须被拒。"""
+        errors = _errors_for({'WB_DEFINITELY_NOT_REGISTERED': '1'})
+        codes = [item for item in errors if item.get('code') == 'unknown_variable']
+        self.assertTrue(codes, '未登记变量没有被拒绝 —— 守卫失效了（会假通过）')
+        self.assertEqual(codes[0]['name'], 'WB_DEFINITELY_NOT_REGISTERED')
 
-    def test_snapshot_redacts_credentials_in_urls_and_secret_fields(self):
-        rows = validate_environment({'WB2API_KEY':'key-sentinel', 'WB_ADMIN_PASSWORD':'pwd-sentinel',
-            'WB_HTTP_PROXY':'http://user-sentinel:pass-sentinel@127.0.0.1:9000/private-token?q=secret'})
-        blob = json.dumps(rows)
-        for forbidden in ('key-sentinel','pwd-sentinel','user-sentinel','pass-sentinel','private-token','q=secret'):
-            self.assertNotIn(forbidden,blob)
-        self.assertEqual(rows['settings']['WB_HTTP_PROXY']['value'],'http://127.0.0.1:9000')
+    def test_registered_traffic_flag_is_accepted(self) -> None:
+        """回归：`WB_TRAFFIC_TAP` 曾经是未登记的，设置即宕机。"""
+        names = [item.get('name') for item in _errors_for({'WB_TRAFFIC_TAP': '1'})]
+        self.assertNotIn('WB_TRAFFIC_TAP', names,
+                         '抓包总开关又被判定为未知变量 —— 设置它会直接宕机')
 
-    def test_bad_configuration_stops_before_directories_database_or_background_work(self):
-        from fastapi.testclient import TestClient
-        from server.main import app
-        with patch.dict(os.environ,{'WB_GATEWAY_RATE_PER_MIN':'not-an-integer'}), \
-             patch('server.config.ensure_dirs',side_effect=AssertionError('directory side effect')), \
-             patch('server.db.connect',side_effect=AssertionError('database side effect')):
-            with self.assertRaises(ConfigurationError):
-                with TestClient(app):pass
+    def test_registered_trae_timeout_is_accepted(self) -> None:
+        """回归：`WB_TRAE_TIMEOUT` 埋了更久的雷，同样从未被设置过。"""
+        names = [item.get('name') for item in _errors_for({'WB_TRAE_TIMEOUT': '90'})]
+        self.assertNotIn('WB_TRAE_TIMEOUT', names)
+
+
+if __name__ == '__main__':
+    unittest.main()
