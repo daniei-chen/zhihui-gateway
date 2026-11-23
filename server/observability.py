@@ -731,23 +731,55 @@ class StreamAudit:
     def completed(self):
         return (self.done_seen or self.finish_seen) and self.error is None
 
+    #: 拆粘帧用的解码器。**不要**改用 `json.loads` 整段解析：一条 `data:` 行里
+    #: 并列多个完整 JSON 对象的写法在上游真实出现过，`json.loads` 会抛错并把整条
+    #: 流判成协议错误 —— 正文、工具分片和用量一起丢。`raw_decode` 才能逐个取出。
+    _SPLITTER = json.JSONDecoder()
+
+    def _split(self, raw):
+        """把一段 `data:` 载荷拆成若干个顶层 JSON 对象（按出现顺序）。
+
+        返回 `(对象列表, 是否有无法解析的残留)`。空载荷与 `[DONE]` 都不算残留。
+        """
+        objects, index, end = [], 0, len(raw)
+        while index < end:
+            while index < end and raw[index].isspace():
+                index += 1
+            if index >= end:
+                break
+            if raw.startswith("[DONE]", index):
+                # 哨兵的规范形态是独占一行，但被拼进同一行时也不能当成解析失败。
+                self.done_seen = True
+                index += len("[DONE]")
+                continue
+            try:
+                obj, index = self._SPLITTER.raw_decode(raw, index)
+            except ValueError:
+                return objects, True
+            if isinstance(obj, dict):
+                objects.append(obj)
+        return objects, False
+
     def _event(self):
         raw = "\n".join(self.data).strip()
         self.data.clear()
         self.event_size = 0
         if not raw:
             return []
-        if raw == "[DONE]":
-            self.done_seen = True
-            return []
-        try:
-            obj = json.loads(raw)
-        except ValueError:
+        objects, garbage = self._split(raw)
+        if garbage:
+            # 残留仍然按协议错误处理：解析不了的尾巴无法归因，继续转发等于把半个
+            # 事件交给客户端（例如截断的工具参数会变成合法但错误的输入）。
             self.error = self.error or "上游 SSE 包含无法解析的 JSON 事件"
             self.error_stage = "protocol"
-            return []
-        if not isinstance(obj, dict):
-            return []
+        out = []
+        for obj in objects:
+            self._absorb(obj)
+            out.append(obj)
+        return out
+
+    def _absorb(self, obj):
+        """把单个事件对象计入累计状态（用量、终止、首字、错误信封）。"""
         if isinstance(obj.get("error"), dict):
             # Error body can contain private text; retain only a bounded provider message.
             self.error = str(obj["error"].get("message") or obj["error"].get("code") or "上游流错误")[:500]
@@ -769,7 +801,6 @@ class StreamAudit:
                 if isinstance(delta, dict) and any(delta.get(k) for k in (
                         "content", "reasoning_content", "reasoning", "tool_calls", "function_call")):
                     self.saw_useful = True
-        return [obj]
 
     def _consume(self, text):
         self.pending += text

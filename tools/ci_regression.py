@@ -111,6 +111,7 @@ MODULES = (
     "server.tests.test_v007_retention_review",
     "server.tests.test_steward_watchdog",
     "server.tests.test_writer_guard_contract",
+    "server.tests.test_upstream_alignment_20261123",
 )
 
 

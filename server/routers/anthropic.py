@@ -503,6 +503,9 @@ def to_openai_request(body: dict) -> dict:
     effort = _reasoning_effort(body)
     if effort:
         out['reasoning_effort'] = effort
+    # 结构化输出（`output_config.format`）。显式给了约束就必须落实或明确报错，
+    # 静默丢掉会让客户端以为拿到了受约束的结果，实际是自由生成。
+    _apply_output_format(body, out)
     if body.get('stop_sequences'):
         out['stop'] = body['stop_sequences']
     if isinstance(body.get('metadata'), dict) and body['metadata'].get('user_id'):
@@ -649,6 +652,65 @@ def _reasoning_effort(body: dict) -> str | None:
     return effort
 
 
+class OutputFormatError(ValueError):
+    """`output_config.format` 显式给出但无法落实。"""
+
+    def __init__(self, message: str, code: str = 'unsupported_output_format'):
+        super().__init__(message)
+        self.code = code
+
+
+def _apply_output_format(body: dict, out: dict) -> None:
+    """Anthropic 的 `output_config.format` → 上游 `response_format`。
+
+    形状（客户端显式开启结构化输出时才会带）：
+
+        {"output_config": {"format": {"type": "json_schema",
+                                      "schema": {...}, "name": "..."}}}
+
+    ## 为什么必须落实或报错
+
+    此前这个字段完全没读：客户端以为拿到了符合 schema 的结果，实际是自由生成，
+    而且**没有任何迹象**表明约束被丢掉了 —— 下游按 schema 解析时才炸，且已经
+    付过费。所以「不认识」不能静默略过，只能明确拒绝。
+
+    ## 为什么只在 `json_schema` 上放行
+
+    上游只承诺按 JSON Schema 约束输出。`type` 是别的值（例如某些客户端的
+    `text`、或未来的新类型）没有对应的上游语义，映射过去等于编一个行为出来。
+
+    `name` 缺省补 `response`、`strict` 缺省补 `true`：这是已验证样本的形状，
+    缺少 `name` 的上游会直接拒。客户端显式给出的同名键一律保留。
+    """
+    cfg = body.get('output_config')
+    if not isinstance(cfg, dict):
+        return
+    fmt = cfg.get('format')
+    if fmt is None:
+        return
+    if not isinstance(fmt, dict):
+        raise OutputFormatError('output_config.format 必须是对象')
+    kind = fmt.get('type')
+    if not isinstance(kind, str) or kind.strip().lower() != 'json_schema':
+        raise OutputFormatError('output_config.format.type 目前只支持 json_schema')
+    schema = fmt.get('schema')
+    if not isinstance(schema, dict) or not schema:
+        # 空 schema 与缺 schema 都会让上游退化成「随便什么 JSON」，那和没约束
+        # 一样却让客户端以为有约束 —— 必须拒。
+        raise OutputFormatError('output_config.format.schema 必须是非空对象',
+                                'invalid_output_format')
+    name = fmt.get('name')
+    if not isinstance(name, str) or not name.strip():
+        name = 'response'
+    strict = fmt.get('strict')
+    if not isinstance(strict, bool):
+        strict = True
+    out['response_format'] = {
+        'type': 'json_schema',
+        'json_schema': {'name': name.strip(), 'strict': strict, 'schema': schema},
+    }
+
+
 def _thinking_block(text: str) -> dict:
     """Anthropic 的 thinking 块：`thinking` 给人看，`signature` 供客户端回传。
 
@@ -665,6 +727,43 @@ def _thinking_block(text: str) -> dict:
         'thinking': text,
         'signature': responses._encode_credential(text),
     }
+
+
+#: 预算耗尽时的对外文案。流式（错误事件）与非流式（400 响应体）共用同一句，
+#: 免得同一件事在两条路径上给出两种说法。
+BUDGET_EXHAUSTED_MESSAGE = (
+    '上游输出预算在产出任何正文与工具调用之前耗尽（思考占满了预算），'
+    '本次没有可交付的内容'
+)
+
+
+class OutputBudgetExhausted(ValueError):
+    """上游把输出预算全花在思考上，正文与工具都没有产出。
+
+    这不是「成功但答案很短」：`finish_reason` 是 `length`，客户端拿到的是一个
+    空回答。按成功交付会被原样无限重试，所以必须报成失败（错误码统一为
+    `output_budget_exhausted`），同时**不惩罚账号** —— 账号是健康的，只是这一次
+    预算不够。
+    """
+
+
+def _budget_exhausted(translator) -> bool:
+    """这次流是否属于「预算耗尽、什么都没交付」。
+
+    三条同时成立（与非流式 `to_anthropic_response` 的口径一致）：
+      · `finish_reason` 是 `length`；
+      · 没有交付任何**非空白**正文；
+      · 上游没有发过任何工具调用分片。
+
+    思考增量不算交付：它对客户端是不可见输入，不能当成答案。判为真时按失败
+    收尾（发 `error` 事件、不发 `message_stop`），否则客户端会把空回答当成功
+    并原样重试。
+    """
+    if str(getattr(translator, '_deferred_finish', '') or '') != 'length':
+        return False
+    if getattr(translator, 'saw_visible', False):
+        return False
+    return not getattr(translator, 'tools', None)
 
 
 def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> dict:
@@ -714,6 +813,11 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
             'input': parsed,
         })
 
+    finish = str(choice.get('finish_reason') or '')
+    # 预算耗尽且什么都没交出去：不是成功，是失败。判据与流式那条路径完全一致
+    # （`length` + 没有正文 + 没有任何工具调用），思考块不算「交付」。
+    if finish == 'length' and not calls and not (isinstance(text, str) and text.strip()):
+        raise OutputBudgetExhausted(BUDGET_EXHAUSTED_MESSAGE)
     if len(content)>MAX_STREAM_TOOLS:
         from ..outputlimits import OutputLimitExceeded
         raise OutputLimitExceeded('Too many translated content blocks')
@@ -792,6 +896,10 @@ class _StreamTranslator:
         # 是否见过正文增量：首字延迟据此判定（用「第一个含正文的 delta」，而不是
         # 「第一个 chunk」——后者会把建连时间也算进去，数字偏小且失真）
         self.saw_content = False
+        # 是否见过**非空白**正文。`saw_content` 只是「有 delta」，纯空白也算；
+        # 而「预算耗尽算不算成功」要看有没有真正交付出去的字（口径见
+        # `_budget_exhausted`），所以两者必须分开。
+        self.saw_visible = False
         self.input_tokens = 0
         self.output_tokens = 0
         # 缓存两段（Anthropic 把它们与 input 并列，见 _usage_fields）
@@ -993,6 +1101,8 @@ class _StreamTranslator:
         text = delta.get('content')
         if isinstance(text, str) and text:
             self.saw_content = True
+            if text.strip():
+                self.saw_visible = True
             # 切到正文前先把思考块关掉（含发签名）——思考与正文是两个块，
             # 顺序保证签名在对应的正文之前送达。
             out += self._close_think()
@@ -1220,6 +1330,16 @@ async def messages(request: Request):
                     if not gateway._valid_chat_response(data):
                         raise ValueError('invalid upstream chat response')
                     converted = JSONResponse(to_anthropic_response(data, model, thinking=want_thinking))
+                except OutputBudgetExhausted as exc:
+                    # 400 而不是 502：上游与账号都正常，是这一次的输出预算不够。
+                    # 不记 `_mark_invalid_response` / `_mark_output_limit_failure` ——
+                    # 那两个是「上游坏了」的口径，会把健康账号推进冷却。
+                    gateway._record(key, ip, model, mapped or '', 400,
+                                    _as_int(usage.get('prompt_tokens')),
+                                    _as_int(usage.get('completion_tokens')), latency,
+                                    ua, str(exc), False, usage=usage, session_key=session_key)
+                    return _err(str(exc), 400, 'invalid_request_error',
+                                code='output_budget_exhausted')
                 except Exception as exc:
                     if isinstance(exc,OutputLimitExceeded):gateway._mark_output_limit_failure()
                     else:gateway._mark_invalid_response()
@@ -1420,6 +1540,13 @@ async def messages(request: Request):
         finally:
             try:
                 if not cancelled:
+                    if not error_text and _budget_exhausted(translator):
+                        # 预算耗尽、什么都没交付：改走错误收尾（下面那个分支），
+                        # 不发 message_stop —— 空回答 + 成功终止 = 客户端静默重试。
+                        error_text = BUDGET_EXHAUSTED_MESSAGE
+                        audit.error = error_text
+                        audit.error_stage = 'upstream'
+                        audit.error_code = 'output_budget_exhausted'
                     if error_text:
                         # U13：流中错误事件与流前 JSON 错误**同一套契约** ——
                         # 保留上游业务 code、gateway_hint 与上下游两个 ID。
