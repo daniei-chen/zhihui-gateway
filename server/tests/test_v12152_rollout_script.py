@@ -153,7 +153,20 @@ class ItWaitsOnTheJournalTests(unittest.TestCase):
                       '事务失败时仍等满超时，会把真失败拖成超时')
 
     def test_it_has_a_bounded_timeout(self):
-        self.assertIn('360', SOURCE, '等待没有上限')
+        """上限必须落在「上限所在的那一行」上。
+
+        原来是 `assertIn('360', SOURCE)` —— 整份脚本里任何一处出现 360 都能满足，
+        注释里的版本号、端口、随机数字都行，等于没断言。改成两句：`wait_phase`
+        的默认上限是个数字，调用处也显式传了上限。
+        """
+        import re
+        default = re.search(r'limit=\$\{2:-(\d+)\}', SOURCE)
+        self.assertIsNotNone(default, 'wait_phase 没有默认上限')
+        limit = int(default.group(1))
+        self.assertGreater(limit, 0, '上限不能是 0')
+        self.assertLessEqual(limit, 900, f'上限 {limit}s 太长，重启窗口会被拖成故障')
+        self.assertRegex(SOURCE, r'wait_phase\s+complete\s+\d+',
+                         '调用处没有显式上限')
 
     def test_run_is_not_killed_on_timeout(self):
         """事务可能有补偿步骤要跑完，杀了它就断在半路。"""

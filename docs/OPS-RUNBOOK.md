@@ -69,6 +69,19 @@ sleep 12 && curl -s http://127.0.0.1:7866/api/release
 的受审清单里。所以同步哈希要跑两遍：先写受保护清单并 `git add`，再算溯源清单。
 一遍过会留下「清单哈希是旧值」的错。
 
+### 重启那几秒的 502（P0-2）
+
+`systemctl restart workbuddy-web` 期间没有进程监听 7866，新连接被内核拒绝，
+nginx 记 502 并回给客户端。2026-11-24 两次升级实测影响 7 条
+`/v1/chat/completions`（全部落在重启的那 3 秒内）。
+
+根治办法是 **systemd socket activation**：监听 socket 由 systemd 持有，重启期间
+连接在内核 backlog 里排队而不是被拒。单元文件随本发行版一起发布，安装步骤、验证
+方法与回滚都在 **`deploy/systemd/INSTALL.md`**（发行目录内为
+`releases/current/deploy/systemd/INSTALL.md`）。
+
+没装之前的替代做法：**升级挑低流量时段**，并且提前看一眼有没有在途请求。
+
 ---
 
 ## 2. 回滚

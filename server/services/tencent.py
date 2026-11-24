@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import contextvars
+import errno
 import json
 import logging
 import os
@@ -335,6 +336,39 @@ def _ensure_auth_directory(base: Path) -> None:
     os.chmod(base,0o750)
 
 
+def _replace_with_retry(source: str, target: Path, *, attempts: int = 3,
+                        delay: float = 0.01) -> None:
+    """`os.replace`，对**瞬时**的共享冲突重试几次。
+
+    为什么需要：在 Windows 上，目标文件只要在替换的一瞬间被别的句柄打开
+    （同一进程的读线程、杀毒软件扫描、索引服务），`MoveFileEx` 会以
+    `PermissionError: [WinError 5] 拒绝访问` 失败。这不是权限配置问题，而是
+    "晚几毫秒就成功"的竞态 —— 账号文件的写入方（控制台保存代理/权重、
+    批量扫码、token 续期）本来就是并发的，实测在门禁里 10 轮并发写偶尔命中一次。
+
+    生产机是 Linux，`os.replace` 是原子的、不会出现这种情况；这个重试只让
+    Windows 开发机与 CI 不再随机红，并且真的提升了并发写入的成功率。
+
+    只重试 `PermissionError`（以及 errno 落在 EACCES/EPERM/EBUSY 的 OSError），
+    三次之后照常抛出 —— 真正的权限错误（比如文件属于别人）必须暴露出来，
+    不能被重试掩盖。
+    """
+    last: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            transient = isinstance(exc, PermissionError) or \
+                getattr(exc, 'errno', None) in {errno.EACCES, errno.EPERM, errno.EBUSY}
+            if not transient or attempt == attempts - 1:
+                raise
+            last = exc
+            time.sleep(delay * (attempt + 1))
+    if last is not None:      # 理论不可达：循环里要么 return 要么 raise
+        raise last
+
+
 def _atomic_write_json(target: Path, payload: dict) -> None:
     """把 payload 以**原子替换**方式写到 target（临时文件 + os.replace）。
 
@@ -362,7 +396,12 @@ def _atomic_write_json(target: Path, payload: dict) -> None:
     跨 UID 部署须配置专用共享组 WB_AUTH_SHARED_GID、双方组成员和目录遍历权限；
     同 UID 部署不需要额外组。修改现有目录权限属于单独的受控部署步骤。
     """
-    original = target.stat() if target.exists() else None
+    try:
+        original = target.stat() if target.exists() else None
+    except OSError:
+        # 并发的另一个写者刚把它 replace 掉了：当作"原本不存在"处理，
+        # 权限走默认值，比在这里抛 FileNotFoundError 让整次写失败要好。
+        original = None
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp',
                                     dir=str(target.parent))
     try:
@@ -382,7 +421,7 @@ def _atomic_write_json(target: Path, payload: dict) -> None:
         mode = (0o600 | (original.st_mode & 0o040)) if original else 0o640
         if shared_gid: mode = 0o640
         os.chmod(tmp_name, mode)
-        os.replace(tmp_name, target)
+        _replace_with_retry(tmp_name, target)
     except Exception:
         # 失败时清掉临时文件，避免在 auths 目录里留垃圾（它不会被加载，但会让人困惑）
         try:

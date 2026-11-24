@@ -163,6 +163,51 @@ class AccountFileLockTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class ReplaceRetryTest(unittest.TestCase):
+    """`os.replace` 遇到瞬时共享冲突要重试，遇到真权限错误要立刻抛。
+
+    背景：Windows 上目标文件只要在替换那一瞬间被别的句柄打开（同一进程的读线程、
+    杀毒软件、索引服务），`MoveFileEx` 就会以 `PermissionError [WinError 5]`
+    失败。这不是权限配置问题，晚几毫秒就成功。门禁里 10 轮并发写会偶发命中。
+
+    两条都必须守住：重试不够就是随机红；什么都重试就会把"文件属于别人"这种
+    真错误吞掉三次、还拖慢失败路径。
+    """
+
+    def test_transient_permission_error_is_retried(self) -> None:
+        calls: list[int] = []
+
+        def flaky(src, dst):  # noqa: ANN001, ANN202
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError(13, '拒绝访问。')
+            return None
+
+        with mock.patch.object(tencent.os, 'replace', flaky):
+            tencent._replace_with_retry('x.tmp', Path('x.json'), delay=0)
+        self.assertEqual(len(calls), 3)
+
+    def test_persistent_permission_error_still_raises(self) -> None:
+        def always(src, dst):  # noqa: ANN001, ANN202
+            raise PermissionError(13, '拒绝访问。')
+
+        with mock.patch.object(tencent.os, 'replace', always):
+            with self.assertRaises(PermissionError):
+                tencent._replace_with_retry('x.tmp', Path('x.json'), delay=0)
+
+    def test_non_transient_error_is_not_retried(self) -> None:
+        calls: list[int] = []
+
+        def broken(src, dst):  # noqa: ANN001, ANN202
+            calls.append(1)
+            raise FileNotFoundError(2, 'no such file')
+
+        with mock.patch.object(tencent.os, 'replace', broken):
+            with self.assertRaises(FileNotFoundError):
+                tencent._replace_with_retry('x.tmp', Path('x.json'), delay=0)
+        self.assertEqual(len(calls), 1, '非瞬时错误不该重试')
+
+
 class WriteAuthFileKeepsMetadataTest(unittest.TestCase):
     """重新登录/导入按响应重建文件时，proxy / weight / device_token 必须保留。"""
 

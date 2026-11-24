@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import html
+import os
 import socket
 import sys
 import smtplib
@@ -38,8 +39,13 @@ LOG = Path('/var/log/wb-gateway-alert.log')
 FALLBACK = Path('/var/log/wb-gateway-alerts.fired')   # 无渠道时告警正文落盘处
 WINDOW_MIN = 10
 COOLDOWN_MIN = 60
+#: 库所在目录（磁盘水位与库体积都看这里）；部署时可被 WB_DATA_DIR 覆盖。
+DATA_DIR = os.environ.get('WB_DATA_DIR', '/opt/workbuddy-manager/data')
+#: 磁盘水位阈值（%）：先黄后红。留出的余量要够「排查 + 清理」的时间。
+DISK_WARN_PCT = 85
+DISK_CRIT_PCT = 92
 # 每条规则各自的冷却（分钟）；缺省 COOLDOWN_MIN。R6=异地备份未配，属长期状态，24h 提一次。
-RULE_COOLDOWN_MIN = {'R6': 1440, 'R5': 360}
+RULE_COOLDOWN_MIN = {'R6': 1440, 'R5': 360, 'R11': 360}
 
 
 def log(msg: str) -> None:
@@ -168,12 +174,31 @@ def collect() -> dict:
 
 
 def collect_resources() -> dict:
-    """宿主机资源异常：swap 压力 / 僵尸进程 / 单进程内存失控。
+    """宿主机资源异常：swap 压力 / 僵尸进程 / 单进程内存失控 / 磁盘水位。
 
     为什么需要：2026-10-22 发现一个 grep 因正则灾难性回溯在机器上卡了
     3 天 14 小时，吃掉 1GB swap，而现有告警只看「服务活不活」，完全没察觉。
+
+    磁盘水位（2026-11-24 补）：2026-11-15 那块 30G 盘到了 94% 才有人发现，
+    期间库还在以每天十几 MB 增长、备份也往同一块盘写。`request_logs` 这类
+    账本表写满之后的表现不是「报错」而是「静默丢记录 + SQLite 报 disk I/O」，
+    所以必须提前几档报警，而不是等写不进去。
     """
-    out = {'swap_pct': None, 'swap_used_mb': None, 'zombies': 0, 'fat': []}
+    out = {'swap_pct': None, 'swap_used_mb': None, 'zombies': 0, 'fat': [],
+           'disk_pct': None, 'disk_free_gb': None, 'db_mb': None}
+    try:
+        import shutil
+        usage = shutil.disk_usage(DATA_DIR if os.path.isdir(DATA_DIR) else '/')
+        out['disk_pct'] = round(100.0 * usage.used / usage.total, 1)
+        out['disk_free_gb'] = round(usage.free / (1024 ** 3), 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        db = os.path.join(DATA_DIR, 'manager.db')
+        if os.path.exists(db):
+            out['db_mb'] = round(os.path.getsize(db) / (1024 ** 2), 1)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         info = {}
         for line in open('/proc/meminfo', encoding='utf-8'):
@@ -259,6 +284,19 @@ def evaluate(m: dict) -> dict:
         fired['R8'] = ('WARN', f"有 {res['zombies']} 个程序已经结束但没被清理干净，会慢慢占资源。")
     if res.get('fat'):
         fired['R9'] = ('WARN', '非核心进程内存异常：' + '; '.join(res['fat'][:5]) + '（单进程 >1GB）')
+    # 磁盘水位（2026-11-24 新增）。为什么单列一条规则：
+    # 盘满不是"某个接口报错"，而是**账本静默写不进去** —— SQLite 报 disk I/O error、
+    # request_logs 丢行、备份也写不下去，等发现时已经丢了数据。所以要在写满之前就喊。
+    disk_pct = res.get('disk_pct')
+    if disk_pct is not None and disk_pct >= DISK_WARN_PCT:
+        level = 'CRITICAL' if disk_pct >= DISK_CRIT_PCT else 'WARN'
+        db_part = f"，库 {res['db_mb']}MB" if res.get('db_mb') else ''
+        fired['R11'] = (level,
+                        f"磁盘已用 {disk_pct}%（剩余 {res.get('disk_free_gb')}G{db_part}）。"
+                        f'阈值：WARN {DISK_WARN_PCT}% / CRITICAL {DISK_CRIT_PCT}%。'
+                        '盘写满后账本是**静默**丢失记录，不会报错。'
+                        '排查：du -sh /opt/workbuddy-manager/data/* | sort -h | tail；'
+                        '可清理的通常是 data/traffic/、旧的 pre-v9-*.db.gz、releases/ 下的旧版本。')
     # WorkBuddy 风控增长（2026-10-22 审计后新增）：11-128 是「请求被渠道校验拦截」，
     # 也是上游识别第三方客户端的直接信号。单请求可能因换路径重试记 2-3 行，
     # 所以阈值取 5 次/窗口；持续越线说明规则变了，需要跟进改写或切备用上游。

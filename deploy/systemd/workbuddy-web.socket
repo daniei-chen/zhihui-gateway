@@ -1,0 +1,34 @@
+# 智汇网关的监听 socket（systemd socket activation）
+#
+# 目的：让「升级重启」不再丢请求。
+#
+# 现状（没装这个单元时）：`systemctl restart workbuddy-web` 会有几秒没有进程在
+# 监听 7866，新连接被内核直接拒绝（ECONNREFUSED），nginx 记 502 并回给客户端。
+# 2026-11-24 两次升级实测产生 7 条 `/v1/chat/completions` 502。
+#
+# 装了之后：监听 socket 由 systemd 一直持有（pid 1 持有 fd，与服务进程生命周期
+# 解耦）。重启期间到达的连接留在内核 backlog 里排队，新进程起来后立刻被 accept，
+# 客户端只是慢一点，不会失败。服务崩溃也变成「排队等重启」而不是「全站 502」。
+#
+# 安装步骤与回滚见同目录 INSTALL.md。**不要**手工改这里之外的东西。
+
+[Unit]
+Description=ZHIHUI Gateway listening socket (127.0.0.1:7866)
+Documentation=file:///opt/workbuddy-manager/docs/OPS-RUNBOOK.md
+# 与 workbuddy-web.service 同名前缀，systemd 会自动把它当作该服务的激活 socket。
+PartOf=workbuddy-web.service
+
+[Socket]
+ListenStream=127.0.0.1:7866
+# Accept=no：由服务进程自己 accept（这是 uvicorn 这类单进程模型需要的模式），
+# systemd 只负责持有并传递监听 fd。
+Accept=no
+# 重启窗口内能排队的连接数。默认 4096 已经够（实测重启 5 秒内最多几十个连接），
+# 显式写出来是为了让这个数字可被搜索到、可被调。
+Backlog=4096
+# 没人连接时不要因为超时自己停掉 socket。
+MaxConnections=0
+FreeBind=no
+
+[Install]
+WantedBy=sockets.target

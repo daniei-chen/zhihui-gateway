@@ -48,8 +48,21 @@ ALWAYS = (
     'test_release_provenance_integrity.py',
     'test_changelog.py',
     'test_docs_packaging.py',
-    'test_writer_capabilities.py',
+    # 2026-11-24：这里原来写的是 `test_writer_capabilities.py`，而那个文件
+    # 早就不存在了（writer 契约的守卫现在是这一个）。因为 `select()` 用的是
+    # glob，不存在的名字会被**静默跳过** —— 清单看起来有 5 条守卫，实际只跑了 4 条，
+    # 谁也不会发现。现在 `missing_guards()` 会把缺失的条目打出来。
+    'test_writer_guard_contract.py',
 )
+
+
+def missing_guards() -> list[str]:
+    """`ALWAYS` 里列了但仓库里没有的条目。
+
+    允许清单写"理想守卫集"，但**必须让人看见**缺了哪几条：静默跳过等于
+    这条守卫从来没存在过。
+    """
+    return [name for name in ALWAYS if not (HERE / name).is_file()]
 
 #: 改动这些目录才值得去看；其余（文档、前端）不选测试。
 SOURCE_PREFIXES = ('server/', 'deploy/')
@@ -159,6 +172,12 @@ def main(argv: list[str] | None = None) -> int:
         if modules:
             print('  模块：' + ', '.join(sorted(modules)))
         print(f'选中测试 {len(picked)} 个：')
+        absent = missing_guards()
+        if absent:
+            print(f'  ⚠ 守卫清单里有 {len(absent)} 个文件不存在（这些守卫不会跑）：',
+                  file=sys.stderr)
+            for name in absent:
+                print(f'    {name}', file=sys.stderr)
 
     for path in picked:
         print(path.relative_to(REPO).as_posix())

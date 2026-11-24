@@ -135,6 +135,10 @@ MODULES = (
     "server.tests.test_responses_budget_and_cache",
     # 信号质量：心跳与额度轮询不该把 request_outcomes 淹掉。
     "server.tests.test_outcome_signal_noise",
+    "server.tests.test_test_selector",
+    "server.tests.test_async_blocking_db",
+    "server.tests.test_socket_activation",
+    "server.tests.test_ops_disk_watermark",
 )
 
 

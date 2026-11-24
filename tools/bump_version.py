@@ -37,6 +37,13 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / 'server/release-provenance.json'
 
+# Windows 的默认控制台代码页是 GBK，`print` 里出现 GBK 编不了的字（比如 ⚠）
+# 会直接抛 UnicodeEncodeError，把一次本该成功的版本同步变成失败。统一改成
+# UTF-8 + replace：宁可显示成问号，也不要因为一行提示把发布流程打断。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 
 def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + '\n',

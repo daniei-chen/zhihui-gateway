@@ -61,9 +61,12 @@ class StreamAuditToolCallsTest(unittest.TestCase):
         return audit
 
     def test_tool_frames_parse_without_error(self) -> None:
+        # 这一条只负责「解析不炸」。原来还有一行
+        #   `assertTrue(audit.completed is False or audit.completed is True)`
+        # —— 那是在断言「一个 bool 是 bool」，恒真、等于没断言，所以删掉。
+        # 「工具帧算开始交付、但不算可见正文」这两个真正的口径在下面一条里断言。
         audit = self._audit(TOOL_FIRST, TOOL_ARG_FRAME, TOOL_ARG_FRAME2, TOOL_PARALLEL)
         self.assertIsNone(audit.error)
-        self.assertTrue(audit.completed is False or audit.completed is True)
 
     def test_tool_frame_counts_as_useful_but_not_visible_text(self) -> None:
         """工具帧算「上游开始交付」，但不算「交付了可见正文」。
