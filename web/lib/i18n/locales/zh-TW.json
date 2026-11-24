@@ -2241,6 +2241,6 @@
     "diffAfter": "改後",
     "noDiff": "閘道未改寫請求",
     "response": "上游回應",
-    "truncatedHint": "以下欄位因過長被省略，只保留了開頭與結尾："
+    "truncatedHint": "以下內容因過長被省略，只保留了最近的部分："
   }
 }

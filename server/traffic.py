@@ -194,6 +194,8 @@ LIST_LIMIT = 256 * 1024
 #: 消息列表裁剪时保留的头部与尾部条数。
 LIST_HEAD = 8
 LIST_TAIL = 4
+#: 最后兜底时对「最后一条消息」用的收紧上限。排障只需要看清这一轮问了什么。
+FINAL_LIMIT = 4 * 1024
 
 
 def _shrink_text(text: str, limit: int = FIELD_LIMIT) -> tuple[str, bool]:
@@ -209,27 +211,27 @@ def _shrink_text(text: str, limit: int = FIELD_LIMIT) -> tuple[str, bool]:
     return head + marker + tail, True
 
 
-def _shrink(node, path: str, found: list) -> None:
+def _shrink(node, path: str, found: list, limit: int = FIELD_LIMIT) -> None:
     """就地裁剪一个子树里的超长字符串，把被裁剪的路径记进 `found`。"""
     if isinstance(node, dict):
         for key in list(node):
             value = node[key]
             if isinstance(value, str):
-                shrank, was = _shrink_text(value)
+                shrank, was = _shrink_text(value, limit)
                 if was:
                     node[key] = shrank
                     found.append(f'{path}.{key}')
             else:
-                _shrink(value, f'{path}.{key}', found)
+                _shrink(value, f'{path}.{key}', found, limit)
     elif isinstance(node, list):
         for index, value in enumerate(node):
             if isinstance(value, str):
-                shrank, was = _shrink_text(value)
+                shrank, was = _shrink_text(value, limit)
                 if was:
                     node[index] = shrank
                     found.append(f'{path}[{index}]')
             else:
-                _shrink(value, f'{path}[{index}]', found)
+                _shrink(value, f'{path}[{index}]', found, limit)
 
 
 def _shrink_messages(section: dict, path: str, found: list,
@@ -271,7 +273,10 @@ def _prepare(payload: dict) -> bytes:
         # 逐步收紧保留条数。**两个 section 都要裁** —— 2026-11-24 这里曾写成
         # 裁完 client 就 break，于是 gateway 的 386 条（541 KB）原样落盘，
         # 单条记录达到 790 KB，上限形同虚设。
-        for head, tail in ((LIST_HEAD, LIST_TAIL), (4, 2), (2, 1), (1, 0)):
+        # 逐步收紧保留条数：**先减头部、后减尾部**。长会话里「最后几条」才是
+        # 当前这一轮要问的东西，历史可以丢、当前不能丢。所以最优一级是
+        # (0, 1)：只留最后一条，前面一条占位说明。
+        for head, tail in ((LIST_HEAD, LIST_TAIL), (4, 4), (2, 4), (0, 2), (0, 1)):
             if len(raw) <= LIST_LIMIT:
                 break
             touched = False
@@ -284,11 +289,34 @@ def _prepare(payload: dict) -> bytes:
             raw = _dumps(payload)
 
     if len(raw) > LIST_LIMIT:
-        # 仍然超：说明超的不是条数（例如某一个段本身就有巨多字段）。
-        # 这时明确整段省略 —— 宁可只剩骨架，也不让单条记录撑破上限。
+        # 仍然超：说明超的不是「条数」而是「单条内部有海量小字段」
+        # （例如一条 assistant 消息带几百个工具调用片段，每段都小于单字段上限，
+        # 加起来却很大）。这时**不能**整段省略 —— 那等于什么都没留下，
+        # 和最初「砍断 JSON」一样没法排障。
+        #
+        # 改为只保留「最后一轮」：最后一条消息 + 其余参数骨架，并把这条消息
+        # 用更小的上限再裁一次。排障最想看的恰恰是「这次问了什么」，
+        # 历史可以没有，当前这一轮必须有。
+        for section_name in ('client', 'gateway'):
+            section = payload.get(section_name)
+            if not isinstance(section, dict):
+                continue
+            messages = section.get('messages')
+            tail = messages[-1:] if isinstance(messages, list) and messages else []
+            for item in tail:
+                _shrink(item, f'{section_name}.messages[-1]', found, FINAL_LIMIT)
+            section['messages'] = ([{'role': 'system',
+                                     '_traffic_placeholder': True,
+                                     'content': '……（此前的历史消息已省略，仅保留最后一条）……'}]
+                                   + tail)
+            found.append(f'{section_name}.messages（仅保留最后 1 条）')
+        raw = _dumps(payload)
+
+    if len(raw) > LIST_LIMIT:
+        # 极端兜底：连一条都塞不下。此时才整段省略，并明确写清原因。
         for section_name in ('client', 'gateway', 'response'):
             section = payload.get(section_name)
-            if isinstance(section, (dict, list)) and len(_dumps(section)) > LIST_LIMIT // 3:
+            if isinstance(section, (dict, list)):
                 payload[section_name] = {
                     '_traffic_oversize': True,
                     '_note': f'该段超过 {LIST_LIMIT // 1024} KB，已整体省略；'
@@ -572,7 +600,7 @@ def render_html(record: dict) -> str:
     truncated_note = ''
     if fields:
         items = '、'.join(text(item) for item in fields)
-        truncated_note = (f'<div class="note">以下字段因过长被省略，只保留了开头与结尾：'
+        truncated_note = (f'<div class="note">以下内容因过长被省略，只保留了最近的部分：'
                           f'<code>{items}</code></div>')
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>{title}</title>

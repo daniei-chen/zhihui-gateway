@@ -352,18 +352,44 @@ class ShrinkTest(unittest.TestCase):
             self.assertLessEqual(len(out[section]['messages']),
                                  traffic.LIST_HEAD + 1 + traffic.LIST_TAIL)
 
-    def test_oversize_section_is_dropped_whole(self) -> None:
-        """条数裁到最少仍超限时，整段省略 —— 绝不写超上限的记录。"""
-        # 300 个消息、每条 30 KB：单条不触发字段裁剪，但总量 9 MB。
-        heavy = [{'role': 'user', 'content': 'z' * 30_000} for _ in range(300)]
-        payload = self._base(client={'messages': heavy, 'tools': [
-            {'name': f'tool{i}', 'description': 'd' * 30_000} for i in range(10)]},
-            gateway={'messages': heavy})
+    def test_oversize_keeps_the_last_message(self) -> None:
+        """条数裁到最少仍超限时，保留**最后一条**消息，而不是整段省略。
+
+        2026-11-24 真实数据：一条 433 条消息的长会话，四轮裁剪后仍超限，于是
+        client/gateway 被整段替换成「已整体省略」——记录只剩一个 diff，排障价值
+        归零。当时那条记录其实只有 19.8 KB，完全放得下「最后一条消息 + 参数」。
+        """
+        # 每条消息内部有大量小字符串（每段都小于单字段上限），总量极大。
+        heavy = [{'role': 'user', 'content': 'z' * 3000,
+                  'attachments': [{'id': f'a{i}', 'body': 'y' * 900} for i in range(60)]}
+                 for _ in range(300)]
+        payload = self._base(client={'model': 'glm', 'messages': heavy},
+                             gateway={'model': 'cn:glm', 'messages': list(heavy)})
+        raw = traffic._prepare(payload)
+        self.assertLessEqual(len(raw), traffic.LIST_LIMIT)
+        out = json.loads(raw)
+        for section in ('client', 'gateway'):
+            messages = out[section]['messages']
+            self.assertTrue(messages[0].get('_traffic_placeholder'),
+                            f'{section} 应该有「历史已省略」的说明在前')
+            self.assertEqual(messages[-1]['role'], 'user', f'{section} 的最后一条消息被丢了')
+            self.assertLessEqual(len(messages), traffic.LIST_TAIL + 1)
+        self.assertNotIn('_traffic_oversize', out['client'],
+                         '不该整段省略 —— 那等于什么都没留下')
+        self.assertEqual(out['client']['model'], 'glm')
+
+    def test_extreme_oversize_falls_back_to_dropping(self) -> None:
+        """连最后一条都塞不下时才整段省略，且必须留下原因。"""
+        half = 200_000
+        one = [{'role': 'user', 'content': 'q' * half,
+                'blobs': ['w' * 30_000 for _ in range(10)]}]
+        payload = self._base(client={'messages': one}, gateway={'messages': list(one)})
         raw = traffic._prepare(payload)
         self.assertLessEqual(len(raw), traffic.LIST_LIMIT)
         out = json.loads(raw)
         self.assertTrue(out['truncated'])
-        self.assertTrue(any('整体省略' in item for item in out['truncated_fields']))
+        self.assertTrue(out['client'].get('_traffic_oversize')
+                        or len(out['client'].get('messages', [])) <= 2)
 
     def test_diff_is_never_shrunk(self) -> None:
         """差异是摘要，逐条都很短；裁它等于毁掉最该看的东西。"""
@@ -400,11 +426,11 @@ class ShrinkTest(unittest.TestCase):
                   'diff': [], 'response': {},
                   'truncated_fields': ['client.messages[0].content']}
         html = traffic.render_html(record)
-        self.assertIn('只保留了开头与结尾', html)
+        self.assertIn('只保留了最近的部分', html)
         self.assertIn('client.messages[0].content', html)
         clean = dict(record)
         clean['truncated_fields'] = []
-        self.assertNotIn('只保留了开头与结尾', traffic.render_html(clean))
+        self.assertNotIn('只保留了最近的部分', traffic.render_html(clean))
 
 
 if __name__ == '__main__':
