@@ -141,6 +141,7 @@ MODULES = (
     "server.tests.test_ops_disk_watermark",
     "server.tests.test_ops_console_static",
     "server.tests.test_metering_reconcile_wiring",
+    "server.tests.test_account_ttft_metric",
 )
 
 

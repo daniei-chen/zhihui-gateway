@@ -1258,6 +1258,78 @@ def _context_quantiles(window_seconds: int = 3600) -> dict | None:
     return _column_quantiles('prompt_tokens', window_seconds)
 
 
+#: 按账号的 TTFT 缓存槽。键存在这里而不是复用 `_COLUMN_CACHES`，是因为后者的
+#: 形状是「一条分位数」，而这里是「每个账号一条」。
+_ACCOUNT_TTFT_CACHE: dict = {'at': 0.0, 'value': None}
+
+
+def _prom_label(value: str) -> str:
+    """Prometheus 标签值转义。
+
+    账号名来自数据库、可能带引号或反斜杠；不转义会**直接生成一行坏掉的暴露文本**
+    —— 要么整条序列被 Prometheus 丢弃，要么把后面的行也带坏。
+    """
+    return str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
+
+def _account_ttft(window_seconds: int = 3600, min_samples: int = 20,
+                  max_accounts: int = 32) -> list[dict] | None:
+    """最近窗口内**按账号**的首字延迟分位数。
+
+    ## 为什么需要（不是"再做一个分位数"）
+
+    2026-11-15 排性能时看到一个数字：平均首字延迟 7.3 秒、p99 57 秒，而当时
+    **只有全局分位数**。进一步查下去才发现，两个账号的首字延迟接近 40 秒，
+    其他账号是 6–13 秒 —— 少数账号把 p99 整个拉高了。
+
+    全局 p99 只能告诉你"慢"，不能告诉你"谁慢"。而账号池的调度、权重、下线决策
+    全是按账号做的：不知道是哪个账号在拖，就只能靠用户投诉来定位。
+
+    ## 边界
+
+    * **样本不足的账号不出现**（< `min_samples`）。一个只有 3 次调用的账号算出来的
+      p99 就是那 3 次里最大的一个，把它画到图上等于制造结论。
+    * **最多导出 `max_accounts` 个**（按 p99 从慢到快），防止账号数量增长时
+      序列基数失控 —— 指标是用来盯趋势的，不是用来替代数据库查询的。
+    * 读失败返回 `None`（指标端点不能因此 500），并且**不缓存失败**：下一次抓取重试。
+    """
+    now_mono = time.monotonic()
+    cached = _ACCOUNT_TTFT_CACHE['value']
+    if cached is not None and 0 <= now_mono - _ACCOUNT_TTFT_CACHE['at'] <= 60:
+        return cached
+    try:
+        rows = db.query(
+            'SELECT account, first_token_ms AS v FROM request_logs '
+            'WHERE ts > ? AND first_token_ms IS NOT NULL '
+            "AND account IS NOT NULL AND account <> ''",
+            (int(time.time()) - window_seconds,))
+    except Exception:      # noqa: BLE001
+        _ACCOUNT_TTFT_CACHE.update(at=now_mono, value=None)
+        return None
+    buckets: dict[str, list[int]] = {}
+    for row in rows:
+        try:
+            buckets.setdefault(str(row['account']), []).append(int(row['v']))
+        except (TypeError, ValueError):
+            continue
+    out: list[dict] = []
+    for name, values in buckets.items():
+        if len(values) < min_samples:
+            continue
+        values.sort()
+        last = len(values) - 1
+        pick = lambda q, v=values, last=last: v[min(last, int(len(v) * q))]  # noqa: E731
+        out.append({'account': name, 'samples': len(values),
+                    'p50': pick(0.50), 'p95': pick(0.95), 'p99': pick(0.99),
+                    'max': values[-1]})
+    # 慢的排前面：看板第一眼看到的就是要处理的账号。
+    out.sort(key=lambda r: (-r['p99'], r['account']))
+    if len(out) > max_accounts:
+        out = out[:max_accounts]
+    _ACCOUNT_TTFT_CACHE.update(at=now_mono, value=out)
+    return out
+
+
 @app.get('/metrics')
 def prometheus_metrics(request: Request):
     from .metricsauth import require_metrics
@@ -1320,6 +1392,31 @@ def prometheus_metrics(request: Request):
             _m('workbuddy_context_max_tokens', 'gauge',
                'Largest prompt-token count in the last hour. Grows steadily in a '
                'long dialogue; that is the signal worth watching.', _ctx['max'])
+    # 按账号的首字延迟。
+    #
+    # 全局 p99 只能说"慢"，说不了"谁慢"。2026-11-15 那次排障里，两个账号的首字延迟
+    # 接近 40 秒、其他账号 6–13 秒 —— 少数账号把整体长尾整个拉高，而调度、权重、
+    # 下线全是按账号做的决策。没有这条序列，就只能等用户投诉来定位。
+    #
+    # 只在样本足够的账号上出数（见 `_account_ttft` 的边界说明），并且账号名单变化时
+    # 序列会自然消失 —— 这是 gauge，不是计数器，不需要清零逻辑。
+    _acct = _account_ttft()
+    if _acct:
+        if not any(x.startswith('# HELP workbuddy_account_ttft_ms ') for x in lines):
+            lines.append('# HELP workbuddy_account_ttft_ms Time to first token in '
+                         'milliseconds over the last hour, per account. Accounts with '
+                         'too few samples are omitted on purpose: they would only '
+                         'produce a "quantile" that is really just their largest value. '
+                         'A few slow accounts raise the global p99 without being '
+                         'visible in it.')
+            lines.append('# TYPE workbuddy_account_ttft_ms gauge')
+        for _row in _acct:
+            _label = _prom_label(_row['account'])
+            lines.append('workbuddy_account_ttft_samples{account="%s"} %d'
+                         % (_label, _row['samples']))
+            for _q, _key in (('0.50', 'p50'), ('0.95', 'p95'), ('0.99', 'p99')):
+                lines.append('workbuddy_account_ttft_ms{account="%s",quantile="%s"} %d'
+                             % (_label, _q, _row[_key]))
     # 上游等待时间的转发次数。
     #
     # 这个能力依赖外部条件 —— 上游得先限流。实现当天查了两次日志都是零，
