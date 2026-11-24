@@ -16,6 +16,19 @@ export function portalUsernameProblem(value: string): string | null {
 
 export const PORTAL_PASSWORD_HINT_KEY = 'portal.members.passwordHint';
 
+/**
+ * 服务端拒绝创建用户时把焦点落到哪个输入框。
+ *
+ * 后端只回一句中文原因，没有机器可读的错误码，所以只能按关键词分派。放在这里
+ * 而不是组件里，是因为组件要能被「除注释外无汉字」这条守卫覆盖 —— 这不是界面
+ * 文案，不能走翻译，但也确实需要认出中文。
+ */
+export function portalFieldForError(message: string): 'password' | 'username' | '' {
+  if (message.includes('密码')) return 'password';
+  if (message.includes('用户名')) return 'username';
+  return '';
+}
+
 export function filterPortalMembers<T extends {username: string; enabled: number}>(
   members: T[], query: string, status: string,
 ): T[] {

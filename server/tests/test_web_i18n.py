@@ -378,14 +378,16 @@ class WebKeyUsageTest(unittest.TestCase):
                     + ''.join(hits[:20]))
 
     def test_members_dialogs_have_no_hardcoded_text(self) -> None:
-        """成员管理的密码重置 / 赠送积分对话框同样不许写死中文。
+        """成员管理的操作界面同样不许写死中文。
 
-        这两块是管理员用的，海外管理员一样要看懂。校验类提示语已经从纯函数里
-        改成返回文案键（`portal.members.err*`），所以源码里再出现汉字就是漏了。
-        成员列表主页与新建用户对话框尚未改完，等它们也清零后再纳入。
+        这几块都是管理员用的，海外管理员一样要看懂。校验类提示语已经从纯函数里
+        改成返回文案键（`portal.members.err*`），按中文关键词决定焦点的逻辑也
+        收进了 lib，所以源码里再出现汉字就是漏了。成员列表主页与钱包操作页
+        尚未改完，等它们也清零后再纳入。
         """
         members = _ROOT / 'web' / 'app' / '(main)' / 'members'
-        for name in ('PasswordDialog.tsx', 'BonusDialog.tsx'):
+        for name in ('PasswordDialog.tsx', 'BonusDialog.tsx',
+                     'CreateMemberDialog.tsx', 'RegistrationInvites.tsx'):
             with self.subTest(page=name):
                 path = members / name
                 self.assertTrue(path.is_file(), f'{name} 不存在')

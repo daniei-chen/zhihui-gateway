@@ -9,7 +9,7 @@ const code = ts.transpileModule(fs.readFileSync(new URL('./portal-members.ts', i
 }).outputText;
 const result = {exports: {}};
 vm.runInNewContext(code, {module: result, exports: result.exports});
-const {passwordCharacters, portalPasswordLengthProblem, portalUsernameProblem, filterPortalMembers} = result.exports;
+const {passwordCharacters, portalFieldForError, portalPasswordLengthProblem, portalUsernameProblem, filterPortalMembers} = result.exports;
 
 test('portal character count matches backend without trimming or normalizing secrets', () => {
   for (const value of ['07392641', 'D7x!p9Q2', '  raw  8', '\u{1f680}'.repeat(7) + 'X', 'xy'.repeat(64)]) {
@@ -28,6 +28,16 @@ test('portal username checks match creation and search does not mutate the membe
   assert.deepEqual(Array.from(filterPortalMembers(users, '', 'disabled')), [users[1]]);
   assert.deepEqual(Array.from(filterPortalMembers(users, 'bob', 'enabled')), []);
   assert.equal(users.length, 2);
+});
+
+test('server rejection reason decides which field is marked without translating the message', () => {
+  // 后端只回一句中文原因、没有错误码，所以分派必须认中文。这条测试固定住
+  // 「认的是关键词、不是整句措辞」——后端换句话只要还带关键词就仍然分派正确。
+  assert.equal(portalFieldForError('密码过于常见，请换一个'), 'password');
+  assert.equal(portalFieldForError('这个密码不符合要求'), 'password');
+  assert.equal(portalFieldForError('用户名已存在'), 'username');
+  assert.equal(portalFieldForError('服务器内部错误'), '');
+  assert.equal(portalFieldForError(''), '');
 });
 
 test('user management is primary and wallet exceptions load only in their tab', () => {

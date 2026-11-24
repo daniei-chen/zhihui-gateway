@@ -760,7 +760,7 @@ test('create user keeps raw password and guards immediate duplicate submissions'
   pending.resolve({id: 'synthetic', username: 'local-user'});
   await flush();
   assert.equal(refreshed, 1);
-  assert.match(JSON.stringify(f.render()), /用户已开通/);
+  assert.match(JSON.stringify(f.render()), /portal\.members\.created/);
   assert.doesNotMatch(JSON.stringify(f.render()), /  raw  8/);
   assert.equal(f.nodes().filter(node => node.type === 'input').length, 0);
 });
@@ -788,8 +788,8 @@ test('creation remains successful when following user-list refresh fails', async
   f.form().props.onSubmit({preventDefault() {}});
   await flush();
   assert.equal(calls, 1);
-  assert.match(JSON.stringify(f.render()), /用户创建成功，但列表刷新失败/);
-  assert.doesNotMatch(JSON.stringify(f.render()), /确认开通用户/);
+  assert.match(JSON.stringify(f.render()), /portal\.members\.createdRefreshFailed/);
+  assert.doesNotMatch(JSON.stringify(f.render()), /portal\.members\.createSubmit/);
 });
 
 test('creation cannot dismiss while the request is pending', async () => {
@@ -814,7 +814,7 @@ test('creation confirmation waits for its refresh before allowing completion', a
   f.input('username').props.onChange({target: {value: 'local-user'}});
   f.input('password').props.onChange({target: {value: 'D7x!p9Q2'}});
   f.form().props.onSubmit({preventDefault() {}}); await flush();
-  const finish = () => f.nodes().find(node => node.type === 'button' && node.props.children === '完成');
+  const finish = () => f.nodes().find(node => node.type === 'button' && node.props.children === 'portal.members.finish');
   assert.equal(finish().props.disabled, true);
   refresh.resolve(); await flush(); assert.equal(finish().props.disabled, false);
 });
