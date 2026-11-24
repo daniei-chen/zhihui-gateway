@@ -129,4 +129,19 @@ location ~ ^/(dashboard|accounts|tasks|keys|models|playground|stats|logs|traffic
 判据是：中继停掉时推理请求会失败，恢复后立刻正常；或对比 `curl` 直连 `7866`
 与走域名两者响应体相同、而把路由文件切到未监听的后端时只有走域名的那一侧失败。
 
+### 顺序已经固化成脚本
+
+上面第三步的顺序（先部署、再重启中继、最后重启网关）靠人记很容易颠倒，
+所以 `rollout-rolling.sh` 把它写死了，并自己统计重启窗口里的 5xx：
+
+```bash
+sudo ./rollout-rolling.sh --check          # 只体检，不动任何东西
+sudo ./rollout-rolling.sh 1.5.59           # 常态发布（中继代码没变）
+sudo ./rollout-rolling.sh 1.5.59 --relay-changed   # 中继代码也变了
+```
+
+退出码 0 才是真的零中断；2 表示已上线但窗口内仍有 5xx。默认不重启中继是
+有意的：中继重启那 1-2 秒是它唯一会打断请求的地方，而中继代码很少变，所以
+必须显式声明 `--relay-changed`，避免顺手把它重启掉。
+
 
