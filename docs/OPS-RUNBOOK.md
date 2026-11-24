@@ -50,7 +50,11 @@ sudo systemctl restart workbuddy-web
 sleep 12 && curl -s http://127.0.0.1:7866/api/release
 
 # 4b) 发布控制台（**别手工切 symlink**，见下方陷阱）
-sudo deploy/publish-console.sh --web /tmp/webout-XYZ.tar.gz --version vX.Y.Z
+#     用 bash 显式调用：v1.5.47 及更早的包里，这个脚本是 0644（git 里漏了可执行位），
+#     直接 ./ 调用会 permission denied。git 模式已在 v1.5.47 之后改为 100755，
+#     下一版起可以直接 sudo deploy/publish-console.sh。
+sudo bash /opt/workbuddy-manager/releases/current/deploy/publish-console.sh \
+    --web /tmp/webout-XYZ.tar.gz --version vX.Y.Z
 ```
 
 ### 判据
