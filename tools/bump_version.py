@@ -87,6 +87,7 @@ def _git(*args: str) -> str:
 
 def sync_provenance(version: str) -> int:
     data = json.loads(PROVENANCE.read_text(encoding='utf-8'))
+    previous_version = str(data.get('version') or '')
     changed: list[str] = []
     missing: list[str] = []
     files = data.get('reviewed_patch_files') or {}
@@ -120,20 +121,24 @@ def sync_provenance(version: str) -> int:
         return 1
     head = _git('rev-parse', 'HEAD')
     previous = data.get('source_commit')
-    if previous != head:
-        data['source_commit'] = head
-        print(f'  source_commit: {str(previous)[:12]} → {head[:12]}')
-    if str(data.get('base_release') or '') != '':
-        # 基线 = 上一个已发布版本；版本号变了就把它记成上一版。
-        if str(data['base_release']) != f'v{version}':
-            base_tag = _git('describe', '--tags', '--abbrev=0', 'HEAD~1') \
-                if _git('rev-list', '--count', 'HEAD') != '1' else ''
-            if base_tag and base_tag != f'v{version}':
-                data['base_release'] = base_tag
-                try:
-                    data['base_commit'] = _git('rev-parse', f'{base_tag}^{{commit}}')
-                except Exception:  # noqa: BLE001
-                    pass
+    # **只在改版本号时**写 source_commit / base_*。
+    #
+    # 原因是结构性的事实：`source_commit` 说的是「将要被打成包的那个提交」，而它
+    # 自己就在包里 —— 一旦锁定到打 tag 的提交，后续任何一次元数据提交都会让
+    # 「HEAD ≠ 已发布提交」，跟着 HEAD 走就成了永远差一个提交的追逐。
+    # 所以：升版本时锁定当时 HEAD（= 随后要打 tag 的提交），之后不再自作主张。
+    if previous_version != version:
+        if previous != head:
+            data['source_commit'] = head
+            print(f'  source_commit: {str(previous)[:12]} → {head[:12]}')
+        try:
+            base_tag = _git('describe', '--tags', '--abbrev=0',
+                            f'--exclude=v{version}', 'HEAD')
+            data['base_release'] = base_tag
+            data['base_commit'] = _git('rev-parse', f'{base_tag}^{{commit}}')
+            print(f'  基线: {base_tag}')
+        except Exception:  # noqa: BLE001 - 拿不到基线就保持原值
+            print('  ⚠ 找不到上一个 tag，base_release / base_commit 保持原值')
 
     write_json(PROVENANCE, data)
 
