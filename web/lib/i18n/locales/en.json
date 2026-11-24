@@ -2280,5 +2280,52 @@
     "refresh": "Refresh",
     "autoOn": "Auto-refresh: on",
     "autoOff": "Auto-refresh: off"
+  },
+  "portal": {
+    "common": {
+      "username": "Username",
+      "password": "Password",
+      "backToLogin": "Back to sign-in"
+    },
+    "login": {
+      "kicker": "Zhihui · personal workspace",
+      "title": "Sign in to your workspace",
+      "desc": "Account status, credit history and usage records — all in one place.",
+      "registered": "Registration complete. Please sign in with your password.",
+      "usernamePlaceholder": "Enter your username",
+      "passwordPlaceholder": "Enter your password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "submit": "Go to my workspace",
+      "busy": "Signing in…",
+      "register": "Register with an invite code",
+      "help": "Register with a one-time invite code; existing accounts sign in directly. Forgot your password? Contact an administrator.",
+      "featureAuth": "Official QR authorization",
+      "featureCheckin": "Check-in status sync",
+      "featureIsolation": "Private data isolation",
+      "policy": "Daily check-in credits are calculated in batches and stay valid for up to 30 days; existing credits keep their original expiry.",
+      "needBoth": "Please enter both username and password.",
+      "uncertain": "Sign-in result is unconfirmed. Please try again shortly."
+    },
+    "register": {
+      "title": "Create your Zhihui account",
+      "desc": "Use the invite code from your administrator to open your personal workspace.",
+      "preparing": "Preparing secure registration…",
+      "deviceUsed": "This browser has already registered an account. Please sign in directly; contact an administrator if you forgot your password.",
+      "disabled": "Registration is temporarily closed. Please try again later.",
+      "usernamePlaceholder": "3–40 letters, digits, underscores or hyphens",
+      "passwordPlaceholder": "At least 12 characters; avoid common passwords",
+      "confirmation": "Confirm password",
+      "invite": "One-time invite code",
+      "invitePlaceholder": "Get an invite code from your administrator",
+      "submit": "Create account",
+      "busy": "Registering…",
+      "uncertainAction": "Unconfirmed — try signing in",
+      "help": "Each invite code can register only once, and this browser registers one account. Registration does not grant usage credits.",
+      "mismatch": "The two passwords do not match.",
+      "invalid": "Please provide a valid username, a password of at least 12 characters, and an invite code.",
+      "uncertainDetail": "The registration result is unconfirmed. Go back and verify by signing in; do not submit again.",
+      "unavailable": "Registration is unavailable"
+    }
   }
 }

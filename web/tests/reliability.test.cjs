@@ -933,6 +933,7 @@ function portalLoginFixture(login) {
     react: {...h.react, useId: () => 'login-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
     'lucide-react': Object.fromEntries(['ArrowUpRight','CalendarCheck','Eye','EyeOff','ScanLine','ShieldCheck'].map(name => [name,name])),
     '@/components/ui/button': {Button: 'button'}, '@/components/ui/input': {Input: 'input'}, '@/components/ui/label': {Label: 'label'},
+    '@/lib/i18n/provider': {useT: () => key => key},
   });
   const render = () => h.render(() => Login({login}));
   const form = () => descendants(render()).find(node => node.type === 'form');
@@ -955,7 +956,7 @@ test('portal login exposes errors, does not erase rejected input, and rejects em
   let cleared=0;
   const form={elements:{namedItem:()=>({value:''})},reset(){cleared++;}};
   const event={preventDefault(){},currentTarget:form};
-  f.form().props.onSubmit(event); await flush(); assert.match(JSON.stringify(f.render()),/请填写用户名和密码/);
+  f.form().props.onSubmit(event); await flush(); assert.match(JSON.stringify(f.render()),/portal\.login\.needBoth/);
   form.elements.namedItem=()=>({value:'synthetic'});
   f.form().props.onSubmit(event); await flush(); assert.match(JSON.stringify(f.render()),/用户名或密码错误/);
   assert.equal(cleared,0);
@@ -1149,6 +1150,7 @@ function portalRegisterFixture(fetch) {
   const {default:Register}=load('app/portal/PortalRegister.tsx',{
     react:h.react,'react/jsx-runtime':{jsx,jsxs:jsx},'@/lib/portal-api':{portalFetch:fetch,PortalError},
     '@/components/ui/button':{Button:'button'},'@/components/ui/input':{Input:'input'},'@/components/ui/label':{Label:'label'},globals:{AbortController},
+    '@/lib/i18n/provider':{useT:()=>key=>key},
   });
   const props={onRegistered:name=>{registered=name;},onCancel:()=>{cancelled++;}};
   const render=()=>h.render(()=>Register(props));
@@ -1164,7 +1166,7 @@ test('signup server failure and used-device conflict block retries without depen
     });
     f.render();f.h.effects();await flush();f.submit();await flush();f.submit();await flush();
     assert.equal(writes,status===400?2:1);
-    if(status!==400)assert.match(JSON.stringify(f.render()),/结果待确认/);
+    if(status!==400)assert.match(JSON.stringify(f.render()),/portal\.register\.uncertainDetail/);
   }
 });
 
@@ -1195,7 +1197,7 @@ test('uncertain signup never automatically retries and late completion cannot sw
     return {enabled:true,invite_required:true,device_registered:false};
   });
   f.render();f.h.effects();await flush();f.submit();await flush();f.submit();await flush();assert.equal(writes,1);
-  assert.match(JSON.stringify(f.render()),/结果待确认/);
+  assert.match(JSON.stringify(f.render()),/portal\.register\.uncertainDetail/);
   const pending=deferred();const g=portalRegisterFixture(async(path,options={})=>options.method==='POST'?pending.promise:{enabled:true,invite_required:true,device_registered:false});
   g.render();g.h.effects();await flush();g.submit();g.h.unmount();pending.resolve({registered:true,username:'late'});await flush();assert.equal(g.registered(),'');
 });

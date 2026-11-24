@@ -2002,5 +2002,52 @@
     "refresh": "刷新",
     "autoOn": "自动刷新：开",
     "autoOff": "自动刷新：关"
+  },
+  "portal": {
+    "common": {
+      "username": "用户名",
+      "password": "登录密码",
+      "backToLogin": "返回用户登录"
+    },
+    "login": {
+      "kicker": "智汇 · 个人工作台",
+      "title": "登录用户工作台",
+      "desc": "账号状态、积分明细和调用记录，都在这里。",
+      "registered": "注册成功，请输入密码登录。",
+      "usernamePlaceholder": "输入你的用户名",
+      "passwordPlaceholder": "输入你的登录密码",
+      "showPassword": "显示密码",
+      "hidePassword": "隐藏密码",
+      "submit": "进入我的工作台",
+      "busy": "正在登录…",
+      "register": "使用邀请码注册账号",
+      "help": "使用一次性邀请码注册；已有账号直接登录，忘记密码请联系管理员。",
+      "featureAuth": "官方扫码授权",
+      "featureCheckin": "签到状态同步",
+      "featureIsolation": "个人数据隔离",
+      "policy": "每日签到积分逐批计算，最长 30 天有效；已有积分保留原到期时间。",
+      "needBoth": "请填写用户名和密码。",
+      "uncertain": "登录结果待确认，请稍后重试。"
+    },
+    "register": {
+      "title": "创建你的智汇账号",
+      "desc": "使用管理员提供的邀请码，开启你的个人工作台。",
+      "preparing": "正在准备安全注册…",
+      "deviceUsed": "此浏览器已注册过账号，请直接登录；忘记密码请联系管理员。",
+      "disabled": "注册暂时关闭，请稍后再试。",
+      "usernamePlaceholder": "3–40位字母、数字、下划线或短横线",
+      "passwordPlaceholder": "至少12位，避免使用常见密码",
+      "confirmation": "确认密码",
+      "invite": "一次性邀请码",
+      "invitePlaceholder": "向管理员获取邀请码",
+      "submit": "注册账号",
+      "busy": "正在注册…",
+      "uncertainAction": "结果待确认，请尝试登录",
+      "help": "每个邀请码仅能成功注册一次；本浏览器仅登记一个账号。注册不会自动获得调用额度。",
+      "mismatch": "两次密码不一致。",
+      "invalid": "请填写有效用户名、至少12位密码和邀请码。",
+      "uncertainDetail": "注册结果待确认，请返回用户登录核对，不要重复提交。",
+      "unavailable": "注册暂不可用"
+    }
   }
 }

@@ -354,6 +354,27 @@ class WebKeyUsageTest(unittest.TestCase):
                 self.assertEqual(missing, {},
                                  f'{name} 有 {len(missing)} 个键在字典里不存在：{detail}')
 
+    def test_portal_auth_pages_have_no_hardcoded_text(self) -> None:
+        """门户登录 / 注册页的文案必须全部走 i18n，注释除外。
+
+        `/portal` 与 `/members` 曾是全站唯一没有 i18n 的模块（其余 47 个命名空间
+        都翻译好了），海外用户点进门户页看到整页中文。登录 / 注册两页已经改完，
+        这里锁住不让它退回去 —— 除注释外再出现汉字，就是又漏了 t()。
+        """
+        portal = _ROOT / 'web' / 'app' / 'portal'
+        for name in ('PortalLogin.tsx', 'PortalRegister.tsx'):
+            with self.subTest(page=name):
+                path = portal / name
+                self.assertTrue(path.is_file(), f'{name} 不存在')
+                text = path.read_text(encoding='utf-8')
+                text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+                text = re.sub(r'//[^\n]*', '', text)
+                hits = _HAN.findall(text)
+                self.assertEqual(
+                    hits, [],
+                    f'{name} 里还有 {len(hits)} 处硬编码中文（应改走 t()）：'
+                    + ''.join(hits[:20]))
+
 
 class WebPhraseTest(unittest.TestCase):
     """短语表（gettext 风格，键为中文源文）的结构守卫。
