@@ -22,6 +22,16 @@ HOP = {b'connection', b'proxy-connection', b'keep-alive', b'transfer-encoding',
 INFERENCE_PATHS = frozenset({'/v1/chat/completions', '/v2/chat/completions',
     '/v1/responses', '/responses', '/v1/messages', '/v1/messages/count_tokens', '/v1/models'})
 
+# 部署空窗重试：`systemctl restart` 要停旧进程、起新解释器、校验整份发布签名、
+# 再初始化应用，实测约 6 秒。这段时间里 connect 直接被拒。此时请求还没发出去、
+# 上游也没见过它，所以重试是安全的 —— 不会重复计费，也不会重放一条已经开始的流。
+# 4 次尝试累计等待 9 秒，正好盖住空窗并留有余量。
+STARTUP_RETRIES = 4
+STARTUP_RETRY_DELAY = 1.5
+# 重试要求请求体可重放，所以先整块读进内存。现实里的推理请求体只有几十 KB
+# （对话 + 工具定义），这个上限是防止有人把 relay 当文件上传口。
+MAX_BUFFERED_BODY = 16 * 1024 * 1024
+
 
 def end_to_end(headers):
     headers = [(key.lower(), value) for key, value in headers]
@@ -104,6 +114,45 @@ class StreamingRelay:
         self.epoch, self.target = data['epoch'], data['target']
         return self.target
 
+    async def _buffer_body(self, receive):
+        """把请求体读进内存，让重试可以重放它。
+
+        代价是失去流式上传能力，但 relay 只转发 JSON 推理请求，本来就没有流式
+        上传的用法；换来的是部署空窗期可以安全重试。
+        """
+        chunks, total = [], 0
+        while True:
+            event = await receive()
+            if event['type'] == 'http.disconnect':
+                raise asyncio.CancelledError()
+            if event['type'] != 'http.request':
+                continue
+            chunk = event.get('body') or b''
+            total += len(chunk)
+            if total > MAX_BUFFERED_BODY:
+                raise RouteError('relay_body_too_large')
+            if chunk:
+                chunks.append(chunk)
+            if not event.get('more_body', False):
+                return b''.join(chunks)
+
+    async def _send_with_startup_retry(self, build):
+        """后端正在重启时等它回来，而不是直接把失败甩给调用方。
+
+        只有 connect 阶段的失败才重试：连接都没建立，说明上游一个字节都没收到。
+        一旦进入读取阶段就不再重试 —— 那时可能已经在生成答案并计费了。
+        """
+        last = None
+        for attempt in range(STARTUP_RETRIES):
+            try:
+                return await self.client.send(build(), stream=True)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                last = error
+                if attempt + 1 >= STARTUP_RETRIES:
+                    break
+                await asyncio.sleep(STARTUP_RETRY_DELAY * (attempt + 1))
+        raise last
+
     def snapshot(self):
         try:
             self.route()
@@ -166,34 +215,25 @@ class StreamingRelay:
         # HTTPX URL.copy_with preserves the declared authority even for // paths.
         url = self.backends[target].copy_with(raw_path=scope.get('raw_path', scope['path'].encode()),
                                               query=scope.get('query_string', b''))
+        try:
+            payload = await self._buffer_body(receive)
+        except RouteError as error:
+            return await json_response(send, 413, str(error))
         body_done = asyncio.Event()
+        body_done.set()
         disconnected = False
         response_started = False
         self.active[target] += 1
         self.accepted += 1
 
-        async def incoming_body():
-            nonlocal disconnected
-            while True:
-                event = await receive()
-                if event['type'] == 'http.disconnect':
-                    disconnected = True
-                    raise asyncio.CancelledError()
-                if event['type'] != 'http.request':
-                    continue
-                if event.get('body'):
-                    yield event['body']
-                if not event.get('more_body', False):
-                    body_done.set()
-                    return
-
         async def forward():
             nonlocal response_started
             response = None
             try:
-                request = self.client.build_request(scope.get('method', 'GET'), url,
-                    headers=headers, content=incoming_body())
-                response = await self.client.send(request, stream=True)
+                def build():
+                    return self.client.build_request(scope.get('method', 'GET'), url,
+                        headers=headers, content=payload)
+                response = await self._send_with_startup_retry(build)
                 response_started = True
                 await send({'type': 'http.response.start', 'status': response.status_code,
                             'headers': end_to_end(response.headers.raw)})

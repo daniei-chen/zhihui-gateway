@@ -107,6 +107,7 @@ MODULES = (
     "server.tests.test_cohort_rollout",
     "server.tests.test_asset_lifecycle",
     "server.tests.test_rolling_relay",
+    "server.tests.test_v1258_relay_startup_retry",
     "server.tests.test_qoder_rootless_contract",
     "server.tests.test_managed_stage_helper",
     "server.tests.test_audit_release_signer",

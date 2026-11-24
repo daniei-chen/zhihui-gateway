@@ -85,3 +85,48 @@ location ~ ^/(dashboard|accounts|tasks|keys|models|playground|stats|logs|traffic
 两者的 `try_files` 互相干扰，且把控制台产物暴露在任意路径下。白名单多一点维护
 成本，但边界清楚。
 
+---
+
+## 三、推理路径走滚动中继（**发布不再打断在途调用**）
+
+### 它解决的问题
+
+`systemctl restart` 实测有约 6 秒空窗：停旧进程 → 起新解释器 → 校验整份发布
+签名 → 初始化应用。这段时间从 nginx 转发过来的推理请求 connect 直接被拒，
+2026-11-24 19:19 那次部署因此丢掉了 4 个真实调用（503 + 三条 502）。
+
+滚动中继（`server/relay_app.py`，listen `127.0.0.1:7867`）按签名路由文件决定把
+新请求转到哪个后端实例，已开始的流留原实例不动。中继自己还会在 connect 失败时
+等后端回来（4 次尝试、累计 9 秒），正好盖住那 6 秒空窗。
+
+### 怎么用
+
+把 `zh-relay-inference.location.conf` 放到 `/etc/nginx/snippets/`，然后在站点的
+`server {}` 里、`location /v1/ {` 之前插入（正则 location 优先级高于前缀，位置
+其实不敏感，放前面更好读）：
+
+```nginx
+    location ~ ^/(v1/chat/completions|v2/chat/completions|v1/responses|v1/messages|v1/messages/count_tokens|v1/models|responses)$ {
+        include /etc/nginx/snippets/zh-relay-inference.location.conf;
+    }
+```
+
+然后 `nginx -t && systemctl reload nginx`。
+
+### 三个必须注意的点
+
+1. **`$zhihui_relay_upstream` 必须已定义**（`conf.d/zhihui-relay-upstream.conf`
+   里 `map $host` 到 `http://127.0.0.1:7867`）。没有它 `nginx -t` 会报
+   `unknown "zhihui_relay_upstream" variable`。
+2. **中继只认白名单里的路径**，白名单外的 `/v1/*`（如 `embeddings`）会落到
+   站点的 `location /v1/` 直连，这是设计如此，不是漏配。
+3. **顺序很重要**：先部署新版本、再重启中继、最后接上这两段。若先接上中继而
+   中继还跑着旧代码，发布仍会 502 —— 中继没有重试就只是多了一跳。
+
+### 怎么确认真的走了中继
+
+中继与后端在线路上的行为一致（同样的 401/404），看状态码区分不出来。可信的
+判据是：中继停掉时推理请求会失败，恢复后立刻正常；或对比 `curl` 直连 `7866`
+与走域名两者响应体相同、而把路由文件切到未监听的后端时只有走域名的那一侧失败。
+
+
