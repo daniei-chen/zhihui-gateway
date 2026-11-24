@@ -248,3 +248,49 @@ sudo tar -tzf "$F" | grep -E 'manager\.db$'   # 两份成对数据库都要在
 **这条只是「确认备份没坏」，不是还原演练**，可以随时做。真实还原不做（已定）。
 
 
+
+---
+
+## 9. 运维脚本变更记录（不随发行版发布）
+
+宿主机上有两个巡检脚本，**它们不在发行包里**（ops/ 目录不进 elease.py 的
+stage 闭包），所以改动要在仓库留档 + 手工同步到宿主机，否则重装机器就回到旧版。
+
+| 宿主机路径 | 仓库副本 | 谁在跑 |
+|---|---|---|
+| `/opt/notify/healthcheck.py` | `ops/healthcheck.py` | `healthcheck.timer`（5 分钟） |
+| `/usr/local/bin/wb-gateway-alert.py` | `ops/wb-gateway-alert.py` | `wb-gateway-alert.timer`（5 分钟） |
+
+同步方式（改完仓库文件后）：
+
+```
+scp ops/healthcheck.py   <host>:/tmp/hc.py
+scp ops/wb-gateway-alert.py <host>:/tmp/ga.py
+sudo cp -p /opt/notify/healthcheck.py /opt/notify/healthcheck.py.bak-$(date +%Y%m%d)
+sudo sed -i 's/\r$//' /tmp/hc.py /tmp/ga.py          # Windows 检出是 CRLF，shebang 会被撑坏
+sudo install -m 0755 -o root -g root /tmp/hc.py /opt/notify/healthcheck.py
+sudo install -m 0755 -o root -g root /tmp/ga.py /usr/local/bin/wb-gateway-alert.py
+sudo /opt/notify/healthcheck.py; echo exit=False          # healthcheck 应 exit=0
+sudo systemctl start wb-gateway-alert.service          # 看 journalctl 输出是否 ok
+```
+
+### 2026-11-24 的三处改动
+
+1. **healthcheck.py 摘掉三个已下线服务**（`zhihui-qoder:8790`、`qoder2-engine:8799`、
+   `zhihui-trae:8080`）。它们 2026-10-28 三平台合并后就不存在了，导致脚本**每 5 分钟
+   exit 1**、`systemctl status` 永远 failed。危害不是日志噪声，而是**所有基于 unit 状态
+   或 exit code 的告警全部失效** —— 真出事时没人能从"一直红着"里看出新红。
+   顺带补了磁盘水位（≥85% 记录、≥92% 判失败）与网关直连探针（`7866/readyz`）。
+
+2. **wb-gateway-alert.py 修掉 R1 探针的两个失效点**。原来 `docker inspect
+   workbuddy2api` 写死了容器名（实际叫 `zhihui-workbuddy`），探针又带一个从凭据文件里
+   抠出来的 key 打反代口 `7864/v1/models`（该 key 已失效，稳定返回 401）。两处共同导致
+   R1 判定"网关连不上"，而网关本体 `readyz` 一直是 200 —— 实测因此发出过一封误报
+   CRITICAL 邮件，1 分钟后自动补发"已恢复"。现在容器名按前缀现查，探针改直连
+   **免鉴权的 `7866/readyz`**。
+
+3. **wb-gateway-alert.py 新增 R12：控制台静态资源可达性**。页面 200 不等于能用：
+   页内 JS/CSS 由 nginx 的**静态池**（另一个目录）提供，发布时只切页面目录、没同步池子，
+   就是"能开一半再崩"（2026-11-24 白屏事故，27 次 404，当时巡检报的是
+   `ok(probe=200 svc=active/healthy)`）。R12 抓 `/dashboard/` 页内的
+   `/_next/static` 链接抽 6 个逐个校验，全坏判 CRITICAL、部分坏判 WARN。

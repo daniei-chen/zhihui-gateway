@@ -139,6 +139,7 @@ MODULES = (
     "server.tests.test_async_blocking_db",
     "server.tests.test_socket_activation",
     "server.tests.test_ops_disk_watermark",
+    "server.tests.test_ops_console_static",
 )
 
 

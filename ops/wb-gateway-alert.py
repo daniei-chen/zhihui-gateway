@@ -20,10 +20,12 @@ from __future__ import annotations
 import json
 import html
 import os
+import re
 import socket
 import sys
 import smtplib
 import subprocess
+import urllib.error
 import urllib.request
 from datetime import datetime
 from email.header import Header
@@ -44,6 +46,10 @@ DATA_DIR = os.environ.get('WB_DATA_DIR', '/opt/workbuddy-manager/data')
 #: 磁盘水位阈值（%）：先黄后红。留出的余量要够「排查 + 清理」的时间。
 DISK_WARN_PCT = 85
 DISK_CRIT_PCT = 92
+#: 控制台页面与静态资源（R12）。取 `/dashboard/` 是因为它一定带 app 级 layout chunk。
+CONSOLE_PAGE = os.environ.get('WB_CONSOLE_PAGE', 'https://zhihui.kaogong.art/dashboard/')
+#: 每次只抽这么多个静态资源。够发现"整批 404"，又不至于让 5 分钟一次的巡检变重。
+CONSOLE_ASSET_LIMIT = 6
 # 每条规则各自的冷却（分钟）；缺省 COOLDOWN_MIN。R6=异地备份未配，属长期状态，24h 提一次。
 RULE_COOLDOWN_MIN = {'R6': 1440, 'R5': 360, 'R11': 360}
 
@@ -134,10 +140,76 @@ def _gateway_key() -> str:
 
 
 # ---------------------------------------------------------------- 检测规则
+def console_static_health() -> dict:
+    """控制台页内静态资源是否真的能取到（R12）。
+
+    为什么单独一条规则：2026-11-24 上线 v1.5.46 时，页面 HTML 换了但新构建的
+    `_next/static` 没同步进 nginx 的静态池，于是「页面能开、点进去白屏」，报错文案
+    还写着"页面资源已更新，刷新一次即可"（刷新没用，服务端确实没那个文件）。
+    那段时间本脚本的结论是 `ok(无告警: probe=200 svc=active/healthy)` ——
+    **探针 200 只证明接口活着，完全不能证明控制台能用**。
+
+    只在"页面本身取到了、但页内资源 404"时才算问题：
+    页面都取不到说明是更大的故障（R1/R3 会报），这里不重复喊第二遍。
+    """
+    out = {'page': '', 'checked': 0, 'bad': []}
+    try:
+        req = urllib.request.Request(CONSOLE_PAGE, headers={'User-Agent': 'wb-gateway-alert/1'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            out['page'] = str(resp.status)
+            if resp.status != 200:
+                return out
+            body = resp.read().decode('utf-8', 'replace')
+    except Exception:  # noqa: BLE001
+        return out
+    refs: list[str] = []
+    for ref in re.findall(r'/_next/static/[^"\']+?\.(?:js|css)', body):
+        if ref not in refs:
+            refs.append(ref)
+    # app 级 layout chunk 优先：白屏炸的就是它（页面骨架一挂，整页都空）。
+    refs.sort(key=lambda p: 0 if 'layout' in p else 1)
+    for ref in refs[:CONSOLE_ASSET_LIMIT]:
+        out['checked'] += 1
+        code = 0
+        try:
+            with urllib.request.urlopen(urllib.request.Request(
+                    CONSOLE_PAGE.split('/dashboard/')[0] + ref,
+                    headers={'User-Agent': 'wb-gateway-alert/1'}), timeout=15) as resp:
+                code = resp.status
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+        except Exception:  # noqa: BLE001
+            code = 0
+        if code != 200:
+            out['bad'].append(f'{code} {ref}')
+    return out
+
+
+#: 上游容器名。历史上有过 `workbuddy2api` 与 `zhihui-workbuddy` 两个名字，
+#: 写死任意一个都会在某次改名后**永久误报 R1**（探针拿不到 healthy 就判"网关连不上"）。
+#: 所以这里按前缀现查，查不到才退回默认值。
+CONTAINER_PREFIX = os.environ.get('WB_UPSTREAM_CONTAINER', 'zhihui-workbuddy')
+
+
+def _container_name() -> str:
+    """实际在跑的上游容器名；查不到就返回配置的名字，让下游照常失败。"""
+    try:
+        out = subprocess.run(
+            ['docker', 'ps', '--filter', f'name={CONTAINER_PREFIX}',
+             '--format', '{{.Names}}'], capture_output=True, text=True, timeout=20).stdout.strip()
+        for name in out.splitlines():
+            if name.strip():
+                return name.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return CONTAINER_PREFIX
+
+
 def collect() -> dict:
     # docker logs 的容器 stderr（Go 的 log.Printf：attempt timeout / soft_rate / 冷却 等）
     # 只取 .stdout 会整片丢掉——实测 12 分钟窗口 stdout 18 行 / 合并后 108 行。
-    container_logs = sh(f'docker logs --since {WINDOW_MIN + 1}m workbuddy2api 2>&1', 90)
+    container = _container_name()
+    container_logs = sh(f'docker logs --since {WINDOW_MIN + 1}m {container} 2>&1', 90)
     manager_journal = sh(
         'journalctl -u workbuddy-web --since "-12 min" --no-pager -q 2>/dev/null')
     service = sh('systemctl is-active workbuddy-web').strip()
@@ -147,14 +219,18 @@ def collect() -> dict:
         watchdog = f'{_wd}s' if _wd else '配置值'
     except Exception:  # noqa: BLE001
         watchdog = '配置值'
-    health = sh("docker inspect workbuddy2api --format '{{.State.Health.Status}}'").strip()
-    cmd = ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '10']
-    key = _gateway_key()
-    if key:
-        cmd += ['-H', f'Authorization: Bearer {key}']
-    cmd.append('http://127.0.0.1:7864/v1/models')
-    probe = run(cmd, 15).strip()
+    health = sh(f"docker inspect {container} --format '{{{{.State.Health.Status}}}}'").strip()
+    # 探针走**网关直连 + 免鉴权端点**。
+    #
+    # 2026-11-24 修：原来探的是 nginx 反代（7864）的 `/v1/models` 并带一个从
+    # 凭据文件里抠出来的 key。那个 key 一旦被吊销/轮换，探针就永远 401，而 R1 的
+    # 判定是"探针不以 2 开头 → 网关连不上"，于是**网关明明好好的却每 5 分钟喊一次
+    # 全站故障**（实测发出去过一封 CRITICAL 邮件）。用 `/readyz`：免鉴权、专为探活
+    # 设计、直连 7866 不依赖反代。
+    probe = run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '10',
+                 'http://127.0.0.1:7866/readyz'], 15).strip()
     return {
+        'container': container,
         'timeout_n': container_logs.count('attempt timeout'),
         'soft_rate_n': container_logs.count('soft_rate'),
         # WorkBuddy 风控拒绝（code=11-128「请求被渠道校验拦截」）。
@@ -170,6 +246,7 @@ def collect() -> dict:
         'client': client_errors(WINDOW_MIN + 2),
         'backup': backup_status(),
         'res': collect_resources(),
+        'console_static': console_static_health(),
     }
 
 
@@ -265,11 +342,11 @@ def evaluate(m: dict) -> dict:
         fired['R5'] = ('WARN',
                        f'每日备份已 {bk["age_h"]:.1f} 小时未更新（阈值 26h）。'
                        '检查 /var/log/wb2api-backup.log 与 /root/wb2api-backup-push.sh。')
-    elif bk.get('offsite') is False:
-        fired['R6'] = ('INFO',
-                       '每日备份正常，但**异地副本未配置**（offsite=false）：快照只躺在同一块盘上。'
-                       + (f' 上次失败原因：{bk["error"]}' if bk.get('error') else
-                          ' 配置 /root/backups/workbuddy-recovery/offsite.json 后生效。'))
+    # R6「异地副本未配置」已于 2026-11-24 移除。
+    # 原因：这是**用户已经明确决定不做**的事（"我不进行异地备份也不要还原点"），
+    # 而它每天还会推一条 INFO —— 把自己明知且接受的取舍当成告警反复提醒，只会训练
+    # 人忽略告警。本地备份的时效性仍由 R5 盯着；真要恢复异地备份，从 git 历史取出
+    # 这段 `elif bk.get('offsite') is False` 即可。
     if m['soft_rate_n'] >= 5:
         fired['R4'] = ('INFO',
                        f'上游限流：最近{WINDOW_MIN}分钟 {m["soft_rate_n"]} 次「模型繁忙」429，'
@@ -297,6 +374,20 @@ def evaluate(m: dict) -> dict:
                         '盘写满后账本是**静默**丢失记录，不会报错。'
                         '排查：du -sh /opt/workbuddy-manager/data/* | sort -h | tail；'
                         '可清理的通常是 data/traffic/、旧的 pre-v9-*.db.gz、releases/ 下的旧版本。')
+    # 控制台静态资源（2026-11-24 新增）。页面 200 不等于能用：页内 JS/CSS 是另一处
+    # 目录（nginx 的静态池）提供的，发布时只切页面目录、没同步池子，就是"能开一半再崩"。
+    cs = m.get('console_static') or {}
+    bad = cs.get('bad') or []
+    if bad:
+        checked = cs.get('checked') or len(bad)
+        # 全抽不到 = 控制台基本不可用（页面骨架都加载不了）；部分取不到 = 局部功能会崩。
+        level = 'CRITICAL' if len(bad) >= checked else 'WARN'
+        fired['R12'] = (level,
+                        f"控制台有 {len(bad)}/{checked} 个静态资源取不到（页面本身 {cs.get('page') or '取不到'}）："
+                        + '；'.join(bad[:3])
+                        + '。典型原因是发布控制台时只切了页面目录、没把新的 `_next/static` 同步进 nginx 的静态池，'
+                        '表现为"页面能打开、点进去白屏"，刷新也无效。'
+                        '修复用 `deploy/publish-console.sh`（它会同步静态池并逐个校验）。')
     # WorkBuddy 风控增长（2026-10-22 审计后新增）：11-128 是「请求被渠道校验拦截」，
     # 也是上游识别第三方客户端的直接信号。单请求可能因换路径重试记 2-3 行，
     # 所以阈值取 5 次/窗口；持续越线说明规则变了，需要跟进改写或切备用上游。
