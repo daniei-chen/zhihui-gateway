@@ -79,6 +79,12 @@ def sync_surfaces(version: str) -> int:
     return 0
 
 
+def _git(*args: str) -> str:
+    import subprocess
+    return subprocess.run(['git', *args], cwd=ROOT, capture_output=True,
+                          check=True, timeout=20).stdout.decode().strip()
+
+
 def sync_provenance(version: str) -> int:
     data = json.loads(PROVENANCE.read_text(encoding='utf-8'))
     changed: list[str] = []
@@ -96,6 +102,39 @@ def sync_provenance(version: str) -> int:
     data['reviewed_patch_files'] = files
     data['version'] = version
     data['release_id'] = f'v{version}'
+
+    # `source_commit` 必须指向**真正被打包的那个提交**。
+    #
+    # 这一条曾经是纯手工维护的，结果是公开的 `/api/release` 长期报着一个更早的
+    # 提交：v1.5.44 实际由 `72358a0` 构建，`source_commit` 里写的却是 v1.5.43 的
+    # `76f5b0b`。发布判据（运维手册第 1 节）就是「`source_commit` 必须等于你打的
+    # tag 的完整哈希」—— 一旦它漂了，这条判据要么误报失败，要么被当成噪声忽略，
+    # 两种都比没有更糟。
+    #
+    # 工作区不干净时拒绝写入：那时 HEAD 描述不了将要打包的内容。
+    dirty = _git('status', '--porcelain', '--untracked-files=no')
+    if dirty:
+        print('  ⚠ 工作区有未提交改动，无法确定 source_commit（先提交）：')
+        for line in dirty.splitlines()[:5]:
+            print(f'    {line}')
+        return 1
+    head = _git('rev-parse', 'HEAD')
+    previous = data.get('source_commit')
+    if previous != head:
+        data['source_commit'] = head
+        print(f'  source_commit: {str(previous)[:12]} → {head[:12]}')
+    if str(data.get('base_release') or '') != '':
+        # 基线 = 上一个已发布版本；版本号变了就把它记成上一版。
+        if str(data['base_release']) != f'v{version}':
+            base_tag = _git('describe', '--tags', '--abbrev=0', 'HEAD~1') \
+                if _git('rev-list', '--count', 'HEAD') != '1' else ''
+            if base_tag and base_tag != f'v{version}':
+                data['base_release'] = base_tag
+                try:
+                    data['base_commit'] = _git('rev-parse', f'{base_tag}^{{commit}}')
+                except Exception:  # noqa: BLE001
+                    pass
+
     write_json(PROVENANCE, data)
 
     print(f'  provenance 版本对齐；哈希更新 {len(changed)} 个')
