@@ -377,6 +377,27 @@ class WebKeyUsageTest(unittest.TestCase):
                     f'{name} 里还有 {len(hits)} 处硬编码中文（应改走 t()）：'
                     + ''.join(hits[:20]))
 
+    def test_members_dialogs_have_no_hardcoded_text(self) -> None:
+        """成员管理的密码重置 / 赠送积分对话框同样不许写死中文。
+
+        这两块是管理员用的，海外管理员一样要看懂。校验类提示语已经从纯函数里
+        改成返回文案键（`portal.members.err*`），所以源码里再出现汉字就是漏了。
+        成员列表主页与新建用户对话框尚未改完，等它们也清零后再纳入。
+        """
+        members = _ROOT / 'web' / 'app' / '(main)' / 'members'
+        for name in ('PasswordDialog.tsx', 'BonusDialog.tsx'):
+            with self.subTest(page=name):
+                path = members / name
+                self.assertTrue(path.is_file(), f'{name} 不存在')
+                text = path.read_text(encoding='utf-8')
+                text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+                text = re.sub(r'//[^\n]*', '', text)
+                hits = _HAN.findall(text)
+                self.assertEqual(
+                    hits, [],
+                    f'{name} 里还有 {len(hits)} 处硬编码中文（应改走 t()）：'
+                    + ''.join(hits[:20]))
+
 
 class WebPhraseTest(unittest.TestCase):
     """短语表（gettext 风格，键为中文源文）的结构守卫。

@@ -4,9 +4,11 @@ import {useId, useRef, useState} from 'react';
 import {Check, Eye, EyeOff, ShieldCheck, Sparkles, UserPlus} from 'lucide-react';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/animate-ui/radix/dialog';
 import {PortalError, portalFetch} from '@/lib/portal-api';
-import {passwordCharacters, portalPasswordLengthProblem, portalUsernameProblem, PORTAL_PASSWORD_HINT} from '@/lib/portal-members';
+import {passwordCharacters, portalPasswordLengthProblem, portalUsernameProblem, PORTAL_PASSWORD_HINT_KEY} from '@/lib/portal-members';
+import {useT} from '@/lib/i18n/provider';
 
 export default function CreateMemberDialog({close, saved}: {close: () => void; saved: () => Promise<void>}) {
+  const t = useT();
   const id = useId();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -28,7 +30,7 @@ export default function CreateMemberDialog({close, saved}: {close: () => void; s
     event.preventDefault();
     if (inFlight.current || created) return;
     const problem = portalUsernameProblem(username) || portalPasswordLengthProblem(password);
-    if (problem) { setError(problem); setField(portalUsernameProblem(username) ? 'username' : 'password'); return; }
+    if (problem) { setError(t(problem)); setField(portalUsernameProblem(username) ? 'username' : 'password'); return; }
     inFlight.current = true; setBusy(true); edit();
     try {
       const result = await portalFetch<{id: string; username: string}>('portal-admin/users', {
@@ -67,7 +69,7 @@ export default function CreateMemberDialog({close, saved}: {close: () => void; s
             aria-invalid={field === 'password'} aria-describedby={`${id}-password-hint${field === 'password' ? ` ${id}-error` : ''}`} />
             <button type="button" className="member-password-toggle" disabled={busy} aria-label={visible ? '隐藏初始密码' : '显示初始密码'}
               aria-pressed={visible} onClick={() => setVisible(value => !value)}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button></div>
-          <div className="member-password-meta"><span id={`${id}-password-hint`}>{PORTAL_PASSWORD_HINT}</span><span>{passwordCharacters(password)}/128</span></div>
+          <div className="member-password-meta"><span id={`${id}-password-hint`}>{t(PORTAL_PASSWORD_HINT_KEY)}</span><span>{passwordCharacters(password)}/128</span></div>
           {error && <p id={`${id}-error`} className="portal-error" role="alert">{error}</p>}
           <div className="member-form-assurance"><ShieldCheck size={17} /><span>密码不会以明文保存。用户积分和已有管理员身份不受影响。</span></div>
           <div className="member-dialog-footer"><button type="button" className="portal-button" disabled={busy} onClick={close}>取消</button>

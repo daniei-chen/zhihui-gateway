@@ -735,7 +735,7 @@ function createMemberFixture(fetch, saved = async () => {}) {
     react: {...h.react, useId: () => 'create-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
     'lucide-react': icons, '@/components/animate-ui/radix/dialog': components,
     '@/lib/portal-api': {PortalError, portalFetch: fetch},
-    '@/lib/portal-members': load('lib/portal-members.ts', {}),
+    '@/lib/portal-members': load('lib/portal-members.ts', {}), '@/lib/i18n/provider': {useT: () => key => key},
     globals: {crypto: {getRandomValues(bytes) {bytes.fill(7); return bytes;}}},
   });
   let closed = 0;
@@ -877,7 +877,7 @@ function passwordMemberFixture(fetch, saved = async () => {}) {
   const {default: Password} = load('app/(main)/members/PasswordDialog.tsx', {
     react: {...h.react, useId: () => 'reset-test'}, 'react/jsx-runtime': {jsx, jsxs: jsx},
     '@/components/animate-ui/radix/dialog': components,
-    '@/lib/portal-api': {portalFetch: fetch}, '@/lib/portal-members': load('lib/portal-members.ts', {}),
+    '@/lib/portal-api': {portalFetch: fetch}, '@/lib/portal-members': load('lib/portal-members.ts', {}), '@/lib/i18n/provider': {useT: () => key => key},
   });
   let closed = 0;
   const render = () => h.render(() => Password({user: {id: 'local-user', username: 'local-user'}, close() {closed++;}, saved}));
@@ -898,8 +898,8 @@ test('password reset stays successful and clears secrets when the list refresh f
   f.prepare('  raw  8'); f.form().props.onSubmit({preventDefault() {}}); await flush();
   assert.equal(calls.length, 1);
   assert.deepEqual(JSON.parse(calls[0].options.body), {password: '  raw  8'});
-  assert.match(JSON.stringify(f.render()), /密码已重置，但列表刷新失败/);
-  assert.doesNotMatch(JSON.stringify(f.render()), /  raw  8|确认重置密码/);
+  assert.match(JSON.stringify(f.render()), /portal\.members\.resetDoneRefreshFailed/);
+  assert.doesNotMatch(JSON.stringify(f.render()), /  raw  8|portal.members.resetSubmit/);
   assert.equal(f.inputs().length, 0);
   f.form().props.onSubmit({preventDefault() {}}); await flush(); assert.equal(calls.length, 1);
 });

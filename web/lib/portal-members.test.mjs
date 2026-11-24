@@ -16,8 +16,8 @@ test('portal character count matches backend without trimming or normalizing sec
     assert.equal(portalPasswordLengthProblem(value), null);
   }
   assert.equal(passwordCharacters('\u{1f680}'.repeat(7)), 7);
-  assert.equal(portalPasswordLengthProblem('\u{1f680}'.repeat(7)), '用户登录密码至少 8 位');
-  assert.equal(portalPasswordLengthProblem('x'.repeat(129)), '用户登录密码最多 128 位');
+  assert.equal(portalPasswordLengthProblem('\u{1f680}'.repeat(7)), 'portal.members.errPasswordShort');
+  assert.equal(portalPasswordLengthProblem('x'.repeat(129)), 'portal.members.errPasswordLong');
 });
 
 test('portal username checks match creation and search does not mutate the member list', () => {

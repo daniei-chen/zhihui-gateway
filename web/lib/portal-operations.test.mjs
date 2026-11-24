@@ -37,7 +37,7 @@ test('admin bonus requires exact root identity and retry-stable actual grants, n
   assert.match(page, /isAdmin && me\?\.username === 'admin'/);
   assert.match(dialog, /crypto.randomUUID/);
   assert.match(dialog, /const body = submitted \|\|/);
-  assert.match(dialog, /有效天数（默认30天）/);
+  assert.match(dialog, /portal\.members\.bonusDays/);
   assert.match(portal, /额度已用尽，请联系管理员赠送额度/);
   assert.match(portal, /admin_bonus: '管理员赠送积分'/);
   assert.doesNotMatch(dialog, /localStorage|sessionStorage/);

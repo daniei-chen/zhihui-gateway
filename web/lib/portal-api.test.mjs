@@ -37,7 +37,7 @@ test('request history pages and password reset preserve visible security boundar
   assert.match(requests, /portal\.requests\.pagination/);
   assert.match(requests, /data\?\.page === page \? data : null/);
   assert.match(page, /PasswordDialog/);
-  assert.match(reset, /旧会话和旧调用密钥/);
+  assert.match(reset, /portal\.members\.resetDesc/);
   assert.match(reset, /password === repeat/);
   assert.doesNotMatch(reset, /localStorage|sessionStorage|console\./);
 });
