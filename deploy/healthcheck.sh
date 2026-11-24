@@ -90,13 +90,17 @@ fi
 
 section '磁盘'
 used=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+avail=$(df -h / 2>/dev/null | tail -1 | awk '{print $4}')
 if [ -n "$used" ]; then
+    # 阈值刻意比「审计要求」更早触发（80/90 而非 85/92）：这台机器 59G 根分区
+    # 已用 65%，数据库每天涨十几 MB，等真到 92% 再喊就只剩几小时窗口。
+    # 文案必须带「还剩多少」与「该清什么」，否则看到百分比仍然不知道该动哪里。
     if [ "$used" -lt 80 ]; then
-        pass "根分区已用 ${used}%"
+        pass "根分区已用 ${used}%，剩余 ${avail}"
     elif [ "$used" -lt 90 ]; then
-        note "根分区已用 ${used}%，该清理了"
+        note "根分区已用 ${used}%，剩余 ${avail}；可清理：/opt/workbuddy-manager/releases 与 /var/www/zhihui-console-releases 的旧版本、journalctl --vacuum-size=500M"
     else
-        broken "根分区已用 ${used}%，随时可能写满"
+        broken "根分区已用 ${used}%，剩余 ${avail}，随时可能写满；立即清理旧版本并按需扩容"
     fi
 fi
 journal=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
