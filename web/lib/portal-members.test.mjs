@@ -44,8 +44,8 @@ test('user management is primary and wallet exceptions load only in their tab', 
   const page = fs.readFileSync(new URL('../app/(main)/members/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /useState\('users'\)/);
   assert.match(page, /tab === 'wallet' && <WalletOperations/);
-  assert.match(page, /aria-label="搜索用户名"/);
-  assert.match(page, /aria-label="筛选用户状态"/);
+  assert.match(page, /aria-label=\{t\('portal\.directory\.search'\)\}/);
+  assert.match(page, /aria-label=\{t\('portal\.directory\.statusFilter'\)\}/);
   assert.match(page, /generation === sequence.current/);
   assert.match(page, /<CreateMemberDialog/);
   assert.doesNotMatch(page, /本地候选|未切换线上/);

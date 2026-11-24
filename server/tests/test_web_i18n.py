@@ -388,7 +388,7 @@ class WebKeyUsageTest(unittest.TestCase):
         members = _ROOT / 'web' / 'app' / '(main)' / 'members'
         for name in ('PasswordDialog.tsx', 'BonusDialog.tsx',
                      'CreateMemberDialog.tsx', 'RegistrationInvites.tsx',
-                     'WalletOperations.tsx'):
+                     'WalletOperations.tsx', 'page.tsx'):
             with self.subTest(page=name):
                 path = members / name
                 self.assertTrue(path.is_file(), f'{name} 不存在')

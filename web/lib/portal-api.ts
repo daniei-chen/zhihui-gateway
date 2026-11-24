@@ -116,9 +116,11 @@ export const points = (units: number, scale = 1_000_000) => (units / scale).toLo
 export const portalTime = (seconds: number) => new Date(seconds * 1000).toLocaleString('zh-CN', {
   timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
 });
+/** 签到状态 → 文案键。调用方用 t() 取词，未知状态回落到「今日未签到」。 */
 export function checkinLabel(state: string | null): string {
-  return ({confirmed: '今日已签到', confirmed_uncredited: '已签到 · 积分待核实',
-    running: '签到中', reconciling: '正在核对到账', unknown: '结果待确认', failed: '签到失败 · 可重试'} as Record<string, string>)[state || ''] || '今日未签到';
+  return ({confirmed: 'portal.checkin.confirmed', confirmed_uncredited: 'portal.checkin.confirmedUncredited',
+    running: 'portal.checkin.running', reconciling: 'portal.checkin.reconciling',
+    unknown: 'portal.checkin.unknown', failed: 'portal.checkin.failed'} as Record<string, string>)[state || ''] || 'portal.checkin.none';
 }
 export function canCheckin(account: PortalAccount): boolean {
   return account.status === 'active' && account.initial_state === 'confirmed'

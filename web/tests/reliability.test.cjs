@@ -987,7 +987,7 @@ function portalPageFixture(fetch, extraGlobals = {}) {
     react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'qrcode.react': {QRCodeSVG: 'qr'},
     'lucide-react': {}, '@/lib/portal-api': api, './portal.css': {},
     './PortalKeys': {default: 'keys'}, './PortalLogin': {default: 'login'}, './PortalRequests': {default: 'requests'},
-    '@/lib/use-portal-workspace': workspace, '@/lib/portal-display': {checkinSummary: () => ({total: 0,ready: 0,pending: 0,confirmed: 0})},
+    '@/lib/use-portal-workspace': workspace, '@/lib/portal-display': {checkinSummary: () => ({total: 0,ready: 0,pending: 0,confirmed: 0})}, '@/lib/i18n/provider': {useT: () => key => key},
     '@/components/common/layout/BrandHome': {BrandHome: 'brand'}, '@/components/common/layout/StatCard': {StatCard: 'stat'},
     '@/components/common/layout/ConsoleAtmosphere': {ConsoleAtmosphere: 'atmosphere'},
     '@/components/ui/tabs': Object.fromEntries(['Tabs','TabsContent','TabsList','TabsTrigger'].map(name => [name,name])),

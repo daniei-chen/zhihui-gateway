@@ -18,8 +18,8 @@ test('portal displays only confirmed daily credit and blocks repeated effects', 
   }
   assert.equal(canCheckin({status: 'active', initial_state: 'confirmed', checkin_state: null}), true);
   assert.equal(canCheckin({status: 'pending', initial_state: 'pending', checkin_state: null}), false);
-  assert.match(checkinLabel('confirmed_uncredited'), /已签到/);
-  assert.match(checkinLabel('unknown'), /待确认/);
+  assert.equal(checkinLabel('confirmed_uncredited'), 'portal.checkin.confirmedUncredited');
+  assert.equal(checkinLabel('unknown'), 'portal.checkin.unknown');
 });
 test('portal fetch stays separate from manager session interceptors', () => {
   const source = fs.readFileSync(new URL('./portal-api.ts', import.meta.url), 'utf8');
