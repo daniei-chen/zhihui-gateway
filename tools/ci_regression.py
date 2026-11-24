@@ -121,7 +121,20 @@ MODULES = (
     "server.tests.test_promptprep",
     # 环境变量契约：读到的必须登记。2026-11-23 因漏登记 WB_TRAFFIC_TAP 导致
     # 设置即宕机（连重启 10 次后放弃，全站 502），这条链路必须有守卫。
+    # 2026-11-24 该测试从「只扫 config.py」改成「AST 扫全树」，抓出另外 10 个
+    # 同级的雷（accountguard.py 5 个 + externalplatforms.py 5 个）。
+    #
+    # 四源对照（schema 默认值 / 源码默认值 / 进程环境 / unit 声明）同理：它早就
+    # 写好、也早就该跑，却一直不在门禁里 —— 而它偏偏是唯一能挡住「schema 与
+    # 源码默认值悄悄分叉」的那条。
     "server.tests.test_config_contract",
+    "server.tests.test_config_drift",
+    # 协议面「静默走错路」的两处：都是给客户端**错误的信号**，不是崩溃，
+    # 所以异常监控与既有测试都抓不到它们。
+    "server.tests.test_count_tokens_content",
+    "server.tests.test_responses_budget_and_cache",
+    # 信号质量：心跳与额度轮询不该把 request_outcomes 淹掉。
+    "server.tests.test_outcome_signal_noise",
 )
 
 

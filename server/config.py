@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import secrets
 import threading
@@ -16,7 +17,22 @@ from .configcontract import validate_environment
 # Some consumer modules parse numeric environment values during import. Validate
 # first so a malformed value never falls back silently or leaks through a raw
 # int()/float() exception before the application's lifespan guard runs.
-validate_environment()
+#
+# 部署层变量（`WB_UPSTREAM_PORT` 之类）只属于独立运行的更新器：服务照常启动，
+# 但要说清楚它被忽略了 —— 运维照着更新器注释写进服务 drop-in 是能预见的事，
+# 而「起不来」是全站不可用，比「照常跑 + 一条告警」坏得多。
+_CONFIGURATION = validate_environment()
+
+
+def _log_config_notices(configuration: dict) -> None:
+    """把「设了但服务不读」的部署层变量在启动时说出来，而不是静默忽略。"""
+    logger = logging.getLogger('workbuddy.config')
+    for notice in configuration.get('notices') or []:
+        logger.warning('config notice name=%s code=%s: %s', notice.get('name'),
+                       notice.get('code'), notice.get('hint', ''))
+
+
+_log_config_notices(_CONFIGURATION)
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓库根目录
 

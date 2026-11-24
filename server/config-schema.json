@@ -1083,6 +1083,108 @@
       "minimum": 1,
       "maximum": 512,
       "unit": "MiB"
+    },
+    "WB_ACCOUNT_ACTION_MIN_INTERVAL": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "server/accountguard.py:DEFAULT_MIN_INTERVAL"
+      ],
+      "default": "1.0",
+      "minimum": 0,
+      "unit": "seconds",
+      "description": "Minimum spacing between two automated actions on the same upstream account. Registered 2026-11-24: accountguard.py read it at import time but it was missing from this schema, so setting it aborted startup with unknown_variable."
+    },
+    "WB_ACCOUNT_ACTION_PER_MINUTE": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/accountguard.py:DEFAULT_PER_MINUTE"
+      ],
+      "default": 60,
+      "minimum": 1,
+      "unit": "actions/minute",
+      "description": "Per-minute ceiling for automated account actions. Same late registration as WB_ACCOUNT_ACTION_MIN_INTERVAL: it was read at import time while unregistered, so any attempt to set it refused to boot."
+    },
+    "WB_ACCOUNT_AUTOMATION_TOKEN": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "server/accountguard.py:AUTOMATION_TOKEN"
+      ],
+      "default": "",
+      "description": "Optional token that unlocks automated account operations that are otherwise refused and must be done by hand in the console. Sensitive: the value is a credential. Empty means automation stays locked."
+    },
+    "WB_ACCOUNT_BATCH_GAP": {
+      "type": "number",
+      "sensitive": false,
+      "consumers": [
+        "server/accountguard.py:DEFAULT_BATCH_GAP"
+      ],
+      "default": "12.0",
+      "minimum": 0,
+      "unit": "seconds",
+      "description": "Pause between consecutive operations inside one batch across many accounts; keeps bursts from looking like scripted abuse upstream."
+    },
+    "WB_ACCOUNT_BATCH_MAX": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "server/accountguard.py:DEFAULT_BATCH_MAX"
+      ],
+      "default": 10,
+      "minimum": 1,
+      "unit": "accounts per batch",
+      "description": "Upper bound on how many accounts one batch operation may touch before it must be re-issued."
+    },
+    "WB_TRAE_ENGINE_SWITCH": {
+      "type": "string",
+      "sensitive": false,
+      "format": "absolute_path",
+      "consumers": [
+        "server/externalplatforms.py:TRAE_ENGINE_SWITCH"
+      ],
+      "default": "/opt/workbuddy-manager/engine/var/trae_engine",
+      "description": "Marker file naming which engine serves the Trae platform. When it says the hub engine, trae_accounts() reads the JSON account directory instead of the retired sqlite list."
+    },
+    "WB_TRAE_HUB_ACCOUNTS": {
+      "type": "string",
+      "sensitive": false,
+      "format": "absolute_path",
+      "consumers": [
+        "server/externalplatforms.py:TRAE_HUB_ACCOUNTS_DIR"
+      ],
+      "default": "/opt/trae-hub/accounts",
+      "description": "Directory holding trae2api-hub account JSON files; only consulted when the engine switch names the hub engine."
+    },
+    "WB_TRAE_HUB_BASE": {
+      "type": "string",
+      "sensitive": false,
+      "format": "http_url",
+      "consumers": [
+        "server/externalplatforms.py:TRAE_HUB_BASE"
+      ],
+      "default": "http://127.0.0.1:8791",
+      "description": "Base URL of the trae2api-hub engine that took over the Trae platform on 2026-11-22."
+    },
+    "WB_TRAE_HUB_HEALTH": {
+      "type": "string",
+      "sensitive": false,
+      "format": "http_url",
+      "consumers": [
+        "server/externalplatforms.py:TRAE_HUB_HEALTH"
+      ],
+      "default": "http://127.0.0.1:8791/health",
+      "description": "Health endpoint probed before Trae account operations are attempted."
+    },
+    "WB_TRAE_HUB_PASSWORD": {
+      "type": "string",
+      "sensitive": true,
+      "consumers": [
+        "server/externalplatforms.py:TRAE_HUB_PASSWORD"
+      ],
+      "default": "/opt/workbuddy-manager/engine/secrets/trae_hub_password",
+      "description": "Path to the file holding the trae2api-hub panel password. Sensitive because the file content is a credential, not the path itself."
     }
   }
 }

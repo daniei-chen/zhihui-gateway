@@ -10,7 +10,7 @@
 
 所以下面用「SQLite 文件当假 PG」把整套搬运跑通：搬运逻辑与两端具体是什么库
 无关（见 pgsync 里 Source/Sink 的说明），因此这些用例不需要真的起一个 PG。
-真连 PG 的用例只在设了 `WB_TEST_PG_DSN` 时才跑（见文件末尾）。
+真连 PG 的用例只在设了 `ZHI_TEST_PG_DSN` 时才跑（见文件末尾）。
 """
 from __future__ import annotations
 
@@ -565,18 +565,18 @@ class RouterTest(unittest.TestCase):
         self.assertIn('running', r.json())
 
 
-@unittest.skipUnless(os.environ.get('WB_TEST_PG_DSN'),
-                     '未设置 WB_TEST_PG_DSN，跳过真实 PG 用例')
+@unittest.skipUnless(os.environ.get('ZHI_TEST_PG_DSN'),
+                     '未设置 ZHI_TEST_PG_DSN，跳过真实 PG 用例')
 class RealPgTest(_Case):  # pragma: no cover - 只在有 PG 的环境跑
     """真实 PG 的端到端：导出 → 改本地 → 恢复 → 核对。
 
-    只在设了 `WB_TEST_PG_DSN`（如 `postgresql://u:p@127.0.0.1/testdb`）时执行，
+    只在设了 `ZHI_TEST_PG_DSN`（如 `postgresql://u:p@127.0.0.1/testdb`）时执行，
     因为它需要一台真的 PostgreSQL。CI 上可以起一个 service 容器再设这个变量。
     """
 
     def _cfg(self) -> dict:
         from urllib.parse import urlsplit
-        parts = urlsplit(os.environ['WB_TEST_PG_DSN'])
+        parts = urlsplit(os.environ['ZHI_TEST_PG_DSN'])
         return {'host': parts.hostname or '', 'port': parts.port or 5432,
                 'dbname': (parts.path or '/').lstrip('/'),
                 'user': parts.username or '', 'password': parts.password or '',

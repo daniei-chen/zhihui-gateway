@@ -226,7 +226,7 @@ def summary(realm: str | None = None,
     一次凌晨的全池中断：31 次请求全部失败，而趋势图上显示为「没有请求」，
     用户只能去翻日志才知道出过事。详见 `_failures`。
     """
-    today = time.strftime('%Y-%m-%d')
+    today = db.day_of()
     week = _since(7)
     # 过滤片段：realm 为空不过滤（保持既有行为），非空则按列匹配
     rf = ' AND realm = ?' if _norm_realm(realm) else ''
@@ -516,7 +516,7 @@ def _failures(realm: str | None = None) -> dict:
         'week_4xx': 0, 'week_5xx': 0,
     }
     try:
-        today = time.strftime('%Y-%m-%d')
+        today = db.day_of()
         week = _since(7)
         # realm 过滤：日志表的 realm 列可能是历史 NULL（该列是后加的），按 cn 归类
         # ——**必须写成 `COALESCE(realm,'cn') = ?`，不能写成 `COALESCE(realm,?) = ?`**：
@@ -721,11 +721,11 @@ def hourly(day: str | None = None, realm: str | None = None,
     **固定返回 24 个桶（补零）**：X 轴长度不随「今天走到几点」变化，图上不会
     因为还没到的时段而抖动；没数据的时段就是 0，读起来也清楚。
     """
-    d = (day or '').strip() or time.strftime('%Y-%m-%d')
+    d = (day or '').strip() or db.day_of()
     # 只接受 YYYY-MM-DD：这是个查询参数，写错形态就回落到今天，而不是抛错
     # （趋势图不该因为一个手改的 URL 变成红色错误态）。
     if len(d) != 10 or d[4] != '-' or d[7] != '-':
-        d = time.strftime('%Y-%m-%d')
+        d = db.day_of()
     rf = ' AND realm = ?' if _norm_realm(realm) else ''
     rargs: tuple = (realm,) if rf else ()
     rows = db.query(

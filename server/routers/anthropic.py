@@ -281,6 +281,41 @@ def _text_of(content: object, *, path='content') -> str:
     return '\n'.join(p for p in out if p)
 
 
+def _tokens_of_content(content: object) -> int:
+    """`count_tokens` 专用的容错计数：**任何块都不许抛异常**。
+
+    与 `_text_of` 的区别是刻意的：`_text_of` 走在真实转译路径上，遇到不认识的
+    block 必须报错（静默丢掉用户内容比报错更糟）；而 `count_tokens` 是个
+    **估算**接口，客户端每次带历史工具结果都会调它 —— 2026-11-24 前
+    `tool_use` / `tool_result` / `thinking` / `document` 一律让它 500，
+    Claude Code 这类客户端拿着 `Internal Server Error` 完全无法继续。
+
+    不认识的块按 JSON 串长度计入：偏大是安全方向（见 `count_tokens` 说明），
+    而少算会让客户端以为还能塞更多，真实请求才被上游以「上下文过长」拒绝。
+    """
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return _estimate_tokens(content)
+    if not isinstance(content, list):
+        return _estimate_tokens(json.dumps(content, ensure_ascii=False, default=str))
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            total += _estimate_tokens(str(block))
+            continue
+        kind = block.get('type')
+        if kind == 'text':
+            total += _estimate_tokens(str(block.get('text') or ''))
+        elif kind == 'image':
+            # 图片按体积而非内容计：与真实分词器的数量级一致，且不需要解码。
+            source = block.get('source') or {}
+            total += _estimate_tokens(str(source.get('data') or ''))
+        else:
+            total += _estimate_tokens(json.dumps(block, ensure_ascii=False, default=str))
+    return total
+
+
 def _estimate_tokens(text: str) -> int:
     """按字符类别粗略估算 token 数（供 `count_tokens`，估不到上游分词器）。
 
@@ -1643,21 +1678,34 @@ async def count_tokens(request: Request):
     if auth_err:
         return auth_err
 
-    total = 0
-    blocks = 0
-    system = body.get('system')
-    if system:
-        blocks += 1
-        total += _estimate_tokens(
-            _text_of(system) if not isinstance(system, str) else system)
-    for msg in body.get('messages') or []:
-        if isinstance(msg, dict):
+    # 兜底：这是估算接口，任何意外都只能降级成一个偏大的数字，绝不能 500。
+    # 客户端（Claude Code 等）在每次发消息前都会先调它，一次 500 就整轮中断。
+    try:
+        total = 0
+        blocks = 0
+        system = body.get('system')
+        if system:
             blocks += 1
-            total += _estimate_tokens(_text_of(msg.get('content')))
-    for tool in body.get('tools') or []:
-        if isinstance(tool, dict):
-            blocks += 1
-            total += _estimate_tokens(json.dumps(tool, ensure_ascii=False))
+            total += _tokens_of_content(system)
+        for msg in body.get('messages') or []:
+            if isinstance(msg, dict):
+                blocks += 1
+                total += _tokens_of_content(msg.get('content'))
+        for tool in body.get('tools') or []:
+            if isinstance(tool, dict):
+                blocks += 1
+                total += _estimate_tokens(
+                    json.dumps(tool, ensure_ascii=False, default=str))
+    except Exception as exc:  # noqa: BLE001 - 估算失败不许升级成 500
+        logging.getLogger('workbuddy.anthropic').warning(
+            'count_tokens estimation failed, falling back to body size: %s', exc)
+        # 退化成「请求体 JSON 字节数 / 4」：比任何精确估算都保守，也绝不会偏小到
+        # 让客户端把超长上下文发出去。
+        try:
+            raw = len(json.dumps(body, ensure_ascii=False, default=str))
+        except Exception:  # noqa: BLE001
+            raw = 4096
+        return JSONResponse({'input_tokens': max(1, raw // 4)})
     # 每块 4 token 的结构开销：消息/工具边界在真实分词里都要额外占位。
     # 这部分是「宁可高估」的落点之一。
     return JSONResponse({'input_tokens': max(1, total + blocks * 4)})

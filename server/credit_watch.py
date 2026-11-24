@@ -65,17 +65,18 @@ def _ratio(remain, total):
 
 
 def _local_day_start(now: float | None = None) -> int:
-    """本地当天零点的 unix 秒。
+    """当天零点的 unix 秒，口径固定 **UTC+8**（与 `db.day_of` 同一个时区）。
 
     **不要用 SQL 的 `strftime('%s','now','start of day','localtime')`** ——
     实测它给出的不是本地零点，会让「今日用量」虚高一个量级（曾出现 254 对
-    28.74 的偏差）。这里在 Python 侧用年月日拼本地零点，行为明确。
+    28.74 的偏差）。
 
-    抽成函数前，这段计算在四个地方各写了一遍，改一处漏三处的风险太高。
+    也不能用 `time.localtime` + `time.mktime`：那是**进程 TZ**，而全库的日边界
+    已经钉死在 UTC+8（`db.day_of` / `db.day_start_ts`）。生产主机恰好是
+    Asia/Shanghai，两者一直相等，所以这个分叉从来没暴露过 —— 但换一台 TZ 不同
+    的机器，这里的「今日」会和账本里的「今日」错开 8 小时，额度判断随之失真。
     """
-    local = time.localtime(now)
-    return int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
-                            0, 0, 0, 0, 0, -1)))
+    return db.day_start_ts(db.day_of(now))
 
 
 def _snapshot_rows() -> list:
@@ -353,8 +354,10 @@ def usage_credit_rate(days: int = 7) -> dict | None:
         return cached[1]
     since = int(now) - max(1, int(days)) * 86400
     try:
+        # 日分组走 `db.day_sql`（固定 `+8 hours`）而不是 SQL 的 `'localtime'`：
+        # 后者跟随进程 TZ，会把这里的分日与账本（`db.day_of`，固定 UTC+8）拆开。
         rows = db.query(
-            'SELECT date(ts, "unixepoch", "localtime") AS day,'
+            f'SELECT {db.day_sql("ts")} AS day,'
             ' SUM(credit_units) AS units, COUNT(*) AS n'
             ' FROM usage_events WHERE ts>=? AND credit_units>0'
             ' GROUP BY day ORDER BY day', (since,))
@@ -507,8 +510,7 @@ def sync_checkin_from_logs(hours: int = 14, container: str | None = None) -> int
         decoded = text.decode('utf-8', 'replace')
     except Exception:  # noqa: BLE001
         return 0
-    local = time.localtime()
-    day = '%04d-%02d-%02d' % (local.tm_year, local.tm_mon, local.tm_mday)
+    day = db.day_of()
     written = 0
     seen = set()
     for line in decoded.splitlines():
@@ -660,8 +662,8 @@ def checkin_fallback(now: float | None = None) -> dict | None:
     重复调用的保护：签到脚本本身对「今天已签」返回 already，不会重复领；
     而且这里以本端签到记录为前提，签过一次就不会再进。
     """
-    moment = time.localtime(now)
-    if moment.tm_hour != CHECKIN_FALLBACK_HOUR:
+    # 小时口径同 `db.hour_of`：固定 UTC+8，不跟进程 TZ 走（全库日边界同一套）。
+    if db.hour_of(now) != CHECKIN_FALLBACK_HOUR:
         return None
     try:
         summary = checkin_today_summary()
@@ -851,6 +853,10 @@ def checkin_window() -> dict | None:
         delay = int(sch.get('random_delay_minutes') or 0)
     except (TypeError, ValueError):
         delay = 0
+    # 这里的 `time.localtime()` 与 `_local_utc_offset_hours()` 是**成对**的：
+    # 前者给本地钟面，后者给同一个本地时区相对 UTC 的偏移，两者相减即 UTC。
+    # 它们内部自洽，所以在任何 TZ 下都正确 —— **不要**只把其中一个换成固定
+    # UTC+8（`db.hour_of`），那会让窗口整体错开 `8 - offset` 小时。
     local = time.localtime()
     hour = local.tm_hour
     minute = local.tm_min
@@ -1217,11 +1223,10 @@ _supplement_day: str | None = None
 
 
 def _in_supplement_window() -> str | None:
-    """在补采窗口内返回本地日字符串，否则 None。"""
-    local = time.localtime()
-    if local.tm_hour != SUPPLEMENT_HOUR:
+    """在补采窗口内返回当天的日字符串（UTC+8），否则 None。"""
+    if db.hour_of() != SUPPLEMENT_HOUR:
         return None
-    return '%04d-%02d-%02d' % (local.tm_year, local.tm_mon, local.tm_mday)
+    return db.day_of()
 
 
 async def _loop() -> None:

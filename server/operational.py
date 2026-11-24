@@ -262,7 +262,7 @@ def evaluate_portal_ledger():
     from . import portalrecovery
     try:
         result = portalrecovery.ledger_consistency(
-            config.DATA_DIR / 'manager.db', config.DATA_DIR / 'user-portal.sqlite3')
+            config.DB_PATH, config.DATA_DIR / 'user-portal.sqlite3')
     except Exception as exc:  # noqa: BLE001 - 自检自身失败也必须可见
         transition('portal_ledger_check', True,
                    'portal ledger consistency check failed: ' + type(exc).__name__)

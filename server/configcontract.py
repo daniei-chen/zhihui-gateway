@@ -96,13 +96,43 @@ def _safe(value, spec):
     return value
 
 
+#: 部署层变量：只被**独立运行的更新器**（`deploy/update.py`）读取，与运行时配置无关。
+#:
+#: 为什么单列一张表而不是登记进 schema：登记意味着「运维可以设、服务会校验并让
+#: 它生效」，而服务根本不读它们 —— 那才是真正的静默误导。`parse_source_defaults`
+#: 也据此把 `deploy/` 整个目录排除在扫描之外（同一判断标准，两处必须一致）。
+#:
+#: 为什么不是直接拒绝：运维照着 `deploy/update.py` 的注释把 `WB_UPSTREAM_PORT`
+#: 写进服务的 drop-in，是**可以预见的操作**；而「起不来」是全站不可用，比「忽略
+#: 并告警」坏得多。所以这里降级为 notice：照常启动，并在启动日志里说清楚它
+#: 属于更新器、服务连上游看的是 `WB2API_BASE`。
+DEPLOY_ONLY_VARIABLES = frozenset({
+    'WB_SYNC_DEPLOY',           # 更新器：deploy/ 是否随包更新
+    'WB_SYNC_UPSTREAM',         # 更新器：是否同步上游
+    'WB_UPDATE_STEP_TIMEOUT',   # 更新器：单步超时
+    'WB_UPSTREAM_PORT',         # 更新器：宿主机上游健康探测端口
+    'WB_UPSTREAM_BIND',         # 更新器：docker 部署时上游绑定地址
+    'WB_UPSTREAM_HEALTH_URL',   # 更新器：上游健康检查整条 URL
+})
+
+
 def validate_environment(environment=None, *, schema=None):
     schema = schema or load_schema()
     environment = dict(os.environ if environment is None else environment)
-    specs, errors = schema['settings'], []
+    specs, errors, notices = schema['settings'], [], []
     for name in sorted(environment):
-        if any(name.startswith(prefix) for prefix in schema['prefixes']) and name not in specs:
-            errors.append({'name': name, 'code': 'unknown_variable'})
+        if not any(name.startswith(prefix) for prefix in schema['prefixes']):
+            continue
+        if name in specs:
+            continue
+        if name in DEPLOY_ONLY_VARIABLES:
+            # 不解析、不校验值：这些变量对服务没有语义，值写错也不该拦住启动。
+            notices.append({'name': name, 'code': 'deploy_only_variable',
+                            'hint': 'only the standalone updater (deploy/update.py) reads '
+                                    'this; the gateway service ignores it. Point the service '
+                                    'at the upstream with WB2API_BASE.'})
+            continue
+        errors.append({'name': name, 'code': 'unknown_variable'})
     rows = {}
     for name, spec in specs.items():
         raw = environment.get(name)
@@ -133,6 +163,7 @@ def validate_environment(environment=None, *, schema=None):
     return {'schema':schema['schema'], 'service':schema['service'],
             'schema_sha256':hashlib.sha256(json.dumps(schema,sort_keys=True).encode()).hexdigest(),
             'settings':rows,
+            'notices':notices,
             'source_note':'Process environment is already resolved by the launcher; unit file provenance must be collected separately.'}
 
 

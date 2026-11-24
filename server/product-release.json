@@ -1,11 +1,11 @@
 {
-  "schema": 1,
-  "name": "智汇网关",
-  "version": "1.5.44",
-  "repository": "daniei-chen/zhihui-gateway",
   "branch": "main",
-  "release_channel": "github-actions",
-  "manager_baseline": "v10.7.22+audit.20261029.2",
   "frontend_origin": "reconstructed-source",
-  "original_frontend_commit_reproduced": false
+  "manager_baseline": "v10.7.22+audit.20261029.2",
+  "name": "智汇网关",
+  "original_frontend_commit_reproduced": false,
+  "release_channel": "github-actions",
+  "repository": "daniei-chen/zhihui-gateway",
+  "schema": 1,
+  "version": "1.5.45"
 }

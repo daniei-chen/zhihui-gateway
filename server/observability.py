@@ -242,6 +242,27 @@ def _release_id() -> str:
 RELEASE_ID = _release_id()
 log = logging.getLogger("workbuddy.audit")
 
+
+#: 恒为心跳、失败另有告警渠道的端点：**成功**时不落 `request_outcomes`。
+#:
+#: 目的不是省空间，而是别把错误信号稀释掉：7 天 553k 行里有 26% 是 daemon
+#: 心跳（21,786 次 204）。分母混进四分之一的无意义请求后，「错误率」永远算
+#: 不准，告警也就没法按比例设阈值。
+#:
+#: 失败仍然照常记录 —— 心跳失败恰恰是最需要看见的那种。
+_NOT_RECORDED_ON_SUCCESS = frozenset({
+    '/api/system/internal-session-verify',   # daemon 心跳，正常恒 204
+    '/v1/usage',                             # 客户端额度轮询，占全部请求 27%
+})
+
+
+def _record_outcome(path: str, status: int) -> bool:
+    """这个请求的成功态要不要写进 `request_outcomes`。"""
+    if path not in _NOT_RECORDED_ON_SUCCESS:
+        return True
+    return not (200 <= int(status) < 300)
+
+
 @dataclass
 class RequestAudit:
     request_id: str
@@ -1483,7 +1504,7 @@ class RequestAuditMiddleware:
                 except Exception:
                     log.warning('bounded request metrics unavailable')
             try:
-                if tracked:
+                if tracked and _record_outcome(path, state.http_status or 500):
                     from . import db
                     status = state.http_status or 500
                     terminal = state.terminal_state or ("rejected" if 400 <= status < 500 else

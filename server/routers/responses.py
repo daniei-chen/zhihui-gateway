@@ -1056,6 +1056,25 @@ def _images_as_user_messages(images: list[dict]) -> list[dict]:
 
 # ── 响应：Chat Completions → Responses ───────────────────────
 
+def _apply_budget_exhausted(audit, error_text, state=None) -> str:
+    """输出预算耗尽 → 转成客户端可见的错误文案。
+
+    抽成函数是为了**能被直接测到**：这条判定藏在 300 行的流式 `finally` 里时，
+    只能靠 grep 源码断言，而那种测试改了缩进就失效、却依然全绿。
+
+    语义：预算耗尽不是「模型没说话」，必须让客户端看见；否则它既不重试也不
+    提示，而账单已经扣过费。chat（`gateway._chat`）与 messages（`anthropic`）
+    都有这条判定，responses 一直缺。
+    """
+    if error_text or not getattr(audit, 'budget_exhausted', False):
+        return error_text
+    audit.error_stage = 'upstream'
+    audit.error_code = 'output_budget_exhausted'
+    logger.warning('output budget exhausted request_id=%s',
+                   getattr(state, 'request_id', None))
+    return observability.BUDGET_EXHAUSTED_MESSAGE
+
+
 def _usage_object(usage: dict) -> dict:
     """usage 字段按 Responses 口径映射。
 
@@ -1067,6 +1086,12 @@ def _usage_object(usage: dict) -> dict:
     completion = _as_int(usage.get('completion_tokens'))
     details = usage.get('prompt_tokens_details')
     cached = _as_int(details.get('cached_tokens')) if isinstance(details, dict) else 0
+    if not cached:
+        # 上游用的是 DeepSeek/国内一族的字段名 `prompt_cache_hit_tokens`，而不是
+        # OpenAI 的 `prompt_tokens_details.cached_tokens`（同一个上游在
+        # `anthropic.py` / `gateway.py` 里读的也是这个名字）。只认 OpenAI 那一个
+        # 的后果是**缓存命中永远显示 0**，客户端据此以为每次都是全量计价。
+        cached = _as_int(usage.get('prompt_cache_hit_tokens'))
     out_details = usage.get('completion_tokens_details')
     reasoning = _as_int(out_details.get('reasoning_tokens')) if isinstance(out_details, dict) else 0
     return {
@@ -2091,6 +2116,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                 if audit.saw_useful and first_token_ms is None:
                     first_token_ms=int((time.time()-started)*1000)
                     gateway.requestperf.mark('first_useful')
+            if not error_text and audit.budget_exhausted:
+                # 与 chat / messages 同一口径：输出预算耗尽**不是**「正常截断」。
+                # 漏掉这一步的后果是这里落进 `translator.finish(force=False)`，
+                # 发出 `response.completed`／`incomplete` + 空 output —— 客户端把
+                # 「没钱了 / 预算用完了」读成「模型没说话」，既不重试也不提示，
+                # 而账单上已经扣过费。chat 与 messages 都有这个判定，只有这里没有。
+                error_text = _apply_budget_exhausted(audit, error_text, state)
             if not error_text:
                 error_text=audit.error or (None if audit.completed else '上游流提前结束：未收到可信终止事件')
         except (asyncio.CancelledError,GeneratorExit):
