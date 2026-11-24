@@ -140,6 +140,7 @@ MODULES = (
     "server.tests.test_socket_activation",
     "server.tests.test_ops_disk_watermark",
     "server.tests.test_ops_console_static",
+    "server.tests.test_metering_reconcile_wiring",
 )
 
 

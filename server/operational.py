@@ -823,6 +823,69 @@ def replay_ledger_receipts(now: int) -> dict:
     return result
 
 
+#: 最近一次账本对账的摘要（只读观测用）。放在模块级是为了让测试与运维脚本
+#: 能在不触发一次真实扫描的情况下读到上次结果。
+_METERING_LAST: dict = {}
+
+#: 对账分类里**必须为零**的那几个：非零就是账本真的对不上（缺行、token 不一致、
+#: 有结算无事件、终态矛盾、未知用量）。其余分类天然非零 —— 生产库实测 500 条窗口
+#: 里就有 186 条 `outcome_without_log`（容量/预算拒绝等无花费路径）和若干
+#: `log_without_request_id`（历史日志）。把它们也当告警，等于每 15 分钟喊一次
+#: 同样的内容，几次之后这条日志就没人看了 —— 这轮刚把 R6 这类噪声清掉，不能再造一个。
+METERING_STRICT_CATEGORIES = frozenset({
+    'missing_usage_event',
+    'token_mismatch',
+    'budget_settled_without_event',
+    'terminal_mismatch',
+    'zero_token_completed',
+})
+
+
+def metering_reconcile_pass(now: int, limit: int | None = None) -> dict:
+    """跑一轮账本对账（只读），返回摘要。
+
+    ## 为什么需要这一步
+
+    `metering.reconcile` 早就写好了，但**没有任何调度** —— 它只是"能跑"的函数，
+    于是"这几张表到底对不对得上"仍然只能人工写 SQL 去查。账本不一致不会让接口
+    报错，只会让对账在事后变成考古。
+
+    ## 边界（重要）
+
+    只观测、**不改数据**：发现差异只写警告日志，绝不自动修正。自动修账是另一类
+    风险 —— 错的对账比没有对账更糟。
+
+    单轮扫描窗口由 `WB_METERING_RECONCILE_LIMIT` 控制（默认最近 500 条日志，
+    上限 5000，设为 0 关闭）。之所以不扫全表：库会一直长，单轮成本必须与历史规模
+    无关，否则这个后台任务迟早变成一次慢查询事故。生产库（707 MB）实测：
+    500 条窗口 25 ms、2000 条窗口 576 ms —— 15 分钟一次完全付得起。
+    """
+    if limit is None:
+        limit = _reconcile_env_int('WB_METERING_RECONCILE_LIMIT', 500)
+    limit = int(limit)
+    if limit <= 0:
+        return {'skipped': True, 'reason': 'disabled'}
+    from . import db as _db
+    from . import metering as _metering
+    report = _metering.reconcile(_db.connect(), limit=limit)
+    findings = {name: item['count']
+                for name, item in (report.get('findings') or {}).items()
+                if item.get('count')}
+    # 键名是 `scanned_logs`（metering.reconcile 的返回契约），别想当然写成 `scanned`。
+    strict = {name: count for name, count in findings.items()
+              if name in METERING_STRICT_CATEGORIES}
+    summary = {'at': now, 'scanned': report.get('scanned_logs', 0),
+               'findings': findings, 'strict': strict}
+    _METERING_LAST.clear()
+    _METERING_LAST.update(summary)
+    if strict:
+        log.warning('metering reconcile found ledger mismatches (read-only, nothing changed): %s',
+                    strict)
+    elif findings:
+        log.info('metering reconcile: only expected categories non-zero: %s', findings)
+    return summary
+
+
 def _monitor_tick(now, failures, next_reconcile, next_replay):
     if not config.BACKGROUND_JOBS:
         # Transition workers refresh local readiness only. Shared recovery,
@@ -940,6 +1003,12 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
                          settled_evidenced, archived, billing_filled, auto_closed)
         except Exception:
             log.exception('incremental budget reconcile pass failed')
+        # 账本对账（只读），与预算结清同周期但**独立 try**：对账失败既不能拖累
+        # 预算结清，也不能因为一次读抖动让整轮 tick 失败。
+        try:
+            metering_reconcile_pass(now)
+        except Exception:
+            log.exception('metering reconcile pass failed')
     return failures, next_reconcile, next_replay, status
 
 

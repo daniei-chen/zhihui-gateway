@@ -672,6 +672,17 @@
       "minimum": 1,
       "unit": "seconds"
     },
+    "WB_METERING_RECONCILE_LIMIT": {
+      "type": "integer",
+      "sensitive": false,
+      "consumers": [
+        "local-overrides/server/operational.py (monitor, metering.reconcile)"
+      ],
+      "default": 500,
+      "minimum": 0,
+      "maximum": 5000,
+      "unit": "rows"
+    },
     "WB_KEY_CONCURRENCY": {
       "type": "integer",
       "sensitive": false,
