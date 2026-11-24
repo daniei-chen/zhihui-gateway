@@ -1998,6 +1998,9 @@
     "filterError": "只看失败",
     "filterOk": "只看成功",
     "filterSince": "时间窗",
-    "filterClear": "清除筛选"
+    "filterClear": "清除筛选",
+    "refresh": "刷新",
+    "autoOn": "自动刷新：开",
+    "autoOff": "自动刷新：关"
   }
 }

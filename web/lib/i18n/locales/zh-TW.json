@@ -2249,6 +2249,9 @@
     "filterError": "只看失敗",
     "filterOk": "只看成功",
     "filterSince": "時間窗",
-    "filterClear": "清除篩選"
+    "filterClear": "清除篩選",
+    "refresh": "重新整理",
+    "autoOn": "自動重新整理：開",
+    "autoOff": "自動重新整理：關"
   }
 }

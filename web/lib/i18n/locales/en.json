@@ -2276,6 +2276,9 @@
     "filterError": "Failures only",
     "filterOk": "Success only",
     "filterSince": "Window",
-    "filterClear": "Clear filters"
+    "filterClear": "Clear filters",
+    "refresh": "Refresh",
+    "autoOn": "Auto-refresh: on",
+    "autoOff": "Auto-refresh: off"
   }
 }

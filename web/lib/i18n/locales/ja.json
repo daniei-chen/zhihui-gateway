@@ -2249,6 +2249,9 @@
     "filterError": "失敗のみ",
     "filterOk": "成功のみ",
     "filterSince": "期間",
-    "filterClear": "絞り込みを解除"
+    "filterClear": "絞り込みを解除",
+    "refresh": "更新",
+    "autoOn": "自動更新：オン",
+    "autoOff": "自動更新：オフ"
   }
 }

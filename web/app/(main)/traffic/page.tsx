@@ -11,7 +11,7 @@
  * 页面顶部常驻这条说明 —— 开关就在旁边，不写清楚等于诱导别人打开它。
  */
 import {useCallback, useEffect, useState} from 'react';
-import {Activity, Download, X} from 'lucide-react';
+import {Activity, Download, RefreshCw, X} from 'lucide-react';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {EmptyState} from '@/components/common/layout/EmptyState';
 import {LoadError} from '@/components/common/states/LoadError';
@@ -83,6 +83,16 @@ export default function TrafficPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // 自动刷新：这一页的典型用法是「我刚发了一次请求，看看它怎么了」。
+  // 只加载一次的话，新记录永远不会出现，第一反应是「抓包没生效」。
+  // 打开详情时暂停轮询，免得正在读的内容被刷新打断。
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  useEffect(() => {
+    if (!autoRefresh || detail) return;
+    const timer = setInterval(() => { void refresh(); }, 10000);
+    return () => clearInterval(timer);
+  }, [autoRefresh, detail, refresh]);
+
   const toggle = async () => {
     if (!status) return;
     setBusy(true);
@@ -132,7 +142,14 @@ export default function TrafficPage() {
         {status && !enabled && status.setting ? (
           <span className="text-destructive">{t('traffic.blockedByEnv')}</span>
         ) : null}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => void refresh()}>
+            <RefreshCw className="mr-1 h-4 w-4" />{t('traffic.refresh')}
+          </Button>
+          <Button size="sm" variant={autoRefresh ? 'secondary' : 'outline'}
+                  onClick={() => setAutoRefresh(!autoRefresh)}>
+            {autoRefresh ? t('traffic.autoOn') : t('traffic.autoOff')}
+          </Button>
           <Button size="sm" variant={enabled ? 'outline' : 'default'} disabled={busy} onClick={() => void toggle()}>
             {enabled ? t('traffic.disable') : t('traffic.enable')}
           </Button>

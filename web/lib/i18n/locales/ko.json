@@ -2249,6 +2249,9 @@
     "filterError": "실패만",
     "filterOk": "성공만",
     "filterSince": "기간",
-    "filterClear": "필터 지우기"
+    "filterClear": "필터 지우기",
+    "refresh": "새로고침",
+    "autoOn": "자동 새로고침: 켜짐",
+    "autoOff": "자동 새로고침: 꺼짐"
   }
 }
