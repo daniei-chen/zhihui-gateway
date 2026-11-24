@@ -522,7 +522,40 @@ def key_for(request, key) -> None:
 
 # ── 读取 ──────────────────────────────────────────────────────────────────
 
-def list_records(limit: int = 50) -> list[dict]:
+def _status_class(status) -> str:
+    """把状态码归成 ok / client / server 三类。"""
+    try:
+        code = int(status)
+    except (TypeError, ValueError):
+        return 'unknown'
+    if 200 <= code < 300:
+        return 'ok'
+    if 400 <= code < 500:
+        return 'client'
+    if code >= 500:
+        return 'server'
+    return 'unknown'
+
+
+#: `since` 支持的相对窗口。只做粗粒度，够「刚才那次」用即可。
+SINCE_WINDOWS = {'15m': 900, '1h': 3600, '6h': 21600, '24h': 86400}
+
+
+def list_records(limit: int = 50, *, status: str | None = None,
+                 model: str | None = None, key: str | None = None,
+                 stream: bool | None = None, truncated: bool | None = None,
+                 since: str | None = None) -> list[dict]:
+    """按条件筛最近若干条轨迹。
+
+    ## 为什么必须能筛
+
+    记录上限是 5000 条 / 24 小时。不能筛的时候，想找「刚才那次失败」只能一页页
+    翻 —— 而这恰恰是排障的起点。所有条件都只读 `index.jsonl`（体量小、无解压），
+    所以筛选本身不产生 IO 压力。
+
+    `status` 接受 `ok` / `error`（4xx+5xx）/ `client` / `server` 或具体码。
+    `since` 接受 `15m` / `1h` / `6h` / `24h`。
+    """
     index = base_dir() / 'index.jsonl'
     if not index.is_file():
         return []
@@ -536,6 +569,38 @@ def list_records(limit: int = 50) -> list[dict]:
                 rows.append(json.loads(line))
             except ValueError:
                 continue
+
+    if status:
+        want = status.strip().lower()
+        if want == 'error':
+            rows = [r for r in rows if _status_class(r.get('status')) in ('client', 'server')]
+        elif want in ('ok', 'client', 'server', 'unknown'):
+            rows = [r for r in rows if _status_class(r.get('status')) == want]
+        else:
+            try:
+                code = int(want)
+            except ValueError:
+                code = None
+            if code is not None:
+                rows = [r for r in rows if r.get('status') == code]
+    if model:
+        needle = model.strip().lower()
+        rows = [r for r in rows
+                if needle in str(r.get('model') or '').lower()
+                or needle in str(r.get('mapped') or '').lower()]
+    if key:
+        needle = key.strip().lower()
+        rows = [r for r in rows if needle in str(r.get('key') or '').lower()]
+    if stream is not None:
+        rows = [r for r in rows if bool(r.get('stream')) is stream]
+    if truncated is not None:
+        rows = [r for r in rows if bool(r.get('truncated')) is truncated]
+    if since:
+        window = SINCE_WINDOWS.get(since.strip().lower())
+        if window:
+            cutoff = time.time() - window
+            rows = [r for r in rows if float(r.get('ts') or 0) >= cutoff]
+
     return rows[-limit:][::-1]
 
 

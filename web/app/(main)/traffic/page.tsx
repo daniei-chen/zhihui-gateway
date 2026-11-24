@@ -58,19 +58,28 @@ export default function TrafficPage() {
   const [records, setRecords] = useState<TrafficRecordSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<TrafficRecord | null>(null);
+  // 筛选只读服务端索引，切换时不必重新拉状态；`refresh` 依赖它，所以要进 useCallback 的依赖表。
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [sinceFilter, setSinceFilter] = useState<string>('');
   const [detailError, setDetailError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, listing] = await Promise.all([trafficApi.status(), trafficApi.list(100)]);
+      const filters = {
+        ...(statusFilter ? {status: statusFilter} : {}),
+        ...(sinceFilter ? {since: sinceFilter} : {}),
+      };
+      const [nextStatus, listing] = await Promise.all([
+        trafficApi.status(), trafficApi.list(100, filters),
+      ]);
       setStatus(nextStatus);
       setRecords(listing.records);
       setError(null);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }
-  }, []);
+  }, [statusFilter, sinceFilter]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -128,6 +137,36 @@ export default function TrafficPage() {
             {enabled ? t('traffic.disable') : t('traffic.enable')}
           </Button>
         </div>
+      </div>
+
+      {/*
+        筛选：记录上限 5000 条 / 24 小时，不能筛的时候「刚才那次失败」只能一页页
+        翻。只放最有用的两个维度 —— 状态与时间窗，够定位到那一条。
+      */}
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-muted-foreground">{t('traffic.filterStatus')}</span>
+        {(['', 'error', 'ok'] as const).map((value) => (
+          <Button key={value || 'all'} size="sm"
+                  variant={statusFilter === value ? 'default' : 'outline'}
+                  onClick={() => setStatusFilter(value)}>
+            {value === '' ? t('traffic.filterAll') : value === 'error'
+              ? t('traffic.filterError') : t('traffic.filterOk')}
+          </Button>
+        ))}
+        <span className="ml-3 text-muted-foreground">{t('traffic.filterSince')}</span>
+        {(['', '15m', '1h', '6h'] as const).map((value) => (
+          <Button key={value || 'all-time'} size="sm"
+                  variant={sinceFilter === value ? 'default' : 'outline'}
+                  onClick={() => setSinceFilter(value)}>
+            {value === '' ? t('traffic.filterAll') : value}
+          </Button>
+        ))}
+        {statusFilter || sinceFilter ? (
+          <Button size="sm" variant="ghost"
+                  onClick={() => { setStatusFilter(''); setSinceFilter(''); }}>
+            {t('traffic.filterClear')}
+          </Button>
+        ) : null}
       </div>
 
       {records === null ? (

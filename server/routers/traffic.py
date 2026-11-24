@@ -17,13 +17,24 @@ SETTING_KEY = 'traffic.tap'
 
 @router.get('')
 def list_records(limit: int = Query(50, ge=1, le=500),
+                 status: str | None = Query(None, max_length=16),
+                 model: str | None = Query(None, max_length=64),
+                 key: str | None = Query(None, max_length=64),
+                 stream: bool | None = Query(None),
+                 truncated: bool | None = Query(None),
+                 since: str | None = Query(None, max_length=8),
                  user: dict = Depends(security.require_panel_reader)) -> dict:
-    """最近若干条轨迹的摘要。
+    """最近若干条轨迹的摘要，可按状态/模型/密钥/时间筛。
 
     只给元数据（时间、模型、状态、大小）：正文要逐条点开，避免一次请求把几十份
-    prompt 全读进内存。
+    prompt 全读进内存。筛选只读索引，所以「只看失败的」这类查询很便宜。
     """
-    return {'enabled': traffic.enabled(), 'records': traffic.list_records(limit)}
+    return {
+        'enabled': traffic.enabled(),
+        'records': traffic.list_records(
+            limit, status=status, model=model, key=key,
+            stream=stream, truncated=truncated, since=since),
+    }
 
 
 @router.get('/status')

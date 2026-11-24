@@ -2243,6 +2243,12 @@
     "response": "업스트림 응답",
     "truncatedHint": "다음 내용은 너무 길어 최근 부분만 보관했습니다:",
     "modelText": "모델 출력",
-    "modelReasoning": "추론 과정"
+    "modelReasoning": "추론 과정",
+    "filterStatus": "상태",
+    "filterAll": "전체",
+    "filterError": "실패만",
+    "filterOk": "성공만",
+    "filterSince": "기간",
+    "filterClear": "필터 지우기"
   }
 }

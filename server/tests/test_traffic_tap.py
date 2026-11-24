@@ -540,5 +540,83 @@ class StreamTextTest(unittest.TestCase):
         self.assertEqual(trace.response['finish_reason'], 'stop')
 
 
+class FilterTest(unittest.TestCase):
+    """按条件筛记录。
+
+    记录上限是 5000 条 / 24 小时。没有筛选时，想找「刚才那次失败」只能一页页翻，
+    而这恰恰是排障的起点。所有条件都只读索引，不碰正文。
+    """
+
+    ROWS = [
+        {'request_id': 'r1', 'ts': 1000, 'status': 200, 'model': 'glm-5', 'mapped': 'cn:glm-5',
+         'key': 'prod', 'stream': True, 'truncated': False, 'size': 10, 'file': 'd/r1.json.gz'},
+        {'request_id': 'r2', 'ts': 2000, 'status': 429, 'model': 'glm-5', 'mapped': 'cn:glm-5',
+         'key': 'prod', 'stream': True, 'truncated': True, 'size': 20, 'file': 'd/r2.json.gz'},
+        {'request_id': 'r3', 'ts': 3000, 'status': 500, 'model': 'deepseek', 'mapped': 'cn:deepseek',
+         'key': 'test', 'stream': False, 'truncated': False, 'size': 30, 'file': 'd/r3.json.gz'},
+    ]
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig = traffic.base_dir
+        root = Path(self._tmp.name)
+        traffic.base_dir = lambda: root           # type: ignore[assignment]
+        (root / 'index.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in self.ROWS), encoding='utf-8')
+
+    def tearDown(self) -> None:
+        traffic.base_dir = self._orig            # type: ignore[assignment]
+        self._tmp.cleanup()
+
+    def ids(self, **kwargs) -> list[str]:
+        return [row['request_id'] for row in traffic.list_records(**kwargs)]
+
+    def test_no_filter_returns_newest_first(self) -> None:
+        self.assertEqual(self.ids(limit=10), ['r3', 'r2', 'r1'])
+
+    def test_status_error_covers_4xx_and_5xx(self) -> None:
+        """只关心「失败了哪些」时，不该还要分别记住 4xx 与 5xx。"""
+        self.assertEqual(self.ids(limit=10, status='error'), ['r3', 'r2'])
+
+    def test_status_ok(self) -> None:
+        self.assertEqual(self.ids(limit=10, status='ok'), ['r1'])
+
+    def test_status_specific_code(self) -> None:
+        self.assertEqual(self.ids(limit=10, status='429'), ['r2'])
+
+    def test_status_class_split(self) -> None:
+        self.assertEqual(self.ids(limit=10, status='client'), ['r2'])
+        self.assertEqual(self.ids(limit=10, status='server'), ['r3'])
+
+    def test_model_matches_requested_or_mapped(self) -> None:
+        """用户记的是请求模型，索引里还有映射后的名字，两边都要能查到。"""
+        self.assertEqual(self.ids(limit=10, model='cn:deepseek'), ['r3'])
+        self.assertEqual(self.ids(limit=10, model='glm'), ['r2', 'r1'])
+
+    def test_key_filter(self) -> None:
+        self.assertEqual(self.ids(limit=10, key='test'), ['r3'])
+
+    def test_stream_and_truncated_filters(self) -> None:
+        self.assertEqual(self.ids(limit=10, stream=False), ['r3'])
+        self.assertEqual(self.ids(limit=10, truncated=True), ['r2'])
+
+    def test_since_window(self) -> None:
+        """`24h` 之外的旧记录不该出现。"""
+        now = int(time.time())
+        rows = [dict(self.ROWS[0], ts=now - 60), dict(self.ROWS[1], ts=now - 90000)]
+        (traffic.base_dir() / 'index.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        self.assertEqual(self.ids(limit=10, since='1h'), ['r1'])
+        self.assertEqual(self.ids(limit=10, since='24h'), ['r1'])
+
+    def test_unknown_filters_are_ignored(self) -> None:
+        """拼错的条件不该静默返回空 —— 忽略它，至少还能看到全部。"""
+        self.assertEqual(self.ids(limit=10, status='bogus'), ['r3', 'r2', 'r1'])
+        self.assertEqual(self.ids(limit=10, since='7d'), ['r3', 'r2', 'r1'])
+
+    def test_limit_applies_after_filtering(self) -> None:
+        self.assertEqual(self.ids(limit=1, status='error'), ['r3'])
+
+
 if __name__ == '__main__':
     unittest.main()

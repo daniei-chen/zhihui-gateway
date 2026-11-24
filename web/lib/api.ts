@@ -747,10 +747,19 @@ export interface TrafficRecord extends Record<string, unknown> {
   truncated_fields?: string[];
 }
 
+export interface TrafficFilters {
+  status?: string;
+  model?: string;
+  key?: string;
+  stream?: boolean;
+  truncated?: boolean;
+  since?: string;
+}
+
 export const trafficApi = {
   status: () => get<TrafficStatus>('/api/traffic/status'),
-  list: (limit = 50) =>
-    get<{enabled: boolean; records: TrafficRecordSummary[]}>('/api/traffic', {limit}),
+  list: (limit = 50, filters: TrafficFilters = {}) =>
+    get<{enabled: boolean; records: TrafficRecordSummary[]}>('/api/traffic', {limit, ...filters}),
   read: (id: string) => get<TrafficRecord>(`/api/traffic/${encodeURIComponent(id)}`),
   setEnabled: (enabled: boolean) =>
     post<{setting: boolean; effective: boolean; detail?: string; blocked_by?: string}>(

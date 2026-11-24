@@ -2243,6 +2243,12 @@
     "response": "上流のレスポンス",
     "truncatedHint": "次の内容は長すぎるため、直近の部分のみを保持しています：",
     "modelText": "モデルの出力",
-    "modelReasoning": "推論過程"
+    "modelReasoning": "推論過程",
+    "filterStatus": "ステータス",
+    "filterAll": "すべて",
+    "filterError": "失敗のみ",
+    "filterOk": "成功のみ",
+    "filterSince": "期間",
+    "filterClear": "絞り込みを解除"
   }
 }

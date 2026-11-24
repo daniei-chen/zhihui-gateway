@@ -2270,6 +2270,12 @@
     "response": "Upstream response",
     "truncatedHint": "These parts were too long; only the most recent portion was kept:",
     "modelText": "Model output",
-    "modelReasoning": "Reasoning"
+    "modelReasoning": "Reasoning",
+    "filterStatus": "Status",
+    "filterAll": "All",
+    "filterError": "Failures only",
+    "filterOk": "Success only",
+    "filterSince": "Window",
+    "filterClear": "Clear filters"
   }
 }
