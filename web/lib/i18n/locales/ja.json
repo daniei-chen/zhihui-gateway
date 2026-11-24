@@ -2230,7 +2230,7 @@
     "colLatency": "所要時間",
     "colKey": "キー",
     "colActions": "操作",
-    "truncated": "切り詰め済み",
+    "truncated": "一部省略",
     "detail": "トレースの詳細",
     "export": "HTML を書き出す",
     "client": "クライアントのリクエスト",

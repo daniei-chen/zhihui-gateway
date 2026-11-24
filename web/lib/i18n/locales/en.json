@@ -2257,7 +2257,7 @@
     "colLatency": "Latency",
     "colKey": "Key",
     "colActions": "Actions",
-    "truncated": "Truncated",
+    "truncated": "Partially trimmed",
     "detail": "Trace detail",
     "export": "Export HTML",
     "client": "Client request",

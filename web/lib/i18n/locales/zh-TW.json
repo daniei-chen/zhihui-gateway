@@ -2230,7 +2230,7 @@
     "colLatency": "耗時",
     "colKey": "金鑰",
     "colActions": "操作",
-    "truncated": "已截斷",
+    "truncated": "部分省略",
     "detail": "軌跡詳情",
     "export": "匯出 HTML",
     "client": "客戶端請求",

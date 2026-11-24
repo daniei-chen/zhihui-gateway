@@ -1979,7 +1979,7 @@
     "colLatency": "耗时",
     "colKey": "密钥",
     "colActions": "操作",
-    "truncated": "已截断",
+    "truncated": "部分省略",
     "detail": "轨迹详情",
     "export": "导出 HTML",
     "client": "客户端请求",

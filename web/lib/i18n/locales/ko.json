@@ -2230,7 +2230,7 @@
     "colLatency": "소요 시간",
     "colKey": "키",
     "colActions": "작업",
-    "truncated": "잘림",
+    "truncated": "일부 생략",
     "detail": "추적 상세",
     "export": "HTML 내보내기",
     "client": "클라이언트 요청",
