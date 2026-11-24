@@ -1,6 +1,6 @@
 {
-  "base_commit": "543f37c985c5284e83cd21a5e60b7b500a1212f5",
-  "base_release": "v1.5.48",
+  "base_commit": "d89dd3460dc5fbb0b6e8ac8f2b1cd0e07d5b3a1e",
+  "base_release": "v1.5.49",
   "candidate_only": false,
   "database_rollback": false,
   "frontend_input_sha256": "33b113c50473a2c2a1fbb1a4c90855cb7d21078334600b0bf0c19a452bbb4c6c",
@@ -159,7 +159,7 @@
   },
   "schema": 1,
   "signed": false,
-  "source_commit": "d89dd3460dc5fbb0b6e8ac8f2b1cd0e07d5b3a1e",
+  "source_commit": "e8e3b8b810b7ce4b58c35f38e834bbfd7ed9508c",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
   "version": "1.5.50"
