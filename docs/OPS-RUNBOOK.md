@@ -25,11 +25,11 @@
 # 1) 打包（本地）
 git tag -a vX.Y.Z <commit> -m "vX.Y.Z"
 git push origin vX.Y.Z
-git archive --format=tar.gz -o /tmp/vXYZ.tar.gz vX.Y.Z
-tar -czf /tmp/webout-XYZ.tar.gz -C web out        # 前端产物（不入库，现场构建）
+git archive --format=tar.gz -o /tmp/zhihui-stage.tar.gz vX.Y.Z
+tar -czf /tmp/zhihui-webout.tar.gz -C web out     # 前端产物（不入库，现场构建）
 
 # 2) 上传
-scp /tmp/vXYZ.tar.gz /tmp/webout-XYZ.tar.gz ubuntu@<host>:/tmp/
+scp /tmp/zhihui-stage.tar.gz /tmp/zhihui-webout.tar.gz ubuntu@<host>:/tmp/
 
 # 3) 四步流水线（部署机，容器内执行）
 RUN='sudo docker run --rm --network none \
@@ -40,7 +40,7 @@ RUN='sudo docker run --rm --network none \
   --entrypoint python3 trae2api-hub:final4-20261122 /tools/release.py \
   --root /rel --key /keys/release-priv.pem --trust /trust.pem'
 
-$RUN stage  vX.Y.Z --archive /tmp/vXYZ.tar.gz --web /tmp/webout-XYZ.tar.gz
+$RUN stage  vX.Y.Z --archive /tmp/zhihui-stage.tar.gz --web /tmp/zhihui-webout.tar.gz
 $RUN seal   vX.Y.Z
 $RUN verify vX.Y.Z --nginx /etc/nginx/sites-enabled/<站点>
 $RUN activate vX.Y.Z
@@ -50,12 +50,20 @@ sudo systemctl restart workbuddy-web
 sleep 12 && curl -s http://127.0.0.1:7866/api/release
 
 # 4b) 发布控制台（**别手工切 symlink**，见下方陷阱）
-#     用 bash 显式调用：v1.5.47 及更早的包里，这个脚本是 0644（git 里漏了可执行位），
-#     直接 ./ 调用会 permission denied。git 模式已在 v1.5.47 之后改为 100755，
-#     下一版起可以直接 sudo deploy/publish-console.sh。
-sudo bash /opt/workbuddy-manager/releases/current/deploy/publish-console.sh \
-    --web /tmp/webout-XYZ.tar.gz --version vX.Y.Z
+#     v1.5.51 起 deploy/ 下 17 个 .sh 全部是 100755，可以直接执行；
+#     v1.5.50 及更早的包请用 sudo bash <脚本路径>。
+sudo /opt/workbuddy-manager/releases/current/deploy/publish-console.sh \
+    --web /tmp/zhihui-webout.tar.gz --version vX.Y.Z
 ```
+
+> **上传包一律用固定文件名，别带版本号。** 2026-11-24 实测：部署机上 `/tmp` 堆了
+> 46 个历史归档，合计 **2.9 GB** —— 每次部署都是 64 MB 的新副本，没人删，最后是
+> 磁盘告警来提醒你。固定名字每次覆盖同一份，天然不会累积。
+>
+> 顺带两条同类清理（都需要人工执行，`journalctl --vacuum-size` 被运维 guard 拦）：
+> `sudo journalctl --vacuum-size=200M`（当时日志占 497 MB）、
+> `sudo deploy/prune-releases.sh --keep 5` 后加 `--apply`（保留 5 个历史版本）。
+
 
 ### 判据
 
