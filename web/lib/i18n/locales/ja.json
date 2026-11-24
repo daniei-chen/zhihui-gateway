@@ -2241,6 +2241,8 @@
     "diffAfter": "変更後",
     "noDiff": "ゲートウェイはリクエストを書き換えていません",
     "response": "上流のレスポンス",
-    "truncatedHint": "次の内容は長すぎるため、直近の部分のみを保持しています："
+    "truncatedHint": "次の内容は長すぎるため、直近の部分のみを保持しています：",
+    "modelText": "モデルの出力",
+    "modelReasoning": "推論過程"
   }
 }

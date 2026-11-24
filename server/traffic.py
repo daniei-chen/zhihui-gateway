@@ -196,6 +196,8 @@ LIST_HEAD = 8
 LIST_TAIL = 4
 #: 最后兜底时对「最后一条消息」用的收紧上限。排障只需要看清这一轮问了什么。
 FINAL_LIMIT = 4 * 1024
+#: 一段超过这个体积且条数/字段都裁不动时，才整体省略。
+FINAL_DROP = 64 * 1024
 
 
 def _shrink_text(text: str, limit: int = FIELD_LIMIT) -> tuple[str, bool]:
@@ -313,16 +315,40 @@ def _prepare(payload: dict) -> bytes:
         raw = _dumps(payload)
 
     if len(raw) > LIST_LIMIT:
-        # 极端兜底：连一条都塞不下。此时才整段省略，并明确写清原因。
-        for section_name in ('client', 'gateway', 'response'):
+        # 极端兜底：某一段的「内部」就塞不下（例如一条消息带几百个工具调用片段，
+        # 每段都小于单字段上限，加起来却远超总量）。先省略真正超限的请求侧，
+        # **再重算**，因为裁掉 client/gateway 往往就够了。
+        #
+        # 注意 `response` 不参与这一轮：它是排障核心（终止原因、用量、生成文本），
+        # 而且通常很小。2026-11-24 真实数据里它被无条件牵连省略，导致「为什么
+        # 这么答」完全无从判断 —— 记录里只剩一个 diff。
+        for section_name in ('client', 'gateway'):
             section = payload.get(section_name)
-            if isinstance(section, (dict, list)):
+            if isinstance(section, (dict, list)) and len(_dumps(section)) > FINAL_DROP:
                 payload[section_name] = {
                     '_traffic_oversize': True,
-                    '_note': f'该段超过 {LIST_LIMIT // 1024} KB，已整体省略；'
+                    '_note': f'该段超过 {FINAL_DROP // 1024} KB 且无法逐条裁剪，已整体省略；'
                              f'需要完整内容请在该时刻直接复现请求。',
                 }
                 found.append(f'{section_name}（整体省略）')
+        raw = _dumps(payload)
+
+    if len(raw) > LIST_LIMIT:
+        # 连响应摘要都留不住时，才动它 —— 但也只是**收紧字段**，绝不整体丢。
+        section = payload.get('response')
+        if isinstance(section, (dict, list)):
+            _shrink(section, 'response', found, FINAL_LIMIT)
+            raw = _dumps(payload)
+
+    if len(raw) > LIST_LIMIT:
+        # 最后一手：response 里可能有个巨大且裁不动的结构，此时才整体省略。
+        section = payload.get('response')
+        if isinstance(section, (dict, list)):
+            payload['response'] = {
+                '_traffic_oversize': True,
+                '_note': '响应摘要超过上限，已省略。',
+            }
+            found.append('response（整体省略）')
         raw = _dumps(payload)
 
     payload['truncated'] = bool(found)
@@ -432,6 +458,7 @@ def response_stream(trace: Trace | None, *, status: int, audit=None,
     if trace is None:
         return
     trace.status = status
+    collect = getattr(audit, 'collected', None) if audit is not None else None
     summary = {
         'kind': 'stream',
         'finish_reason': getattr(audit, 'finish_reason', None) if audit is not None else None,
@@ -441,7 +468,11 @@ def response_stream(trace: Trace | None, *, status: int, audit=None,
         'error_code': getattr(audit, 'error_code', None) if audit is not None else None,
         'saw_visible_text': getattr(audit, 'saw_visible_text', None) if audit is not None else None,
         'saw_tool_delta': getattr(audit, 'saw_tool_delta', None) if audit is not None else None,
-        'text': getattr(audit, 'text', None) if audit is not None else None,
+        # 模型实际生成的内容。排障问「为什么这么答」时，这是除终止原因之外
+        # 唯一能看的东西；只记 `finish_reason=length` 说明不了它断在哪一句。
+        'text': collect('text') if collect else None,
+        'reasoning': collect('reasoning') if collect else None,
+        'text_truncated': getattr(audit, 'text_truncated', None) if audit is not None else None,
     }
     trace.response = summary
     _finish(trace)

@@ -378,7 +378,45 @@ class ShrinkTest(unittest.TestCase):
                          '不该整段省略 —— 那等于什么都没留下')
         self.assertEqual(out['client']['model'], 'glm')
 
-    def test_extreme_oversize_falls_back_to_dropping(self) -> None:
+    def test_response_summary_survives_oversize_request(self) -> None:
+        """请求侧被省略时，响应摘要必须保住。
+
+        2026-11-24 真实数据：一条流式长会话的 `response` 被无条件牵连省略，
+        记录里只剩一个 diff —— 终止原因、用量、模型实际说了什么全都没了，
+        「模型为什么这么答」彻底无从判断。响应摘要是排障的核心，不能陪葬。
+        """
+        heavy = [{'role': 'user', 'content': 'q' * 3000,
+                  'attachments': [{'id': f'a{i}', 'body': 'y' * 900} for i in range(80)]}
+                 for _ in range(300)]
+        payload = self._base(
+            client={'messages': heavy}, gateway={'messages': list(heavy)},
+            response={'kind': 'stream', 'finish_reason': 'stop', 'completed': True,
+                      'usage': {'prompt_tokens': 10, 'completion_tokens': 2},
+                      'text': '这是模型的回答。' * 10, 'error': None})
+        raw = traffic._prepare(payload)
+        self.assertLessEqual(len(raw), traffic.LIST_LIMIT)
+        out = json.loads(raw)
+        self.assertNotIn('_traffic_oversize', out['response'],
+                         '响应摘要被省略了 —— 排障最需要的部分没了')
+        self.assertEqual(out['response']['finish_reason'], 'stop')
+        self.assertEqual(out['response']['usage']['completion_tokens'], 2)
+        self.assertIn('这是模型的回答', out['response']['text'])
+
+    def test_long_generated_text_is_trimmed_not_dropped(self) -> None:
+        """流式生成的全文可能有几 MB，但「说了什么」正是排障要看的 ——
+        裁剪保留头尾，而不是整体丢掉。"""
+        payload = self._base(
+            client={'messages': [{'role': 'user', 'content': '短'}]},
+            gateway={'messages': [{'role': 'user', 'content': '短'}]},
+            response={'kind': 'stream', 'finish_reason': 'length',
+                      'text': 'A' * 500_000 + '结尾'})
+        raw = traffic._prepare(payload)
+        self.assertLessEqual(len(raw), traffic.LIST_LIMIT)
+        out = json.loads(raw)
+        text = out['response']['text']
+        self.assertIn('此处省略', text)
+        self.assertTrue(text.startswith('A'))
+        self.assertIn('结尾', text, '生成文本的结尾被丢了')
         """连最后一条都塞不下时才整段省略，且必须留下原因。"""
         half = 200_000
         one = [{'role': 'user', 'content': 'q' * half,
@@ -431,6 +469,75 @@ class ShrinkTest(unittest.TestCase):
         clean = dict(record)
         clean['truncated_fields'] = []
         self.assertNotIn('只保留了最近的部分', traffic.render_html(clean))
+
+
+class StreamTextTest(unittest.TestCase):
+    """流式记录必须留下「模型说了什么」。
+
+    2026-11-24 之前 `response.text` 是个**从未被赋值**的字段：`traffic` 从审计
+    对象上 `getattr(audit, 'text', None)`，而 `StreamAudit` 根本没有这个属性，
+    于是面板上永远是 null。用户拿着一行 `finish_reason=length` 的记录，仍然
+    不知道它断在哪一句 —— 而这恰恰是「模型为什么这么答」要回答的。
+    """
+
+    @staticmethod
+    def _frame(obj) -> bytes:
+        return ('data: ' + json.dumps(obj, ensure_ascii=False) + '\n\n').encode()
+
+    def _audit(self, pieces, reasoning=(), finish='stop'):
+        from server import observability
+        audit = observability.StreamAudit()
+        for piece in pieces:
+            audit.feed(self._frame({'choices': [{'delta': {'content': piece}}]}))
+        for piece in reasoning:
+            audit.feed(self._frame({'choices': [{'delta': {'reasoning_content': piece}}]}))
+        audit.feed(self._frame({'choices': [{'delta': {}, 'finish_reason': finish}],
+                                'usage': {'completion_tokens': 3}}))
+        audit.finish()
+        return audit
+
+    def test_text_is_collected_in_order(self) -> None:
+        audit = self._audit(['你好', '，世界', '！'])
+        self.assertEqual(audit.collected('text'), '你好，世界！')
+
+    def test_reasoning_is_collected_separately(self) -> None:
+        audit = self._audit(['答'], reasoning=['先想一想'])
+        self.assertEqual(audit.collected('text'), '答')
+        self.assertEqual(audit.collected('reasoning'), '先想一想')
+
+    def test_no_text_returns_none_not_empty(self) -> None:
+        """没有正文时必须是 null，不是空串 —— 面板据此区分「没生成」与「生成了空」。"""
+        audit = self._audit([])
+        self.assertIsNone(audit.collected('text'))
+
+    def test_cap_stops_accumulation_and_flags(self) -> None:
+        """长回答只留前 64 KB，并标记被截断 —— 几 MB 的正文不能全塞进记录。"""
+        from server import observability
+        audit = observability.StreamAudit()
+        chunk = 'x' * 8000
+        for _ in range(20):          # 160 KB > 64 KB 上限
+            audit.feed(self._frame({'choices': [{'delta': {'content': chunk}}]}))
+        audit.finish()
+        text = audit.collected('text')
+        self.assertLessEqual(len(text), audit.TEXT_CAP + len(chunk))
+        self.assertTrue(audit.text_truncated)
+
+    def test_summary_carries_text_and_reasoning(self) -> None:
+        audit = self._audit(['最终回答'], reasoning=['内心活动'])
+
+        class Trace:
+            request = None
+            rid = 'r1'
+            started = 0.0
+            status = 200
+            client = None
+            gateway = None
+
+        trace = Trace()
+        traffic.response_stream(trace, status=200, audit=audit, error=None)
+        self.assertEqual(trace.response['text'], '最终回答')
+        self.assertEqual(trace.response['reasoning'], '内心活动')
+        self.assertEqual(trace.response['finish_reason'], 'stop')
 
 
 if __name__ == '__main__':

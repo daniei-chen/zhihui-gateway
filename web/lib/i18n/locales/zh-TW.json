@@ -2241,6 +2241,8 @@
     "diffAfter": "改後",
     "noDiff": "閘道未改寫請求",
     "response": "上游回應",
-    "truncatedHint": "以下內容因過長被省略，只保留了最近的部分："
+    "truncatedHint": "以下內容因過長被省略，只保留了最近的部分：",
+    "modelText": "模型輸出",
+    "modelReasoning": "推理過程"
   }
 }

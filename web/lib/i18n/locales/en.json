@@ -2268,6 +2268,8 @@
     "diffAfter": "After",
     "noDiff": "The gateway did not rewrite this request",
     "response": "Upstream response",
-    "truncatedHint": "These parts were too long; only the most recent portion was kept:"
+    "truncatedHint": "These parts were too long; only the most recent portion was kept:",
+    "modelText": "Model output",
+    "modelReasoning": "Reasoning"
   }
 }

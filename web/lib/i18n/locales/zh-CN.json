@@ -1990,6 +1990,8 @@
     "diffAfter": "改后",
     "noDiff": "网关未改写请求",
     "response": "上游响应",
-    "truncatedHint": "以下内容因过长被省略，只保留了最近的部分："
+    "truncatedHint": "以下内容因过长被省略，只保留了最近的部分：",
+    "modelText": "模型输出",
+    "modelReasoning": "推理过程"
   }
 }

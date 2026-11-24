@@ -2241,6 +2241,8 @@
     "diffAfter": "변경 후",
     "noDiff": "게이트웨이가 요청을 바꾸지 않았습니다",
     "response": "업스트림 응답",
-    "truncatedHint": "다음 내용은 너무 길어 최근 부분만 보관했습니다:"
+    "truncatedHint": "다음 내용은 너무 길어 최근 부분만 보관했습니다:",
+    "modelText": "모델 출력",
+    "modelReasoning": "추론 과정"
   }
 }

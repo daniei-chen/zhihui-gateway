@@ -762,6 +762,14 @@ class StreamAudit:
         self.done_seen = False
         self.finish_seen = False
         self.saw_useful = False
+        # 生成文本（供调用轨迹回答「模型说了什么」）。用 list 累积，见 `_keep`。
+        self.TEXT_CAP = 64 * 1024
+        self.text_parts: list[str] = []
+        self.text_bytes = 0
+        self.text_truncated = False
+        self.reasoning_parts: list[str] = []
+        self.reasoning_bytes = 0
+        self.reasoning_truncated = False
         # 首字时刻**不**记在这里：判定「上游开始交付」之后由调用方取一次时间戳
         # （见 gateway 里 `if audit.saw_useful and first_token_ms is None`）。
         # 这里曾有一个 `first_useful` 字段，从未被赋值过 —— 保留它只会让下一个
@@ -876,8 +884,45 @@ class StreamAudit:
                     text = delta.get("content")
                     if isinstance(text, str) and text.strip():
                         self.saw_visible_text = True
+                    if isinstance(text, str) and text:
+                        self._keep("text", text)
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if isinstance(reasoning, str) and reasoning:
+                        self._keep("reasoning", reasoning)
                     if any(delta.get(key) for key in ("tool_calls", "function_call")):
                         self.saw_tool_delta = True
+
+    def _keep(self, kind: str, chunk: str) -> None:
+        """按上限累积生成文本。
+
+        ## 为什么要留下生成内容
+
+        调用轨迹要回答的是「模型为什么这么答」。只记终止原因与用量的话，用户
+        拿着一条 ``finish_reason=length`` 的记录，还是不知道它中断在哪里、说了
+        什么。2026-11-24 之前 `response.text` 一直是个**从未被赋值的字段**
+        （和 `first_useful` 一样），面板上永远显示 null。
+
+        ## 为什么要上限
+
+        一次长回答可能是几 MB，而排障只需要看清开头与结尾。所以只保留前
+        `TEXT_CAP` 个字符，超出后停止累积并置 `text_truncated`。用 list 累积、
+        由调用方 join：每帧拼接字符串会反复拷贝已累积的内容，在长回答上是
+        平方级开销，而这条路径在**每个流式帧**都会走到。
+        """
+        parts = getattr(self, kind + '_parts')
+        used = getattr(self, kind + '_bytes')
+        if used >= self.TEXT_CAP:
+            setattr(self, kind + '_truncated', True)
+            return
+        parts.append(chunk)
+        setattr(self, kind + '_bytes', used + len(chunk))
+        if used + len(chunk) >= self.TEXT_CAP:
+            setattr(self, kind + '_truncated', True)
+
+    def collected(self, kind: str) -> str | None:
+        """取累积的生成文本（没有内容时返回 None，而不是空串）。"""
+        parts = getattr(self, kind + '_parts', None) or []
+        return ''.join(parts) or None
 
     def _consume(self, text):
         self.pending += text

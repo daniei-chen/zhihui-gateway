@@ -253,6 +253,27 @@ export default function TrafficPage() {
                 </section>
                 <section>
                   <h3 className="mb-2 text-sm font-medium">{t('traffic.response')}</h3>
+                  {/*
+                    模型实际生成的内容单独渲染：它是「为什么这么答」唯一能直接读的
+                    证据，塞进 JSON 里看不出来。其余字段（终止原因、用量、错误）仍然
+                    走 JSON 视图。
+                  */}
+                  {typeof (detail.response as {text?: unknown})?.text === 'string' ? (
+                    <div className="mb-3">
+                      <p className="mb-1 text-[12px] text-muted-foreground">{t('traffic.modelText')}</p>
+                      <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-3 text-[12px] leading-relaxed">
+                        {(detail.response as {text: string}).text}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {typeof (detail.response as {reasoning?: unknown})?.reasoning === 'string' ? (
+                    <div className="mb-3">
+                      <p className="mb-1 text-[12px] text-muted-foreground">{t('traffic.modelReasoning')}</p>
+                      <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/20 p-3 text-[12px] leading-relaxed text-muted-foreground">
+                        {(detail.response as {reasoning: string}).reasoning}
+                      </pre>
+                    </div>
+                  ) : null}
                   <JsonBlock value={detail.response} />
                 </section>
               </>
