@@ -966,7 +966,7 @@ test('portal login exposes errors, does not erase rejected input, and rejects em
 test('portal reuses console brand and stat components with accessible tabs and truthful dispatch state', () => {
   const page=fs.readFileSync(path.join(root,'app/portal/page.tsx'),'utf8');
   assert.match(page,/<BrandHome href="\/portal"/);
-  assert.match(page,/<StatCard/); assert.match(page,/<TabsList aria-label="用户工作台页面"/);
+  assert.match(page,/<StatCard/); assert.match(page,/<TabsList aria-label=\{t\('portal\.home\.tabsLabel'\)\}/);
   assert.match(page,/data.dispatch_enabled/); assert.match(page,/data.pool_enabled/);
   assert.doesNotMatch(page,/本地候选|portal-mark|Your accounts\. Your credits\./);
   const login=fs.readFileSync(path.join(root,'app/portal/PortalLogin.tsx'),'utf8');
@@ -1013,7 +1013,7 @@ test('unreachable portal session is a retryable connection state, not a sign-in 
   const f = portalPageFixture(async () => {throw new Error('synthetic offline');});
   f.render(); f.h.effects(); await flush();
   assert.equal(descendants(f.render()).some(node => node.type === 'login'), false);
-  assert.match(JSON.stringify(f.render()), /重新连接/);
+  assert.match(JSON.stringify(f.render()), /portal\.home\.reconnect/);
 });
 
 function workspaceFixture(fetch) {
@@ -1300,7 +1300,7 @@ test('portal action authorization failure immediately clears private workspace i
     throw new f.PortalError(401, 'session expired');
   });
   f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
-  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号')).props.onClick();
+  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('portal.home.scanAdd')).props.onClick();
   await flush();
   assert.equal(descendants(f.render()).some(node => node.type === 'login'), true);
   assert.doesNotMatch(JSON.stringify(f.render()), /private-user/);
@@ -1313,10 +1313,10 @@ test('uncertain portal actions require a confirmed read before another submissio
     writes++; throw new Error('synthetic connection lost');
   });
   f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
-  const add = () => descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号'));
+  const add = () => descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('portal.home.scanAdd'));
   add().props.onClick(); await flush(); add().props.onClick(); await flush();
-  assert.equal(writes, 1); assert.match(JSON.stringify(f.render()), /核对/);
-  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '重新读取').props.onClick(); await flush();
+  assert.equal(writes, 1); assert.match(JSON.stringify(f.render()), /portal\.home\.uncertainAction/);
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === 'portal.home.reload').props.onClick(); await flush();
   add().props.onClick(); await flush(); assert.equal(writes, 2);
 });
 
@@ -1330,15 +1330,15 @@ test('scan polling pauses on failure, retries the same session only on demand, a
     throw new Error('unexpected operation');
   });
   f.render(); f.h.effects(); await flush(); f.render(); f.h.effects();
-  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('扫码添加账号')).props.onClick();
+  descendants(f.render()).find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('portal.home.scanAdd')).props.onClick();
   await flush(); f.render(); f.h.effects();
   const tick = [...f.timers.values()][0]; await tick();
-  assert.match(JSON.stringify(f.render()), /已暂停轮询/);
+  assert.match(JSON.stringify(f.render()), /portal\.home\.pollInterrupted/);
   assert.equal(descendants(f.render()).some(node => node.props?.role === 'dialog'), true);
   await tick(); assert.equal(polls, 1);
-  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '重试当前二维码').props.onClick();
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === 'portal.home.retryQr').props.onClick();
   await tick(); assert.equal(polls, 2); assert.equal(starts, 1);
-  descendants(f.render()).find(node => node.type === 'button' && node.props.children === '关闭').props.onClick();
+  descendants(f.render()).find(node => node.type === 'button' && node.props.children === 'portal.home.close').props.onClick();
   await flush(); f.render(); f.h.effects();
   assert.equal(cancelled, 1); assert.equal(f.timers.size, 0);
 });
@@ -1353,7 +1353,7 @@ test('QR expiry waits for an in-flight import and never starts another session',
     throw new Error('unexpected operation');
   },{Date:{now:()=>now}});
   f.render();f.h.effects();await flush();f.render();f.h.effects();
-  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('扫码添加账号'));
+  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('portal.home.scanAdd'));
   add().props.onClick();await flush();f.render();f.h.effects();
   const tick=[...f.timers.values()][0];const pending=tick();await flush();
   now=2000;await tick();assert.equal(polls,1);assert.equal(cancelled,0);assert.equal(starts,1);
@@ -1373,13 +1373,13 @@ test('QR expiry after uncertain polling requires a read before another mutation'
     throw new Error('unexpected operation');
   },{Date:{now:()=>now}});
   f.render();f.h.effects();await flush();f.render();f.h.effects();
-  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('扫码添加账号'));
+  const add=()=>descendants(f.render()).find(n=>n.type==='button'&&JSON.stringify(n.props.children).includes('portal.home.scanAdd'));
   add().props.onClick();await flush();f.render();f.h.effects();
   const tick=[...f.timers.values()][0];await tick();now=2000;await tick();
-  assert.match(JSON.stringify(f.render()),/结果待核对/);
+  assert.match(JSON.stringify(f.render()),/portal\.home\.qrExpired/);
   assert.equal(add().props.disabled,true);assert.equal(polls,1);assert.equal(starts,1);
-  assert.equal(descendants(f.render()).some(n=>n.type==='button'&&n.props.children==='重试当前二维码'),false);
-  descendants(f.render()).find(n=>n.type==='button'&&n.props.children==='关闭').props.onClick();await flush();
+  assert.equal(descendants(f.render()).some(n=>n.type==='button'&&n.props.children==='portal.home.retryQr'),false);
+  descendants(f.render()).find(n=>n.type==='button'&&n.props.children==='portal.home.close').props.onClick();await flush();
   assert.equal(add().props.disabled,true);assert.equal(starts,1);
 });
 

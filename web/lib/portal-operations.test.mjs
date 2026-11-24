@@ -38,8 +38,8 @@ test('admin bonus requires exact root identity and retry-stable actual grants, n
   assert.match(dialog, /crypto.randomUUID/);
   assert.match(dialog, /const body = submitted \|\|/);
   assert.match(dialog, /portal\.members\.bonusDays/);
-  assert.match(portal, /额度已用尽，请联系管理员赠送额度/);
-  assert.match(portal, /admin_bonus: '管理员赠送积分'/);
+  assert.match(portal, /portal\.home\.quotaExhausted/);
+  assert.match(portal, /admin_bonus: t\('portal\.home\.kindBonus'\)/);
   assert.doesNotMatch(dialog, /localStorage|sessionStorage/);
 });
 test('dispatch hold and request-end proof are displayed without a force-unlock affordance', () => {

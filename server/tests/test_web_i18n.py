@@ -355,15 +355,14 @@ class WebKeyUsageTest(unittest.TestCase):
                                  f'{name} 有 {len(missing)} 个键在字典里不存在：{detail}')
 
     def test_portal_auth_pages_have_no_hardcoded_text(self) -> None:
-        """门户四块界面的文案必须全部走 i18n，注释除外。
+        """门户各界面（主页 / 登录 / 注册 / 默认密钥 / 请求记录）的文案必须全部走 i18n，注释除外。
 
         `/portal` 与 `/members` 曾是全站唯一没有 i18n 的模块（其余 47 个命名空间
-        都翻译好了），海外用户点进门户页看到整页中文。登录 / 注册 / 默认密钥 /
-        请求记录四块已经改完，这里锁住不让它退回去 —— 除注释外再出现汉字，
-        就是又漏了 t()。
+        都翻译好了），海外用户点进门户页看到整页中文。这几块已经改完，这里锁住
+        不让它退回去 —— 除注释外再出现汉字，就是又漏了 t()。
         """
         portal = _ROOT / 'web' / 'app' / 'portal'
-        for name in ('PortalLogin.tsx', 'PortalRegister.tsx',
+        for name in ('page.tsx', 'PortalLogin.tsx', 'PortalRegister.tsx',
                      'PortalKeys.tsx', 'PortalRequests.tsx'):
             with self.subTest(page=name):
                 path = portal / name
