@@ -218,34 +218,45 @@ def static_suite() -> dict:
 
     规则集故意收得很窄：完整 ruff 默认规则在这个仓库有 2700+ 条历史告警
     （`UP006`/`I001` 之类风格项），全开会把门禁变成噪声墙，反而没人看。
-    `F811`（重复定义）有 53 条、绝大多数是 `try: import x except: x = None`
-    这种正当写法，也先不收 —— 等单独清理干净再说。
+    历史上 `F811`（重复定义）报 53 条。2026-11-24 逐条看过，里面**没有一条**
+    是 `try: import x except: x = None` —— 全是测试文件里「参数名遮蔽了 import
+    进来的 fixture」这种有意写法，另有 3 处是生产代码在同一函数内重复 import
+    模块级早已 import 过的模块。那 3 处已修掉，所以 F811 现在只查生产代码：
+    测试里的参数遮蔽是正当写法，收进来只会变成噪声墙。
     """
     exe = shutil.which('ruff')
     if exe:
-        args = [exe, 'check']
+        base = [exe, 'check']
     else:
         exe = shutil.which('python') or shutil.which('python3')
         if not exe:
             return {'skipped': True, 'reason': 'ruff/python not found'}
-        args = [exe, '-m', 'ruff', 'check']
-    args += ['server', 'deploy', 'tools', '--select', 'F821',
-             '--output-format', 'concise']
-    try:
-        proc = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
-                              timeout=300, encoding='utf-8', errors='replace')
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        # ruff 没装时 `python -m ruff` 返回非零而不是抛异常，真正的 OSError
-        # 意味着解释器本身有问题 —— 这时跳过比让门禁误报更合理。
-        return {'skipped': True, 'reason': str(exc)}
-    output = ((proc.stdout or '') + (proc.stderr or '')).strip()
-    if 'No module named ruff' in output or "No module named 'ruff'" in output:
-        return {'skipped': True, 'reason': 'ruff not installed'}
-    if proc.returncode != 0:
-        print('静态检查发现未定义名字（执行到就是 NameError）：', file=sys.stderr)
-        print('\n'.join(output.splitlines()[:25]), file=sys.stderr)
-        return {'ok': False, 'returncode': proc.returncode}
-    print('静态检查通过（F821 未定义名字 0 处）')
+        base = [exe, '-m', 'ruff', 'check']
+
+    checks = (
+        (['server', 'deploy', 'tools', '--select', 'F821'],
+         '未定义名字（执行到就是 NameError）', 'F821 未定义名字'),
+        (['server', 'deploy', 'tools', '--exclude', 'server/tests',
+          '--select', 'F811'],
+         '生产代码里的重复定义', 'F811 重复定义'),
+    )
+    for extra, label, short in checks:
+        args = base + extra + ['--output-format', 'concise']
+        try:
+            proc = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
+                                  timeout=300, encoding='utf-8', errors='replace')
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # ruff 没装时 `python -m ruff` 返回非零而不是抛异常，真正的 OSError
+            # 意味着解释器本身有问题 —— 这时跳过比让门禁误报更合理。
+            return {'skipped': True, 'reason': str(exc)}
+        output = ((proc.stdout or '') + (proc.stderr or '')).strip()
+        if 'No module named ruff' in output or "No module named 'ruff'" in output:
+            return {'skipped': True, 'reason': 'ruff not installed'}
+        if proc.returncode != 0:
+            print(f'静态检查发现{label}：', file=sys.stderr)
+            print('\n'.join(output.splitlines()[:25]), file=sys.stderr)
+            return {'ok': False, 'returncode': proc.returncode}
+        print(f'静态检查通过（{short} 0 处）')
     return {'ok': True}
 
 

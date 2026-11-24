@@ -298,7 +298,6 @@ def settle(usage, pt, ct, credit):
     if not _owned(row, state):
         raise BudgetRejected('预算预留已被恢复进程隔离', 'budget_fenced')
     fresh = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (state.key_id,))
-    from . import metering
     measured = metering.parse_usage(usage)
     pt = ((measured.prompt_tokens or 0) if isinstance(usage, dict) and 'prompt_tokens' in usage
           else metering._int_or_none(pt)[0] or 0)

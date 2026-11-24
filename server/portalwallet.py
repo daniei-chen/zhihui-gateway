@@ -142,7 +142,7 @@ def supplier_units(credit):
     User grants and operator-entered amounts retain their strict six-digit input
     validation; only measured supplier credit uses this conversion.
     """
-    from . import ledger, metering
+    from . import ledger
     parsed, malformed = metering.parse_credit(credit)
     if malformed or parsed is None:
         return None
@@ -158,7 +158,6 @@ def receipt(state, usage, credit):
         return
     amount = None
     supplier = None
-    from . import metering
     try:
         if credit is not None:supplier = supplier_units(credit)
     except ValueError:pass
