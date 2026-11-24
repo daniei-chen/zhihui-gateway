@@ -48,6 +48,9 @@ $RUN activate vX.Y.Z
 # 4) 重启并确认（宿主机）
 sudo systemctl restart workbuddy-web
 sleep 12 && curl -s http://127.0.0.1:7866/api/release
+
+# 4b) 发布控制台（**别手工切 symlink**，见下方陷阱）
+sudo deploy/publish-console.sh --web /tmp/webout-XYZ.tar.gz --version vX.Y.Z
 ```
 
 ### 判据
@@ -63,6 +66,23 @@ sleep 12 && curl -s http://127.0.0.1:7866/api/release
 | 服务起不来但门禁全绿 | 检查 `releases/current` 是不是写成了绝对路径（应为相对名 `vX.Y.Z`） |
 | `verify` 报 `release_id != 目录名` | 归档里的元数据版本号没跟着改 |
 
+### 陷阱：控制台的 `/_next/static` 不在控制台目录里
+
+nginx 对 `/_next/static/` 有单独的 location：
+
+`
+location ^~ /_next/static/ { root /var/cache/zhihui-static-performance-20261104;
+                             try_files $uri @zhihui_static_pool_fallback; }
+`
+
+也就是说页面 HTML 从 `zhihui-console-current` 出，**页面里的 JS/CSS 从那个缓存池出**。
+只切 symlink、不把新的 `_next/static` 同步进池子，结果就是：hash 没变的 chunk 一切正常，
+**凡是版本变了重新打包的 chunk 全部 404** —— 用户看到的是"页面资源已更新，刷新一次即可"，
+但刷新也没用，服务端确实没有那个文件。
+
+2026-11-24 v1.5.46 上线时就翻了一次车（27 次 404、页面白屏）。现在统一用
+`deploy/publish-console.sh`：解包切目录 → **同步静态池** → 抓每个页面 HTML 里的
+`/_next/static` 链接逐个校验，非 200 直接失败退出。
 ### 已知的先后顺序陷阱
 
 `docs/protected-customizations.json` **自身也在** `server/release-provenance.json`
