@@ -168,6 +168,14 @@ def frontend_suite() -> dict:
     web = ROOT / 'web'
     if not (web / 'package.json').is_file():
         return {'skipped': True, 'reason': 'web/package.json missing'}
+    # 没装依赖就跑不了：这些用例 `require('typescript')` 等真实包。
+    #
+    # 2026-11-24 实际踩到：CI 的后端 job 直接跑本文件，而它没有 `npm ci` ——
+    # 于是 `web/tests/steward.test.cjs` 在 CI 上以 exitCode 1 / location 1:1
+    # 崩掉（模块加载失败），而同一份代码在本地全绿。门禁要区分「代码坏了」和
+    # 「这台机器没装依赖」：前者必须红，后者跳过并说清原因。
+    if not (web / 'node_modules').is_dir():
+        return {'skipped': True, 'reason': 'web/node_modules missing (run npm ci)'}
     try:
         proc = subprocess.run([npm, 'test'], cwd=str(web), capture_output=True,
                               text=True, timeout=900, encoding='utf-8',
