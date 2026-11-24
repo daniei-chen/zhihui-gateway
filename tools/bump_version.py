@@ -112,13 +112,9 @@ def sync_provenance(version: str) -> int:
     # tag 的完整哈希」—— 一旦它漂了，这条判据要么误报失败，要么被当成噪声忽略，
     # 两种都比没有更糟。
     #
-    # 工作区不干净时拒绝写入：那时 HEAD 描述不了将要打包的内容。
+    # 工作区不干净时**不能**写 source_commit：那时 HEAD 描述不了将要打包的内容。
+    # 但哈希重算是另一回事 —— 改完文档顺手对齐哈希是常态，不能因此整条命令失败。
     dirty = _git('status', '--porcelain', '--untracked-files=no')
-    if dirty:
-        print('  ⚠ 工作区有未提交改动，无法确定 source_commit（先提交）：')
-        for line in dirty.splitlines()[:5]:
-            print(f'    {line}')
-        return 1
     head = _git('rev-parse', 'HEAD')
     previous = data.get('source_commit')
     # **只在改版本号时**写 source_commit / base_*。
@@ -128,17 +124,22 @@ def sync_provenance(version: str) -> int:
     # 「HEAD ≠ 已发布提交」，跟着 HEAD 走就成了永远差一个提交的追逐。
     # 所以：升版本时锁定当时 HEAD（= 随后要打 tag 的提交），之后不再自作主张。
     if previous_version != version:
-        if previous != head:
-            data['source_commit'] = head
-            print(f'  source_commit: {str(previous)[:12]} → {head[:12]}')
-        try:
-            base_tag = _git('describe', '--tags', '--abbrev=0',
-                            f'--exclude=v{version}', 'HEAD')
-            data['base_release'] = base_tag
-            data['base_commit'] = _git('rev-parse', f'{base_tag}^{{commit}}')
-            print(f'  基线: {base_tag}')
-        except Exception:  # noqa: BLE001 - 拿不到基线就保持原值
-            print('  ⚠ 找不到上一个 tag，base_release / base_commit 保持原值')
+        if dirty:
+            print('  ⚠ 工作区有未提交改动，本次不更新 source_commit（先提交再升版本）：')
+            for line in dirty.splitlines()[:5]:
+                print(f'    {line}')
+        else:
+            if previous != head:
+                data['source_commit'] = head
+                print(f'  source_commit: {str(previous)[:12]} → {head[:12]}')
+            try:
+                base_tag = _git('describe', '--tags', '--abbrev=0',
+                                f'--exclude=v{version}', 'HEAD')
+                data['base_release'] = base_tag
+                data['base_commit'] = _git('rev-parse', f'{base_tag}^{{commit}}')
+                print(f'  基线: {base_tag}')
+            except Exception:  # noqa: BLE001 - 拿不到基线就保持原值
+                print('  ⚠ 找不到上一个 tag，base_release / base_commit 保持原值')
 
     write_json(PROVENANCE, data)
 
