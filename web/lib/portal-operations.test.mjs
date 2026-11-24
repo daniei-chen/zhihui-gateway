@@ -20,17 +20,17 @@ test('operator amounts preserve six decimal places without rounding away a debt'
   assert.throws(() => exactCredit(1.5));
 });
 test('debt waiver is distinct from adding credits and requests keep explicit confirmation', () => {
-  assert.equal(operationLabel('waive'), '管理员豁免');
+  assert.equal(operationLabel('waive'), 'portal.wallet.opWaive');
   const source = fs.readFileSync(new URL('../app/(main)/members/WalletOperations.tsx', import.meta.url), 'utf8');
   assert.match(source, /crypto.randomUUID/);
   assert.match(source, /expected_units: target.row.amount_units/);
   assert.match(source, /setSubmitted\(operation\)/);
   assert.match(source, /can_resolve/);
-  assert.match(source, /我已核对用户、金额和凭证/);
+  assert.match(source, /portal\.wallet\.confirm/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
 });
 test('admin bonus requires exact root identity and retry-stable actual grants, not credit lines', () => {
-  assert.equal(operationLabel('bonus'), '管理员赠送积分');
+  assert.equal(operationLabel('bonus'), 'portal.wallet.opBonus');
   const page = fs.readFileSync(new URL('../app/(main)/members/page.tsx', import.meta.url), 'utf8');
   const dialog = fs.readFileSync(new URL('../app/(main)/members/BonusDialog.tsx', import.meta.url), 'utf8');
   const portal = fs.readFileSync(new URL('../app/portal/page.tsx', import.meta.url), 'utf8');
@@ -49,6 +49,6 @@ test('dispatch hold and request-end proof are displayed without a force-unlock a
   assert.match(page, /data.dispatch_note/);
   assert.match(page, /!data.pool_enabled/);
   assert.match(operations, /row.end_confirmed/);
-  assert.match(operations, /不代表费用为0/);
-  assert.match(operations, /没有强制解锁入口/);
+  assert.match(operations, /portal\.wallet\.endConfirmed/);
+  assert.match(operations, /portal\.wallet\.pendingDesc/);
 });

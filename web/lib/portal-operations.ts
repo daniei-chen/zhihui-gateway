@@ -24,4 +24,11 @@ export function creditInputUnits(text: string): number | null {
   const result = Number(whole) * 1_000_000 + Number(fraction.padEnd(6, '0'));
   return Number.isSafeInteger(result) && result <= 1_000_000_000_000_000 ? result : null;
 }
-export const operationLabel = (kind: string) => ({resolve: '费用核对', repay: '积分抵历史欠额', waive: '管理员豁免', bonus: '管理员赠送积分', platform_overrun: '平台承担超额（不扣用户）'}[kind] || kind);
+/** 处置类型 → 文案键。调用方用 t() 取词；未知类型原样返回，便于发现新增类型。 */
+export const operationLabel = (kind: string) => ({
+  resolve: 'portal.wallet.opResolve',
+  repay: 'portal.wallet.opRepay',
+  waive: 'portal.wallet.opWaive',
+  bonus: 'portal.wallet.opBonus',
+  platform_overrun: 'portal.wallet.opOverrun',
+}[kind] || kind);
