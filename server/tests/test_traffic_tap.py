@@ -330,10 +330,40 @@ class ShrinkTest(unittest.TestCase):
                              gateway={'messages': list(messages)})
         out = self._prepare(payload)
         kept = out['client']['messages']
-        self.assertEqual(len(kept), traffic.LIST_HEAD + 1 + traffic.LIST_TAIL)
-        self.assertTrue(kept[traffic.LIST_HEAD].get('_traffic_placeholder'))
-        self.assertIn('省略', kept[traffic.LIST_HEAD]['content'])
-        self.assertTrue(any('messages' in item for item in out['truncated_fields']))
+        self.assertLessEqual(len(kept), traffic.LIST_HEAD + 1 + traffic.LIST_TAIL)
+        placeholders = [m for m in kept if m.get('_traffic_placeholder')]
+        self.assertEqual(len(placeholders), 1)
+        self.assertIn('省略', placeholders[0]['content'])
+
+    def test_both_sections_are_trimmed(self) -> None:
+        """回归：曾写成「裁完 client 就 break」，于是 gateway 的几百条原样落盘，
+        单条记录达到 790 KB，256 KB 上限形同虚设。
+
+        真实数据：client 裁到 13 条（156 KB）、gateway 仍 386 条（541 KB）。
+        """
+        many = [{'role': 'user', 'content': 'y' * 3000} for _ in range(400)]
+        payload = self._base(client={'messages': list(many)},
+                             gateway={'messages': list(many)})
+        raw = traffic._prepare(payload)
+        self.assertLessEqual(len(raw), traffic.LIST_LIMIT,
+                             f'单条记录 {len(raw)} 字节，超过 {traffic.LIST_LIMIT} 上限')
+        out = json.loads(raw)
+        for section in ('client', 'gateway'):
+            self.assertLessEqual(len(out[section]['messages']),
+                                 traffic.LIST_HEAD + 1 + traffic.LIST_TAIL)
+
+    def test_oversize_section_is_dropped_whole(self) -> None:
+        """条数裁到最少仍超限时，整段省略 —— 绝不写超上限的记录。"""
+        # 300 个消息、每条 30 KB：单条不触发字段裁剪，但总量 9 MB。
+        heavy = [{'role': 'user', 'content': 'z' * 30_000} for _ in range(300)]
+        payload = self._base(client={'messages': heavy, 'tools': [
+            {'name': f'tool{i}', 'description': 'd' * 30_000} for i in range(10)]},
+            gateway={'messages': heavy})
+        raw = traffic._prepare(payload)
+        self.assertLessEqual(len(raw), traffic.LIST_LIMIT)
+        out = json.loads(raw)
+        self.assertTrue(out['truncated'])
+        self.assertTrue(any('整体省略' in item for item in out['truncated_fields']))
 
     def test_diff_is_never_shrunk(self) -> None:
         """差异是摘要，逐条都很短；裁它等于毁掉最该看的东西。"""

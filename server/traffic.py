@@ -232,7 +232,8 @@ def _shrink(node, path: str, found: list) -> None:
                 _shrink(value, f'{path}[{index}]', found)
 
 
-def _shrink_messages(section: dict, path: str, found: list) -> bool:
+def _shrink_messages(section: dict, path: str, found: list,
+                     head: int = LIST_HEAD, tail: int = LIST_TAIL) -> bool:
     """消息条数太多时保留首尾、中间插一条说明。返回是否动过。
 
     为什么需要这层：字段裁剪只解决「单条太长」，解决不了「几千条消息」。
@@ -240,41 +241,67 @@ def _shrink_messages(section: dict, path: str, found: list) -> bool:
     结构仍然是合法的 JSON。
     """
     messages = section.get('messages')
-    if not isinstance(messages, list) or len(messages) <= LIST_HEAD + LIST_TAIL + 1:
+    if not isinstance(messages, list) or len(messages) <= head + tail + 1:
         return False
-    dropped = len(messages) - LIST_HEAD - LIST_TAIL
+    dropped = len(messages) - head - tail
     placeholder = {
         'role': 'system',
         'content': f'……（此处省略 {dropped} 条消息，共 {len(messages)} 条）……',
         '_traffic_placeholder': True,
     }
-    section['messages'] = messages[:LIST_HEAD] + [placeholder] + messages[-LIST_TAIL:]
+    section['messages'] = messages[:head] + [placeholder] + (messages[-tail:] if tail else [])
     found.append(f'{path}.messages（省略 {dropped} 条）')
     return True
 
 
+def _dumps(payload: dict) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+
+
 def _prepare(payload: dict) -> bytes:
-    """裁剪到可落盘尺寸，返回要写的字节。保证 JSON 合法。"""
+    """裁剪到可落盘尺寸，返回要写的字节。**保证 JSON 合法**，并遵守整体上限。"""
     found: list[str] = []
     for section_name in ('client', 'gateway', 'response'):
         section = payload.get(section_name)
         if isinstance(section, (dict, list)):
             _shrink(section, section_name, found)
 
-    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+    raw = _dumps(payload)
     if len(raw) > LIST_LIMIT:
-        # 字段都裁过了还超限，说明是条数问题。只动请求侧的消息列表。
-        for section_name in ('client', 'gateway'):
-            section = payload.get(section_name)
-            if isinstance(section, dict) and _shrink_messages(section, section_name, found):
+        # 逐步收紧保留条数。**两个 section 都要裁** —— 2026-11-24 这里曾写成
+        # 裁完 client 就 break，于是 gateway 的 386 条（541 KB）原样落盘，
+        # 单条记录达到 790 KB，上限形同虚设。
+        for head, tail in ((LIST_HEAD, LIST_TAIL), (4, 2), (2, 1), (1, 0)):
+            if len(raw) <= LIST_LIMIT:
                 break
-        raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+            touched = False
+            for section_name in ('client', 'gateway'):
+                section = payload.get(section_name)
+                if isinstance(section, dict):
+                    touched = _shrink_messages(section, section_name, found, head, tail) or touched
+            if not touched:
+                break
+            raw = _dumps(payload)
+
+    if len(raw) > LIST_LIMIT:
+        # 仍然超：说明超的不是条数（例如某一个段本身就有巨多字段）。
+        # 这时明确整段省略 —— 宁可只剩骨架，也不让单条记录撑破上限。
+        for section_name in ('client', 'gateway', 'response'):
+            section = payload.get(section_name)
+            if isinstance(section, (dict, list)) and len(_dumps(section)) > LIST_LIMIT // 3:
+                payload[section_name] = {
+                    '_traffic_oversize': True,
+                    '_note': f'该段超过 {LIST_LIMIT // 1024} KB，已整体省略；'
+                             f'需要完整内容请在该时刻直接复现请求。',
+                }
+                found.append(f'{section_name}（整体省略）')
+        raw = _dumps(payload)
 
     payload['truncated'] = bool(found)
-    payload['truncated_fields'] = found[:40]
+    payload['truncated_fields'] = list(dict.fromkeys(found))[:40]
     if payload['truncated']:
         _STATS['truncated'] += 1
-    return json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+    return _dumps(payload)
 
 
 # ── 写入 ──────────────────────────────────────────────────────────────────
