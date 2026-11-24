@@ -22,10 +22,14 @@ test('checkin progress counts only confirmed eligible accounts and keeps unknown
   assert.equal(result.total,7);assert.equal(result.confirmed,1);assert.equal(result.ready,2);assert.equal(result.pending,4);
 });
 
+// 组件侧模板文案走 t()：这里的 t 直接把键名当译文返回，于是断言检查的是
+// 「用了哪个键」而不是「用了哪句话」—— 措辞调整不该让测试变红。
+const t = key => key;
+
 test('request presentation keeps zero distinct from unknown and never fabricates measurements',()=>{
-  assert.equal(requestCredit(0),'0');assert.equal(requestCredit(null),'待核实');assert.equal(requestCredit(-1),'待核实');
-  assert.equal(requestTokens(3,7),'10');assert.equal(requestTokens(null,7),'待核实');
-  assert.equal(requestTokens(Number.MAX_SAFE_INTEGER,1),'待核实');assert.equal(requestTokens(0,0),'0');
-  assert.equal(requestLatency(0),'0 ms');assert.equal(requestLatency(1250),'1.25 s');assert.equal(requestLatency(NaN),'待核实');
-  assert.equal(requestStatus(200).label,'成功');assert.equal(requestStatus(499).label,'已取消');assert.equal(requestStatus(503).label,'失败');
+  assert.equal(requestCredit(0,t),'0');assert.equal(requestCredit(null,t),'portal.pending');assert.equal(requestCredit(-1,t),'portal.pending');
+  assert.equal(requestTokens(3,7,t),'10');assert.equal(requestTokens(null,7,t),'portal.pending');
+  assert.equal(requestTokens(Number.MAX_SAFE_INTEGER,1,t),'portal.pending');assert.equal(requestTokens(0,0,t),'0');
+  assert.equal(requestLatency(0,t),'0 ms');assert.equal(requestLatency(1250,t),'1.25 s');assert.equal(requestLatency(NaN,t),'portal.pending');
+  assert.equal(requestStatus(200,t).label,'portal.status.success');assert.equal(requestStatus(499,t).label,'portal.status.cancelled');assert.equal(requestStatus(503,t).label,'portal.status.failed');
 });

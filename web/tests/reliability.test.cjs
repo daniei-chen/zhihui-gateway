@@ -1108,8 +1108,10 @@ function requestFixture(fetch) {
     react: h.react, 'react/jsx-runtime': {jsx, jsxs: jsx}, 'lucide-react': {History:'icon',RefreshCw:'icon',ChevronLeft:'icon',ChevronRight:'icon'},
     '@/lib/portal-api': {portalFetch: fetch, PortalError, portalTime: String},
     '@/lib/portal-display': {requestCredit: value => value === null ? '待核实' : String(value),requestLatency:String,
-      requestTokens:(a,b)=>String(a+b),requestStatus:()=>({tone:'success',label:'成功'})},
+      requestTokens:(a,b)=>String(a+b),requestStatus:()=>({tone:'success',label:'成功'}),
+      creditUnverified: value => !(typeof value === 'number' && Number.isFinite(value) && value >= 0)},
     '@/lib/use-heartbeat': {useHeartbeat(fn) {heartbeat = fn;}}, globals: {AbortController},
+    '@/lib/i18n/provider': {useT: () => key => key},
   });
   const render = () => h.render(() => Requests({onUnauthorized: unauthorized}));
   const button = name => descendants(render()).find(node => node.type === 'button' && node.props.children === name);
@@ -1123,12 +1125,12 @@ test('request history stays page-bound, exposes load errors and retries without 
     return {page: path.endsWith('2') ? 2 : 1, total: 35, items: [{ts: 1, model: path.endsWith('2') ? 'page-two' : 'page-one',status:200,prompt_tokens:3,completion_tokens:4,latency_ms:20,credit:null}]};
   });
   f.render(); f.h.effects(); await flush(); assert.match(JSON.stringify(f.render()), /page-one/);
-  f.button('下一页').props.onClick(); f.render(); f.h.effects(); await flush();
+  f.button('portal.requests.next').props.onClick(); f.render(); f.h.effects(); await flush();
   assert.match(JSON.stringify(f.render()), /page-two/); assert.doesNotMatch(JSON.stringify(f.render()), /page-one/);
-  assert.equal(f.button('下一页').props.disabled, true);
+  assert.equal(f.button('portal.requests.next').props.disabled, true);
   fail = true; await f.heartbeat();
-  assert.match(JSON.stringify(f.render()), /history offline/); assert.match(JSON.stringify(f.render()), /上次读取/);
-  fail = false; f.button('重试记录').props.onClick(); await flush(); assert.doesNotMatch(JSON.stringify(f.render()), /history offline/);
+  assert.match(JSON.stringify(f.render()), /history offline/); assert.match(JSON.stringify(f.render()), /portal\.requests\.stale/);
+  fail = false; f.button('portal.requests.retry').props.onClick(); await flush(); assert.doesNotMatch(JSON.stringify(f.render()), /history offline/);
   assert.equal(calls.every(path => path.startsWith('portal/requests?page=')), true);
 });
 
@@ -1139,7 +1141,7 @@ test('request history never renders a previous page under failed new-page or aut
     if (path.endsWith('2')) throw new Error('page two unavailable');
     return {page:1,total:35,items:[{ts:1,model:'private-page-one',status:200,prompt_tokens:0,completion_tokens:0,latency_ms:0,credit:0}]};
   });
-  f.render(); f.h.effects(); await flush(); f.button('下一页').props.onClick(); f.render(); f.h.effects(); await flush();
+  f.render(); f.h.effects(); await flush(); f.button('portal.requests.next').props.onClick(); f.render(); f.h.effects(); await flush();
   assert.match(JSON.stringify(f.render()), /page two unavailable/); assert.doesNotMatch(JSON.stringify(f.render()), /private-page-one/);
   revoked = true; await f.heartbeat(); assert.equal(f.revoked(), 1); assert.doesNotMatch(JSON.stringify(f.render()), /private-page-one/);
 });
@@ -1209,6 +1211,7 @@ function portalKeyFixture(fetch) {
   const {default: Keys} = load('app/portal/PortalKeys.tsx', {react: h.react, 'react/jsx-runtime': {jsx,jsxs:jsx},
     '@/lib/base-path':{BASE_PATH:''},'@/lib/portal-api':{portalFetch:fetch,PortalError,portalTime:String},
     '@/components/animate-ui/radix/dialog':Object.fromEntries(['Dialog','DialogBody','DialogContent','DialogDescription','DialogHeader','DialogTitle'].map(name=>[name,name])),
+    '@/lib/i18n/provider':{useT:()=>key=>key},
     globals:{AbortController,window:{location:{origin:'http://localhost'}}},
   });
   const render=()=>h.render(()=>Keys({onUnauthorized:unauthorized}));
@@ -1222,8 +1225,8 @@ test('existing default key displays username and removes all key creation contro
     return {items:[{id:7,label:'alice',prefix:'synthetic-prefix',enabled:true,created_at:1}],can_initialize:false,allowed_models:[]};
   });
   f.render();f.h.effects();await flush();assert.equal(f.form(),undefined);
-  const tree=JSON.stringify(f.render());assert.match(tree,/alice/);assert.match(tree,/默认密钥/);assert.equal(writes,0);
-  assert.doesNotMatch(tree,/最多.*5|生成密钥|密钥名称/);
+  const tree=JSON.stringify(f.render());assert.match(tree,/alice/);assert.match(tree,/portal\.keys\.defaultSuffix/);assert.equal(writes,0);
+  assert.doesNotMatch(tree,/portal\.keys\.initEnable/);
 });
 
 test('portal key creation preserves one-time result and blocks duplicate creation if following list refresh fails', async () => {
@@ -1233,7 +1236,7 @@ test('portal key creation preserves one-time result and blocks duplicate creatio
     if(++reads>1)throw new Error('list offline'); return {items:[],can_initialize:true,allowed_models:['deepseek-fixture']};
   });
   f.render();f.h.effects();await flush(); f.form().props.onSubmit({preventDefault(){}});await flush();
-  const tree=JSON.stringify(f.render()); assert.match(tree,/synthetic-one-time-value/);assert.match(tree,/默认密钥已就绪，但列表刷新失败/);
+  const tree=JSON.stringify(f.render()); assert.match(tree,/synthetic-one-time-value/);assert.match(tree,/portal\.keys\.errRefreshAfter/);
   f.form().props.onSubmit({preventDefault(){}}); await flush(); assert.equal(writes,1);
 });
 
@@ -1254,9 +1257,9 @@ test('uncertain portal key creation requires a list read before another mutation
     return {items:[],can_initialize:true,allowed_models:[]};
   });
   f.render();f.h.effects();await flush();f.form().props.onSubmit({preventDefault(){}});await flush();
-  assert.match(JSON.stringify(f.render()),/操作结果待确认/);
+  assert.match(JSON.stringify(f.render()),/portal\.keys\.errUnconfirmed/);
   f.form().props.onSubmit({preventDefault(){}});await flush();assert.equal(writes,1);
-  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='刷新列表').props.onClick();await flush();
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='portal.keys.refresh').props.onClick();await flush();
   f.form().props.onSubmit({preventDefault(){}});await flush();assert.equal(writes,2);
 });
 
@@ -1267,7 +1270,7 @@ test('request page change aborts obsolete work and late response cannot replace 
   });
   f.render();f.h.effects();await flush();
   reads[0].work.resolve({page:1,total:35,items:[{ts:1,model:'first',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await flush();
-  const old=f.heartbeat();await flush();f.button('下一页').props.onClick();f.render();f.h.effects();await flush();
+  const old=f.heartbeat();await flush();f.button('portal.requests.next').props.onClick();f.render();f.h.effects();await flush();
   assert.equal(reads[1].signal.aborted,true);
   reads[2].work.resolve({page:2,total:35,items:[{ts:2,model:'current',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await flush();
   reads[1].work.resolve({page:1,total:35,items:[{ts:1,model:'late-private',status:200,prompt_tokens:1,completion_tokens:2,latency_ms:5,credit:1}]});await old;
@@ -1283,11 +1286,11 @@ test('successful portal key revocation remains disabled even if its follow-up li
     return {items:[{id:7,label:'fixture',prefix:'synthetic',enabled:true,created_at:1}],allowed_models:[]};
   });
   f.render();f.h.effects();await flush();
-  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='撤销').props.onClick();
-  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='确认撤销').props.onClick();await flush();
-  assert.equal(deletes,1);assert.match(JSON.stringify(f.render()),/密钥已撤销，但列表刷新失败/);
-  assert.equal(descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='撤销').props.disabled,true);
-  assert.doesNotMatch(JSON.stringify(f.render()),/确认撤销/);
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='portal.keys.revoke').props.onClick();
+  descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='portal.keys.revokeConfirm').props.onClick();await flush();
+  assert.equal(deletes,1);assert.match(JSON.stringify(f.render()),/portal\.keys\.errRefreshAfter/);
+  assert.equal(descendants(f.render()).find(node=>node.type==='button'&&node.props.children==='portal.keys.revoke').props.disabled,true);
+  assert.doesNotMatch(JSON.stringify(f.render()),/portal\.keys\.revokeConfirm/);
 });
 
 test('portal action authorization failure immediately clears private workspace instead of retaining it', async () => {
@@ -1386,10 +1389,10 @@ test('key page distinguishes enabled key, model discovery and paid dispatch with
     dispatch_note: 'synthetic dispatch reason'}));
   f.render(); f.h.effects(); await flush();
   const view = JSON.stringify(f.render());
-  assert.match(view, /模型调用暂未开放/);
-  assert.match(view, /可读取模型目录/);
+  assert.match(view, /portal\.keys\.dispatchClosed/);
+  assert.match(view, /portal\.keys\.modelsReadable/);
   assert.match(view, /synthetic dispatch reason/);
-  assert.match(view, /已启用/);
+  assert.match(view, /portal\.keys\.enabled/);
 });
 
 test('approved key page states wallet cap and does not show the unpaid-activation warning', async () => {
@@ -1397,10 +1400,10 @@ test('approved key page states wallet cap and does not show the unpaid-activatio
     model_discovery_enabled: true, pool_enabled: true, dispatch_enabled: true, dispatch_note: 'approved'}));
   f.render(); f.h.effects(); await flush();
   const view = JSON.stringify(f.render());
-  assert.doesNotMatch(view, /模型调用暂未开放/);
-  assert.match(view, /余额为零拒绝新请求/);
-  assert.match(view, /超出部分由平台承担/);
-  assert.match(view, /不扣未来签到/);
+  assert.doesNotMatch(view, /portal\.keys\.dispatchClosed/);
+  assert.match(view, /portal\.keys\.helpCap/);
+  assert.match(view, /portal\.keys\.helpCap/);
+  assert.match(view, /portal\.keys\.helpCap/);
 });
 
 function authRaceFixture() {

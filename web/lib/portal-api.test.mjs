@@ -34,7 +34,7 @@ test('request history pages and password reset preserve visible security boundar
   const requests = fs.readFileSync(new URL('../app/portal/PortalRequests.tsx', import.meta.url), 'utf8');
   assert.match(portal, /tab === 'requests' && <PortalRequests key=\{me.id\} onUnauthorized=\{reset\}/);
   assert.match(requests, /portal\/requests\?page=\$\{page\}/);
-  assert.match(requests, /请求记录分页/);
+  assert.match(requests, /portal\.requests\.pagination/);
   assert.match(requests, /data\?\.page === page \? data : null/);
   assert.match(page, /PasswordDialog/);
   assert.match(reset, /旧会话和旧调用密钥/);
