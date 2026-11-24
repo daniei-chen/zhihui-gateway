@@ -55,7 +55,11 @@ class _Rep:
         self.state['target_version'] = tag
 
     def set_integrity(self, status: str, digest: str = '') -> None:
-        self.state['signature'] = {'status': status, 'detail': detail}
+        # 字段名对齐 `deploy/update.py` 的真实写入（`state['integrity']` +
+        # `digest`）。这里原先写的是 `state['signature']` 并引用了一个不存在的
+        # `detail` —— 一旦有人调用这个方法就会 NameError，而因为它从没被调用，
+        # 这个错误在门禁里一直看不出来。
+        self.state['integrity'] = {'status': status, 'digest': digest}
 
     def finish(self, ok: bool) -> None:
         self.state['ok'] = ok

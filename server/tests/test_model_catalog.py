@@ -150,7 +150,7 @@ class CatalogSourceTest(unittest.TestCase):
         calls = []
 
         async def fake(auth):
-            calls.append(token)
+            calls.append(auth)
             return True, [_m('glm-5.2')]
 
         async def upstream():

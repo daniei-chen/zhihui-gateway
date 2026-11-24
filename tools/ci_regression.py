@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -142,7 +144,100 @@ MODULES = (
     "server.tests.test_ops_console_static",
     "server.tests.test_metering_reconcile_wiring",
     "server.tests.test_account_ttft_metric",
+    "server.tests.test_platform_auth",
 )
+
+
+def frontend_suite() -> dict:
+    """跑 web 的前端用例（`npm test`：`lib/*.test.mjs` + `tests/*.test.cjs`）。
+
+    ## 为什么接在这里
+
+    CI 的 `quality.yml` 目前只跑 `node --test lib/*.test.mjs` —— **只覆盖一半**：
+    `web/tests/` 下那 12 个 `.test.cjs` 文件（控制台状态机、i18n、静态导出等）
+    从来没在 CI 上跑过。而修改 workflow 需要令牌带 `workflow` scope，本仓库的令牌
+    没有（2026-11-24 实测：`gist, read:org, repo`），所以先接进门禁：
+    **每次本地验证都跑**，覆盖面立刻补齐，不必等权限。
+
+    整套 244 例实测 2.5 秒，代价可以忽略；找不到 npm 时跳过而不是失败 ——
+    门禁的职责是"这台机器能验的都验了"，不是"必须装 Node"。
+    """
+    npm = shutil.which('npm') or shutil.which('npm.cmd')
+    if not npm:
+        return {'skipped': True, 'reason': 'npm not found'}
+    web = ROOT / 'web'
+    if not (web / 'package.json').is_file():
+        return {'skipped': True, 'reason': 'web/package.json missing'}
+    try:
+        proc = subprocess.run([npm, 'test'], cwd=str(web), capture_output=True,
+                              text=True, timeout=900, encoding='utf-8',
+                              errors='replace', shell=(os.name == 'nt'))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f'前端用例无法执行：{exc}', file=sys.stderr)
+        return {'ok': False, 'error': str(exc)}
+    output = (proc.stdout or '') + (proc.stderr or '')
+    if proc.returncode != 0:
+        # 只打印尾部：node --test 的失败摘要就在最后十几行。
+        print('\n'.join(output.strip().splitlines()[-25:]), file=sys.stderr)
+        return {'ok': False, 'returncode': proc.returncode}
+    # `node --test` 的摘要行形如 "ℹ pass 244"。不写死行首字符：Windows 上
+    # 控制台编码不保证能表示那个符号，实测会被替换成别的字符。
+    passed = 0
+    for line in output.splitlines():
+        match = re.search(r'\bpass\s+(\d+)\s*$', line)
+        if match:
+            passed = int(match.group(1))
+    print(f'前端用例通过 {passed} 例（npm test）')
+    return {'ok': True, 'passed': passed}
+
+
+def static_suite() -> dict:
+    """静态检查：只查「一旦执行就一定炸」的那一类（F821 未定义名字）。
+
+    ## 为什么单独加这一条
+
+    2026-11-22 的「平台属性收敛」重构把 `_platform_spec` 从 `_sessions()` 的
+    局部 import 里删掉、提到别处，但 `start()` 里那两处用法没跟着改 —— 结果
+    **每点一次「添加账号」就是一次 NameError / HTTP 500**，线上真实触发了 4 次。
+
+    更糟的是它逃过了所有既有测试：`test_platform_auth.py` 里 32 个用例其实一直
+    失败，只是那个文件**没被加进门禁清单**，于是「门禁全绿」和「测试是红的」
+    同时成立，两天没人发现。
+
+    所以这里做两件事：静态查 F821（覆盖全部源码，包括还没写测试的地方），
+    并把该测试文件加进 `MODULES`。前者防新增，后者防已有。
+
+    规则集故意收得很窄：完整 ruff 默认规则在这个仓库有 2700+ 条历史告警
+    （`UP006`/`I001` 之类风格项），全开会把门禁变成噪声墙，反而没人看。
+    `F811`（重复定义）有 53 条、绝大多数是 `try: import x except: x = None`
+    这种正当写法，也先不收 —— 等单独清理干净再说。
+    """
+    exe = shutil.which('ruff')
+    if exe:
+        args = [exe, 'check']
+    else:
+        exe = shutil.which('python') or shutil.which('python3')
+        if not exe:
+            return {'skipped': True, 'reason': 'ruff/python not found'}
+        args = [exe, '-m', 'ruff', 'check']
+    args += ['server', 'deploy', 'tools', '--select', 'F821',
+             '--output-format', 'concise']
+    try:
+        proc = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
+                              timeout=300, encoding='utf-8', errors='replace')
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # ruff 没装时 `python -m ruff` 返回非零而不是抛异常，真正的 OSError
+        # 意味着解释器本身有问题 —— 这时跳过比让门禁误报更合理。
+        return {'skipped': True, 'reason': str(exc)}
+    output = ((proc.stdout or '') + (proc.stderr or '')).strip()
+    if 'No module named ruff' in output or "No module named 'ruff'" in output:
+        return {'skipped': True, 'reason': 'ruff not installed'}
+    if proc.returncode != 0:
+        print('静态检查发现未定义名字（执行到就是 NameError）：', file=sys.stderr)
+        print('\n'.join(output.splitlines()[:25]), file=sys.stderr)
+        return {'ok': False, 'returncode': proc.returncode}
+    print('静态检查通过（F821 未定义名字 0 处）')
+    return {'ok': True}
 
 
 def main() -> int:
@@ -158,12 +253,18 @@ def main() -> int:
         for name in MODULES:
             suite.addTests(loader.loadTestsFromName(name))
         result = unittest.TextTestRunner(verbosity=1).run(suite)
+        # 前端用例放在 Python 套件之后：Python 失败时先看到 Python 的报告，
+        # 不必等一套无关的 Node 进程。
+        frontend = frontend_suite()
+        static = static_suite()
         summary = {
             "modules": list(MODULES),
             "tests": result.testsRun,
             "failures": len(result.failures),
             "errors": len(result.errors),
             "skips": len(result.skipped),
+            "frontend": frontend,
+            "static": static,
             "network_namespace_isolated": os.environ.get("ZH_CI_NET_ISOLATED") == "1",
             "isolated_data_dir": True,
         }
@@ -177,7 +278,9 @@ def main() -> int:
                 db._close_connection_locked()
         except Exception:
             pass
-    return 0 if result.wasSuccessful() else 1
+    return 0 if (result.wasSuccessful()
+                 and frontend.get('ok') is not False
+                 and static.get('ok') is not False) else 1
 
 
 if __name__ == "__main__":

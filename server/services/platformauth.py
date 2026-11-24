@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from fastapi import HTTPException, Request
 
 from .. import db, security
+from ..platformpolicy import spec as _platform_spec
 
 PREFIX = 'auth.platform-session.'
 TTL = 300
@@ -141,7 +142,10 @@ def _sessions(now):
         # 这类记录不参与任何授权决策（没有任何代码会读 doubaowork 的会话去
         # 发授权），所以跳过它即可。其余字段的类型校验保持严格：那些才真正
         # 意味着台账被写坏了。
-        from ..platformpolicy import spec as _platform_spec
+        #
+        # `_platform_spec` 原先是在这里局部 import 的，而 `start()` 里也用到了
+        # 它却没 import —— 2026-11-22 的「平台属性收敛」重构留下的漏洞，点
+        # 「添加账号」直接 NameError/500（线上 4 次）。现已提到模块顶部。
         _s = _platform_spec(session.get('platform'))
         if not (_s and _s.oauth_session):
             continue
