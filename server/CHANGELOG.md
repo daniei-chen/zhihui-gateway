@@ -3,6 +3,13 @@
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，
 不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
+## [1.5.49] - 2026-11-24
+
+### 修复
+- **发布包里的脚本是 CRLF，装到宿主机上执行不了。** 典型报错是 `/usr/bin/env: 'bash\r': No such file or directory` —— shebang 行末尾多了一个回车，内核找不到名为 `bash\r` 的解释器。2026-11-24 实际踩到：发布包里那份 `deploy/publish-console.sh` 在宿主机上直接执行就是这个错。
+  - 根因不是仓库脏：`git cat-file` 看 blob 是干净的 LF（5228 字节、0 个 `\r`），但 `git archive` 出来的 tar 里是 5342 字节、114 个 `\r` —— 差的正是行数。**Windows 上 `core.autocrlf=true` 时 `git archive` 也会按 CRLF 输出**，于是整个发布包（Python、JSON、脚本）都是 CRLF。Python 与 JSON 能容忍，脚本不能。
+  - 修法：`.gitattributes` 显式声明 `* text=auto eol=lf`（`.cmd` 的 `eol=crlf` 规则仍在后面覆盖，Windows 批处理不受影响），并做了一次 `git add --renormalize .`。仓库里原本就有 54 个文件是 CRLF 入库的（历史上在 Windows 上提交），这次一并规范成 LF；`git diff --ignore-cr-at-eol` 确认除 `.gitattributes` 外**没有任何内容改动**。
+  - 效果：此后 `git archive` / CI 打包 / 宿主机解包拿到的都是 LF，不再需要在目标机上 `sed -i 's/\r$//'`。这条以前是每个脚本的必做步骤，忘一次就是一个"脚本莫名不能执行"的故障。
 ## [1.5.48] - 2026-11-24
 
 ### 观测

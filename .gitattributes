@@ -1,3 +1,26 @@
+# 仓库里一律存 LF，检出/打包也一律是 LF —— 除了 .cmd（见下）。
+#
+# 为什么必须显式写 `eol=lf`：Windows 上 `core.autocrlf=true` 时，**`git archive`
+# 也会按 CRLF 输出**，于是发布到 Linux 的整个包都是 CRLF。Python 和 JSON 能容忍，
+# 但**脚本不行**：shebang 行多一个 \r 就是
+#     /usr/bin/env: 'bash\r': No such file or directory
+# 2026-11-24 实际踩到 —— 发行包里的 `deploy/publish-console.sh` 装到宿主机后
+# 直接执行报这个错，而 `od -c` 看仓库 blob 是干净的 LF（blob 5228 字节 0 个 CR，
+# tar 里却是 5342 字节 114 个 CR，差的正是行数）。
+#
+# 加了这条之后，`git archive` / CI 打包 / 宿主机解包拿到的都是 LF，不再需要在
+# 目标机上 `sed -i 's/\r$//'`。
+* text=auto eol=lf
+
+# GitHub Actions 的 workflow 文件**不做换行转换**。
+#
+# 原因很实际：改动这些文件需要令牌带 `workflow` scope。一次纯行尾规范化也会被
+# 拒：`refusing to allow an OAuth App to create or update workflow
+# .github/workflows/quality.yml without workflow scope` —— 2026-11-24 就是这么
+# 被卡住的，改了 54 个文件的行尾，结果整次推送被拒。把它们排除在转换之外，
+# 就再也不会出现"只想修换行、却被 workflow 权限拦住"。
+.github/workflows/* -text
+
 # Windows 批处理的换行符必须锁成 CRLF。
 #
 # 为什么单独给 .cmd 定这一条：cmd.exe 对 LF-only 批处理在 if 块 / goto / 标签
