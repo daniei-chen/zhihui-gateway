@@ -70,7 +70,9 @@ class ErrorCodeClassifierTest(unittest.TestCase):
             (('rejected', 'validation', 400), ('gateway.request.invalid', 'gateway')),
             (('protocol_incomplete', 'protocol', 502), ('gateway.protocol.incomplete', 'gateway')),
             (('transport_error', 'stream_read', 502), ('gateway.transport.error', 'gateway')),
-            (('upstream_error', 'upstream', 502), ('gateway.upstream.error', 'gateway')),
+            # 上游阶段失败归上游：规范 §3.4 规定上游瞬时失败不算发版责任。
+            # 错误码仍是 `gateway.upstream.error`（历史趋势连续），只改来源列。
+            (('upstream_error', 'upstream', 502), ('gateway.upstream.error', 'upstream')),
             (('application_error', 'application', 500), ('gateway.application.error', 'gateway')),
             (('interrupted', 'application', 500), ('gateway.interrupted', 'gateway')),
             (('completed', None, 200), ('none', 'none')),

@@ -422,7 +422,20 @@ def _gateway_code(terminal, stage, status) -> tuple[str, str]:
     if terminal == 'transport_error':
         return 'gateway.transport.error', ERROR_SOURCE_GATEWAY
     if terminal == 'upstream_error':
-        return 'gateway.upstream.error', ERROR_SOURCE_GATEWAY
+        # 上游阶段失败 → 责任在上游，不在网关。
+        #
+        # 这里原先是 ERROR_SOURCE_GATEWAY，与规范 §3.4 冲突：那张表写着
+        # 「上游瞬时失败 → 否，记下来即可」，即不算发版责任。而错误码名字
+        # 本身就叫 `gateway.upstream.error`，名字说上游、归属说我们，
+        # 统计口径自相矛盾。
+        #
+        # 判定依据是可靠的：`upstream_error` 只在 `error_stage == 'upstream'`
+        # 时被设置（见本文件下方 settle 逻辑），含义就是「请求死在上游那一环」。
+        #
+        # 只改 `error_source`，**不改 `error_code`** —— 这样控制台按错误码看
+        # 的历史趋势完全连续，只有「该由谁负责」这一列变准。
+        # 历史行不重标注：那是账本，改它等于改账（规范 §1.2）。
+        return 'gateway.upstream.error', ERROR_SOURCE_UPSTREAM
     if terminal == 'application_error':
         return 'gateway.application.error', ERROR_SOURCE_GATEWAY
     if terminal == 'interrupted':
