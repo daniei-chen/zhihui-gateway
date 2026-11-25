@@ -133,10 +133,34 @@ def _check_audit_chain() -> None:
                           chain_events=int(row['n']) if row else None, chain_error=None)
         if not intact:
             log.error('admin_events hash chain is broken; audit history was modified')
+        # `chain_error`（校验本身没跑成）与 `chain_intact=False`（链真断了）
+        # 是两件事，但都意味着「审计完整性现在无法保证」，所以都进告警，
+        # detail 里说清是哪一种。
+        _report_audit_chain(intact, None)
     except (Exception, SystemExit) as exc:  # noqa: BLE001
         with _lock:
             _state.update(chain_error=type(exc).__name__)
         log.warning('audit chain check failed: %s', type(exc).__name__)
+        _report_audit_chain(None, type(exc).__name__)
+
+
+def _report_audit_chain(intact: bool | None, error: str | None) -> None:
+    """审计链异常接入运维告警。
+
+    调用方已经做过 try/except，这里再包一层：告警失败不能连累校验本身。
+    """
+    try:
+        from . import operational
+        if intact is False:
+            operational.transition('audit_chain_broken', True,
+                                   '管理事件哈希链断裂——历史被改动过')
+        elif error is not None:
+            operational.transition('audit_chain_broken', True,
+                                   f'审计链校验未能完成：{error}')
+        else:
+            operational.transition('audit_chain_broken', False, '审计链完整')
+    except Exception:  # noqa: BLE001
+        log.warning('audit chain health reporting failed')
 
 
 def _loop():
@@ -157,15 +181,30 @@ def _loop():
                 _state.update(sampled=True, last_at=int(time.time()), ok=True, error=None,
                               pending=result['pending'], deleted_rows=result['deleted_rows'],
                               duration_ms=result['duration_ms'])
+            _report_health(True, '归档周期正常')
         except (Exception, SystemExit) as exc:
             with _lock:
                 _state.update(sampled=True, last_at=int(time.time()), ok=False, error=type(exc).__name__)
             log.error('archive cycle failed: %s; source rows remain protected', type(exc).__name__)
+            # 2026-11-25：原来这里**只写日志**。数据是安全的（失败时一行都不删），
+            # 但「归档连续失败」这件事没有任何人会知道 —— 日志没人盯，而
+            # status() 里的 fresh 只判断「多久没跑过」，一个每 300 秒都失败的任务
+            # 永远 fresh=True。等到有人发现时只会是磁盘满。
+            _report_health(False, f'归档周期失败：{type(exc).__name__}（源数据未删除）')
         finally:
             with _lock:
                 _state['running'] = False
             _check_audit_chain()
             next_run = time.monotonic() + config.ARCHIVE_INTERVAL_SEC
+
+
+def _report_health(ok: bool, detail: str) -> None:
+    """把归档周期成败接入运维告警。**失败绝不影响归档本身**。"""
+    try:
+        from . import operational
+        operational.transition('archive_cycle_failed', not ok, detail)
+    except Exception:  # noqa: BLE001 - 告警路径不能反过来影响归档
+        log.warning('archive health reporting failed')
 
 
 def start():
