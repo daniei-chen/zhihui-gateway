@@ -130,6 +130,30 @@ journal=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
 console_count=$(ls /var/www/zhihui-console-releases 2>/dev/null | wc -l)
 printf '  控制台历史版本 %s 个' "$console_count"
 [ "$console_count" -gt 8 ] && printf '（偏多，可清理旧版）\n' || printf '\n'
+
+# inode：空间够但 inode 用完时，所有「看起来正常」的写入都会失败，且不会先变慢。
+# 2026-11-25 实测：已用 26%，其中 releases 下 31 个版本占 5.8 万，年增约 17%，
+# 短期没有风险 —— 但它不会渐进恶化，是直接 ENOSPC，所以放一条观测在这里。
+inodes=$(df --output=ipcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+if [ -n "$inodes" ]; then
+    if [ "$inodes" -lt 80 ]; then
+        pass "inode 已用 ${inodes}%"
+    else
+        note "inode 已用 ${inodes}% —— 磁盘空间可能还够，但建不了新文件；先清理旧版本"
+    fi
+fi
+
+# OOM：进程被内核杀掉时来不及写自己的日志，只有内核记得。
+# 2026-11-25 实测：7 天内 4 次，全部是备份进程撞上 512MB 的 cgroup 限制。
+# 备份另有基于报告新鲜度的健康告警，但「谁被杀了」只有这里能看见 ——
+# 那次备份失败后，全局仍判为健康（前一份报告未超 26 小时），是合理的，
+# 但如果连续两次失败，就需要这条线索来解释原因。
+oom=$(journalctl --since '-24 hours' --no-pager 2>/dev/null | grep -ci 'out of memory.*killed process')
+if [ "${oom:-0}" -gt 0 ]; then
+    note "近 24 小时 ${oom} 次内存不足杀进程（journalctl -k 可见是谁）"
+else
+    pass '近 24 小时无内存不足杀进程'
+fi
 release_count=$(ls /opt/workbuddy-manager/releases 2>/dev/null | grep -c '^v1')
 printf '  应用历史版本 %s 个\n' "$release_count"
 
