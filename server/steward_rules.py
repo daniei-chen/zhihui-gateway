@@ -68,4 +68,24 @@ def evaluate(snapshot, policy):
         output.append(Signal('platform_' + platform['name'], platform['state'] != 'up', 'warning',
                              platform['name'] + ' 状态需要核对',
                              f"只读探针状态 {platform['state']}；未知不等于已宕机，健康也不等于真实推理验收。"))
+        # 2026-11-25：账号余额告警原来只进 `operational_alerts`（页面 + 回环 API），
+        # **不发邮件**。同一套系统里，磁盘、证书、备份、延迟都会主动发信，唯独
+        # 「某个账号快没积分了」不会 —— 而它打空之后推理请求会直接 503。
+        #
+        # 判据是**单号余额**而不是池子总量：总量充足时个别账号照样会被打空。
+        pool = platform.get('pool') or {}
+        low = pool.get('low_credit_accounts')
+        threshold = pool.get('low_credit_threshold')
+        if low is None or threshold is None:
+            # 采不到就报「未知」，不报「正常」—— 失败采集器是未知，不是健康。
+            output.append(Signal('platform_' + platform['name'] + '_credits', None, 'warning',
+                                 platform['name'] + ' 账号余额需要复核',
+                                 '未取得可用的余额数据，不能据此判断正常。'))
+        else:
+            output.append(Signal(
+                'platform_' + platform['name'] + '_credits', low > 0, 'warning',
+                platform['name'] + ' 有账号余额偏低',
+                f"共 {pool.get('total')} 个账号，其中 {low} 个低于 {threshold} 分"
+                f"（已取到 {pool.get('credits_coverage')} 个账号的余额）；"
+                '余额耗尽的账号会被摘出池子，之后请求可能被拒。'))
     return output

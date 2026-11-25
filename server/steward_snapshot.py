@@ -11,7 +11,7 @@ import math
 import shutil
 import time
 
-from . import config, db, operational
+from . import config, credit_watch, db, operational
 from .services.asyncwork import joined_thread
 
 
@@ -139,9 +139,21 @@ def pool_projection(body, platform='qoder'):
                            else number(raw.get('remain')) if isinstance(raw, dict) else None)
     enabled = sum(enabled_values) if len(enabled_values) == len(rows) else None
     finite = [value for value in credits if value is not None]
+    # 2026-11-25：`credits_remain` 是**总和**，看不出「某一个号快空了」。
+    #
+    # 这两件事的后果完全不同：池子总计 15 万分时，某个号剩 600 分照样会在一次
+    # 长上下文请求里被打空，然后被摘出池子，而总量看起来还很健康。`credit_watch`
+    # 的 `workbuddy_alerts` 专门为此按**单号余额**告警，判断用的是同一个阈值。
+    #
+    # 阈值从 `credit_watch` 取而不是在这里另写一个 1000：两处各写一份，
+    # 改了一处忘了另一处，就会出现「页面说告警、邮件说没事」。
+    low_credit_accounts = (sum(1 for value in finite if value < credit_watch.WB_LOW_ACCOUNT)
+                           if finite else None)
     return {'total': len(rows), 'enabled': enabled,
             'credits_remain': sum(finite) if finite and math.isfinite(sum(finite)) else None,
             'credits_coverage': len(finite), 'healthy_accounts': None,
+            'low_credit_accounts': low_credit_accounts,
+            'low_credit_threshold': credit_watch.WB_LOW_ACCOUNT,
             'scope': body.get('scope') if body.get('scope') in ('engine_loaded_pool', 'engine_account_list')
                      else 'engine_account_list'}
 
