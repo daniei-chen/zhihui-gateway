@@ -161,17 +161,23 @@ fi
 
 section '上游可用性'
 # 「调用失败」和「调用慢」是两件事，不能都塞进一个错误率百分比里。
-# 近 24 小时的 5xx 只有 8 条、占比 0.10%，看上去很健康 —— 但其中 7 条是
+# 近 24 小时的 5xx 只有 8 条、占比 0.10%，看上去很健康 —— 但其中大部分是
 # 「上游没有可用账号」，客户端拿到的是 503，用户侧就是「服务暂时不可用」，
-# 而且是连续 30 秒内重试 7 次全败。这类失败会被平均值淹没，必须单独可见。
+# 而且是连续 30 秒内重试全败。这类失败会被平均值淹没，必须单独可见。
 #
-# 口径说明：no_healthy_account 是上游的业务码（网关按 A6 规则透传并包成 503），
-# 不是我们自己的判断 —— 也就是说它代表「上游说没人可用」，不是「我们说不行」。
+# 口径说明：这些是**上游的业务码**（网关按 A6 规则透传并包成 503），
+# 不是我们自己的判断 —— 它代表「上游说没人可用」，不是「我们说不行」。
 # 处置方向不同：前者要看账号池与额度，后者要查网关自身。
+#
+# 为什么有两个码：`no_healthy_account` 与 `no_available_account` 都表示
+# 「池子里没有能用的账号」，但来自上游不同分支。只查前者会漏掉后者 ——
+# 实测 7 天内 `doubaowork/deepseek-v4.1-flash` 这个模型 15 次失败全是后者，
+# 如果只盯前者，整类失败在巡检里就是隐形的。
 if [ -r "$DB" ]; then
     nh=$(sqlite3 -readonly "$DB" \
         "SELECT count(*) FROM request_outcomes
-          WHERE ts > strftime('%s','now')-86400 AND error_code='no_healthy_account';" 2>/dev/null)
+          WHERE ts > strftime('%s','now')-86400
+            AND error_code IN ('no_healthy_account','no_available_account');" 2>/dev/null)
     if [ -z "${nh:-}" ]; then
         note '查不到上游可用性数据'
     elif [ "$nh" -eq 0 ]; then
