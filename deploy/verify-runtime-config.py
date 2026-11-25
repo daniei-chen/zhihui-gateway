@@ -42,6 +42,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# 2026-11-25：**必须**在任何 import 之前关掉字节码缓存。
+# 这个脚本会 `sys.path.insert` 到发布目录再 import `server.configcontract`，
+# 默认会往 `releases/<v>/server/__pycache__` 里写 .pyc —— 而发布树的完整性
+# 校验拒绝任何 `__pycache__`，于是 seal 直接失败：
+#     REJECTED: 发布树里有 __pycache__：.../releases/v1.5.85/server/__pycache__
+# 第一次跑就踩了。检查工具绝不能改变被检查对象。
+sys.dont_write_bytecode = True
+
 
 def unit_environment(unit: str) -> dict[str, str]:
     """取 unit 的实际环境（`systemctl show` 会把所有 drop-in 合并进来）。"""

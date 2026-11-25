@@ -107,5 +107,21 @@ class EnvironmentParsingTests(unittest.TestCase):
         self.assertEqual(loaded.get('WB_TRAFFIC_TAP'), '1')
 
 
+class NoSideEffectsTests(unittest.TestCase):
+    def test_does_not_write_bytecode_into_the_release_tree(self):
+        """检查工具绝不能改变被检查对象。
+
+        第一版忘了关字节码缓存，import `server.configcontract` 时在
+        `releases/v1.5.85/server/__pycache__` 生成了 .pyc，而发布树完整性
+        校验拒绝任何 `__pycache__`：
+
+            REJECTED: 发布树里有 __pycache__：.../server/__pycache__
+
+        `seal` 直接失败。加这个用例防止回退。
+        """
+        self.assertIs(verify.sys.dont_write_bytecode, True,
+                      '必须关闭字节码写入，否则会在发布树里生成 __pycache__')
+
+
 if __name__ == '__main__':
     unittest.main()
