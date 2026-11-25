@@ -147,6 +147,37 @@ else
     note "读不到数据库 $DB"
 fi
 
+section '首字节（TTFT）'
+# 首字节是「用户等了多久才看到第一个字」。整体错误率看不出慢，而慢本身就是一种
+# 失败：审计记录过 118 秒的首字节，那一次 status 是 200，错误率完全正常。
+# 分位数用 ORDER BY + OFFSET 算（SQLite 3.45 没有 percentile_cont），
+# 5 千行排序在这个数据量上是毫秒级，不必预先聚合。
+if [ -r "$DB" ]; then
+    fb=$(sqlite3 -readonly -separator '|' "$DB" "
+        WITH s AS (SELECT first_byte_ms v FROM request_logs
+                   WHERE ts > strftime('%s','now')-86400 AND first_byte_ms IS NOT NULL
+                   ORDER BY first_byte_ms)
+        SELECT count(*),
+               (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)/2 FROM s)),
+               (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)*95/100 FROM s)),
+               (SELECT max(v) FROM s),
+               (SELECT count(*) FROM s WHERE v > 60000),
+               (SELECT count(*) FROM s WHERE v > 30000);" 2>/dev/null)
+    IFS='|' read -r fbn fbp50 fbp95 fbmax fbover60 fbover30 <<< "$fb"
+    if [ -n "${fbn:-}" ] && [ "$fbn" -gt 0 ]; then
+        printf '  %s 次：p50 %sms，p95 %sms，最长 %sms\n' "$fbn" "$fbp50" "$fbp95" "$fbmax"
+        if [ "${fbover60:-0}" -gt 0 ]; then
+            note "$fbover60 次首字节超过 60 秒（最长 $((fbmax / 1000)) 秒）—— 那些请求虽然成功了，用户也已经等不住"
+        elif [ "${fbover30:-0}" -gt 0 ]; then
+            pass "超 30 秒 $fbover30 次，无超 60 秒"
+        else
+            pass '全部在 30 秒内'
+        fi
+    else
+        note '近 24 小时没有首字节记录'
+    fi
+fi
+
 section '数据库'
 if [ -r "$DB" ]; then
     size=$(du -h "$DB" 2>/dev/null | cut -f1)
