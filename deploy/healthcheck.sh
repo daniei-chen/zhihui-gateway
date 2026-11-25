@@ -191,6 +191,11 @@ section '运行告警'
 # 所以**持续 active 的告警在日志里只有开头一行**。人工跑巡检时因此看不见它们 ——
 # 脚本报「全部正常」而实际有告警挂着。这个端点专为巡检而开：只允许回环访问、
 # 不返回 detail（detail 里有账号名与上游原文）。
+#
+# 判为 note 而不是 broken：这些是**预警**（余额见底、备份将过期、回执积压），
+# 表达「需要关注」；而巡检这一行的职责是判断「能不能用」—— 服务、页面、错误率、
+# 数据库、上游额度这些**硬故障**已由上面各段覆盖。把预警也判成 FAIL，巡检会长期
+# 不绿，反而没人再看它。
 alerts_json=$(curl -sf --max-time 5 http://127.0.0.1:7866/api/health/alerts 2>/dev/null)
 if [ -n "$alerts_json" ]; then
     acount=$(printf '%s' "$alerts_json" | sed -n 's/.*"count":[ ]*\([0-9]\{1,\}\).*/\1/p')
@@ -199,7 +204,9 @@ if [ -n "$alerts_json" ]; then
     elif [ "$acount" -eq 0 ]; then
         pass '应用内告警全部为空'
     else
-        broken "$acount 项应用内告警处于 active 状态（按名字查日志可看到 detail）"
+        anames=$(printf '%s' "$alerts_json" \
+            | grep -o '"name":"[^"]*"' | sed 's/"name":"//; s/"$//' | tr '\n' ' ')
+        note "$acount 项预警：$anames（按名字查日志可见详情）"
     fi
 else
     note '取不到告警快照（端点未上线或服务未起）'
