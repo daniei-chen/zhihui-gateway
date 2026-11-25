@@ -202,7 +202,7 @@ main() {
     local status=$?
 
     step '完成'
-    [ "$status" -eq 0 ] && printf '   v%s 已上线，重启窗口零中断\n' "$version"
+    [ "$status" -eq 0 ] && printf '   v%s 已上线，重启窗口零中断\n' "${version#v}"
     return "$status"
 }
 

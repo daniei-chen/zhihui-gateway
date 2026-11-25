@@ -84,6 +84,17 @@ class VersionArgumentIsNormalizedTests(unittest.TestCase):
         # 消息里是 "v$version"；归一化之后正好是 v1.5.92，不能变成 vv1.5.92。
         self.assertIn('v$version', SOURCE)
 
+    def test_the_success_message_also_normalizes(self):
+        """`main()` 里的完成消息同样要去前缀。
+
+        2026-11-25 第一次修的时候只改了 `restart_gateway` 内部的局部变量，
+        判断路径对了（不再 die），但 `main()` 结尾打印的还是
+        `vv1.5.93 已上线` —— 结论正确、显示错误，一样会让人怀疑发布到底成没成。
+        """
+        self.assertIn(
+            '"${version#v}"', SOURCE,
+            '完成消息没有归一化：会打印出 vv1.5.93')
+
 
 class CheckModeIsReadOnlyTests(unittest.TestCase):
     def test_check_returns_before_any_mutation(self):
