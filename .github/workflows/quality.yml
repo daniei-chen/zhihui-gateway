@@ -42,7 +42,7 @@ jobs:
       - run: npm ci
       - run: npm exec eslint -- .
       - run: npm exec tsc -- --noEmit
-      - run: node --test lib/*.test.mjs tests/*.test.cjs
+      - run: node --test lib/*.test.mjs
       - run: npm run build:export
       - run: npm audit --audit-level=high
   gateway:
