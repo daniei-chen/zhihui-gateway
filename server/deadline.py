@@ -73,12 +73,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import math
 import random
 import time
 from dataclasses import dataclass, replace
 from typing import Any, AsyncIterator, Callable
+
+#: 预算超限的 `kind` 只在这里落日志（见 `classify_budget_exceeded`）。
+#: 命名沿用项目惯例 `workbuddy.<模块>`。
+_log = logging.getLogger('workbuddy.deadline')
 
 # 阶段
 PHASE_CONNECT = 'connect'
@@ -263,6 +268,27 @@ def classify_budget_exceeded(exc: 'BudgetExceeded') -> BudgetFailure:
     message = f'上游响应超出时间预算：{kind}'
     if detail:
         message = message + f'（{detail}）'
+    # 2026-11-25：`kind` 原来是**丢掉的**。
+    #
+    # 上面说「具体是哪一类预算，由 kind 与 message 表达」，但 message 只用来
+    # 填 `BudgetFailure.message`，而那些调用方把 `error_stage` 落库成
+    # `stream_read`、把终态归成 `gateway.transport.error` 之后就结束了 ——
+    # 6 个调用点没有一个把它写进日志或数据库。
+    #
+    # 实测证据：`request_outcomes` 里 253 条 `gateway.transport.error`，
+    # `error_stage` 全部是 `stream_read`，**无法区分**是连不上、发不出、
+    # 首字节超时、流中断还是总预算耗尽。而 `journalctl` 里
+    # `grep '上游响应超出时间预算：'` **零命中**。
+    #
+    # 后果是归因错位：这 253 条记在 `gateway` 名下（我们的责任），
+    # 但它们平均 31.7 秒、最长 173 秒 —— 是**等上游**，不是我们算错。
+    # 21 天统计里 `gateway` 因此占到 51.5%，比上游还多，而其中 218 条
+    # 是这一类。
+    #
+    # 这里只补日志，不动 `error_stage`/`error_code` 的取值：那两样有既有
+    # 统计和测试依赖，改动会让历史对比断裂。**先让信息可见，再谈归因。**
+    _log.warning('上游响应超出时间预算 kind=%s stage=%s detail=%s',
+                 kind, stage, detail or '-')
     return BudgetFailure(kind=kind, terminal_state=terminal,
                          error_stage=stage, message=message)
 

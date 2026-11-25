@@ -72,3 +72,48 @@ class AmbiguousTransportFailureTest(unittest.TestCase):
         for value in (float('inf'), float('nan')):
             with self.assertRaises(ValueError):
                 deadline.Budgets(total_s=value)
+
+
+class BudgetKindVisibilityTest(unittest.TestCase):
+    """预算超限的 `kind` 必须落到日志里。
+
+    2026-11-25 之前的实现把 `kind` 丢掉了：`error_stage` 一律落 `stream_read`、
+    终态一律归 `gateway.transport.error`，而这两样都无法区分「连不上」和
+    「首字节超时」。实测 253 条记录全部不可分辨，`journalctl` 里也搜不到。
+
+    这个测试锁住两件事：
+    1. 五类 `kind` 每一种都会写一条 warning；
+    2. 日志里带 `kind=` 与具体的取值。
+    """
+
+    KINDS = ('connect', 'send_request', 'first_byte', 'stream_idle', 'total')
+
+    def test_every_kind_is_logged_with_its_value(self):
+        for kind in self.KINDS:
+            with self.assertLogs('workbuddy.deadline', level='WARNING') as captured:
+                deadline.classify_budget_exceeded(deadline.BudgetExceeded(kind))
+            line = captured.output[0]
+            self.assertIn('kind=' + kind, line)
+            self.assertIn('时间预算', line)
+
+    def test_log_line_does_not_leak_upstream_topology(self):
+        with self.assertLogs('workbuddy.deadline', level='WARNING') as captured:
+            deadline.classify_budget_exceeded(
+                deadline.BudgetExceeded('first_byte', '127.0.0.1:7863'))
+        line = captured.output[0]
+        # detail 是调用方传进来的上下文，可以出现；但不能出现凭据或密钥字样。
+        for forbidden in ('authorization', 'bearer', 'api_key', 'token='):
+            self.assertNotIn(forbidden, line.lower())
+
+    def test_unknown_kind_still_logs(self):
+        """未知 kind 不能因为不在表里就静默。"""
+        with self.assertLogs('workbuddy.deadline', level='WARNING') as captured:
+            failure = deadline.classify_budget_exceeded(
+                deadline.BudgetExceeded('something_new'))
+        self.assertIn('kind=something_new', captured.output[0])
+        self.assertEqual(failure.terminal_state, 'transport_error')
+        self.assertEqual(failure.error_stage, 'stream_read')
+
+
+if __name__ == '__main__':
+    unittest.main()
