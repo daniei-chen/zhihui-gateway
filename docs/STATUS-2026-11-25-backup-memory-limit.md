@@ -127,3 +127,67 @@ sudo -n systemd-run --scope --quiet -p MemoryMax=1G -p MemorySwapMax=256M \
 三条都满足，就该动手，而不是把它写进「待办」然后继续下一轮。
 
 **把「不在我负责的目录里」当成「不该我管」，是一种偷懒。**
+## 9. 端到端验证：真的跑了一次备份
+
+配置改了、cgroup 读到了，但这还不能证明「备份流程在新额度下能走完」。
+所以完整跑了一次（只跑 `backup_application.py`，不跑 retention）。
+
+**结果**：
+
+```json
+{"path": "/root/backups/workbuddy-daily/recovery-20261125-175858.tar.gz",
+ "sha256": "cfab91d26d1687665c9d677777e86e38337ae5f069f47167f30b811a81ce149a"}
+```
+
+```json
+{"bytes": 411712838, "created_at": 1795600986, "offsite": false,
+ "restore_check": "ok", "schema": 1}
+```
+
+**`restore_check: "ok"`** —— 这正是上次被 OOM 杀掉的那一步，这次走完了。
+
+### 过程观测
+
+| 阶段 | 观测 |
+|---|---|
+| 开始 | 建 `snapshot-2fczq291/`，拷 `manager.db` |
+| 1 分 35 秒 | `snapshot` 清理，开始打 tar |
+| 2 分 48 秒 | `recovery-...tar.gz.tmp` 增长中 |
+| 3 分 58 秒 | `.tmp` 已改名为正式文件（393 MB），RSS 仅 64 MB |
+| 4 分 55 秒 | 完成，`restore_check: ok`，`snapshot` 与 `.tmp` 均已清理 |
+
+总用时约 5 分钟，IO 读 2.45 GB / 写 4.24 GB。
+
+### 一个意外收获：残留目录是怎么产生的
+
+备份的步骤是「建 `snapshot-xxxx/` → 拷 DB → 打包 → 清理」。第 2 步打开的文件是：
+
+```
+/root/backups/workbuddy-daily/snapshot-2fczq291/manager.db
+```
+
+**如果进程在第 3、4 步之间被杀，`snapshot-xxxx/` 就留在盘上了。** 这正好解释了
+11-20 之前那 3 次 `FileNotFoundError`（见 `OPS-PITFALLS.md` 第二十条）——
+不是文件被删了，是**上一次被杀时留下的临时目录**在下次遍历时找不到预期成员。
+
+所以「OOM」和「残留目录」是同一个原因的两个后果：
+**OOM 杀掉进程 → 临时目录留下 → 下次备份遇到残留**。
+
+把内存额度提上去，这两个问题一起消失。
+
+### 验证后的干净度
+
+```
+$ ls -d /root/backups/workbuddy-daily/snapshot-*     → 无输出
+$ find /root/backups -name '*.tmp'                   → 无输出
+$ df -h /                                            → avail=17G pct=71%
+$ curl .../api/release                               → v1.5.91 正常
+$ healthcheck.sh                                     → ok 26 / 警告 3 / 问题 0
+```
+
+多出一次备份后磁盘从 70% 到 71%，生产侧零影响。
+
+## 10. 一句话
+
+**改配置只证明「我写了这行」；读 cgroup 证明「它生效了」；
+真跑一次证明「流程能走完」。三件事缺一不可。**
