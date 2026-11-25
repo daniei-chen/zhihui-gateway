@@ -148,35 +148,41 @@ else
 fi
 
 section '首字节（TTFT）'
-# 首字节是「用户等了多久才看到第一个字」。整体错误率看不出慢，而慢本身就是一种
-# 失败：审计记录过 118 秒的首字节，那一次 status 是 200，错误率完全正常。
-# 分位数用 ORDER BY + OFFSET 算（SQLite 3.45 没有 percentile_cont），
+# 只看流式请求。非流式请求的「首字节」就是最后一个字节 —— 实测它与总延迟只差 2 ms，
+# 混进来会把「生成 5816 个 token 用了 118 秒」误报成「首字节慢」。那不是缺陷，
+# 是用户选了非流式又要求长输出。两者的判据不同，必须分开算。
+# 分位数用 ORDER BY + OFFSET（SQLite 3.45 没有 percentile_cont），
 # 5 千行排序在这个数据量上是毫秒级，不必预先聚合。
 if [ -r "$DB" ]; then
     fb=$(sqlite3 -readonly -separator '|' "$DB" "
         WITH s AS (SELECT first_byte_ms v FROM request_logs
                    WHERE ts > strftime('%s','now')-86400 AND first_byte_ms IS NOT NULL
+                     AND stream=1
                    ORDER BY first_byte_ms)
         SELECT (SELECT count(*) FROM s),
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)/2 FROM s)),
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)*95/100 FROM s)),
                (SELECT max(v) FROM s),
-               (SELECT count(*) FROM s WHERE v > 60000),
-               (SELECT count(*) FROM s WHERE v > 30000);" 2>/dev/null)
-    IFS='|' read -r fbn fbp50 fbp95 fbmax fbover60 fbover30 <<< "$fb"
+               (SELECT count(*) FROM s WHERE v > 60000);" 2>/dev/null)
+    IFS='|' read -r fbn fbp50 fbp95 fbmax fbover60 <<< "$fb"
     if [ -n "${fbn:-}" ] && [ "$fbn" -gt 0 ]; then
-        printf '  %s 次：p50 %sms，p95 %sms，最长 %sms\n' "$fbn" "$fbp50" "$fbp95" "$fbmax"
+        printf '  流式 %s 次：p50 %sms，p95 %sms，最长 %sms\n' "$fbn" "$fbp50" "$fbp95" "$fbmax"
         if [ "${fbover60:-0}" -gt 0 ]; then
-            note "$fbover60 次首字节超过 60 秒（最长 $((fbmax / 1000)) 秒）—— 那些请求虽然成功了，用户也已经等不住"
-        elif [ "${fbover30:-0}" -gt 0 ]; then
-            pass "超 30 秒 $fbover30 次，无超 60 秒"
+            note "$fbover60 次流式请求首字节超过 60 秒（最长 $((fbmax / 1000)) 秒）"
         else
-            pass '全部在 30 秒内'
+            pass '流式请求全部在 60 秒内给出首字节'
         fi
     else
-        note '近 24 小时没有首字节记录'
+        note '近 24 小时没有流式首字节记录'
     fi
-fi
+    # 非流式单独一行：这里能看的是总时长，不是 TTFT。
+    nf=$(sqlite3 -readonly -separator '|' "$DB" "
+        SELECT count(*), round(avg(latency_ms)), max(latency_ms) FROM request_logs
+        WHERE ts > strftime('%s','now')-86400 AND stream<>1;" 2>/dev/null)
+    IFS='|' read -r nfn nfavg nfmax <<< "$nf"
+    if [ -n "${nfn:-}" ] && [ "$nfn" -gt 0 ]; then
+        printf '  非流式 %s 次：平均 %sms，最长 %sms（首字节即末尾，按总时长看）\n' "$nfn" "$nfavg" "$nfmax"
+    fi
 
 section '数据库'
 if [ -r "$DB" ]; then
