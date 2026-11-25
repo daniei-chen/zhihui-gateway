@@ -51,6 +51,30 @@ fi
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null)
 [ "$code" = 200 ] && pass "/readyz 200" || broken "/readyz 返回 $code"
 
+section '配置与发布树'
+# 2026-11-25：这两项原来都没有，而它们各自造成过或差点造成真实故障。
+#
+# 1) 配置校验：2026-11-23 23:25 有一个 drop-in 先加了 WB_TRAFFIC_TAP，
+#    而当时代码 schema 还不认识它，服务在「启动→被拒→3 秒后重启」之间
+#    循环了约 8 分钟。现在能在这里提前看到「当前配置会被拒」。
+# 2) 字节码污染：发布树完整性校验拒绝任何 __pycache__，而检查工具
+#    自己 import 发布树代码时就会生成它。见 verify-runtime-config.py 顶部。
+current=$(readlink -f /opt/workbuddy-manager/releases/current 2>/dev/null)
+if [ -n "$current" ] && [ -x /opt/workbuddy-manager/deploy/verify-runtime-config.py ]; then
+    if /opt/workbuddy-manager/deploy/verify-runtime-config.py "$current" workbuddy-web \
+        >/tmp/hc-config.$$ 2>&1; then
+        pass "配置校验通过（$(basename "$current")）"
+    else
+        broken "当前配置会被 $(basename "$current") 拒绝：$(sed -n '2p' /tmp/hc-config.$$ 2>/dev/null)"
+    fi
+    rm -f /tmp/hc-config.$$
+else
+    note '找不到发布目录或配置校验工具，跳过'
+fi
+stale=$(find /opt/workbuddy-manager/releases -maxdepth 3 -name __pycache__ -type d 2>/dev/null | wc -l)
+[ "$stale" = 0 ] && pass '发布树没有字节码残留' \
+    || note "$stale 个历史版本目录里有 __pycache__（发布树校验会拒绝这些版本）"
+
 section '反代与中继'
 grep -q 'zhihui_relay_upstream' "$MAPFILE" 2>/dev/null \
     && pass '推理流量变量已定义' || broken "缺少 \$zhihui_relay_upstream（$MAPFILE）"
