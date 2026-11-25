@@ -26,6 +26,25 @@ note() { warn=$((warn + 1)); printf '  warn  %s\n' "$*"; }
 broken() { bad=$((bad + 1)); printf '  FAIL  %s\n' "$*"; }
 section() { printf '\n== %s\n' "$*"; }
 
+# 从**运行中**的 unit 读一个环境变量，读不到就用调用方给的默认值。
+#
+# 2026-11-25：巡检里判警告用的阈值原来硬编码成魔数，而线上真实预算由 systemd
+# drop-in 决定。两者不一致时，报出来的数字没有语义 —— 例如「首字节超过 60 秒」
+# 在 240 秒预算下属于正常范围，却每天都被算成一条警告。
+#
+# 这不是第一次因为这组数字出错：`server/config.py` 里的默认值 60 也与线上的
+# 240 不一致（见 docs/OPS-PITFALLS.md 第十八条「代码里的默认值不是线上值」）。
+# 所以这里统一从 `systemctl show` 取，而不是相信任何一份代码里的常量。
+unit_env() {
+    local value
+    value=$(systemctl show "$1" -p Environment --value 2>/dev/null \
+        | tr ' ' '\n' | sed -n "s/^$2=//p" | head -1)
+    case "$value" in
+        '' | *[!0-9]*) printf '%s' "$3" ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
 section '服务'
 for unit in workbuddy-web zhihui-rolling-relay nginx; do
     if systemctl is-active --quiet "$unit"; then
@@ -277,6 +296,9 @@ section '首字节（TTFT）'
 # 分位数用 ORDER BY + OFFSET（SQLite 3.45 没有 percentile_cont），
 # 5 千行排序在这个数据量上是毫秒级，不必预先聚合。
 if [ -r "$DB" ]; then
+    # 阈值取自线上真实预算。读不到才退回 60 —— 退回去的那个 60 只作为兜底，
+    # 不再被当成有意义的判断标准。
+    fb_budget=$(unit_env workbuddy-web WB_FIRST_BYTE_TIMEOUT_S 60)
     fb=$(sqlite3 -readonly -separator '|' "$DB" "
         WITH s AS (SELECT first_byte_ms v FROM request_logs
                    WHERE ts > strftime('%s','now')-86400 AND first_byte_ms IS NOT NULL
@@ -286,14 +308,15 @@ if [ -r "$DB" ]; then
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)/2 FROM s)),
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)*95/100 FROM s)),
                (SELECT max(v) FROM s),
-               (SELECT count(*) FROM s WHERE v > 60000);" 2>/dev/null)
-    IFS='|' read -r fbn fbp50 fbp95 fbmax fbover60 <<< "$fb"
+               (SELECT count(*) FROM s WHERE v > $((fb_budget * 1000)));" 2>/dev/null)
+    IFS='|' read -r fbn fbp50 fbp95 fbmax fbover <<< "$fb"
     if [ -n "${fbn:-}" ] && [ "$fbn" -gt 0 ]; then
-        printf '  流式 %s 次：p50 %sms，p95 %sms，最长 %sms\n' "$fbn" "$fbp50" "$fbp95" "$fbmax"
-        if [ "${fbover60:-0}" -gt 0 ]; then
-            note "$fbover60 次流式请求首字节超过 60 秒（最长 $((fbmax / 1000)) 秒）"
+        printf '  流式 %s 次：p50 %sms，p95 %sms，最长 %sms（预算 %s 秒）\n' \
+            "$fbn" "$fbp50" "$fbp95" "$fbmax" "$fb_budget"
+        if [ "${fbover:-0}" -gt 0 ]; then
+            note "$fbover 次流式请求首字节超过了 ${fb_budget} 秒预算（最长 $((fbmax / 1000)) 秒）—— 这些本该被判超时"
         else
-            pass '流式请求全部在 60 秒内给出首字节'
+            pass "流式请求全部在 ${fb_budget} 秒预算内给出首字节"
         fi
     else
         note '近 24 小时没有流式首字节记录'

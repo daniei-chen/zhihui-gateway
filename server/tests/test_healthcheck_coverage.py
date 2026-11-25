@@ -61,5 +61,52 @@ class ReadOnlyTests(unittest.TestCase):
                          '巡检里出现了删文件的动作——它是只读检查工具')
 
 
+class ThresholdSourceTests(unittest.TestCase):
+    """判警告用的阈值必须来自线上，不能是代码里的魔数。
+
+    ## 为什么
+
+    2026-11-25 发现巡检每天报「3 次流式请求首字节超过 60 秒」，而线上实际
+    `WB_FIRST_BYTE_TIMEOUT_S=240`。
+
+    那个 60 是个**没有出处的魔数**：既不等于线上超时，也不等于任何配置值。
+    在 240 秒预算下，60~240 秒之间给出首字节是**正常**的 —— 但每天都被算成
+    一条警告。运维看到它会以为接近故障，实际还有 3 分钟余量。
+
+    `server/config.py` 里也有一个 60 的默认值，同一个数字在三个地方含义不同
+    （见 docs/OPS-PITFALLS.md 第十八条「代码里的默认值不是线上值」）。
+
+    ## 本测试守什么
+
+    | 不变量 | 破坏后的表现 |
+    | --- | --- |
+    | 阈值从 `systemctl show` 读 | 又变回魔数，警告失去语义 |
+    | 读不到时有非数字兜底 | 读到异常值会让算术展开报错，巡检崩掉 |
+    | 首字节比较不再硬编码 60000 | 240 秒预算下的正常请求继续被报成警告 |
+    """
+
+    def test_reads_threshold_from_running_unit(self):
+        self.assertIn('systemctl show', SOURCE,
+                      '阈值必须来自运行中的服务，不是代码里的常量')
+
+    def test_first_byte_budget_is_not_hardcoded(self):
+        self.assertNotIn('v > 60000', SOURCE,
+                         '首字节阈值又硬编码成 60 秒了——线上预算是 240')
+        self.assertIn('unit_env workbuddy-web WB_FIRST_BYTE_TIMEOUT_S', SOURCE,
+                      '首字节预算没有从 WB_FIRST_BYTE_TIMEOUT_S 读')
+
+    def test_unit_env_has_a_non_numeric_fallback(self):
+        """读到空值或非数字时必须退回默认值，否则 `$((x * 1000))` 会报错。
+
+        巡检是「一条命令给出全局结论」的那个命令，它自己不能崩。
+        """
+        self.assertIn('unit_env()', SOURCE, '缺少 unit_env 定义')
+        block = SOURCE.split('unit_env()', 1)[1].split('}\n', 1)[0]
+        self.assertIn('[!0-9]', block,
+                      'unit_env 没有非数字兜底：读到异常值会让算术展开失败')
+        self.assertIn('"$3"', block,
+                      'unit_env 没有用调用方给的默认值')
+
+
 if __name__ == '__main__':
     unittest.main()
