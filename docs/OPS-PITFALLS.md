@@ -359,6 +359,117 @@ python tools/ci_regression.py    # exit 0 才能推
 
 ---
 
+## 二十、cgroup 的 OOM 不等于「机器内存不够」
+
+巡检报了一条 `warn 近 24 小时 1 次内存不足杀进程（journalctl -k 可见是谁）`。
+
+按直觉会去查「哪个进程吃爆了内存」。但内核那几行写得很清楚：
+
+```
+backup_applicat invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0
+oom-kill:constraint=CONSTRAINT_MEMCG, ...
+Memory cgroup out of memory: Killed process 1058616 (backup_applicat)
+    total-vm:801496kB, anon-rss:513072kB
+```
+
+**`constraint=CONSTRAINT_MEMCG`** —— 是**内存 cgroup 的上限**触发的，
+不是整机内存耗尽。整机当时 swap 只用了一部分，其他服务全程正常。
+
+### 上限是哪来的
+
+`/root/wb2api-backup-push.sh` 第 14 行：
+
+```bash
+systemd-run --scope --quiet -p MemoryMax=512M -p MemorySwapMax=256M \
+    /opt/workbuddy-manager/server/backup_application.py
+```
+
+`MemoryMax=512M`。而被杀的进程 `anon-rss: 513072kB`（501 MB）——
+**正好顶到线上**。差一点点。
+
+### 关键结论：备份没有失效
+
+这是最容易被误判的地方。看到 OOM 立刻会想「备份挂了」。
+
+实际情况：
+
+```
+/root/backups/workbuddy-daily/recovery-20261125-144335.tar.gz   409,271,601 字节
+/root/backups/workbuddy-mirror/recovery-20261125-053001.tar.gz  406,181,248 字节
+/root/backups/workbuddy-daily/recovery-20261125-041857.tar.gz   405,987,303 字节
+```
+
+05:30 那次启动的备份，**文件在 05:33 就写完了**，OOM 发生在 05:34:56 ——
+是写完归档之后的后处理阶段被杀的。产物完整。
+
+而 `backup-status.json` 的 `restore_check` 是 `"ok"`：
+
+```json
+{"bytes":409271601,"created_at":1795589424,"offsite":false,"restore_check":"ok","schema":1}
+```
+
+所以那天 14:50 的那一轮把它补上了。
+
+### 为什么会误判
+
+因为「OOM」这个词带着强烈的暗示：**内存不够**。
+但 cgroup 的 OOM 说的是**这一组进程超过了给它划的额度**，
+和「整机有没有余量」是两个问题。
+
+**看到 `CONSTRAINT_MEMCG`，先找是谁划的额度，而不是去查谁吃爆了内存。**
+
+### 真正的风险
+
+不是「备份会失败」，而是**余量已经为零**。
+
+```
+MemoryMax   = 512 MB
+实际峰值     = 501 MB
+余量         = 11 MB（2%）
+```
+
+库还在长（`request_logs` 已 124 MB，总量 726 MB）。**再长一点就会真的写不完。**
+
+这条应该处理，但处理点在 `/root/wb2api-backup-push.sh` —— **那不在仓库里**，
+不在自动迭代能改的范围内。已记录待运维调整（建议 `MemoryMax=1G`）。
+
+### 那 3 次 FileNotFoundError 是历史的
+
+```
+FileNotFoundError: '/root/backups/workbuddy-daily/snapshot-ayktuzlw/paired-ledgers/auths/...'
+FileNotFoundError: '/root/backups/workbuddy-daily/snapshot-4kebstb7/paired-ledgers/auths/...'
+```
+
+出现 3 次，最晚到 2026-11-20。原因是被清理掉的临时快照目录仍留在某处引用里。
+现在查 `ls -d /root/backups/workbuddy-daily/snapshot-*` —— **没有输出了**，已经清干净。
+
+**「日志里有错误」和「现在还有错误」是两件事**（见第十三条 pitfall）。
+计数要看最后出现时间，不能只看 `grep -c`。
+
+### 还有一处值得记
+
+日志里这几行说明有两天备份没成，但系统自己降级了：
+
+```
+2026-11-21T05:50:01 hardlinked recovery-20261119-053001.tar.gz
+2026-11-23T05:50:01 hardlinked recovery-20261122-112029.tar.gz
+2026-11-24T05:50:02 hardlinked recovery-20261123-152107.tar.gz
+2026-11-25T05:50:01 hardlinked recovery-20261125-053001.tar.gz
+```
+
+11-21 硬链接的是 11-19 的包，11-23 硬链接的是 11-22 的包。
+**那不是缺陷，是设计好的降级**：当天没有新包时，镜像指向最近可用的那一份，
+而不是留一个空目录。降级本身是对的。
+
+**要区分「降级」和「失败」。**降级是系统在坏情况下的正确行为。
+
+### 一句话
+
+**`CONSTRAINT_MEMCG` 的 OOM，先问「额度是谁划的」，
+再问「产物还完整吗」，最后才问「整机内存够不够」。**
+
+---
+
 ## 维护说明
 
 **新增一条时，写成「症状 → 原因 → 正确做法」三段。**
@@ -367,5 +478,7 @@ python tools/ci_regression.py    # exit 0 才能推
 
 **每条都必须对应一次真实的失败**，不要写通用建议。通用建议读起来都对，
 但一条也记不住；真实失败有细节，细节才记得住。
+
+---
 
 ---
