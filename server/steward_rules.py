@@ -48,6 +48,18 @@ def evaluate(snapshot, policy):
     unknown = snapshot['budget']['unknown_count']
     output.append(Signal('budget_evidence', unknown >= policy.budget_unknown_warning, 'warning',
                          '部分用量仍待核对', f'共有 {unknown} 条预算待核对；不能据此断言扣费，也不能无证据清零。'))
+    # 2026-11-25：密钥日配额用到八成时也发邮件。
+    #
+    # 配额是强制的（`budget.py` 超了直接拒，文案「今日积分额度不足，次日按服务器
+    # 时区重置」），但在此之前用户只会拿到那条拒绝 —— 没有任何提前信号。
+    # 同一套系统里磁盘、证书、备份都会主动发信，这条不会，说不过去。
+    #
+    # 判据和阈值都来自 `credit_watch.quota_alerts()`，不在这里重写：
+    # 两处各写一份，改一处忘另一处就会出现「页面告警、邮件说没事」。
+    quota = snapshot.get('quota') or {}
+    output.append(Signal('key_quota_near_limit', quota.get('active'), 'warning',
+                         '密钥日配额接近上限',
+                         quota.get('detail') or '未取得可用的配额数据，不能据此判断正常。'))
     channel = snapshot['ledger']
     output.append(Signal('ledger_channel', channel['state'] == 'degraded' or channel['writable'] is not True
                          or (channel.get('pending') or 0) > 0 or (channel.get('dead') or 0) > 0,

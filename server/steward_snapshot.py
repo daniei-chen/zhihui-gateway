@@ -108,12 +108,40 @@ def local_facts(now=None):
             'budget': {'unknown_count': int(unknown['n']), 'oldest_at': unknown['oldest'],
                        'note': '待核对不是已计费，也不是零用量；未归档和已归档均计入'},
             'keys': {'total': int(key_counts['total']), 'enabled': int(key_counts['enabled'] or 0)},
+            'quota': quota_fact(),
             'ledger': {k: channel.get(k) for k in ('state', 'pending', 'dead', 'writable', 'checked_at')},
             'backup': backup, 'certificate': certificate_fact(now),
             'release': {'version': product.identity()['version'],
                                          'release_id': operational._release_id()},
             'limits': {'no_generation_probe': True, 'no_credentials_in_context': True,
                        'offsite_restore_proven': False}}
+
+
+def quota_fact():
+    """密钥日配额的使用情况，直接取自 `credit_watch.quota_alerts()`。
+
+    ## 为什么不在这里重写一遍
+
+    阈值（80%）、单位换算（`ledger.SCALE = 1_000_000`）、「没配额的密钥不参与」
+    这些判断都在 `quota_alerts` 里，而且它已经被巡检和 `operational` 用着。
+
+    在这里再写一份 SQL，等于把同一个判据维护两遍。改了一处忘另一处，
+    就会出现「页面说告警、邮件说没事」—— 比完全不告警更糟。
+
+    ## 采不到就报 None
+
+    `active=None` 在 `steward_rules` 里是「未知」：既不发告警也不发恢复。
+    报 `False` 等于宣布「配额充足」，而实际上我们没查到。
+    """
+    try:
+        verdict = credit_watch.quota_alerts()
+    except Exception:  # noqa: BLE001 - 采集失败不能放倒整份快照
+        return {'active': None, 'detail': '日配额查询失败，本轮不评估'}
+    if not verdict:
+        return {'active': None, 'detail': '日配额没有返回结论'}
+    _name, active, detail = verdict[0]
+    return {'active': bool(active), 'detail': detail}
+
 
 
 def pool_projection(body, platform='qoder'):

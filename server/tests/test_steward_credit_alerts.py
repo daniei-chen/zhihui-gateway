@@ -39,6 +39,7 @@ Signal('platform_' + name, platform['state'] != 'up', ...)
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 
 from server import credit_watch, steward_rules, steward_snapshot
 
@@ -116,6 +117,59 @@ class RuleTests(unittest.TestCase):
         rules = {s.rule for s in signals}
         self.assertIn('platform_workbuddy', rules)
         self.assertIn('platform_workbuddy_credits', rules)
+
+
+class QuotaFactTests(unittest.TestCase):
+    """`quota_fact()` 必须转述 `credit_watch.quota_alerts()`，而不是重算一遍。
+
+    重算的后果：阈值改了、单位换了、或者「哪些密钥参与」的条件变了，
+    只改一处另一处不动 —— 于是页面告警而邮件说没事。
+    """
+
+    def test_forwards_the_verdict_verbatim(self):
+        with unittest.mock.patch.object(
+                credit_watch, 'quota_alerts',
+                return_value=[('key_quota_near_limit', True, '甲 今日积分已用 91.0%（剩 18.00）')]):
+            fact = steward_snapshot.quota_fact()
+        self.assertTrue(fact['active'])
+        self.assertIn('91.0%', fact['detail'])
+
+    def test_quiet_verdict_is_forwarded_too(self):
+        with unittest.mock.patch.object(
+                credit_watch, 'quota_alerts',
+                return_value=[('key_quota_near_limit', False, '日配额充足')]):
+            fact = steward_snapshot.quota_fact()
+        self.assertFalse(fact['active'])
+
+    def test_failure_is_unknown_not_healthy(self):
+        with unittest.mock.patch.object(
+                credit_watch, 'quota_alerts', side_effect=RuntimeError('boom')):
+            fact = steward_snapshot.quota_fact()
+        self.assertIsNone(fact['active'], '查询失败必须报未知，不能报「配额充足」')
+
+    def test_empty_verdict_is_unknown(self):
+        with unittest.mock.patch.object(credit_watch, 'quota_alerts', return_value=[]):
+            fact = steward_snapshot.quota_fact()
+        self.assertIsNone(fact['active'])
+
+
+class QuotaRuleTests(unittest.TestCase):
+    def _signal(self, quota):
+        policy = __import__('server.steward_config', fromlist=['Policy']).Policy()
+        snapshot = RuleTests()._snapshot(None)
+        snapshot['quota'] = quota
+        found = [s for s in steward_rules.evaluate(snapshot, policy)
+                 if s.rule == 'key_quota_near_limit']
+        self.assertEqual(len(found), 1, '缺少 key_quota_near_limit 规则')
+        return found[0]
+
+    def test_fires_when_quota_is_near(self):
+        signal = self._signal({'active': True, 'detail': '甲 今日积分已用 91.0%'})
+        self.assertTrue(signal.active)
+
+    def test_unknown_when_fact_missing(self):
+        signal = self._signal(None)
+        self.assertIsNone(signal.active, '没有配额数据时必须报未知')
 
 
 if __name__ == '__main__':
