@@ -94,6 +94,17 @@ verify_runtime_config() {
 
 restart_gateway() {
     local version="$1" before after ready=0
+    # 参数可能带 `v` 前缀（`v1.5.92`）也可能不带（`1.5.92`）。
+    #
+    # `/api/release` 里两个字段的写法不一样：`version` 是 `1.5.92`，
+    # `release_id` 是 `v1.5.92`。下面比对的是 `version`，所以必须先去掉
+    # 前缀，否则 `v$version` 会拼出 `vv1.5.92`，永远匹配不上。
+    #
+    # 2026-11-25 发 v1.5.92 时就是这么误报的：服务已经正常返回
+    # `{"version":"1.5.92",...}`，脚本却报「重启后 60 秒仍未返回 vv1.5.92」
+    # 然后 die —— 发布本身是成功的，但后面的 5xx 统计没跑，退出码也没给，
+    # 看起来就像一次失败的发版。调用方传哪种写法都该能用。
+    version="${version#v}"
     before=$(wc -l < "$ACCESS_LOG" 2>/dev/null || echo 0)
     step "重启网关（空窗期间由中继重试兜住）"
     systemctl restart "$GATEWAY" || die "重启网关失败"
@@ -109,14 +120,24 @@ restart_gateway() {
     [ "$ready" = 1 ] || die "重启后 60 秒仍未返回 v$version，请检查 $GATEWAY"
 
     after=$(wc -l < "$ACCESS_LOG" 2>/dev/null || echo 0)
-    step "重启窗口内的 5xx"
+    step "重启窗口内的 5xx（只算推理流量）"
     local failures
-    failures=$(awk -v s="$before" 'NR>s && $9 ~ /^5/' "$ACCESS_LOG" 2>/dev/null | wc -l)
+    # 只统计 `/v1/` 的 5xx。
+    #
+    # `/var/log/nginx/access.log` 是**整台机器的共享日志**，同一个文件里还有
+    # 控制台页面、`/_next` 静态资源、`/dsh-login`（属于另一个站点）等等。
+    # 2026-11-25 实测：这份日志里的 5xx 有 8 条属于 `/v1/`，另有 4 条不是 ——
+    # 那 4 条跟推理无关，却会被算进「本次发版丢了几个请求」。
+    #
+    # 判据必须只覆盖本次发布真正影响的流量：推理请求。否则一次无关站点的
+    # 5xx 就能把「零中断」判成失败，而**误报的判据比没有判据更糟** ——
+    # 下次真出问题时它不再被相信。
+    failures=$(awk -v s="$before" 'NR>s && $9 ~ /^5/ && $7 ~ /^\/v1\//' "$ACCESS_LOG" 2>/dev/null | wc -l)
     if [ "$failures" -eq 0 ]; then
         printf '   0 条 —— 零中断\n'
     else
         printf '   %s 条（下面这些）：\n' "$failures"
-        awk -v s="$before" 'NR>s && $9 ~ /^5/' "$ACCESS_LOG" 2>/dev/null \
+        awk -v s="$before" 'NR>s && $9 ~ /^5/ && $7 ~ /^\/v1\//' "$ACCESS_LOG" 2>/dev/null \
             | awk '{print "   ", $4, $9, $7}' | head -10
         printf '\n   说明：中继的重试只覆盖「连接阶段失败、累计 9 秒」。\n'
         printf '   若失败集中在重启第一秒之外，多半是中继没跑上新代码，\n'

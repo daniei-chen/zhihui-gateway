@@ -24,6 +24,11 @@ MODULES = (
     "server.tests.test_v133_release_hardening",
     "server.tests.test_v12149_post_migration_cleanup",
     "server.tests.test_v12152_rollout_script",
+    # 与上面那个是**两个不同的脚本**：`rollout.sh` 管 prepare/run/cleanup，
+    # `rollout-rolling.sh` 管滚动重启（发版不打断在途调用的核心）。
+    # 后者长期没有测试覆盖，2026-11-25 因此同时漏掉了「版本号前缀没归一化」
+    # 和「5xx 统计没限定 /v1/」两个问题。
+    "server.tests.test_rollout_rolling_contract",
     "server.tests.test_verify_runtime_config",
     "server.tests.test_healthcheck_coverage",
     "server.tests.test_key_quota_alerts",
