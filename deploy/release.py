@@ -499,8 +499,29 @@ def cmd_rollback(args) -> int:
     current = _previous(root)
     _switch(root / "current", previous)
     stamp.write_text((current or "") + "\n", encoding="utf-8")
+
+    # 回滚只切指针，**不重启服务**。
+    #
+    # 这不是疏漏，是刻意的：重启要 sudo、要配合中继重试，而 release.py 只负责
+    # 文件与指针，不碰进程。但「只切指针」有一个很危险的副作用 ——
+    # 命令返回 0（成功），而**服务还在跑出故障的那个版本**。
+    #
+    # 2026-11-25 实测：执行 rollback 后指针已指向 v1.5.76，
+    # 而 /api/release 仍在报 v1.5.77。如果有谁看到「成功」就去忙别的，
+    # 故障会一直继续，而日志里唯一线索只是一行容易被跳过的提示。
+    #
+    # 所以这里把「还没完」说得足够重，并给出可直接粘贴的下一步与验证方法。
     print(f"== rollback：{current or '(无)'} → {previous} ==")
-    print("   **下一步必须在宿主执行**：sudo systemctl restart workbuddy-web")
+    print("")
+    print("  ** 注意：只切了指针，服务还在跑旧代码。回滚尚未生效。 **")
+    print("")
+    print("  必须立刻执行下面这条，否则故障会继续：")
+    print(f"      cd {root.parent / 'deploy'} && sudo ./rollout-rolling.sh {previous}")
+    print("")
+    print("  然后验证版本真的变了：")
+    print("      curl -s http://127.0.0.1:7866/api/release")
+    print(f"  返回的 version 应当是 {previous[1:] if previous.startswith('v') else previous}。")
+    print("  如果仍是回滚前的版本，说明服务还没重启。")
     return 0
 
 
