@@ -1023,7 +1023,26 @@ if config.STATIC_DIR.is_dir():
         not_found = config.STATIC_DIR / '404.html'
         if not_found.is_file():
             return FileResponse(not_found, status_code=404)
-        return JSONResponse({'error': 'not found'}, status_code=404)
+        # 静态目录里连 404.html 都没有时的最后兜底。
+        #
+        # 2026-11-25：这里原来是 `{'error': 'not found'}` —— 全仓唯一一处把
+        # `error` 写成裸字符串的地方。其余所有错误响应（含 401/403/404/405/422）
+        # 的 `error` 都是 `{code, message, type}` 对象，客户端按 `error.code`
+        # 取值时，走到这条路径会拿到 `undefined`，进而把它当成"未知错误"。
+        #
+        # `detail` 保持原样，因为前端与既有断言按它取值；补充 `error` 对象
+        # 让两条读取路径都能工作。
+        return JSONResponse(
+            {
+                'detail': 'not found',
+                'error': {
+                    'code': 'not_found',
+                    'message': 'not found',
+                    'type': 'api_error',
+                },
+            },
+            status_code=404,
+        )
 
 
 # ── 子路径部署（反向代理前缀）────────────────────────────────────────

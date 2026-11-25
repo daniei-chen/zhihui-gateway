@@ -124,7 +124,11 @@ class SpaRouteTest(unittest.TestCase):
             cand = server_main._safe_static_path(f'{full_path}/index.html')
             if cand is not None:
                 return FileResponse(cand)
-            return JSONResponse({'error': 'not found'}, status_code=404)
+            # 与生产实现同源：`detail` 保留原样，`error` 是对象而不是裸字符串。
+            return JSONResponse(
+                {'detail': 'not found',
+                 'error': {'code': 'not_found', 'message': 'not found', 'type': 'api_error'}},
+                status_code=404)
 
         from fastapi.testclient import TestClient
         cls.client = TestClient(cls.app)
