@@ -219,6 +219,14 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         main()
+    except EntryRejected as exc:
+        # `EntryRejected` 的 message 全部是固定常量（本文件 24 处），不含路径、
+        # 环境值、用户文档或 provider token —— 所以可以原样输出。
+        # 它是「哪一项检查失败」的唯一线索：此前所有异常都压成同一句话，
+        # 运维看到 BLOCKED 只能逐项猜，而这里每一项的处置方式都不同。
+        # 其余异常仍然压成统称：无法证明其 message 是安全的。
+        print(f'WRITER-LAUNCH-BLOCKED: {exc}', file=sys.stderr)
+        raise SystemExit(1)
     except Exception:
         # Never include environment values, user documents or provider tokens.
         print('WRITER-LAUNCH-BLOCKED: host release/state/runtime contract rejected', file=sys.stderr)
