@@ -108,5 +108,64 @@ class ThresholdSourceTests(unittest.TestCase):
                       'unit_env 没有用调用方给的默认值')
 
 
+class VacuumAdviceTests(unittest.TestCase):
+    """巡检不能建议一个规范明令禁止的操作。
+
+    ## 为什么
+
+    原来判的是**绝对页数**：
+
+    ```bash
+    if [ "$free" -gt 200 ]; then
+        note "空闲页 $free 偏多，可考虑 VACUUM 回收空间"
+    ```
+
+    线上库是 **185,588 页**。200 页 = **0.108%**。
+
+    也就是说：只要攒下 800 KB 的空闲页，巡检就会建议对一个 725 MB 的库做
+    VACUUM。
+
+    而规范第六节写着：
+
+    > 对 700 MB 级数据库无脑 VACUUM —— 先看空闲页；空闲页少说明没有碎片，
+    > VACUUM 只锁表不解决任何问题
+
+    **0.108% 显然属于「空闲页少」。巡检原来在建议一件被禁止的事。**
+
+    ## 本测试守什么
+
+    | 不变量 | 破坏后的表现 |
+    | --- | --- |
+    | 判比例而不是绝对页数 | 760 MB 的库和 7 MB 的库用同一个门槛 |
+    | 阈值不低于 10% | 又会建议对碎片很少的库做全表锁 |
+    | 文案写明「全程锁表」 | 只说「可考虑」，把决策成本藏起来 |
+    | 取不到页数时不崩 | `$((free * 1000 / pages))` 在 pages 为空时直接报错 |
+    """
+
+    def test_does_not_use_absolute_page_count(self):
+        self.assertNotIn('-gt 200', SOURCE,
+                         'VACUUM 建议又变成绝对页数了——它对不同大小的库意义完全不同')
+
+    def test_judges_by_ratio(self):
+        self.assertIn('permille', SOURCE, '没有按比例判断')
+        block = SOURCE.split('section \'数据库\'', 1)[1].split('section ', 1)[0]
+        self.assertIn('pages', block, '比例计算要用到 page_count')
+
+    def test_threshold_is_at_least_ten_percent(self):
+        """10% 以下都不值得为一个 700 MB 的库全程锁表。"""
+        self.assertIn('-ge 100', SOURCE,
+                      '千分比阈值低于 100（10%）：又会建议对碎片很少的库做 VACUUM')
+
+    def test_mentions_the_lock_cost(self):
+        block = SOURCE.split('section \'数据库\'', 1)[1].split('section ', 1)[0]
+        self.assertIn('锁表', block,
+                      '没有说明 VACUUM 会锁表——规范禁止它的原因正是这个')
+
+    def test_guards_against_missing_page_count(self):
+        block = SOURCE.split('section \'数据库\'', 1)[1].split('section ', 1)[0]
+        self.assertIn('"$pages" -gt 0', block,
+                      'page_count 为 0 或空时会让算术展开报错，巡检会崩')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -366,10 +366,24 @@ if [ -r "$DB" ]; then
     mode=$(sqlite3 -readonly "$DB" 'pragma journal_mode;' 2>/dev/null)
     printf '  %s，%s 页，空闲 %s 页，journal=%s\n' "$size" "$pages" "$free" "$mode"
     [ "$mode" = wal ] && pass 'WAL 模式（读写不互相阻塞）' || note "journal 模式为 $mode"
-    if [ -n "$free" ] && [ "$free" -gt 200 ]; then
-        note "空闲页 $free 偏多，可考虑 VACUUM 回收空间"
+    if [ -n "$free" ] && [ -n "$pages" ] && [ "$pages" -gt 0 ]; then
+        # 2026-11-25：阈值原来是绝对页数 `free > 200`。在 185,588 页的库上
+        # 200 页只有 0.108% —— 等于「只要有一点空闲页就建议 VACUUM」。
+        #
+        # 而规范第六节明令不做这件事：「对 700 MB 级数据库无脑 VACUUM ——
+        # 先看空闲页；空闲页少说明没有碎片，VACUUM 只锁表不解决任何问题」。
+        #
+        # 也就是说，巡检原来在建议一个规范禁止的操作。改判比例，并且把
+        # 代价写进文案 —— 只说「可考虑 VACUUM」而不说「它会全程锁表」，
+        # 等于把决策成本藏起来。
+        permille=$((free * 1000 / pages))
+        if [ "$permille" -ge 100 ]; then
+            note "空闲页 $free/$pages（$((permille / 10)).$((permille % 10))%）—— 回收空间需要 VACUUM，它会全程锁表，挑低峰做"
+        else
+            pass "碎片很少（空闲 $free/$pages，$((permille / 10)).$((permille % 10))%），VACUUM 不值得做"
+        fi
     else
-        pass '碎片很少，无需 VACUUM'
+        note '取不到页数，无法判断碎片情况'
     fi
     rows=$(sqlite3 -readonly "$DB" 'select count(*) from request_logs;' 2>/dev/null)
     oldest=$(sqlite3 -readonly "$DB" "select date(min(ts),'unixepoch','+8 hours') from request_logs;" 2>/dev/null)
