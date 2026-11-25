@@ -24,6 +24,7 @@ MODULES = (
     "server.tests.test_v133_release_hardening",
     "server.tests.test_v12149_post_migration_cleanup",
     "server.tests.test_v12152_rollout_script",
+    "server.tests.test_verify_runtime_config",
     "server.tests.test_release_pointer_closure",
     "server.tests.test_release_consistency",
     "server.tests.test_product_origin",

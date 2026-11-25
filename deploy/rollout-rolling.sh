@@ -28,6 +28,8 @@ RELEASES=/opt/workbuddy-manager/releases
 ACCESS_LOG=/var/log/nginx/access.log
 RELAY=zhihui-rolling-relay
 GATEWAY=workbuddy-web
+#: 脚本自身所在目录 —— 配置校验工具与它同目录，不能靠调用者的 cwd 找。
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 
 step() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
@@ -71,6 +73,23 @@ restart_relay() {
         fi
     done
     die '中继重启后 10 秒仍未就绪'
+}
+
+verify_runtime_config() {
+    step '用这一版的代码校验当前配置'
+    # 2026-11-23 23:25 真实踩过：drop-in 先加了 WB_TRAFFIC_TAP=1，而后端代码的
+    # schema 还不认识它，于是每次启动都被拒、每 3 秒重启一次，直到
+    # StartLimitBurst=10 才停 —— 约 8 分钟完全不可用。
+    #
+    # 这件事**在重启前就能查出来**：校验读的是「当前环境」与「这一版的 schema」，
+    # 两者在重启前都是已知的。原流程只是没人去比。
+    local vdir
+    vdir=$(readlink -f "$RELEASES/current" 2>/dev/null) || vdir=''
+    [ -n "$vdir" ] || die '无法解析发布指针，不敢继续'
+    [ -x "$SELF_DIR/verify-runtime-config.py" ] \
+        || die "缺少 $SELF_DIR/verify-runtime-config.py"
+    "$SELF_DIR/verify-runtime-config.py" "$vdir" "$GATEWAY" \
+        || die '这一版的配置校验不通过 —— 重启会陷入崩溃重启循环，已中止（服务仍在跑旧代码）'
 }
 
 restart_gateway() {
@@ -132,6 +151,8 @@ main() {
     if [ "$check_only" = 1 ]; then
         step '发布指针'
         printf '   current -> %s\n' "$(current_release || echo '(无法解析)')"
+        # --check 也跑配置校验：这是只读的，而且正是「体检」该报的东西。
+        verify_runtime_config
         step '体检通过，未做任何改动'
         return 0
     fi
@@ -152,8 +173,13 @@ main() {
         printf '   而旧代码没有空窗重试 —— 那样这次发布仍会打断在途调用。\n'
     fi
 
+    # 重启前先确认这一版能接受当前配置 —— 2026-11-23 那次 8 分钟崩溃重启
+    # 就是这一步的缺失造成的。检查在重启之前，所以失败时服务仍在跑旧代码。
+    verify_runtime_config
+
     restart_gateway "$version"
     local status=$?
+
     step '完成'
     [ "$status" -eq 0 ] && printf '   v%s 已上线，重启窗口零中断\n' "$version"
     return "$status"
