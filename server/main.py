@@ -557,6 +557,38 @@ def release_info():
     }, headers={'Cache-Control': 'no-store'})
 
 
+@app.get('/api/health/alerts', include_in_schema=False)
+def health_alerts(request: Request):
+    """本机巡检用的告警快照（只读）。
+
+    为什么单独开一个端点：应用内 18 项告警（备份、归档、预算对账、账本回执、
+    门户账本……）只存在 `operational.alerts` 这个内存字典里，`transition()` 进入
+    时写一条日志就不再重复，于是**持续 active 的告警在日志里只有开头一行**。
+    人工跑巡检脚本时因此看不到它们，脚本报「全部正常」而实际有告警挂着。
+
+    ## 边界
+
+    **只允许回环地址**：巡检脚本在宿主机上 `curl 127.0.0.1`，外部拿不到。
+    既有的 `/api/release` 无鉴权是因为它只暴露不可变的发布身份；告警名虽然
+    也是内部术语，但没有必要对外开放，所以这里额外限定来源。
+
+    **不返回 detail**：`detail` 里可能带账号名、上游错误原文。巡检只需要知道
+    「哪一项挂着、挂了多久」，排查时再按名字去日志里找原文。
+    """
+    client = request.client.host if request.client else ''
+    if client not in ('127.0.0.1', '::1', 'localhost'):
+        return JSONResponse({'error': 'loopback only'}, status_code=403)
+    from . import operational
+    now = int(time.time())
+    active = [{'name': name, 'age_seconds': max(0, now - int(item.get('since') or now))}
+              for name, item in sorted(operational.alerts.items())]
+    return JSONResponse({
+        'service': 'zhihui-gateway',
+        'count': len(active),
+        'active': active,
+    }, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/api/readyz/detail', include_in_schema=False)
 def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
     """完整就绪诊断（需面板读者身份）。

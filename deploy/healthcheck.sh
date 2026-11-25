@@ -185,6 +185,26 @@ if [ -r "$DB" ]; then
     fi
 fi
 
+section '运行告警'
+# 应用内有 18 项告警（备份、归档、预算对账、账本回执、门户账本……）。它们只存在
+# `operational.alerts` 这个内存字典里：`transition()` 进入时写一条日志就不再重复，
+# 所以**持续 active 的告警在日志里只有开头一行**。人工跑巡检时因此看不见它们 ——
+# 脚本报「全部正常」而实际有告警挂着。这个端点专为巡检而开：只允许回环访问、
+# 不返回 detail（detail 里有账号名与上游原文）。
+alerts_json=$(curl -sf --max-time 5 http://127.0.0.1:7866/api/health/alerts 2>/dev/null)
+if [ -n "$alerts_json" ]; then
+    acount=$(printf '%s' "$alerts_json" | sed -n 's/.*"count":[ ]*\([0-9]\{1,\}\).*/\1/p')
+    if [ -z "${acount:-}" ]; then
+        note '告警快照格式无法解析'
+    elif [ "$acount" -eq 0 ]; then
+        pass '应用内告警全部为空'
+    else
+        broken "$acount 项应用内告警处于 active 状态（按名字查日志可看到 detail）"
+    fi
+else
+    note '取不到告警快照（端点未上线或服务未起）'
+fi
+
 section '数据库'
 if [ -r "$DB" ]; then
     size=$(du -h "$DB" 2>/dev/null | cut -f1)
