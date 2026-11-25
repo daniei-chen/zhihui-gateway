@@ -183,6 +183,7 @@ if [ -r "$DB" ]; then
     if [ -n "${nfn:-}" ] && [ "$nfn" -gt 0 ]; then
         printf '  非流式 %s 次：平均 %sms，最长 %sms（首字节即末尾，按总时长看）\n' "$nfn" "$nfavg" "$nfmax"
     fi
+fi
 
 section '数据库'
 if [ -r "$DB" ]; then
