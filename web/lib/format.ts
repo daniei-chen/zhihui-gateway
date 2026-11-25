@@ -84,15 +84,16 @@ function calendarDaysAgo(d: Date): number {
   return Math.round((b - a) / 86400000);
 }
 
-/** 千分位数字 */
+/** 千分位数字。`null`/`undefined` 是「未知」不是「零」，显示破折号。 */
 export function fmtNumber(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '0';
+  if (n === null || n === undefined) return '—';
   return n.toLocaleString(intlLocale());
 }
 
-/** 大数紧凑显示：1.2k / 3.4M */
+/** 大数紧凑显示：1.2k / 3.4M。同样区分「未知」与「零」。 */
 export function fmtCompact(n: number | null | undefined): string {
-  if (!n) return '0';
+  if (n === null || n === undefined) return '—';
+  if (n === 0) return '0';
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
