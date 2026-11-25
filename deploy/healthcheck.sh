@@ -111,6 +111,42 @@ printf '  控制台历史版本 %s 个' "$console_count"
 release_count=$(ls /opt/workbuddy-manager/releases 2>/dev/null | grep -c '^v1')
 printf '  应用历史版本 %s 个\n' "$release_count"
 
+section '上游额度'
+# 额度快照由后台任务定时采集。没有这一段时，账号额度将尽只能等用户撞上 429 才发现
+# —— 而那时已经有人在生产上失败了。阈值 20% / 10% 是按充值周期定的：低于两成还
+# 来得及在工作时间处理，低于一成基本就是当天的事了。
+if [ -r "$DB" ]; then
+    latest=$(sqlite3 -readonly "$DB" 'select max(captured_at) from platform_credit_snapshots;' 2>/dev/null)
+    if [ -n "$latest" ]; then
+        rows=$(sqlite3 -readonly -separator '|' "$DB" \
+            "select platform||'/'||coalesce(account,'-'), ifnull(total,0), ifnull(remain,0)
+             from platform_credit_snapshots where captured_at=$latest
+             order by remain*1.0/nullif(total,0) asc;" 2>/dev/null)
+        # 用 herestring 而不是管道：管道会开子 shell，里面的 pass/note/broken
+        # 改不到外层的计数器，结论那一行的数字就会少算。
+        while IFS='|' read -r who total remain; do
+            [ -n "$who" ] || continue
+            case "$total" in ''|0|0.0|*[!0-9.]*) continue ;; esac
+            pct=$(awk -v r="$remain" -v t="$total" 'BEGIN{printf "%.0f", 100*r/t}')
+            if [ "$pct" -lt 10 ]; then
+                broken "$who 剩余 $remain/$total（${pct}%）—— 即将耗尽"
+            elif [ "$pct" -lt 20 ]; then
+                note "$who 剩余 $remain/$total（${pct}%）—— 该充值了"
+            else
+                pass "$who 剩余 $remain/$total（${pct}%）"
+            fi
+        done <<< "$rows"
+        age=$(( $(date +%s) - latest ))
+        if [ "$age" -gt 86400 ]; then
+            note "额度快照已 $((age / 3600)) 小时未更新，上面的数字可能是旧的"
+        fi
+    else
+        note '没有额度快照，无法判断上游还剩多少'
+    fi
+else
+    note "读不到数据库 $DB"
+fi
+
 section '数据库'
 if [ -r "$DB" ]; then
     size=$(du -h "$DB" 2>/dev/null | cut -f1)
