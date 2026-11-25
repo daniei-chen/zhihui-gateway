@@ -31,7 +31,20 @@ class QtgError(Exception):
             self.status_code = status_code
 
     def to_body(self) -> dict:
-        return {"error": {"code": self.code, "message": self.message, "type": self.type}}
+        # 两套字段同时提供，不是二选一。
+        #
+        # `detail` 是 FastAPI/Starlette 的既有错误体形状，控制台与后端测试都按
+        # 这个字段取值（`r.json()['detail']`）。只给 `error` 会让它们读不到文案 ——
+        # 曾经试过只返回 `error`，四个测试当场报 `KeyError: 'detail'` 与
+        # `'12' not found in ''`。
+        #
+        # `error` 是 OpenAI 风格的结构化入口，需要错误码（而不只是文案）的调用方
+        # 用它。两者语义相同，`message` 与 `detail` 逐字一致，不会出现「同一件事
+        # 两种说法」。
+        return {
+            'detail': self.message,
+            'error': {'code': self.code, 'message': self.message, 'type': self.type},
+        }
 
 
 class BadRequest(QtgError):
@@ -159,12 +172,15 @@ def install_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=422,
             content={
+                # `detail` 保持 FastAPI 默认形状（校验错误列表）。控制台与既有
+                # 测试按这个字段取值，只给 `error` 会让它们读不到。
+                "detail": exc.errors()[:8],
                 "error": {
                     "code": "validation_error",
                     "message": "请求参数不合法",
                     "type": "invalid_request_error",
                     "details": exc.errors()[:8],
-                }
+                },
             },
         )
 
@@ -175,5 +191,13 @@ def install_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error": {"code": code, "message": str(exc.detail), "type": "api_error"}},
+            content={
+                # `detail` 保持 FastAPI 默认形状（就是 exc.detail 本身）。
+                # 这条是三个处理器里影响面最大的一个：它覆盖了所有
+                # `HTTPException` 的默认响应，包括鉴权失败、404、以及各处手动
+                # 抛出的带文案的拒绝。只给 `error` 会让 `{"detail": "未登录"}`
+                # 变成 `{"error": {...}}`，前端与测试按 `detail` 取值全部落空。
+                "detail": exc.detail,
+                "error": {"code": code, "message": str(exc.detail), "type": "api_error"},
+            },
         )

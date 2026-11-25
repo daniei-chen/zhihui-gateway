@@ -431,6 +431,25 @@ app = FastAPI(
     openapi_url='/openapi.json' if config.ENABLE_DOCS else None,
 )
 
+# qtgcore 的错误翻译器。
+#
+# `qtgcore/errors.py` 定义了 `QtgError` 及五个子类（BadRequest/Unauthorized/
+# Forbidden/NotFound/UpstreamError），每个都带自己的 `status_code`，同一文件里
+# 也写好了 `install_handlers(app)` 把它们挂到 FastAPI。
+#
+# **但这个函数从来没有被调用过。**全仓只有两处命中：定义处与一句 docstring。
+# 结果是这些受控错误一路冒到 Starlette，被兜成 500 并打印 traceback ——
+# 「缓存已更新」「上游不可用」这类本可识别的失败，客户端只看到「服务器内部错误」。
+#
+# 实测证据：`request_outcomes` 里 133 条 `gateway.application.error`，`error_stage`
+# 全为 null；按端点集中在 `/api/stats/*`（控制台轮询下载缓存失效时抛的
+# `UpstreamError(..., code='cache_invalidated')`）与 `/api/system/internal-session-verify`。
+#
+# 注意 `to_body()` 现在同时给 `detail` 与 `error` 两套字段：只给 `error` 会让
+# 按 `detail` 取值的控制台与测试读不到文案（曾经试过，四个测试当场失败）。
+from .qtgcore.errors import install_handlers as _install_qtg_error_handlers
+_install_qtg_error_handlers(app)
+
 app.include_router(budgets.router)
 
 if config.CORS_ORIGINS:
