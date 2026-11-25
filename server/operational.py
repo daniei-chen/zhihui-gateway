@@ -16,6 +16,8 @@ ledger_spool_failed = False
 #: U01：连续成功重放轮数。只有它达到阈值且积压归零，才允许把写入健康置真。
 _ledger_replay_streak = 0
 alerts = {}
+#: 是否已从库里恢复过告警状态。进程可能因为部署重启，而告警条件跨重启持续存在。
+_alerts_loaded = False
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS readiness_probe(id INTEGER PRIMARY KEY CHECK(id=1), ts INTEGER NOT NULL);
 '''
@@ -201,11 +203,67 @@ def readiness():
                            'write_proof 是最近一次真实落盘的证据'),
     }
 
+def _load_alerts():
+    """进程重启后接续未恢复的告警，避免同一个告警被反复当成「新的」重报。
+
+    2026-11-25：`workbuddy_low_accounts` 在 24 小时内报了 35 次，而当天只有 7 次部署。
+    原因是 `alerts` 是**内存字典**：部署重启后它清空，monitor 下一轮看到 `old is None`
+    就判定为「状态进入」，于是把同一条从未恢复的告警又投递一遍。
+
+    表里只存「当前仍处于告警中」的项，不存历史——恢复时删行，不留档案。
+    这样它和内存字典表达的是同一件事，只是多了跨重启的能力。
+    """
+    global _alerts_loaded
+    if _alerts_loaded:
+        return
+    _alerts_loaded = True
+    # 调用方已经把 alerts 填好了（测试注入、或外部恢复），就不要用库里的覆盖它。
+    # 生产路径下 alerts 在进程启动时必然是空字典，所以这条不会挡住真正的恢复。
+    if alerts:
+        return
+    try:
+        rows = db.query('SELECT name, since, detail FROM operational_alerts')
+    except Exception:  # noqa: BLE001 - 读不到就当没有历史，绝不能挡住告警判定
+        log.warning('operational alert state load failed')
+        return
+    for row in rows:
+        alerts[row['name']] = {
+            'name': row['name'],
+            'since': int(row['since']),
+            'detail': row['detail'],
+        }
+    if alerts:
+        log.info('operational alert state restored count=%d', len(alerts))
+
+
+def _persist_alert(name, record):
+    """把「进入告警」写进库。失败只记日志——告警状态机的正确性不能依赖磁盘。"""
+    try:
+        with db.transaction() as conn:
+            conn.execute(
+                'INSERT INTO operational_alerts(name, since, detail) VALUES(?,?,?) '
+                'ON CONFLICT(name) DO UPDATE SET since=excluded.since, detail=excluded.detail',
+                (name, record['since'], record['detail']))
+    except Exception:  # noqa: BLE001
+        log.warning('operational alert persist failed name=%s', name)
+
+
+def _forget_alert(name):
+    """告警恢复时删行。失败同样只记日志。"""
+    try:
+        with db.transaction() as conn:
+            conn.execute('DELETE FROM operational_alerts WHERE name=?', (name,))
+    except Exception:  # noqa: BLE001
+        log.warning('operational alert forget failed name=%s', name)
+
+
 def transition(name, active, detail):
+    _load_alerts()
     old = alerts.get(name)
     if active:
         if old is None:
             alerts[name] = {'name':name,'since':int(time.time()),'detail':detail}
+            _persist_alert(name, alerts[name])
             log.error('operational alert name=%s detail=%s',name,detail)
             # K46：日志之外**再**投递一次（默认 disabled，不擅自外发）。
             # 只在状态**进入**时投递，避免 monitor 每轮重复刷。
@@ -216,6 +274,7 @@ def transition(name, active, detail):
                 log.warning('alert dispatch failed name=%s', name)
     elif old is not None:
         alerts.pop(name)
+        _forget_alert(name)
         log.info('operational recovery name=%s',name)
         try:
             from . import notify

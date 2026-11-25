@@ -2057,6 +2057,19 @@ CREATE TABLE IF NOT EXISTS budget_resolution_evidence_v2(
 from .legacymig import SCHEMA as _LEGACY_QTG_SCHEMA
 SCHEMA += _LEGACY_QTG_SCHEMA
 SCHEMA += 'CREATE TABLE IF NOT EXISTS readiness_probe(id INTEGER PRIMARY KEY CHECK(id=1), ts INTEGER NOT NULL);'
+# 2026-11-25：运维告警的「当前状态」需要跨进程重启存活。
+#
+# 原来 `operational.alerts` 只是内存字典，部署重启后清空，monitor 下一轮看到
+# `old is None` 就当成「状态进入」，把同一条从未恢复的告警又投递一遍 ——
+# 实测 24 小时内 `low_accounts` 报了 35 次，而当天只有 7 次部署。
+#
+# 只存「当前仍处于告警中」的行：进入告警时写，恢复时删。不存历史，
+# 所以它表达的事实和内存字典完全一致，只是多了跨重启的能力。
+#
+# 建表语句写在这里而不是 operational.SCHEMA：`operational` 自身 import db，
+# 反向 import 会循环。这个文件历来是 DDL 的唯一执行点（见上面 readiness_probe）。
+SCHEMA += ('CREATE TABLE IF NOT EXISTS operational_alerts('
+           'name TEXT PRIMARY KEY, since INTEGER NOT NULL, detail TEXT NOT NULL);')
 
 
 # ── U03：重建/修复入口不得改写 api_keys.used_credit_units ──────────────────
