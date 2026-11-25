@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+import ipaddress
 import logging
 import os
 import asyncio
@@ -594,8 +595,22 @@ def health_alerts(request: Request):
     **不返回 detail**：`detail` 里可能带账号名、上游错误原文。巡检只需要知道
     「哪一项挂着、挂了多久」，排查时再按名字去日志里找原文。
     """
-    client = request.client.host if request.client else ''
-    if client not in ('127.0.0.1', '::1', 'localhost'):
+    # 用全站统一的来源解析，不要直接读 ASGI scope 的 client。
+    #
+    # `request.client.host` 在反代之后拿到什么，取决于 uvicorn 的 proxy_headers
+    # 与 nginx 是否真的传了 X-Forwarded-For/Real-IP —— 那是没写进代码的隐式前提。
+    # 只要某一环没按预期传头，这个「只允许本机」就会对所有外部请求都成立，
+    # 承诺当场失效而没人会发现。
+    #
+    # `client_ip()` 是唯一按 WB_TRUSTED_PROXY_CIDRS 从右往左数跳数的实现，
+    # 与 IP 白名单、登录锁定、密钥 max_ips 同一套口径，这里跟着它走。
+    # 顺带补上原先漏掉的：is_loopback 覆盖整个 127.0.0.0/8，比只认
+    # '127.0.0.1' 更全面（以前 127.0.0.2 会被误拒）。
+    try:
+        loopback = ipaddress.ip_address(client_ip(request)).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
         return JSONResponse({'error': 'loopback only'}, status_code=403)
     from . import operational
     now = int(time.time())

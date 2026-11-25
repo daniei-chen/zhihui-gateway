@@ -324,10 +324,20 @@ def bootstrap_users() -> dict:
     save_users(data)
     if not env_pwd:
         _write_initial_password_file(pwd)
+        # 这里**不打印密码本身**。
+        #
+        # stderr 会进 journald：systemd-journal 组成员、日志采集侧车、
+        # `docker logs` 都能读到，而这份密码在改密之前一直是有效的管理员凭据。
+        # 把它写进日志系统，等于给凭据开了一条绕过文件权限的旁路。
+        #
+        # 但也不能只留文件不留提示 —— issue #179 的死结正是「错过那一次输出
+        # 就永远登不进去」（库里只有 pbkdf2 哈希，读不出明文）。所以这里保留
+        # 提示、去掉密码，并直接把文件路径写出来：可恢复性还在，凭据不外泄。
         print('=' * 60, file=sys.stderr)
         print('[智汇网关] 已生成初始管理员账号', file=sys.stderr)
-        print(f'  用户名: admin', file=sys.stderr)
-        print(f'  密码  : {pwd}', file=sys.stderr)
+        print('  用户名: admin', file=sys.stderr)
+        print(f'  密码  : 见 {initial_password_path()}（权限 0600，仅属主可读）',
+              file=sys.stderr)
         print('  请登录后立即在「设置 → 管理用户」中修改密码。', file=sys.stderr)
         print('=' * 60, file=sys.stderr)
     return data
@@ -341,10 +351,16 @@ def initial_password_path() -> Path:
 def _write_initial_password_file(pwd: str) -> None:
     """把随机生成的初始密码落盘，0600。
 
-    为什么必须留一份：随机密码**只在 stderr 打一次**（issue #179）。journal 会被
-    轮转、安装脚本可能因为竞态没抓到、用户在几屏日志里也可能翻过去 —— 一旦错过，
-    库里只有 pbkdf2 哈希，`users.json` 里也读不出明文，于是**没有任何办法登录**。
-    落一份明文 + 登录页指路，是唯一能把这个死结解开的办法。
+    为什么必须留一份：随机密码**不进日志**（原因见上面 bootstrap 处），所以这个
+    文件是唯一出口。启动时只打印它的路径，不打印密码本身。
+
+    这里曾经靠「stderr 打一次」兜底（issue #179），但那等于把一份仍然有效的
+    管理员凭据写进 journald —— 任何能跑 journalctl 的人、任何日志采集侧车都能
+    读到，绕过了 0600 的文件权限。现在改成「文件 + 路径提示」。
+
+    代价是：这个文件比日志更容易被误删。一旦它也没了，库里只有 pbkdf2 哈希，
+    `users.json` 里读不出明文，就**没有任何办法登录**。所以三条要同时成立：
+    文件权限正确、备份覆盖到它、改密后立刻清除。
 
     权限与 users.json 同级（仅属主可读写）：那已经是能伪造任意管理员会话的
     secret 所在，再多一个同样只属主可读的明文密码不改变暴露面。

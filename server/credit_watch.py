@@ -839,6 +839,19 @@ def checkin_retry_failed(now: float | None = None) -> dict | None:
     if not failed_uids:
         return None
 
+    # 格式闸门：uid 是 8 位短 id，合法字符集只有 [0-9A-Za-z_-]。
+    # 面板写入路径已经有同样的白名单（services/tencent.py），这里再挡一次 ——
+    # auths 目录里的 JSON 还能从旁路进来（手工放置、备份还原、上游自己写入），
+    # 而下面那段 shell 脚本会拿 uid 去匹配文件名。
+    safe_uids = [u for u in failed_uids
+                 if re.fullmatch(r'[0-9A-Za-z_-]{1,80}', u)]
+    if len(safe_uids) != len(failed_uids):
+        log.warning('签到重试：%d 个 uid 含非法字符，已跳过',
+                    len(failed_uids) - len(safe_uids))
+    failed_uids = safe_uids
+    if not failed_uids:
+        return None
+
     name = _wb_container()
     delay = 30
     log.warning('今日有 %d 个账号签到失败，%d 秒后单独重试：%s',
@@ -849,13 +862,22 @@ def checkin_retry_failed(now: float | None = None) -> dict | None:
     # 注意：checkin_logs 里存的是 8 位 uid，而 auths 目录里的文件名是完整
     # uuid（workbuddy-<uuid>.json）。用前缀通配匹配，不要直接拼全名 ——
     # 拼全名会一个文件都链不上，重试变成空转。
-    setup = 'mkdir -p /tmp/retry && rm -f /tmp/retry/*.json'
-    for uid in failed_uids:
-        setup += (' && for f in /app/auths/workbuddy-%s*.json; do '
-                  '[ -e "$f" ] && ln -sf "$f" /tmp/retry/; done' % uid)
+    #
+    # uid 一律作为**参数**传给 sh，绝不拼进命令串。
+    #
+    # 原来这里逐个 `setup += '...workbuddy-%s*.json...' % uid`，把 uid 直接
+    # 拼进 `sh -c` 的脚本文本。面板写入路径有正则白名单，正常流程带不进恶意
+    # 字符；但一处「外部输入 + 拼 shell」就足以在 workbuddy2api 容器里执行任意
+    # 命令 —— 那个容器挂着全部账号 token。现在 uid 走 argv，脚本里用 "$u"
+    # 引用，shell 不对它做任何解析（上面那层格式闸门是第二道保险）。
     try:
-        subprocess.run(['docker', 'exec', name, 'sh', '-c', setup],
-                       capture_output=True, timeout=60)
+        subprocess.run(
+            ['docker', 'exec', name, 'sh', '-c',
+             'mkdir -p /tmp/retry && rm -f /tmp/retry/*.json && '
+             'for u in "$@"; do for f in /app/auths/workbuddy-"$u"*.json; do '
+             '[ -e "$f" ] && ln -sf "$f" /tmp/retry/; done; done',
+             'sh', *failed_uids],
+            capture_output=True, timeout=60)
         proc = subprocess.run(
             ['docker', 'exec', name, 'sh', '-c', 'cd /app && ./signin.sh /tmp/retry 2>&1'],
             capture_output=True, timeout=300)
