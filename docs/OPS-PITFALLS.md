@@ -305,3 +305,65 @@ Environment=WB_FIRST_BYTE_TIMEOUT_S=240
 
 **每条都必须对应一次真实的失败**，不要写通用建议。通用建议读起来都对，
 但一条也记不住；真实失败有细节，细节才记得住。
+
+---
+
+## 十九、纯文档提交也能让 CI 变红
+
+2026-11-25 有一次 CI 失败，提交是 `75431fc`（只改了 `docs/OPS-PITFALLS.md`）：
+
+```
+FAIL: test_reviewed_patch_files_match_current_source
+AssertionError: '264ef1f1518ca35434ea453d87425c2f470acdcf657ce957cba8721236ae4f10'
+                not found in {'00...}
+Ran 1127 tests
+FAILED (failures=1)
+```
+
+### 为什么
+
+`server/release-provenance.json` 里的 `reviewed_patch_files` 记着受保护文件的哈希。
+测试要求每一个记下的哈希都能在当前源码里找到：
+
+```python
+for relative, expected in files.items():
+    self.assertIn(expected, self._source_hashes(path), relative)
+```
+
+**这个断言只看源码状态，与「这次提交改了什么」无关。**
+
+所以：如果版本面文件（`VERSION` / `product-release.json` / `release-provenance.json` /
+`writer-capabilities.json`）处于「已经升过版本、但 `reviewed_patch_files` 没跟上」
+的中间态，那么**下一个提交** —— 哪怕只改一个 markdown —— 都会把它带到 CI 上，红。
+
+### 这次的成因
+
+`bump_version.py` 会重算 `reviewed_patch_files`。但如果在某个环节漏了重算，
+或者手工改过受保护文件却没跑 `deploy/protected-customizations.py --update`，
+就会留下一个对不上的哈希。
+
+它不会立刻暴露，而是**等到下一次推送到 CI 时才炸** —— 而那时推送的人
+很可能正是「只是改了个文档」的那个人，于是第一反应会是「我什么都没动」。
+
+### 怎么避免
+
+**① 收尾时跑一次全门禁，哪怕这次只改了文档。**
+
+```bash
+python tools/ci_regression.py    # exit 0 才能推
+```
+
+成本是几分钟；不跑的成本是 CI 红一次，而那条红会挂在历史上。
+
+**② 出现这类失败，先看 `git log` 里上一个碰过版本面文件的提交。**
+
+`75431fc` 自己什么都没改坏 —— 它只是第一个把既存的不一致带上去的提交。
+
+**③ 记住 `_source_hashes` 返回的是集合，不是单值。**
+
+它同时接受 LF 与 CRLF 两种行尾的哈希（这个项目在 Windows 上开发、Linux 上部署）。
+所以「哈希对不上」不是行尾问题 —— 别往那个方向查。
+
+### 一句话
+
+**CI 检的是仓库的当前状态，不是你这次提交的意图。**
