@@ -312,7 +312,30 @@ def cmd_stage(args) -> int:
     web_out.mkdir(parents=True)
     if args.web:
         extract(Path(args.web), web_out, strip=1)
-        print(f"   web/out 落地 {len(web_closure(target))} 个文件")
+        landed = web_closure(target)
+        # 前端包是空的 / 不完整 —— 必须在 stage 就拦，不能等到 seal。
+        #
+        # `seal` 确实会检查「缺 index.html 或 login/index.html」，但那时
+        # 归档已经打好了，中间还隔着一个可能被 `activate` 或被人当成正常
+        # 的窗口。更要命的是 stage 只打印一行「落地 0 个文件」，没人盯着
+        # 输出就漏过去了。
+        #
+        # 这也不是假想的：本机 `web/out` 现在就是个 94 个目录、0 个文件的
+        # 空骨架（`.gitignore` 忽略了 out/，所以不会体现在 git status 里）。
+        # 拿它打包必然得到一个没有界面却「发布成功」的版本。
+        if not landed:
+            raise ReleaseError(
+                f"--web {args.web} 解压后 web/out 里一个文件都没有。\n"
+                f"最常见的原因是忘了先跑 `npm run build:export`，"
+                f"或者 tar 包的第一层不是 out/。\n"
+                f"先确认 `web/out/index.html` 真的存在，再重新打包。"
+            )
+        if not (web_out / "index.html").is_file() or not (web_out / "login" / "index.html").is_file():
+            raise ReleaseError(
+                f"--web {args.web} 解压出 {len(landed)} 个文件，但缺 "
+                f"index.html 或 login/index.html —— 这不是一套完整的 Next 静态导出。"
+            )
+        print(f"   web/out 落地 {len(landed)} 个文件")
 
     (target / ".version").write_text(args.version + "\n", encoding="utf-8")
 
