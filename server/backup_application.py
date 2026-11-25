@@ -344,12 +344,29 @@ def main():
                 member=archive.getmember(name)
                 if not member.isdir() or (member.uid,member.gid,member.mode)!=metadata:
                     raise RuntimeError('private recovery directory metadata mismatch')
-            restored=Path(scratch)/'restore.db'; restored.write_bytes(archive.extractfile('manager/data/manager.db').read())
+            # 恢复验证要把库解出来查一次，但**不能整库读进内存**。
+            #
+            # 2026-11-25：这里原来是 `restored.write_bytes(archive.extractfile(...).read())`，
+            # 把 750 MB 的 manager.db 整个读进内存再写盘。加上下面那行整包读进内存算
+            # sha256（406 MB），峰值约 1.1 GB，而备份进程的 cgroup 上限是 512 MB ——
+            # 于是它在 05:34 被内核 OOM 杀掉，备份中断，留下一个没清理的中间目录。
+            # 那次失败本身被「前一份报告还没超 26 小时」兜住了，所以全局仍报健康，
+            # 但如果连续两次，就会变成「备份陈旧」而没人知道原因。
+            #
+            # 改成流式：内存占用与库大小无关，恒定一个 1 MB 缓冲。
+            restored=Path(scratch)/'restore.db'
+            with archive.extractfile('manager/data/manager.db') as src, restored.open('wb') as dst:
+                shutil.copyfileobj(src, dst, 1024*1024)
             con=sqlite3.connect(restored)
             if con.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('restore check failed')
             if con.execute('SELECT count(*) FROM request_logs').fetchone()[0]!=count: raise RuntimeError('restore row mismatch')
             con.close()
-        result={'path':str(output),'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
+        # 同理：整包 400 MB 读进内存只为算一个哈希，也是 OOM 的一半原因。
+        digest=hashlib.sha256()
+        with output.open('rb') as handle:
+            for block in iter(lambda: handle.read(1024*1024), b''):
+                digest.update(block)
+        result={'path':str(output),'sha256':digest.hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
         # The local verified recovery remains available if publication fails.
         if Path('/root/backups/workbuddy-recovery/offsite.json').is_file():
             sys.path.insert(0,str(Path(__file__).resolve().parent))
