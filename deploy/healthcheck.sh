@@ -187,6 +187,31 @@ if [ -r "$DB" ]; then
     fi
 fi
 
+section '容量拒绝'
+# 5xx 归因分三类，只有一类是发版责任，另有一类**是运营责任**：
+#   · 部署窗口    —— 落在重启前后 15 秒内，发版失败
+#   · 上游瞬时失败 —— 上游侧，记下来即可
+#   · 容量拒绝    —— 我们自己没接住，必须扩容或限流
+# 前两类在别处已经有专门段落；第三类此前只被并进总错误率，看不见。
+# 实测 11-01 单日 262 次容量拒绝、之后连日零星 —— 那种日子在总错误率里
+# 只是「占比略高」，看不出是自己在拒绝人。
+#
+# 这里用 broken 而不是 note：容量拒绝不是「上游不配合」，是我们接不住，
+# 属于必须处理的项。
+if [ -r "$DB" ]; then
+    cap=$(sqlite3 -readonly "$DB" \
+        "SELECT count(*) FROM request_outcomes
+          WHERE ts > strftime('%s','now')-86400
+            AND error_code='gateway.capacity.rejected';" 2>/dev/null)
+    if [ -z "${cap:-}" ]; then
+        note '查不到容量拒绝数据'
+    elif [ "$cap" -eq 0 ]; then
+        pass '近 24 小时没有容量拒绝'
+    else
+        broken "近 24 小时 $cap 次容量拒绝（503）—— 这是我们的责任，需要扩容或限流"
+    fi
+fi
+
 section '首字节（TTFT）'
 # 只看流式请求。非流式请求的「首字节」就是最后一个字节 —— 实测它与总延迟只差 2 ms，
 # 混进来会把「生成 5816 个 token 用了 118 秒」误报成「首字节慢」。那不是缺陷，
