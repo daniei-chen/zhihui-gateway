@@ -26,6 +26,7 @@ MODULES = (
     "server.tests.test_v12152_rollout_script",
     "server.tests.test_verify_runtime_config",
     "server.tests.test_healthcheck_coverage",
+    "server.tests.test_key_quota_alerts",
     "server.tests.test_release_pointer_closure",
     "server.tests.test_release_consistency",
     "server.tests.test_product_origin",

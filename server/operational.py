@@ -1010,6 +1010,10 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
         # 之前只有「账号数」告警，池子烧到只剩两成也没有信号。
         for _name, _active, _detail in _safe_alerts(credit_watch.workbuddy_alerts, 'workbuddy.credits'):
             transition(_name, _active, _detail)
+        # 日配额接近上限：配额本身是强制的（超了直接拒），但用户看到的第一条
+        # 信息就是「额度不足」—— 那时已经调不通了。同类产品都把这个当独立能力。
+        for _name, _active, _detail in _safe_alerts(credit_watch.quota_alerts, 'key.quota'):
+            transition(_name, _active, _detail)
         # 凭证过期：23 个账号是同一批登录的，到期时刻几乎相同 —— 失效是
         # 「某天集体掉线」而不是慢慢变少，必须提前看日期。
         for _name, _active, _detail in _safe_alerts(credit_watch.account_token_alerts, 'workbuddy.tokens'):

@@ -21,7 +21,7 @@ import time
 
 from pathlib import Path
 
-from . import db, externalplatforms
+from . import db, externalplatforms, ledger
 
 log = logging.getLogger('server.credit_watch')
 
@@ -333,6 +333,73 @@ CREDIT_UNITS_SCALE = 1_000_000.0
 #: 十分钟缓存不会让数字失真。
 USAGE_RATE_TTL = 600
 _usage_rate_cache: dict = {}
+
+
+#: 日配额用到这个比例就提醒。80% 是同类产品的常见值，也给运维留出反应时间。
+QUOTA_WARN_RATIO = 0.8
+
+
+def quota_alerts() -> list:
+    """日配额接近上限告警：`[(告警名, 是否触发, 文案)]`。
+
+    2026-11-25：配额**有强制**（`budget.py` 里超了直接 `BudgetRejected`，
+    文案是「今日积分额度不足，次日按服务器时区重置」），但**没有任何提前信号**。
+
+    这一点是和同类产品对比出来的：LiteLLM 有 budget alert、Portkey 有 budget
+    limits、New API 有额度预警 —— 它们都把「快用完了」当成独立能力。我们缺。
+    用户看到的第一条信息就是「额度不足」，而那时已经调不通了。
+
+    数据缺失不告警 —— 和本文件其它告警一致：宁可不说，也不制造假信号。
+    """
+    today = time.strftime('%Y-%m-%d')
+    try:
+        rows = db.query(
+            'SELECT k.id AS id, k.name AS name,'
+            ' k.daily_credit_quota AS credit_quota, k.daily_token_quota AS token_quota,'
+            ' COALESCE(SUM(u.credit_units), 0) AS used_units,'
+            ' COALESCE(SUM(u.prompt_tokens + u.completion_tokens), 0) AS used_tokens'
+            ' FROM api_keys k LEFT JOIN usage_daily u'
+            '   ON u.key_id = k.id AND u.day = ?'
+            ' WHERE (k.daily_credit_quota > 0 OR k.daily_token_quota > 0)'
+            '   AND k.enabled = 1'
+            ' GROUP BY k.id, k.name, k.daily_credit_quota, k.daily_token_quota',
+            (today,))
+    except Exception:  # noqa: BLE001 - 告警查询失败不能影响其它告警
+        log.warning('日配额告警查询失败', exc_info=True)
+        return [('key_quota_near_limit', False, '日配额查询失败，本轮不评估')]
+
+    if not rows:
+        return [('key_quota_near_limit', False, '没有配置日配额的密钥')]
+
+    triggered, details = False, []
+    for row in rows:
+        name = row['name'] or ('#%s' % row['id'])
+        # 积分配额：库里的 credit_units 是「百万分之一积分」，要换算后再比。
+        credit_quota = float(row['credit_quota'] or 0)
+        if credit_quota > 0:
+            limit = ledger.units(credit_quota)
+            used = int(row['used_units'] or 0)
+            if limit and used >= limit * QUOTA_WARN_RATIO:
+                percent = used * 100.0 / limit
+                left = (limit - used) / 1_000_000
+                triggered = True
+                details.append('%s 今日积分已用 %.1f%%（剩 %.2f）'
+                               % (name, percent, max(left, 0.0)))
+        # Token 配额：直接比个数。
+        token_quota = int(row['token_quota'] or 0)
+        if token_quota > 0:
+            used = int(row['used_tokens'] or 0)
+            if used >= token_quota * QUOTA_WARN_RATIO:
+                percent = used * 100.0 / token_quota
+                triggered = True
+                details.append('%s 今日 Token 已用 %.1f%%（%d/%d）'
+                               % (name, percent, used, token_quota))
+
+    if not triggered:
+        return [('key_quota_near_limit', False, '日配额充足')]
+    return [('key_quota_near_limit', True,
+             '已用超过 %d%%：[%s]；用满后该密钥今日会被拒绝，次日按服务器时区重置'
+             % (QUOTA_WARN_RATIO * 100, '；'.join(details)))]
 
 
 def usage_credit_rate(days: int = 7) -> dict | None:
