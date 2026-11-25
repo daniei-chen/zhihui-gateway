@@ -133,7 +133,7 @@ class ItCatchesTemplateLiteralsTests(unittest.TestCase):
 
     def test_it_normalises_interpolation(self):
         """`${id}` 要归一化成 `{}`，才能与后端的路径参数形式比对。"""
-        self.assertIn("s/\${[^}]*}/{}/g", SCRIPT)
+        self.assertIn(r"s/\${[^}]*}/{}/g", SCRIPT)
 
     def test_both_patterns_are_used(self):
         self.assertIn('"/api/[a-z0-9/_-]+"', SCRIPT)

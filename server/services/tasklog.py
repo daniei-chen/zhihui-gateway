@@ -109,12 +109,6 @@ _SCRIPT_FAIL_LINE = re.compile(
     r'(?:WARN|ERR):\s*(' + _SCRIPT_KINDS + r')\s*(?:\(([^)]*)\))?\s*:\s*(.*)$'
 )
 
-# 脚本类任务的中文名（与 KIND_LABELS 合并展示）
-SCRIPT_KIND_LABELS = {
-    'school': '开学季任务',
-    'cat': '夜猫任务',
-}
-
 # 幂等成功标志：腾讯把「今天已签到」当业务错误返回，但语义上是成功。
 # 与上游 IsAlreadyCheckin 的判定保持一致（已签到 / already）。
 _ALREADY_MARKERS = ('已签到', 'already', '重复签到')
