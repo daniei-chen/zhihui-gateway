@@ -157,7 +157,7 @@ if [ -r "$DB" ]; then
         WITH s AS (SELECT first_byte_ms v FROM request_logs
                    WHERE ts > strftime('%s','now')-86400 AND first_byte_ms IS NOT NULL
                    ORDER BY first_byte_ms)
-        SELECT count(*),
+        SELECT (SELECT count(*) FROM s),
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)/2 FROM s)),
                (SELECT v FROM s LIMIT 1 OFFSET (SELECT count(*)*95/100 FROM s)),
                (SELECT max(v) FROM s),
