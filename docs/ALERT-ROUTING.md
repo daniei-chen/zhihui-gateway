@@ -83,15 +83,21 @@
 
 ## 五、现状（2026-11-25）
 
-**steward 的 14 条规则**（会发邮件）：
+**steward 的 16 个规则名**（会发邮件）：
 
 ```
-backup_evidence          budget_evidence         certificate_evidence
-certificate_expiry       channel_verification    disk_capacity
-inference_failure        inference_latency       ledger_channel
-memory_capacity          memory_evidence         platform_<name>
-platform_<name>_credits  pool_capacity           key_quota_near_limit
+backup_evidence        budget_evidence          certificate_evidence
+certificate_expiry     channel_verification     disk_capacity
+inference_failure      inference_latency        key_quota_near_limit
+ledger_channel         memory_capacity          memory_evidence
+platform_<name>        platform_<name>_credits  pool_capacity
+upstream_authorization
 ```
+
+**这份清单必须靠核对，不能靠印象。**初版写成「14 条」并列了 15 个名字，
+漏了 `upstream_authorization` —— 它是 `steward_rules.py` 里那个三元组循环的
+第二项，和 `channel_verification`、`pool_capacity` 一起，同一个 `Signal(`
+调用点展开成三条规则。数 `Signal(` 的个数会得到 14，数规则名才是 16。
 
 **operational 的 18 项**（只进页面/巡检）：见 `server/operational.py` 里的 `_safe_alerts` 调用链。
 
