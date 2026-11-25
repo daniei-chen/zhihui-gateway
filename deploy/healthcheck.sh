@@ -67,14 +67,26 @@ for url in / /portal/ /keys/ /dashboard/ /members/; do
 done
 
 section '近 24 小时错误率'
-if [ -r "$ACCESS_LOG" ]; then
-    since=$(date -u -d '24 hours ago' '+%d/%b/%Y:%H:%M:%S' 2>/dev/null)
-    total=$(awk -v s="$since" '$4 > "["s' "$ACCESS_LOG" 2>/dev/null | wc -l)
-    errors=$(awk -v s="$since" '$4 > "["s && $9 ~ /^5/' "$ACCESS_LOG" 2>/dev/null | wc -l)
-    if [ "$total" -gt 0 ]; then
-        rate=$(awk -v e="$errors" -v t="$total" 'BEGIN{printf "%.2f", 100*e/t}')
-        printf '  请求 %s，5xx %s（%s%%）\n' "$total" "$errors" "$rate"
-        if [ "$errors" -eq 0 ]; then
+# 数据源改成本地数据库的 request_outcomes，不再读 nginx 日志。原因有两个：
+#
+#   1. 日志按天轮转，`date -d '24 hours ago'` 在每天刚过零点时取不到昨天的行，
+#      实际统计窗口会缩到几小时，「近 24 小时」名不副实；
+#   2. 原先拿 nginx 的 `$4`（形如 `[25/Nov/2026:10:30:01`）与 `date` 输出做字符串
+#      比较，既多拼了一个 `[`（日志字段本身已带），又用了 `-u`（UTC）去比 `+0800`
+#      的时间戳 —— 两个错误叠加后比较恒为真，`total` 实际是整个文件的行数。
+#      日志越大，错误率被稀释得越厉害，这个数就彻底失去意义了。
+#
+# request_outcomes 是应用自己写的每一个请求的终态，带 http_status 与 ts，不受日志
+# 轮转影响，也不会被文件行数带偏。
+if [ -r "$DB" ]; then
+    total=$(sqlite3 -readonly "$DB" \
+        "SELECT count(*) FROM request_outcomes WHERE ts > strftime('%s','now')-86400;" 2>/dev/null)
+    errors=$(sqlite3 -readonly "$DB" \
+        "SELECT count(*) FROM request_outcomes WHERE ts > strftime('%s','now')-86400 AND http_status >= 500;" 2>/dev/null)
+    if [ "${total:-0}" -gt 0 ] 2>/dev/null; then
+        rate=$(awk -v e="${errors:-0}" -v t="$total" 'BEGIN{printf "%.2f", 100*e/t}')
+        printf '  请求 %s，5xx %s（%s%%）\n' "$total" "${errors:-0}" "$rate"
+        if [ "${errors:-0}" -eq 0 ]; then
             pass '近 24 小时无 5xx'
         elif [ "$(awk -v r="$rate" 'BEGIN{print (r<1)?1:0}')" = 1 ]; then
             note "5xx 占比 $rate%，低于 1% —— 多半是推理调用在上游侧失败"
@@ -85,7 +97,7 @@ if [ -r "$ACCESS_LOG" ]; then
         note '近 24 小时没有请求记录'
     fi
 else
-    note "读不到 $ACCESS_LOG"
+    note "读不到 $DB"
 fi
 
 section '磁盘'
