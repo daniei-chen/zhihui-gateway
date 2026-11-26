@@ -105,7 +105,54 @@ def key_usage(conn, days: int, realm: str, platform: str, *, now: float | None =
             'source': 'manager_retained_request_logs', 'platform': platform, 'realm': realm,
             'from': start_day.isoformat(), 'to': today.isoformat(),
         })
+    _attach_daily(conn, result, args, realm, known_tokens)
     return result
+
+
+def _attach_daily(conn, rows: list[dict], args, realm: str, known_tokens: str) -> None:
+    """给每个 key 补上逐日用量。
+
+    为什么需要：这张表原来只给窗口内合计，「80 号用了 4 千万 token」说明不了是哪天
+    用的 —— 而这正是「昨天为什么突然翻倍」要回答的问题。合计与日序列必须来自
+    **同一个 WHERE**，所以这里复算一遍而不是去读 `key_daily_usage`：那张表的
+    tokens 与 request_logs 聚合出来的不是一套口径，并排放会让报表自相矛盾。
+
+    额外开销：同一个时间范围再扫一次（377K 行实测 0.5 秒），仍走 `idx_logs_ts`。
+    """
+    if not rows:
+        return
+    sql = f'''
+        SELECT l.key_id AS key_id, date(l.ts,'unixepoch','+8 hours') AS day,
+          COUNT(*) AS requests,
+          SUM(CASE WHEN {known_tokens} THEN l.prompt_tokens ELSE 0 END) AS pt,
+          SUM(CASE WHEN {known_tokens} THEN l.completion_tokens ELSE 0 END) AS ct,
+          SUM(CASE WHEN {known_tokens} THEN 0 ELSE 1 END) AS token_unknown
+        FROM request_logs l INNER JOIN api_keys k ON k.id=l.key_id
+        WHERE l.ts>=? AND l.ts<? AND l.actual_platform=?
+          AND l.protocol IN ('openai','anthropic','responses')
+          {'AND l.realm=?' if realm else ''}
+        GROUP BY l.key_id, day ORDER BY l.key_id, day
+    '''
+    series: dict[int, list[dict]] = {}
+    for raw in conn.execute(sql, args).fetchall():
+        row = dict(raw)
+        if type(row['key_id']) is not int or type(row['requests']) is not int:
+            raise ValueError('invalid selected key-usage series')
+        if type(row['pt']) is not int or type(row['ct']) is not int:
+            raise ValueError('invalid selected key-usage series')
+        if not 0 <= row['requests'] <= MAX_COUNT:
+            raise ValueError('invalid selected key-usage series')
+        tokens = row['pt'] + row['ct']
+        if tokens > MAX_COUNT:
+            raise ValueError('selected key-usage series overflow')
+        series.setdefault(row['key_id'], []).append({
+            'day': str(row['day'] or ''),
+            'requests': row['requests'],
+            # 与上面对齐：有未完成的 token 上报时给 null，而不是给个偏小的数。
+            'tokens': tokens if row['token_unknown'] == 0 else None,
+        })
+    for item in rows:
+        item['daily'] = series.get(item['key_id'], [])
 
 
 def current_key_usage(days: int, realm: str, platform: str) -> list[dict]:

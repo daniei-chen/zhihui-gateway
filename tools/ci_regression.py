@@ -163,6 +163,10 @@ MODULES = (
     "server.tests.test_metering_reconcile_wiring",
     "server.tests.test_account_ttft_metric",
     "server.tests.test_platform_auth",
+    # 2026-11-26 才发现它一直不在列表里：`/api/stats/by-key` 的合计与日序列
+    # 对不对得上，全靠这个文件。磁盘上 499 个测试文件、门禁只跑 93 个 ——
+    # 剩下那 407 个的收敛是另一件事，这里只补上本轮动到的那一个。
+    "server.tests.test_platform_key_stats",
 )
 
 

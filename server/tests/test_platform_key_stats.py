@@ -171,6 +171,60 @@ class PlatformKeyStatsTests(unittest.TestCase):
                                        headers={'X-QTG-Platform': 'qoder'}).status_code, 422)
 
 
+class PlatformKeyDailySeriesTests(PlatformKeyStatsTests):
+    """「这个 key 哪天用了多少」要和窗口合计对得上。
+
+    原来这张表只给合计，看到「32 号用了 4 千万 token」说明不了是哪天用的 ——
+    而这正是「昨天为什么突然翻倍」要回答的问题。日序列故意从同一个 WHERE 复算，
+    不读 `key_daily_usage`：两张表的 tokens 不是一套口径，并排放会自相矛盾。
+    """
+
+    def _days(self, row):
+        return {d['day']: d for d in row['daily']}
+
+    def _today(self, now):
+        tz = dt.timezone(dt.timedelta(hours=8))
+        return dt.datetime.fromtimestamp(now, tz).date().isoformat()
+
+    def test_daily_sums_back_to_the_total(self):
+        now = time.time()
+        self.log(completion_tokens=50)                      # 今天第一条
+        self.log(completion_tokens=50)                      # 今天第二条
+        self.log(ts=now - 86400, completion_tokens=30)      # 昨天
+        self.log(ts=now - 2 * 86400, completion_tokens=10)  # 前天
+        row = {r['key_id']: r for r in self.rows(days=7)}[32]
+        self.assertEqual(sum(d['requests'] for d in row['daily']), row['requests'])
+        self.assertEqual(sum(d['tokens'] for d in row['daily']), row['total_tokens'])
+        self.assertEqual(len(row['daily']), 3)
+
+    def test_same_day_rows_collapse_into_one_bucket(self):
+        now = time.time()
+        self.log()
+        self.log()
+        row = {r['key_id']: r for r in self.rows()}[32]
+        day = self._days(row)[self._today(now)]
+        self.assertEqual(day['requests'], 2)
+        self.assertEqual(day['tokens'], 300)   # 两条各 100+50
+
+    def test_rows_outside_the_window_stay_out_of_the_series(self):
+        self.log()
+        self.log(ts=time.time() - 2 * 86400)
+        row = {r['key_id']: r for r in self.rows(days=1)}[32]
+        self.assertEqual(len(row['daily']), 1)
+        self.assertEqual(row['requests'], 1)
+
+    def test_unknown_token_day_is_null_not_a_smaller_number(self):
+        # 当天有一条没上报 token：那天的 tokens 给 null，而不是只算已知部分 ——
+        # 否则用户看到的是「少了」而不是「不知道」。
+        self.log(usage_complete=0)
+        row = {r['key_id']: r for r in self.rows()}[32]
+        self.assertIsNone(row['daily'][0]['tokens'])
+        self.assertIsNone(row['total_tokens'])
+
+    def test_no_rows_means_empty_series_not_missing_key(self):
+        self.assertEqual(self.rows(), [])
+
+
 class PlatformKeyRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_storage_and_unsafe_evidence_return_unavailable_not_empty(self):
         request = Request({'type': 'http', 'headers': [(b'x-qtg-platform', b'qoder')]})
