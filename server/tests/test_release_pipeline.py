@@ -362,6 +362,24 @@ class StageTest(unittest.TestCase):
         self.assertEqual(release_tool.cmd_stage(args), 0)
         self.assertEqual((self.root / 'v1.0.3/server/logo.png').read_bytes(), blob)
 
+    def test_stage_keeps_crlf_for_windows_batch_files(self) -> None:
+        """`.cmd` 必须保持 CRLF。
+
+        仓库的 `.gitattributes` 明确写着 `*.cmd text eol=crlf`，因为 cmd.exe 对
+        LF-only 批处理在 if 块 / goto 标签边界上有已知的解析风险。它们不会被
+        Linux 的 execve 执行，行尾归一只有坏处 —— 2026-11-26 第一次 stage
+        v1.6.1 时就是这么把两个 `.cmd` 误转成了 LF。
+        """
+        script = b'@echo off\r\nstart "" workbuddy\r\n'
+        archive = make_archive(Path(self._tmp.name) / 'cmd.tar.gz', 'v1.0.4', '1.0.4',
+                               extra={'deploy/windows-native/start.cmd': script})
+        args = release_tool.argparse.Namespace(
+            root=str(self.root), version='v1.0.4', archive=str(archive),
+            web=str(self.web), base='v1.0.0', key='k', trust='t')
+        self.assertEqual(release_tool.cmd_stage(args), 0)
+        landed = (self.root / 'v1.0.4/deploy/windows-native/start.cmd').read_bytes()
+        self.assertEqual(landed, script, '.cmd 被归一成 LF 了：cmd.exe 会有解析风险')
+
     def test_existing_version_refused(self) -> None:
         args = release_tool.argparse.Namespace(
             root=str(self.root), version='v1.0.0', archive=str(self.archive),

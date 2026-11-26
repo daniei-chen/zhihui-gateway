@@ -65,6 +65,11 @@ WEB_SEALED = {"manifest.sha256", "manifest.sig"}
 #: 里的 `web/lib` 之类混进发布树 —— 发布树只需要可运行的那部分。
 STAGE_ROOTS = ("server", "deploy", "CHANGELOG.md", "VERSION")
 SAFE_MODES = {0o644, 0o755}
+#: 必须保持 CRLF 的扩展名。Windows 批处理在 cmd.exe 的 if 块 / goto 标签边界上
+#: 有已知的 LF 解析风险，仓库的 `.gitattributes` 也明确写着 `*.cmd text eol=crlf`。
+#: 它们不会被 Linux 的 execve 执行，行尾归一只有坏处 —— 2026-11-26 的第一次
+#: v1.6.1 stage 就把这两个文件误转成了 LF，靠读 stage 输出才发现。
+CRLF_KEEP = {".cmd", ".bat"}
 
 
 class ReleaseError(RuntimeError):
@@ -154,7 +159,8 @@ def normalize_eol(root: Path, roots: tuple[str, ...] = ("server", "deploy")) -> 
     `seal` 签的是**归一后的字节**，签名、哈希、实际内容三者仍然自洽。
 
     只动可解码的文本：含 NUL 或不是合法 UTF-8 的一律按二进制原样保留 ——
-    把二进制改坏比留一处行尾问题严重得多。
+    把二进制改坏比留一处行尾问题严重得多。Windows 批处理（`.cmd` / `.bat`）
+    也跳过：仓库里就要求它们是 CRLF，且不会被 Linux 的 execve 执行。
     """
     changed: list[str] = []
     for name in roots:
@@ -163,6 +169,8 @@ def normalize_eol(root: Path, roots: tuple[str, ...] = ("server", "deploy")) -> 
             continue
         for path in sorted(base.rglob("*")):
             if path.is_symlink() or not path.is_file():
+                continue
+            if path.suffix.lower() in CRLF_KEEP:
                 continue
             raw = path.read_bytes()
             if b"\r\n" not in raw or b"\x00" in raw:
