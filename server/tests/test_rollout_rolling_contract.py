@@ -255,12 +255,60 @@ class CandidateInstanceRunsBeforeTheRestartTests(unittest.TestCase):
 
     def test_check_mode_never_starts_it(self):
         check_return = SOURCE.index('体检通过，未做任何改动')
-        candidate = SOURCE.index('    prestart_candidate "$version"')
+        # 带换行：蓝绿分支里那处调用是 `prestart_candidate "$version" 1`，不能算进来。
+        candidate = SOURCE.index('    prestart_candidate "$version"\n')
         self.assertLess(check_return, candidate, '--check 不能起候选实例')
 
     def test_missing_unit_warns_instead_of_blocking(self):
         self.assertIn('跳过这一步', SOURCE,
                       'unit 不存在时应降级为提示，而不是让发布无法进行')
+
+
+class BlueGreenHandsTheTrafficOverTests(unittest.TestCase):
+    """蓝绿：让候选实例真的接流量，再重启主实例。
+
+    `--blue-green` 与常态发布的区别只有一处：候选实例不再「检查完就停」，而是先把
+    中继路由切到它，再停主实例、起主实例，最后切回来。重启那几秒里有另一个实例在
+    服务，所以不依赖重试兜底。
+
+    2026-11-26 实测过这条路的两端：把路由写成 `new` 后，经中继的请求出现在候选
+    实例的日志里；切回 `old` 后出现在主实例日志里。中继在每次请求时重读路由文件，
+    不需要重启它。
+    """
+
+    def test_it_exists_and_is_opt_in(self):
+        self.assertIn('--blue-green) blue_green=1', SOURCE)
+        self.assertIn('rollout_blue_green "$version"', SOURCE)
+        # 默认路径仍然是重启，蓝绿必须显式要求。
+        self.assertIn('    prestart_candidate "$version"\n', SOURCE)
+
+    def test_route_moves_before_the_old_instance_stops(self):
+        switch = SOURCE.index('    route_switch new')
+        stop = SOURCE.index('    systemctl stop "$GATEWAY" || die')
+        self.assertLess(switch, stop, '必须先把流量切走，再停旧实例')
+
+    def test_route_comes_back_after_the_main_instance_is_ready(self):
+        ready = SOURCE.index("    step '主实例已就绪，把流量切回来'")
+        back = SOURCE.index('    route_switch old')
+        self.assertLess(ready, back)
+        # 切回之后才停候选实例；用连续代码块定位，避免命中前面那处同名调用。
+        self.assertIn('    route_switch old\n    sleep 1\n    systemctl stop "$HELPER" 2>/dev/null\n',
+                      SOURCE)
+
+    def test_a_failed_restart_leaves_the_candidate_serving(self):
+        self.assertIn('线上仍由候选实例服务', SOURCE,
+                      '主实例起不来时必须说明服务没断，否则运维会直接停候选实例')
+        self.assertIn('不要先停掉', SOURCE)
+
+    def test_route_switch_writes_atomically_and_advances_epoch(self):
+        self.assertIn('mv -f "$tmp" "$ROUTE_FILE"', SOURCE)
+        self.assertIn('"epoch":%d', SOURCE)
+        self.assertIn("sed -n 's/.*\"epoch\":\\([0-9]*\\).*/\\1/p'", SOURCE,
+                      'epoch 必须从现有文件读出来再 +1，否则中继会当成过期路由')
+
+    def test_pages_are_checked_the_same_way_in_both_paths(self):
+        # 页面检查两边共用同一段，避免蓝绿模式漏掉这一环。
+        self.assertEqual(SOURCE.count("    check_pages\n"), 2)
 
 
 if __name__ == '__main__':

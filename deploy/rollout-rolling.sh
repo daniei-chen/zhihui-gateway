@@ -36,6 +36,10 @@ GATEWAY=workbuddy-web
 #: （WB_BACKGROUND_JOBS=0）。发布前先用它确认「这一版能起来」。
 HELPER=workbuddy-web-helper
 CANDIDATE_PORT=7865
+#: 中继按这个文件决定把推理流量发给哪个后端实例；写它就能改流量去向。
+#: 中继在每次请求时重读，改完立即生效，不需要重启它。
+DATA_DIR=/opt/workbuddy-manager/data
+ROUTE_FILE=/opt/workbuddy-manager/data/relay-route.json
 #: 脚本自身所在目录 —— 配置校验工具与它同目录，不能靠调用者的 cwd 找。
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 
@@ -174,21 +178,14 @@ restart_gateway() {
         printf '   之外，多半是中继没跑上新代码，或这一段流量绕过了中继。\n'
     fi
 
-    step '页面与就绪探针'
-    local url code
-    for url in / /portal/ /keys/ /dashboard/ /members/; do
-        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://zhihui.kaogong.art$url" 2>/dev/null)
-        printf '   %-12s %s\n' "$url" "$code"
-        [ "$code" = 200 ] || printf '   ^^ 这个页面不是 200\n'
-    done
-    printf '   readyz       %s\n' "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null)"
+    check_pages
 
     [ "$failures" -eq 0 ] || return 2
     return 0
 }
 
 prestart_candidate() {
-    local version="${1#v}"
+    local version="${1#v}" keep="${2:-0}"
     step '发布前先在旁边起一个候选实例'
     # 2026-11-23 真实发生过：drop-in 加了一个新版 schema 不认识的变量，重启后每
     # 3 秒崩一次，直到 StartLimitBurst 才停 —— 前后约 8 分钟完全不可用。
@@ -199,8 +196,11 @@ prestart_candidate() {
     # 但发布脚本从来没用过 —— 于是每次都拿线上的 6 秒空窗去赌「这一版能起来」。
     # 起一次实测 6 秒，失败时线上一个请求都没被动过。
     if ! systemctl cat "$HELPER.service" >/dev/null 2>&1; then
-        printf '   没有候选实例的 unit（%s），跳过这一步\n' "$HELPER"
-        printf '   注意：这一版无法提前发现「起不来」，失败只能在重启后暴露。\n'
+        printf '   没有候选实例的 unit（%s）\n' "$HELPER"
+        if [ "$keep" = 1 ]; then
+            die '蓝绿发布需要候选实例，但这台机器上没有它的 unit'
+        fi
+        printf '   跳过这一步；这一版无法提前发现「起不来」，失败只能在重启后暴露。\n'
         return 0
     fi
     systemctl start "$HELPER" 2>/dev/null \
@@ -234,17 +234,118 @@ prestart_candidate() {
         die '候选实例跑的代码与本次发布不一致，已中止；线上仍在跑旧代码'
     fi
 
+    if [ "$keep" = 1 ]; then
+        printf '   候选实例就绪（版本 %s，约 %s 秒），保持运行等着接管流量\n' "$version" "$((i * 3 / 2))"
+        return 0
+    fi
+
     systemctl stop "$HELPER" 2>/dev/null
     printf '   候选实例就绪（版本 %s，约 %s 秒），已停止\n' "$version" "$((i * 3 / 2))"
     printf '   到这一步为止线上没有被动过。\n'
 }
 
+route_switch() {
+    local target="$1" epoch tmp
+    # 中继校验：目标必须存在、epoch 只能前进、文件不能被打成组/其他可写。
+    epoch=$(sed -n 's/.*"epoch":\([0-9]*\).*/\1/p' "$ROUTE_FILE" 2>/dev/null | head -1)
+    case "$epoch" in
+        ''|*[!0-9]*) die "读不到中继路由文件（$ROUTE_FILE），无法切到 $target";;
+    esac
+    # 同目录 + rename：中继随时可能在读，半截文件会被当成 invalid_or_stale_route。
+    tmp="$DATA_DIR/.relay-route.$$"
+    printf '{"epoch":%d,"target":"%s"}\n' "$((epoch + 1))" "$target" > "$tmp" \
+        || die "写不了路由临时文件（$tmp）"
+    chmod 600 "$tmp"
+    chown 10001:10001 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$ROUTE_FILE" || { rm -f "$tmp"; die "路由切换失败（$target）"; }
+    printf '   中继路由 -> %s（epoch %s）\n' "$target" "$((epoch + 1))"
+}
+
+check_pages() {
+    step '页面与就绪探针'
+    local url code
+    for url in / /portal/ /keys/ /dashboard/ /members/; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://zhihui.kaogong.art$url" 2>/dev/null)
+        printf '   %-12s %s\n' "$url" "$code"
+        [ "$code" = 200 ] || printf '   ^^ 这个页面不是 200\n'
+    done
+    printf '   readyz       %s\n' "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null)"
+}
+
+rollout_blue_green() {
+    local version="${1#v}" before ready=0 total failures
+    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;')
+    case "$before" in
+        ''|*[!0-9]*) die "读不到请求终态表（$DB），无法证明本次发版零中断";;
+    esac
+
+    # 候选实例先起来并一直留着 —— 这次不是用它做检查，而是让它真的接流量。
+    prestart_candidate "$version" 1
+
+    step '把中继流量切到候选实例'
+    route_switch new
+    sleep 2
+    printf '   现在新请求由候选实例服务，旧实例只负责跑完在途的流。\n'
+
+    systemctl stop "$GATEWAY" || die "停旧实例失败（流量仍在候选实例上，服务未中断）"
+    if ! systemctl start "$GATEWAY"; then
+        printf '\n   主实例起不来。流量仍在候选实例上，服务没有中断。\n' >&2
+        printf '   处理：修好后重跑本脚本；不要先停掉 %s，那才会真的中断。\n' "$HELPER" >&2
+        die '主实例启动失败（线上仍由候选实例服务）'
+    fi
+
+    for _ in $(seq 1 40); do
+        sleep 1.5
+        if curl -sf --max-time 3 http://127.0.0.1:7866/api/release 2>/dev/null \
+            | grep -q "\"version\":\"$version\""; then
+            ready=1
+            break
+        fi
+    done
+    if [ "$ready" != 1 ]; then
+        printf '\n   主实例 60 秒未就绪。流量仍在候选实例上，服务没有中断。\n' >&2
+        die '主实例未就绪（路由未切回，候选实例继续服务）'
+    fi
+
+    step '主实例已就绪，把流量切回来'
+    route_switch old
+    sleep 1
+    systemctl stop "$HELPER" 2>/dev/null
+
+    # 最后几条终态的落库是请求结束时写的，留 2 秒再数。
+    sleep 2
+    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;")
+    case "$total" in ''|*[!0-9]*) total=0;; esac
+    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;")
+    case "$failures" in ''|*[!0-9]*) failures=0;; esac
+
+    step '发布窗口内的流量（按网关自己的请求终态）'
+    printf '   请求 %s 条，5xx %s 条\n' "$total" "$failures"
+    if [ "$failures" -eq 0 ]; then
+        if [ "$total" -gt 0 ]; then
+            printf '   —— 零中断（窗口内有真实请求）\n'
+        else
+            printf '   —— 窗口内 0 条请求：不能据此宣称零中断\n'
+        fi
+    else
+        printf '   明细：\n'
+        db_rows "select datetime(ts,'unixepoch','+8 hours'), method, endpoint, http_status, coalesce(error_stage,'')
+                 from request_outcomes where rowid > $before and http_status >= 500
+                 order by rowid limit 10;" | sed 's/^/     /'
+    fi
+
+    check_pages
+    [ "$failures" -eq 0 ] || return 2
+    return 0
+}
+
 main() {
-    local version='' relay_changed=0 check_only=0 arg
+    local version='' relay_changed=0 check_only=0 blue_green=0 arg
     for arg in "$@"; do
         case "$arg" in
             --check) check_only=1 ;;
             --relay-changed) relay_changed=1 ;;
+            --blue-green) blue_green=1 ;;
             -*) die "未知参数：$arg" ;;
             *) version="$arg" ;;
         esac
@@ -279,6 +380,15 @@ main() {
     # 重启前先确认这一版能接受当前配置 —— 2026-11-23 那次 8 分钟崩溃重启
     # 就是这一步的缺失造成的。检查在重启之前，所以失败时服务仍在跑旧代码。
     verify_runtime_config
+
+    if [ "$blue_green" = 1 ]; then
+        # 蓝绿：候选实例先接流量，再重启主实例，然后切回来 —— 重启期间一个请求都不落空。
+        rollout_blue_green "$version"
+        local status=$?
+        step '完成'
+        [ "$status" -eq 0 ] && printf '   v%s 已上线（蓝绿切换，重启期间流量在候选实例上）\n' "${version#v}"
+        return "$status"
+    fi
 
     # 再往前一步：真的起一次。配置校验只看静态契约，起不来只有真启动才知道；
     # 这一步失败时线上还在跑旧代码，代价只有几秒的 CPU。
