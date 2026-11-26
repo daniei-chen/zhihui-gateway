@@ -41,11 +41,46 @@ CANDIDATE_PORT=7865
 #: 中继在每次请求时重读，改完立即生效，不需要重启它。
 DATA_DIR=/opt/workbuddy-manager/data
 ROUTE_FILE=/opt/workbuddy-manager/data/relay-route.json
+#: 每次发布的结果追加一行到这里（JSONL）。发版中途断了、终端超时了，也能事后查。
+#: 2026-11-26 就发生过：通过远程会话发版，命令 30 秒超时，脚本自己的统计输出全丢，
+#: 只能事后翻请求终态表反推窗口数据 —— 结论没留痕，等于没有结论。
+ROLLOUT_LOG=/opt/workbuddy-manager/data/rollout-log.jsonl
+RECORDED=0
+CHECK_ONLY=0
+LOG_VERSION='unknown'
+LOG_MODE='重启'
+STARTED_AT=$(date '+%Y-%m-%dT%H:%M:%S%z')
 #: 脚本自身所在目录 —— 配置校验工具与它同目录，不能靠调用者的 cwd 找。
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 
 step() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
+
+#: 把这次发布的结果追一行进 ROLLOUT_LOG。
+#:
+#: 为什么落盘：发布窗口的结论（几条请求、几个 5xx）此前只活在脚本的 stdout 里。
+#: 2026-11-26 09:45 那次走远程会话发版，命令 30 秒超时，stdout 全丢，只能事后
+#: 翻 request_outcomes 反推 —— 而且「这次用的蓝绿还是重启」「脚本是正常结束还是
+#: 中途退出」根本没法反推。巡检也就能看到「最近一次发版」到底成没成。
+record_rollout() {
+    local version="$1" mode="$2" requests="$3" failures="$4" status="$5" note="$6"
+    [ "$RECORDED" = 1 ] && return 0
+    RECORDED=1
+    printf '{"started_at":"%s","ended_at":"%s","version":"%s","mode":"%s","requests":%s,"failures":%s,"exit":%s,"note":"%s"}\n' \
+        "$STARTED_AT" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$version" "$mode" \
+        "${requests:-null}" "${failures:-null}" "$status" "$note" \
+        >> "$ROLLOUT_LOG" 2>/dev/null \
+        || printf '   注意：发布记录没写进 %s（不影响发布本身）\n' "$ROLLOUT_LOG"
+}
+
+#: 中途 die 或被强杀时也留一条 —— 「这次发布没走完」本身就是结论。
+on_exit() {
+    local code=$?
+    if [ "$RECORDED" = 0 ] && [ "$CHECK_ONLY" != 1 ]; then
+        record_rollout "$LOG_VERSION" "$LOG_MODE" '' '' "$code" '未走到统计环节（脚本中途退出）'
+    fi
+}
+trap on_exit EXIT
 
 db_scalar() {
     sqlite3 -readonly "$DB" "$1" 2>/dev/null | head -1
@@ -181,8 +216,12 @@ restart_gateway() {
 
     check_pages
 
-    [ "$failures" -eq 0 ] || return 2
-    return 0
+    if [ "$failures" -eq 0 ]; then
+        record_rollout "$version" '重启' "$total" "$failures" 0 "$([ "$total" -gt 0 ] && printf '窗口内零 5xx' || printf '窗口内 0 条请求')"
+        return 0
+    fi
+    record_rollout "$version" '重启' "$total" "$failures" 2 '窗口内有 5xx'
+    return 2
 }
 
 prestart_candidate() {
@@ -339,12 +378,17 @@ rollout_blue_green() {
     fi
 
     check_pages
-    [ "$failures" -eq 0 ] || return 2
-    return 0
+    if [ "$failures" -eq 0 ]; then
+        record_rollout "$version" '蓝绿' "$total" "$failures" 0 '窗口内零 5xx'
+        return 0
+    fi
+    record_rollout "$version" '蓝绿' "$total" "$failures" 2 '窗口内有 5xx'
+    return 2
 }
 
 main() {
     local version='' relay_changed=0 check_only=0 blue_green=1 arg
+    STARTED_AT=$(date '+%Y-%m-%dT%H:%M:%S%z')
     for arg in "$@"; do
         case "$arg" in
             --check) check_only=1 ;;
@@ -355,6 +399,10 @@ main() {
             *) version="$arg" ;;
         esac
     done
+    # 供 EXIT 兜底记录用：中途 die 时也要能写清「哪个版本、哪种方式」。
+    CHECK_ONLY="$check_only"
+    LOG_VERSION="${version#v}"
+    if [ "$blue_green" = 1 ]; then LOG_MODE='蓝绿'; else LOG_MODE='重启'; fi
 
     check_prereqs
     if [ "$check_only" = 1 ]; then

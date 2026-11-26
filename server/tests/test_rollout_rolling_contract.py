@@ -66,6 +66,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'deploy' / 'rollout-rolling.sh'
+HEALTHCHECK = SCRIPT.parent / 'healthcheck.sh'
 SOURCE = SCRIPT.read_text(encoding='utf-8')
 
 
@@ -316,6 +317,38 @@ class BlueGreenHandsTheTrafficOverTests(unittest.TestCase):
     def test_pages_are_checked_the_same_way_in_both_paths(self):
         # 页面检查两边共用同一段，避免蓝绿模式漏掉这一环。
         self.assertEqual(SOURCE.count("    check_pages\n"), 2)
+
+
+class RolloutResultIsRecordedTests(unittest.TestCase):
+    """每次发布的结果要落盘，而且巡检要能看见。
+
+    2026-11-26 09:45 那次发版走远程会话，命令 30 秒超时，脚本的 stdout 全丢；
+    发布本身是成功的，但「窗口多少请求、多少 5xx、用的蓝绿还是重启」都没有留痕，
+    只能事后翻 request_outcomes 反推。结论没留痕，等于没有结论。
+    """
+
+    def test_results_are_appended_not_overwritten(self):
+        self.assertIn('ROLLOUT_LOG=', SOURCE)
+        self.assertIn('>> "$ROLLOUT_LOG"', SOURCE, '必须追加；覆盖会把历史发布记录抹掉')
+
+    def test_both_modes_record_the_window(self):
+        # 蓝绿与重启两条路径都要写，否则从记录里看不出用的哪种方式。
+        self.assertIn('record_rollout "$version" \'蓝绿\'', SOURCE)
+        self.assertIn('record_rollout "$version" \'重启\'', SOURCE)
+
+    def test_an_interrupted_rollout_still_leaves_a_line(self):
+        self.assertIn('trap on_exit EXIT', SOURCE)
+        self.assertIn('未走到统计环节', SOURCE)
+
+    def test_check_mode_never_writes(self):
+        # --check 不改任何状态，也不该往发布记录里写东西。
+        self.assertIn('[ "$CHECK_ONLY" != 1 ]', SOURCE)
+
+    def test_healthcheck_shows_the_last_rollout(self):
+        health = HEALTHCHECK.read_text(encoding='utf-8')
+        self.assertIn("section '最近一次发布'", health)
+        self.assertIn('rollout-log.jsonl', health)
+        self.assertIn('不能据此宣称零中断', health)
 
 
 if __name__ == '__main__':

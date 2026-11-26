@@ -70,6 +70,45 @@ fi
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null)
 [ "$code" = 200 ] && pass "/readyz 200" || broken "/readyz 返回 $code"
 
+section '最近一次发布'
+# 发版脚本每次结束都往这里追一行（含中途退出）。它回答两个此前只能翻日志的问题：
+# 最近一次发版用的是蓝绿还是重启、那次窗口里到底有没有 5xx。2026-11-26 有一次
+# 远程发版命令超时，脚本的统计输出全丢 —— 结论没留痕，只能事后翻请求表反推。
+ROLLOUT_LOG=/opt/workbuddy-manager/data/rollout-log.jsonl
+if [ -r "$ROLLOUT_LOG" ]; then
+    last=$(tail -1 "$ROLLOUT_LOG" 2>/dev/null)
+    if [ -z "$last" ]; then
+        printf '   发布记录是空的（%s）\n' "$ROLLOUT_LOG"
+    else
+        r_version=$(printf '%s' "$last" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+        r_mode=$(printf '%s' "$last" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')
+        r_started=$(printf '%s' "$last" | sed -n 's/.*"started_at":"\([^"]*\)".*/\1/p')
+        r_requests=$(printf '%s' "$last" | sed -n 's/.*"requests":\([0-9]*\|null\).*/\1/p')
+        r_failures=$(printf '%s' "$last" | sed -n 's/.*"failures":\([0-9]*\|null\).*/\1/p')
+        r_exit=$(printf '%s' "$last" | sed -n 's/.*"exit":\([0-9]*\).*/\1/p')
+        case "$r_requests" in '' | null | *[!0-9]*) r_requests=0 ;; esac
+        case "$r_failures" in '' | null | *[!0-9]*) r_failures=0 ;; esac
+        case "$r_exit" in
+            0)
+                if [ "$r_requests" -gt 0 ]; then
+                    pass "v$r_version（$r_mode）$r_started · 窗口 $r_requests 条请求、$r_failures 个 5xx"
+                else
+                    note "v$r_version（$r_mode）窗口内 0 条请求，不能据此宣称零中断"
+                fi
+                ;;
+            *)
+                if [ "$r_requests" -gt 0 ]; then
+                    note "v$r_version（$r_mode）$r_started 退出码 $r_exit · 窗口 $r_requests 条请求、$r_failures 个 5xx"
+                else
+                    note "v$r_version（$r_mode）$r_started 退出码 $r_exit · 未走到统计环节"
+                fi
+                ;;
+        esac
+    fi
+else
+    printf '   还没有发布记录（%s）；下一次发版后才会出现\n' "$ROLLOUT_LOG"
+fi
+
 section '配置与发布树'
 # 2026-11-25：这两项原来都没有，而它们各自造成过或差点造成真实故障。
 #
