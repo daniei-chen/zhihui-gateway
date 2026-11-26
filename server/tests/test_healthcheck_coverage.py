@@ -321,5 +321,31 @@ class ApplicationBackupVisibilityTests(unittest.TestCase):
         self.assertIn('workbuddy-daily', SOURCE)
 
 
+class RuntimeAlertDetailTests(unittest.TestCase):
+    """运行告警要说出「为什么」，而不只是「哪一项」。
+
+    `/api/health/alerts` 刻意不返回 detail（里面可能有账号名与上游错误原文）。
+    但巡检是宿主机上的 root，库就在本地 —— 从 `operational_alerts` 直接取，
+    比「按名字去日志里翻」实际得多：`transition()` 进入时只写一行，持续 active
+    的告警在日志里早就滚没了。
+
+    2026-11-26 之前的输出只有「1 项预警：workbuddy_low_accounts」，
+    看到它仍然不知道该不该处理。
+    """
+
+    def test_reads_detail_from_the_local_table(self):
+        self.assertIn('FROM operational_alerts', SOURCE)
+        self.assertIn('detail', SOURCE)
+
+    def test_falls_back_when_the_table_is_unreadable(self):
+        # sqlite3 缺失或库锁住时不能整段消失。
+        self.assertIn('取不到明细', SOURCE)
+
+    def test_keeps_the_endpoint_contract(self):
+        # 端点仍然只给名字 —— 扩大它反而把内部术语暴露给回环上的其他进程。
+        self.assertIn('/api/health/alerts', SOURCE)
+        self.assertNotIn('"detail"', SOURCE.split('/api/health/alerts')[1][:400])
+
+
 if __name__ == '__main__':
     unittest.main()

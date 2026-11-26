@@ -451,7 +451,28 @@ if [ -n "$alerts_json" ]; then
     else
         anames=$(printf '%s' "$alerts_json" \
             | grep -o '"name":"[^"]*"' | sed 's/"name":"//; s/"$//' | tr '\n' ' ')
-        note "$acount 项预警：$anames（按名字查日志可见详情）"
+        # 端点刻意不给 detail（里面可能有账号名与上游错误原文，只对回环开也不该
+        # 顺手扩大暴露面）。但巡检是宿主机上的 root，库就在本地 —— 直接从
+        # `operational_alerts` 取 detail，比「按名字去日志里翻」实际得多：
+        # `transition()` 进入时只写一行，持续 active 的告警在日志里早就滚没了。
+        #
+        # 2026-11-26 之前这里只有一行「N 项预警：名字1 名字2」，看到
+        # `workbuddy_low_accounts` 仍然不知道该不该处理 —— 而那条 detail 里
+        # 写着「2 个账号余额低于 1000 分（ì 801、慢点 897）；其中 慢点 掉得最快，
+        # 按这速度约 18 天用完」，本来就已经能回答这个问题。
+        alert_rows=$(sqlite3 -readonly -separator '|' "$DB" \
+            "SELECT name, datetime(since,'unixepoch','localtime'), detail
+             FROM operational_alerts ORDER BY since;" 2>/dev/null)
+        if [ -n "$alert_rows" ]; then
+            printf '%s\n' "$alert_rows" | while IFS='|' read -r aname asince adetail; do
+                [ -n "$aname" ] || continue
+                printf '  · %s（自 %s）\n' "$aname" "${asince:-未知}"
+                [ -n "$adetail" ] && printf '    %s\n' "$adetail"
+            done
+            note "$acount 项预警（明细见上）"
+        else
+            note "$acount 项预警：$anames（取不到明细，按名字查日志）"
+        fi
     fi
 else
     note '取不到告警快照（端点未上线或服务未起）'
