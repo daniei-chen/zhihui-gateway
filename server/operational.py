@@ -272,6 +272,21 @@ def transition(name, active, detail):
                 notify.dispatch(name, True, detail)
             except Exception:  # noqa: BLE001 - 投递失败绝不影响告警状态机
                 log.warning('alert dispatch failed name=%s', name)
+        elif old.get('detail') != detail:
+            # 持续 active 的告警，detail 也要跟着更新 —— 否则库里那条文案永远停在
+            # 第一次进入时的样子。2026-11-26 撞上过：`workbuddy_low_accounts` 的
+            # detail 写着「每日签到各 +100，日消耗低于 100 会自行回升」（十小时前的
+            # 观察），而实际单号已经在掉（ì -30/天、慢点 -88/天）。看的人拿不到新数字。
+            #
+            # 日志另加节流：monitor 每 30 秒跑一轮，余额这类数字每轮都可能不同，
+            # 不节流会变成每天几千行。
+            alerts[name]['detail'] = detail
+            _persist_alert(name, alerts[name])
+            _now = int(time.time())
+            if _now - alerts[name].get('detail_logged_at', 0) >= 600:
+                alerts[name]['detail_logged_at'] = _now
+                log.info('operational alert detail updated name=%s detail=%s',
+                         name, detail)
     elif old is not None:
         alerts.pop(name)
         _forget_alert(name)
