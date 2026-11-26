@@ -394,7 +394,14 @@ case "$recovery_state" in
         note 'zhihui-recovery.service 正在跑（完整快照要几分钟）'
         ;;
     *)
-        pass "zhihui-recovery.service 状态 $recovery_state"
+        # oneshot 跑完就是 inactive —— "没在运行"不等于"上次失败了"，
+        # 只有 Result 能回答后者。写 inactive 会让人以为备份没在跑。
+        recovery_result=$(systemctl show zhihui-recovery.service -p Result --value 2>/dev/null)
+        if [ "$recovery_result" = success ]; then
+            pass "zhihui-recovery.service 上次运行成功（跑完即退出，属正常）"
+        else
+            note "zhihui-recovery.service 状态 $recovery_state（Result=${recovery_result:-未知}）"
+        fi
         ;;
 esac
 

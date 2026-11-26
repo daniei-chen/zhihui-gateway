@@ -217,6 +217,14 @@ class RecoverySnapshotTests(unittest.TestCase):
         self.assertIn('-le 36', self._block(),
                       '快照年龄阈值变了：超过 36 小时（每日一次加半天余量）就该 FAIL')
 
+    def test_inactive_oneshot_is_judged_by_result(self):
+        """oneshot 跑完就是 inactive：不能把它写成「没在运行」。"""
+        block = self._block()
+        self.assertIn('上次运行成功', block,
+                      'oneshot 结束后只打印 inactive，会让人以为备份没在跑')
+        self.assertIn('Result', block,
+                      '没有读 systemd 的 Result，无法区分「跑完了」与「失败了」')
+
     def test_reads_the_snapshot_directory(self):
         self.assertIn('/root/backups/zhihui-v2/snapshots', self._block(),
                       '快照目录写错或缺失时，这一节会永远显示 ok')
