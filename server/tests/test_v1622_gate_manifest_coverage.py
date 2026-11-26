@@ -50,7 +50,6 @@ KNOWN_UNCOUNTED = frozenset({
     'server.tests.test_qoder_checkin_evidence',
     'server.tests.test_refresh_all_tokens',
     'server.tests.test_refresh_plan',
-    'server.tests.test_section_nav',
     'server.tests.test_settings_contract',
     'server.tests.test_speed_boundaries',
     'server.tests.test_steward',
@@ -60,9 +59,7 @@ KNOWN_UNCOUNTED = frozenset({
     'server.tests.test_v12137_snapshot_gauge_always_emitted',
     'server.tests.test_v12156_stale_transactions',
     'server.tests.test_v12160_context_metric',
-    'server.tests.test_v1276_platform_timeout',
     'server.tests.test_v1279_route_authorization',
-    'server.tests.test_web_polling_visibility',
     'server.tests.test_workbench_registration',
 })
 

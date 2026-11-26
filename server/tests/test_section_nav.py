@@ -264,10 +264,10 @@ class SectionNavInvariantTest(unittest.TestCase):
         """Keep the eight existing routes plus the explicitly admin-only portal."""
         hrefs = _dock_hrefs()
         self.assertEqual(
-            len(hrefs), 9,
-            f'底栏有 {len(hrefs)} 个目的地，应当是 9 个：{hrefs}',
+            len(hrefs), 10,
+            f'底栏有 {len(hrefs)} 个目的地，应当是 10 个：{hrefs}',
         )
-        expected = sorted([items[0][1] for items in self.nav.values()] + _OTHER_DESTINATIONS + ['/members'])
+        expected = sorted([items[0][1] for items in self.nav.values()] + _OTHER_DESTINATIONS + ['/members', '/traffic'])
         self.assertIn("...(isAdmin ? [{title: t('nav.members')", _code(_BAR))
         self.assertTrue((_MAIN / 'members/page.tsx').is_file())
         self.assertEqual(

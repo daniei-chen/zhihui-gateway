@@ -89,8 +89,18 @@ export default function TrafficPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   useEffect(() => {
     if (!autoRefresh || detail) return;
-    const timer = setInterval(() => { void refresh(); }, 10000);
-    return () => clearInterval(timer);
+    // 标签页在后台时不要拉：开着流量页放一晚上，会白跑几千次请求，
+    // 每次都要服务端扫一遍索引。切回前台立刻补一次，不让人盯着空屏等 10 秒。
+    const tick = () => {
+      if (document.hidden) return;
+      void refresh();
+    };
+    const timer = setInterval(tick, 10000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, [autoRefresh, detail, refresh]);
 
   const toggle = async () => {

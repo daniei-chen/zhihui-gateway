@@ -42,17 +42,17 @@ from server.routers import gateway
 
 
 class PlatformTimeoutConfigTests(unittest.TestCase):
-    def test_qoder_has_a_shorter_timeout(self):
-        self.assertIn('qoder', config.PLATFORM_TIMEOUT)
-        self.assertLess(config.PLATFORM_TIMEOUT['qoder'], config.UPSTREAM_TIMEOUT,
-                        'qoder 的窗口必须比全局更短，否则这个改动没有意义')
+    def test_trae_has_a_shorter_timeout(self):
+        self.assertIn('trae', config.PLATFORM_TIMEOUT)
+        self.assertLess(config.PLATFORM_TIMEOUT['trae'], config.UPSTREAM_TIMEOUT,
+                        'trae 的窗口必须比全局更短，否则这个改动没有意义')
 
-    def test_qoder_window_is_still_generous(self):
+    def test_trae_window_is_still_generous(self):
         """它历史上最大 12.8 秒，60 秒要留够余量。"""
-        self.assertGreaterEqual(config.PLATFORM_TIMEOUT['qoder'], 30)
+        self.assertGreaterEqual(config.PLATFORM_TIMEOUT['trae'], 30)
 
     def test_other_platforms_are_not_affected(self):
-        for platform in ('workbuddy', 'trae'):
+        for platform in ('workbuddy', 'qoder'):
             self.assertNotIn(platform, config.PLATFORM_TIMEOUT,
                              f'{platform} 不该被这个改动波及')
 
@@ -61,7 +61,7 @@ class PlatformTimeoutConfigTests(unittest.TestCase):
         source = (inspect.getsource(config))
         start = source.index('PLATFORM_TIMEOUT')
         window = source[start:start + 300]
-        self.assertIn('WB_QODER_TIMEOUT', window)
+        self.assertIn('WB_TRAE_TIMEOUT', window)
 
 
 class RoutingUsesThePlatformTimeoutTests(unittest.TestCase):
@@ -94,11 +94,11 @@ class TheFallbackTableWorksTests(unittest.TestCase):
     def _pick(self, platform):
         return config.PLATFORM_TIMEOUT.get(platform or '', config.UPSTREAM_TIMEOUT)
 
-    def test_qoder_gets_its_own_window(self):
-        self.assertEqual(self._pick('qoder'), config.PLATFORM_TIMEOUT['qoder'])
+    def test_trae_gets_its_own_window(self):
+        self.assertEqual(self._pick('trae'), config.PLATFORM_TIMEOUT['trae'])
 
     def test_others_get_the_global_window(self):
-        for platform in ('workbuddy', 'trae', '', None, 'unknown'):
+        for platform in ('workbuddy', 'qoder', '', None, 'unknown'):
             self.assertEqual(self._pick(platform), config.UPSTREAM_TIMEOUT)
 
 

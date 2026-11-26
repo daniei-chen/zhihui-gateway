@@ -170,6 +170,9 @@ MODULES = (
     # 守「磁盘上有、清单里没有」的新测试文件：不写进 MODULES 就永远不执行，
     # 而写下它的人会以为「我加了测试」。存量 406 个记在白名单里，只许减少。
     "server.tests.test_v1622_gate_manifest_coverage",
+    "server.tests.test_web_polling_visibility",
+    "server.tests.test_v1276_platform_timeout",
+    "server.tests.test_section_nav",
     # ── 2026-11-26 补入：磁盘上有、清单里一直没有的那批 ──
     # 摸底 406 个：381 个能过、25 个过不了。后者先留在白名单里逐个修，
     # 前者没有理由继续不跑 —— 它们本来就是好的，只是没人执行过。
