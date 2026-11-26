@@ -285,5 +285,41 @@ class ErrorRateDenominatorTests(unittest.TestCase):
         self.assertIn('[ "${errors:-0}" -eq 0 ]', SOURCE)
 
 
+class ApplicationBackupVisibilityTests(unittest.TestCase):
+    """巡检要看得见每日应用备份。
+
+    机器上有两套备份：04:20 的加密快照（`zhihui-v2/snapshots`，巡检早就在看）与
+    05:30 的应用备份（`workbuddy-daily/*.tar.gz`，把主库、门户库、配对账本打包，
+    生成时真解出来校验过一次）。
+
+    后者在 2026-11-23 与 11-25 各失败过一次 —— 首行 CRLF 让内核找不到解释器、
+    OOM 撞上 512MB 限制 —— 而巡检当时报「问题 0」，失败信息只躺在
+    /var/log/wb2api-backup.log 里。
+    """
+
+    def test_reads_the_latest_manifest(self):
+        self.assertIn('/root/backups/workbuddy-daily/latest.json', SOURCE)
+
+    def test_surfaces_the_restore_check_result(self):
+        # latest.json 里 `restore_check` 是「生成时真的解出来校验过」的结论，
+        # 比「文件在」强得多，要显示出来。
+        self.assertIn('restore_check', SOURCE)
+
+    def test_two_thresholds_not_one(self):
+        # 每天一次：26 小时记待观察，50 小时（连续两次没成功）才判问题。
+        self.assertIn('app_age_h" -gt 50', SOURCE)
+        self.assertIn('app_age_h" -gt 26', SOURCE)
+
+    def test_non_root_does_not_cry_wolf(self):
+        # /root 下的目录非 root 读不到。读不到就报「有问题」是误报 ——
+        # 这台机器上巡检常年用 sudo 跑，但别的调用方不一定。
+        self.assertIn('id -u', SOURCE)
+
+    def test_snapshot_and_application_backup_are_both_checked(self):
+        # 两套互不替代，缺一个都算没覆盖。
+        self.assertIn('/root/backups/zhihui-v2/snapshots', SOURCE)
+        self.assertIn('workbuddy-daily', SOURCE)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -504,6 +504,38 @@ case "$recovery_state" in
         ;;
 esac
 
+# 每日应用备份（05:30 cron，明文 tar + 配对账本）。
+#
+# 「恢复快照」查的是加密快照（04:20 timer），这是**另一套**：它把主库、门户库与
+# 配对账本打进一个 tar，生成时真的解出来校验过一次 —— `latest.json` 里的
+# `restore_check` 就是那次的结果。两套互不替代：加密快照防的是介质损坏，这套防的
+# 是「库写坏了但文件还在」。
+#
+# 2026-11-26 之前这里只有加密快照那一套，应用备份跑没跑没人看。而它在 11-23 与
+# 11-25 各失败过一次（首行 CRLF 让内核找不到解释器；OOM 撞上 512MB 限制），
+# 全靠人翻 /var/log/wb2api-backup.log 才发现 —— 每天 05:50 的日志里躺着几行
+# FileNotFoundError，而巡检报「问题 0」。
+APP_BACKUP_LATEST=/root/backups/workbuddy-daily/latest.json
+if [ -r "$APP_BACKUP_LATEST" ]; then
+    app_age_h=$(( ( $(date +%s) - $(stat -c %Y "$APP_BACKUP_LATEST") ) / 3600 ))
+    app_check=$(grep -o '"restore_check": "[^"]*"' "$APP_BACKUP_LATEST" 2>/dev/null | tail -1 | cut -d'"' -f4)
+    app_bytes=$(grep -o '"bytes": [0-9]*' "$APP_BACKUP_LATEST" 2>/dev/null | head -1 | cut -d' ' -f2)
+    app_mb=$(( ${app_bytes:-0} / 1048576 ))
+    # 阈值 50 小时而不是 26：备份每天一次，撞上维护窗口不该立刻判 FAIL。
+    # 但连续两天没成功就是真的停了 —— 那时 50 小时已经过去。
+    if [ "$app_age_h" -gt 50 ]; then
+        broken "应用备份已是 ${app_age_h} 小时前（阈值 50 小时）：每天 05:30 的备份没成功，查 /var/log/wb2api-backup.log"
+    elif [ "$app_age_h" -gt 26 ]; then
+        note "应用备份 ${app_age_h} 小时前（${app_mb} MB，恢复校验 ${app_check:-未知}）—— 比每日一次慢了些"
+    else
+        pass "应用备份 ${app_age_h} 小时前（${app_mb} MB，恢复校验 ${app_check:-未知}）"
+    fi
+elif [ "$(id -u)" -ne 0 ]; then
+    note '应用备份在 /root 下，非 root 跑巡检看不到（用 sudo）'
+else
+    broken '找不到应用备份 latest.json —— 每天 05:30 的备份没有产出'
+fi
+
 section '数据库'
 if [ -r "$DB" ]; then
     size=$(du -h "$DB" 2>/dev/null | cut -f1)
