@@ -221,5 +221,47 @@ class GatewayMustActuallyComeBackTests(unittest.TestCase):
         self.assertIn('seq 1', SOURCE)
 
 
+class CandidateInstanceRunsBeforeTheRestartTests(unittest.TestCase):
+    """发布前先起候选实例：拿几秒 CPU 换「线上不会因为起不来而断」。
+
+    2026-11-23 真实踩过：drop-in 加了一个新版 schema 不认识的变量，重启后每 3 秒
+    崩一次、直到 StartLimitBurst 才停，约 8 分钟完全不可用。配置校验能挡那一类，
+    但挡不住 import 失败、迁移失败、静态资源缺失 —— 那三样只有真启动才知道。
+
+    仓库里早就有候选实例的 unit（7865、`WB_BACKGROUND_JOBS=0`、共享入账），
+    但发布脚本从来没用过：每次都拿线上那 6 秒空窗去赌「这一版能起来」。
+    实测起一次约 6 秒，失败时线上一个请求都没被动过。
+    """
+
+    def test_candidate_runs_before_the_gateway_restart(self):
+        candidate = SOURCE.index('    prestart_candidate "$version"')
+        restart = SOURCE.index('    restart_gateway "$version"')
+        self.assertLess(candidate, restart, '候选实例必须在重启之前')
+
+    def test_it_uses_the_existing_helper_unit_and_port(self):
+        self.assertIn('HELPER=workbuddy-web-helper', SOURCE)
+        self.assertIn('CANDIDATE_PORT=7865', SOURCE,
+                      '候选实例必须用 7865：那是 helper unit 里写死的端口')
+
+    def test_failure_aborts_before_touching_production(self):
+        self.assertIn('线上仍在跑旧代码', SOURCE,
+                      '候选实例失败时要明说「线上没动过」，否则调用方会以为已经切了')
+
+    def test_it_stops_the_candidate_on_every_path(self):
+        # 就绪后停、没就绪也停、版本不符也停：三条路径都不能把 7865 留在监听状态。
+        self.assertGreaterEqual(
+            SOURCE.count('systemctl stop "$HELPER"'), 3,
+            '有一条失败路径没有停候选实例，7865 会被留在监听状态')
+
+    def test_check_mode_never_starts_it(self):
+        check_return = SOURCE.index('体检通过，未做任何改动')
+        candidate = SOURCE.index('    prestart_candidate "$version"')
+        self.assertLess(check_return, candidate, '--check 不能起候选实例')
+
+    def test_missing_unit_warns_instead_of_blocking(self):
+        self.assertIn('跳过这一步', SOURCE,
+                      'unit 不存在时应降级为提示，而不是让发布无法进行')
+
+
 if __name__ == '__main__':
     unittest.main()

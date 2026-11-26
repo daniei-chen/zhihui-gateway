@@ -32,6 +32,10 @@ RELEASES=/opt/workbuddy-manager/releases
 DB=/opt/workbuddy-manager/data/manager.db
 RELAY=zhihui-rolling-relay
 GATEWAY=workbuddy-web
+#: 候选实例：同一份发布树、同一份数据，端口 7865、不跑后台作业
+#: （WB_BACKGROUND_JOBS=0）。发布前先用它确认「这一版能起来」。
+HELPER=workbuddy-web-helper
+CANDIDATE_PORT=7865
 #: 脚本自身所在目录 —— 配置校验工具与它同目录，不能靠调用者的 cwd 找。
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 
@@ -183,6 +187,58 @@ restart_gateway() {
     return 0
 }
 
+prestart_candidate() {
+    local version="${1#v}"
+    step '发布前先在旁边起一个候选实例'
+    # 2026-11-23 真实发生过：drop-in 加了一个新版 schema 不认识的变量，重启后每
+    # 3 秒崩一次，直到 StartLimitBurst 才停 —— 前后约 8 分钟完全不可用。
+    # 配置校验（上一步）能挡那一类，但挡不住 import 失败、数据库迁移失败、
+    # 静态资源缺失：那三样只有真启动才知道。
+    #
+    # 仓库里早就有候选实例的 unit（7865，WB_BACKGROUND_JOBS=0，共享入账），
+    # 但发布脚本从来没用过 —— 于是每次都拿线上的 6 秒空窗去赌「这一版能起来」。
+    # 起一次实测 6 秒，失败时线上一个请求都没被动过。
+    if ! systemctl cat "$HELPER.service" >/dev/null 2>&1; then
+        printf '   没有候选实例的 unit（%s），跳过这一步\n' "$HELPER"
+        printf '   注意：这一版无法提前发现「起不来」，失败只能在重启后暴露。\n'
+        return 0
+    fi
+    systemctl start "$HELPER" 2>/dev/null \
+        || die "候选实例启动失败（$HELPER），已中止；线上仍在跑旧代码"
+
+    local ready=0 code i
+    for i in $(seq 1 30); do
+        sleep 1.5
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+            "http://127.0.0.1:$CANDIDATE_PORT/readyz" 2>/dev/null)
+        if [ "$code" = 200 ]; then
+            ready=1
+            break
+        fi
+        # unit 已经退出就没什么可等的了，直接去看日志。
+        systemctl is-active --quiet "$HELPER" || break
+    done
+
+    if [ "$ready" != 1 ]; then
+        systemctl stop "$HELPER" 2>/dev/null
+        printf '\n   候选实例没有就绪，日志最后 20 行：\n' >&2
+        journalctl -u "$HELPER" -n 20 --no-pager 2>/dev/null | sed 's/^/   /' >&2
+        die '这一版起不来，已中止发布；线上仍在跑旧代码'
+    fi
+
+    local served
+    served=$(curl -s --max-time 3 "http://127.0.0.1:$CANDIDATE_PORT/api/release" 2>/dev/null)
+    if ! printf '%s' "$served" | grep -q "\"version\":\"$version\""; then
+        systemctl stop "$HELPER" 2>/dev/null
+        printf '   候选实例报告的版本不是 %s：%s\n' "$version" "$served" >&2
+        die '候选实例跑的代码与本次发布不一致，已中止；线上仍在跑旧代码'
+    fi
+
+    systemctl stop "$HELPER" 2>/dev/null
+    printf '   候选实例就绪（版本 %s，约 %s 秒），已停止\n' "$version" "$((i * 3 / 2))"
+    printf '   到这一步为止线上没有被动过。\n'
+}
+
 main() {
     local version='' relay_changed=0 check_only=0 arg
     for arg in "$@"; do
@@ -223,6 +279,10 @@ main() {
     # 重启前先确认这一版能接受当前配置 —— 2026-11-23 那次 8 分钟崩溃重启
     # 就是这一步的缺失造成的。检查在重启之前，所以失败时服务仍在跑旧代码。
     verify_runtime_config
+
+    # 再往前一步：真的起一次。配置校验只看静态契约，起不来只有真启动才知道；
+    # 这一步失败时线上还在跑旧代码，代价只有几秒的 CPU。
+    prestart_candidate "$version"
 
     restart_gateway "$version"
     local status=$?
