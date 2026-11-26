@@ -275,7 +275,14 @@ class StreamingRelay:
             response = None
             try:
                 def build():
-                    return self.client.build_request(scope.get('method', 'GET'), url,
+                    # 每轮重试都重新解析路由。发版时路由会从旧实例切到新实例，
+                    # 而旧实例正处在排空期；只认第一次捕获的 url，等于对着那扇
+                    # 已经关上的门重试满 6 次（约 31 秒），最后仍把 503 交给调用方。
+                    target_now = self.route()
+                    url_now = self.backends[target_now].copy_with(
+                        raw_path=scope.get('raw_path', scope['path'].encode()),
+                        query=scope.get('query_string', b''))
+                    return self.client.build_request(scope.get('method', 'GET'), url_now,
                         headers=headers, content=payload)
                 response = await self._send_with_startup_retry(build)
                 response_started = True

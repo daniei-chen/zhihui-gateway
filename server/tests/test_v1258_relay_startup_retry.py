@@ -169,3 +169,32 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
             response = await self._post()
         self.assertEqual(response.status_code, 502)
         self.assertEqual(len(attempts), 1)
+
+    async def test_draining_503_follows_the_new_route_after_switch(self):
+        """排空期的 503 不仅要重试，还要跟到已经就绪的新实例上。
+
+        2026-11-26 08:59 那次真实丢单：旧实例进入排空回「503 + Retry-After」，
+        发版脚本随后把路由切到新实例；但中继只认第一次捕获的地址，六次重试
+        全打在旧实例上，最后仍把 503 交给调用方 —— 新实例其实早就绪了。
+        """
+        seen = []
+
+        async def provider(request):
+            seen.append(f'{request.url.host}:{request.url.port}')
+            if len(seen) == 1:
+                # 旧实例排空中；同一时刻发版脚本把路由切到新实例。
+                self.route.write_text(json.dumps({'epoch': 2, 'target': 'new'}),
+                                      encoding='utf-8')
+                os.chmod(self.route, 0o600)
+                return httpx.Response(503, headers={'retry-after': '1'})
+            return httpx.Response(200, stream=BytesBody(),
+                                  headers={'content-type': 'text/event-stream'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(seen), 2)
+        self.assertIn('7866', seen[0])
+        self.assertIn('7865', seen[1])
+        self.assertEqual(self.relay.transport_errors, 0)
