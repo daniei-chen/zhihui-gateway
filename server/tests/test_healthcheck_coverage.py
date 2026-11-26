@@ -167,5 +167,60 @@ class VacuumAdviceTests(unittest.TestCase):
                       'page_count 为 0 或空时会让算术展开报错，巡检会崩')
 
 
+class RecoverySnapshotTests(unittest.TestCase):
+    """巡检必须看得见「每日完整快照失败了」。
+
+    ## 为什么
+
+    2026-11-26：`zhihui-recovery.service` 连续两天失败（11-24、11-26），而巡检
+    报的是「ok 28 项，警告 1 项，问题 0 项」—— 那 1 条警告还是上游账号数，与
+    备份毫无关系。
+
+    失败原因在发布树里：`server/backup_application.py` 的首行带 CRLF，内核直接
+    执行时找不到 `python\\r` 这个解释器，错误却报成「文件不存在」。
+
+    一个每天跑、失败了两天、而全局巡检仍然全绿的任务，等于没有监控。
+
+    ## 本测试守什么
+
+    | 不变量 | 破坏后的表现 |
+    | --- | --- |
+    | 巡检里有恢复快照这一节 | 备份停摆又只能靠人想起来去看 journal |
+    | 快照过期判 FAIL | 报 warn 会被当成「待观察」，而它意味着恢复能力归零 |
+    | 同时看 systemd 的失败状态 | 只比目录年龄会漏掉「今天失败、昨天那份还在」 |
+    | 年龄阈值有上限 | 阈值太松时，失效一整天仍然显示 ok |
+    """
+
+    def _block(self) -> str:
+        parts = SOURCE.split("section '恢复快照'", 1)
+        self.assertEqual(len(parts), 2, '「恢复快照」这一节不见了')
+        return parts[1].split('section ', 1)[0]
+
+    def test_has_a_recovery_snapshot_section(self):
+        self.assertIn("section '恢复快照'", SOURCE,
+                      '巡检没有恢复快照这一节：备份停摆会完全静默')
+
+    def test_checks_service_failure_state(self):
+        block = self._block()
+        self.assertIn('zhihui-recovery.service', block,
+                      '没有检查 systemd 的失败状态：只比目录年龄会漏掉「今天失败」')
+        self.assertIn('failed', block, 'service 处于 failed 时没有单独判据')
+
+    def test_stale_snapshot_is_fatal_not_warning(self):
+        block = self._block()
+        self.assertIn('broken', block,
+                      '快照过期必须判 FAIL：报 warn 会被当成"待观察"')
+        self.assertNotIn('note "最近快照', block,
+                         '快照过期不能降级成警告')
+
+    def test_snapshot_age_threshold_is_bounded(self):
+        self.assertIn('-le 36', self._block(),
+                      '快照年龄阈值变了：超过 36 小时（每日一次加半天余量）就该 FAIL')
+
+    def test_reads_the_snapshot_directory(self):
+        self.assertIn('/root/backups/zhihui-v2/snapshots', self._block(),
+                      '快照目录写错或缺失时，这一节会永远显示 ok')
+
+
 if __name__ == '__main__':
     unittest.main()

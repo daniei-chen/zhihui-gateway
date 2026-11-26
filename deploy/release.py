@@ -129,6 +129,53 @@ def extract(tar_path: Path, dest: Path, *, roots=(), strip: int = 0) -> list[str
     return written
 
 
+def normalize_eol(root: Path, roots: tuple[str, ...] = ("server", "deploy")) -> list[str]:
+    """把落地的 `server/` 与 `deploy/` 文本文件行尾归一成 LF，返回被改动的路径。
+
+    ## 为什么 stage 必须做这件事
+
+    2026-11-26：线上 v1.6.0 发布树里有 **525/713 个 `server/*.py` 和 39 个
+    `deploy` 脚本是 CRLF**（基线 v1.5.94 是 0 个）。Python 解释器读文件容错，
+    所以网关照常服务、巡检也全绿；但**内核直接执行的脚本不容错**：
+
+        #!/opt/workbuddy-manager/venv/bin/python\\r
+                                                  ↑ 这个 \\r 让 execve 返回 ENOENT
+
+    `server/backup_application.py` 正是被 recovery 直接执行的入口。于是每天
+    04:15 的完整加密快照连续失败，报的却是
+    `FileNotFoundError: ... /backup_application.py` —— 看日志像文件丢了，实际
+    文件在、只是解释器路径多了一个 \\r。这就是「能跑」与「能执行」的差别。
+
+    ## 为什么归一而不是拒绝
+
+    归档来自 `git archive`，仓库里存的本来就是 LF（`.gitattributes` 里
+    `* text=auto eol=lf`）；CRLF 是打包那台机器带进来的。拒绝会让正确的字节
+    因为上游的打包方式而不可用，而这台机器没办法让上游重打一次。归一之后
+    `seal` 签的是**归一后的字节**，签名、哈希、实际内容三者仍然自洽。
+
+    只动可解码的文本：含 NUL 或不是合法 UTF-8 的一律按二进制原样保留 ——
+    把二进制改坏比留一处行尾问题严重得多。
+    """
+    changed: list[str] = []
+    for name in roots:
+        base = root / name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            raw = path.read_bytes()
+            if b"\r\n" not in raw or b"\x00" in raw:
+                continue
+            try:
+                raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            path.write_bytes(raw.replace(b"\r\n", b"\n"))
+            changed.append(path.relative_to(root).as_posix())
+    return changed
+
+
 def closure(root: Path) -> dict[str, dict]:
     """`server/` 与 `deploy/` 下的全部文件（排除自己重写的两个清单）。"""
     files: dict[str, dict] = {}
@@ -303,6 +350,17 @@ def cmd_stage(args) -> int:
 
     executable = extract(Path(args.archive), target, roots=STAGE_ROOTS)
     print(f"   server+deploy 落地 {len(executable)} 个文件")
+
+    # 行尾必须在 seal 之前归一：签名与清单哈希都对**这一份字节**负责。
+    # 放在这里而不是「假设归档是 LF」，是因为 2026-11-26 的 v1.6.0 就是从
+    # Web 工作区打的 CRLF 包，恢复快照因此停摆两天（详见 normalize_eol 文档）。
+    normalised = normalize_eol(target)
+    if normalised:
+        preview = "、".join(normalised[:5]) + ("…" if len(normalised) > 5 else "")
+        print(f"   行尾归一 {len(normalised)} 个文件（CRLF → LF）：{preview}")
+        print("   来源归档带 CRLF，通常是在 Windows 工作区打的包。仓库里存的是 LF"
+              "（.gitattributes 的 eol=lf），打包请用 git archive，"
+              "或先确认 git config core.autocrlf。")
 
     # 前端整目录替换（不是叠加）：混合两代产物会出现「页面引用了不存在的
     # chunk」，而那种错误只在新旧标签页并存时才显形，极难归因。

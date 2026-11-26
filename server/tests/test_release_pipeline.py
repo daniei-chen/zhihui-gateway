@@ -56,8 +56,14 @@ def make_release(root: Path, version: str, product: str) -> Path:
     return base
 
 
-def make_archive(path: Path, version: str, product: str, *, mode: int = 0o664) -> Path:
-    """造一个 `git archive` 形态的归档（顶层为 server/ 与 deploy/）。"""
+def make_archive(path: Path, version: str, product: str, *, mode: int = 0o664,
+                 eol: str = '\n', extra: dict[str, bytes] | None = None) -> Path:
+    """造一个 `git archive` 形态的归档（顶层为 server/ 与 deploy/）。
+
+    `eol` 用来复现「在 Windows 工作区打包」：2026-11-26 的 v1.6.0 发布树
+    就是这样带着 525 个 CRLF 的 `server/*.py` 上线的（见
+    `release_tool.normalize_eol`）。`extra` 放二进制，验证归一不会碰它们。
+    """
     files = {
         '.version': version + '\n',
         'CHANGELOG.md': f'# 更新日志\n\n## [{product}] - 2026-11-23\n\n### 新增\n\n- 新版本。\n',
@@ -75,12 +81,17 @@ def make_archive(path: Path, version: str, product: str, *, mode: int = 0o664) -
     }
     with tarfile.open(path, 'w:gz') as archive:
         for name, text in files.items():
-            raw = text.encode()
-            info = tarfile.TarInfo(name)
-            info.size = len(raw)
-            info.mode = mode
-            archive.addfile(info, io.BytesIO(raw))
+            _add_member(archive, name, text.replace('\n', eol).encode(), mode)
+        for name, raw in (extra or {}).items():
+            _add_member(archive, name, raw, mode)
     return path
+
+
+def _add_member(archive: tarfile.TarFile, name: str, raw: bytes, mode: int) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(raw)
+    info.mode = mode
+    archive.addfile(info, io.BytesIO(raw))
 
 
 def make_web_archive(path: Path, *, markup: str = '<html>new</html>') -> Path:
@@ -319,6 +330,37 @@ class StageTest(unittest.TestCase):
             for path in (target / base).rglob('*'):
                 mode = stat.S_IMODE(path.lstat().st_mode)
                 self.assertIn(mode, (0o644, 0o755), f'{path} mode={oct(mode)}')
+
+    def test_stage_normalises_crlf_archive(self) -> None:
+        """CRLF 归档落地后必须是 LF。
+
+        2026-11-26：v1.6.0 的发布树带着 525 个 CRLF 的 `server/*.py` 和 39 个
+        `deploy` 脚本上线。Python 读文件容错，所以网关照常服务、巡检全绿；但
+        `server/backup_application.py` 是**内核直接执行**的入口，shebang 末尾多
+        一个 `\\r` 就等于解释器不存在 —— 每日恢复快照因此连着失败了两天。
+        """
+        crlf = make_archive(Path(self._tmp.name) / 'crlf.tar.gz', 'v1.0.2', '1.0.2',
+                            eol='\r\n')
+        args = release_tool.argparse.Namespace(
+            root=str(self.root), version='v1.0.2', archive=str(crlf),
+            web=str(self.web), base='v1.0.0', key='k', trust='t')
+        self.assertEqual(release_tool.cmd_stage(args), 0)
+        target = self.root / 'v1.0.2'
+        for relative in ('server/entry.py', 'deploy/preflight-gate.py'):
+            data = (target / relative).read_bytes()
+            self.assertNotIn(b'\r', data,
+                             f'{relative} 还是 CRLF：内核执行会报解释器不存在')
+
+    def test_stage_keeps_binary_bytes(self) -> None:
+        """含 NUL 的二进制原样保留：改坏图片比留一处行尾严重得多。"""
+        blob = b'\x89PNG\r\n\x1a\n\x00\x00\r\nEND'
+        archive = make_archive(Path(self._tmp.name) / 'bin.tar.gz', 'v1.0.3', '1.0.3',
+                               extra={'server/logo.png': blob})
+        args = release_tool.argparse.Namespace(
+            root=str(self.root), version='v1.0.3', archive=str(archive),
+            web=str(self.web), base='v1.0.0', key='k', trust='t')
+        self.assertEqual(release_tool.cmd_stage(args), 0)
+        self.assertEqual((self.root / 'v1.0.3/server/logo.png').read_bytes(), blob)
 
     def test_existing_version_refused(self) -> None:
         args = release_tool.argparse.Namespace(

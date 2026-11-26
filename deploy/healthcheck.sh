@@ -358,6 +358,43 @@ else
     note '取不到告警快照（端点未上线或服务未起）'
 fi
 
+section '恢复快照'
+# 每日 04:20 由 zhihui-recovery.timer 触发一次完整加密快照（含真密钥解密校验）。
+#
+# 2026-11-26：它连续两天失败（11-24、11-26），而巡检报的是「ok 28 / 问题 0」——
+# 因为这一段根本不存在，没人看得见。失败原因还在发布树里：
+# `server/backup_application.py` 首行带 CRLF，内核直接执行时找不到 `python\r`
+# 这个解释器，错误却报成「文件不存在」。
+#
+# 这不是「备份有点旧」，而是**灾难恢复能力已经归零**，所以快照过期与 service
+# failed 都判 FAIL，不判 warn —— warn 会被当成「待观察」，而它等不起。
+SNAPSHOT_ROOT=/root/backups/zhihui-v2/snapshots
+newest_snapshot=$(ls -1d "$SNAPSHOT_ROOT"/*/ 2>/dev/null | sort | tail -1)
+if [ -z "$newest_snapshot" ]; then
+    broken "没有任何恢复快照（$SNAPSHOT_ROOT 为空）—— 出事时没有可回滚的完整备份"
+else
+    snap_age_h=$(( ( $(date +%s) - $(stat -c %Y "$newest_snapshot") ) / 3600 ))
+    snap_name=$(basename "$newest_snapshot")
+    snap_size=$(du -sh "$newest_snapshot" 2>/dev/null | cut -f1)
+    if [ "$snap_age_h" -le 36 ]; then
+        pass "最近快照 $snap_name（${snap_age_h} 小时前，${snap_size}）"
+    else
+        broken "最近快照 $snap_name 已是 ${snap_age_h} 小时前（阈值 36 小时）：每日快照没有成功"
+    fi
+fi
+recovery_state=$(systemctl is-active zhihui-recovery.service 2>/dev/null)
+case "$recovery_state" in
+    failed)
+        broken "zhihui-recovery.service 处于 failed（$(systemctl show zhihui-recovery.service -p Result --value 2>/dev/null)）：journalctl -u zhihui-recovery -n 30 看原因"
+        ;;
+    activating)
+        note 'zhihui-recovery.service 正在跑（完整快照要几分钟）'
+        ;;
+    *)
+        pass "zhihui-recovery.service 状态 $recovery_state"
+        ;;
+esac
+
 section '数据库'
 if [ -r "$DB" ]; then
     size=$(du -h "$DB" 2>/dev/null | cut -f1)
