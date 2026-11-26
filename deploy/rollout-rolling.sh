@@ -25,7 +25,11 @@ SITE=/etc/nginx/sites-enabled/zhihui.kaogong.art
 SNIPPET=/etc/nginx/snippets/zh-relay-inference.location.conf
 MAPFILE=/etc/nginx/conf.d/zhihui-relay-upstream.conf
 RELEASES=/opt/workbuddy-manager/releases
-ACCESS_LOG=/var/log/nginx/access.log
+# 判据读网关自己记的请求终态，而不是 nginx 的共享 access.log。
+# 2026-11-26 实测：那份日志里混着另一个站点（zhijing.kaogong.art）转发到境外
+# 上游的 7 条 502，时间正好落在本次重启窗口里，被算成了「本次发版丢了 7 个
+# 请求」；而真正进入网关的 8 条请求全部 200。误报的判据比没有判据更糟。
+DB=/opt/workbuddy-manager/data/manager.db
 RELAY=zhihui-rolling-relay
 GATEWAY=workbuddy-web
 #: 脚本自身所在目录 —— 配置校验工具与它同目录，不能靠调用者的 cwd 找。
@@ -33,6 +37,14 @@ SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 
 step() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
+
+db_scalar() {
+    sqlite3 -readonly "$DB" "$1" 2>/dev/null | head -1
+}
+
+db_rows() {
+    sqlite3 -readonly -separator ' | ' "$DB" "$1" 2>/dev/null
+}
 
 check_prereqs() {
     step '体检'
@@ -42,6 +54,9 @@ check_prereqs() {
     [ -f "$SNIPPET" ] || die "中继片段未安装：$SNIPPET"
     grep -q 'zh-relay-inference' "$SITE" || die "站点配置没有接中继：$SITE"
     systemctl is-active --quiet "$RELAY" || die "中继没在运行：$RELAY"
+    command -v sqlite3 >/dev/null 2>&1 \
+        || die '缺少 sqlite3：无法统计重启窗口的请求终态'
+    [ -r "$DB" ] || die "读不到请求终态表：$DB"
     printf '   ok 中继在跑、map 已定义、片段已安装、站点已接线\n'
 }
 
@@ -93,7 +108,7 @@ verify_runtime_config() {
 }
 
 restart_gateway() {
-    local version="$1" before after ready=0
+    local version="$1" before ready=0
     # 参数可能带 `v` 前缀（`v1.5.92`）也可能不带（`1.5.92`）。
     #
     # `/api/release` 里两个字段的写法不一样：`version` 是 `1.5.92`，
@@ -105,7 +120,18 @@ restart_gateway() {
     # 然后 die —— 发布本身是成功的，但后面的 5xx 统计没跑，退出码也没给，
     # 看起来就像一次失败的发版。调用方传哪种写法都该能用。
     version="${version#v}"
-    before=$(wc -l < "$ACCESS_LOG" 2>/dev/null || echo 0)
+    # 判据用网关自己记的请求终态（request_outcomes），不是 nginx 的共享日志。
+    #
+    # 2026-11-26 实测：`/var/log/nginx/access.log` 里混着另一个站点
+    # （zhijing.kaogong.art）转发到境外上游的 7 条 502，时间正好落在本次重启
+    # 窗口内，被原来的 `/v1/` 过滤算成了「本次发版丢了 7 个请求」—— 而真正
+    # 进入网关的 8 条请求全部 200。`/v1/` 这个前缀两个站点都有，路径过滤不够。
+    #
+    # 请求终态表只收网关真正处理过的请求，天然排除别的站点。
+    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;')
+    case "$before" in
+        ''|*[!0-9]*) die "读不到请求终态表（$DB），无法证明本次发版零中断";;
+    esac
     step "重启网关（空窗期间由中继重试兜住）"
     systemctl restart "$GATEWAY" || die "重启网关失败"
 
@@ -119,29 +145,29 @@ restart_gateway() {
     done
     [ "$ready" = 1 ] || die "重启后 60 秒仍未返回 v$version，请检查 $GATEWAY"
 
-    after=$(wc -l < "$ACCESS_LOG" 2>/dev/null || echo 0)
-    step "重启窗口内的 5xx（只算推理流量）"
-    local failures
-    # 只统计 `/v1/` 的 5xx。
-    #
-    # `/var/log/nginx/access.log` 是**整台机器的共享日志**，同一个文件里还有
-    # 控制台页面、`/_next` 静态资源、`/dsh-login`（属于另一个站点）等等。
-    # 2026-11-25 实测：这份日志里的 5xx 有 8 条属于 `/v1/`，另有 4 条不是 ——
-    # 那 4 条跟推理无关，却会被算进「本次发版丢了几个请求」。
-    #
-    # 判据必须只覆盖本次发布真正影响的流量：推理请求。否则一次无关站点的
-    # 5xx 就能把「零中断」判成失败，而**误报的判据比没有判据更糟** ——
-    # 下次真出问题时它不再被相信。
-    failures=$(awk -v s="$before" 'NR>s && $9 ~ /^5/ && $7 ~ /^\/v1\//' "$ACCESS_LOG" 2>/dev/null | wc -l)
+    # 最后几条终态的落库是请求结束时写的，留 2 秒再数。
+    sleep 2
+    local total failures
+    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;")
+    case "$total" in ''|*[!0-9]*) total=0;; esac
+    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;")
+    case "$failures" in ''|*[!0-9]*) failures=0;; esac
+
+    step '重启窗口内的流量（按网关自己的请求终态）'
+    printf '   请求 %s 条，5xx %s 条\n' "$total" "$failures"
     if [ "$failures" -eq 0 ]; then
-        printf '   0 条 —— 零中断\n'
+        if [ "$total" -gt 0 ]; then
+            printf '   —— 零中断（窗口内有真实请求）\n'
+        else
+            printf '   —— 窗口内 0 条请求：不能据此宣称零中断\n'
+        fi
     else
-        printf '   %s 条（下面这些）：\n' "$failures"
-        awk -v s="$before" 'NR>s && $9 ~ /^5/ && $7 ~ /^\/v1\//' "$ACCESS_LOG" 2>/dev/null \
-            | awk '{print "   ", $4, $9, $7}' | head -10
-        printf '\n   说明：中继的重试只覆盖「连接阶段失败、累计 9 秒」。\n'
-        printf '   若失败集中在重启第一秒之外，多半是中继没跑上新代码，\n'
-        printf '   或这一段流量绕过了中继（站点里中继 location 缺失）。\n'
+        printf '   明细：\n'
+        db_rows "select datetime(ts,'unixepoch','+8 hours'), method, endpoint, http_status, coalesce(error_stage,'')
+                 from request_outcomes where rowid > $before and http_status >= 500
+                 order by rowid limit 10;" | sed 's/^/     /'
+        printf '\n   说明：中继的重试只覆盖「连接阶段失败」。若失败集中在重启第一秒\n'
+        printf '   之外，多半是中继没跑上新代码，或这一段流量绕过了中继。\n'
     fi
 
     step '页面与就绪探针'

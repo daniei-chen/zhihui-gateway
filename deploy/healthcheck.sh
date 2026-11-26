@@ -369,7 +369,10 @@ section '恢复快照'
 # 这不是「备份有点旧」，而是**灾难恢复能力已经归零**，所以快照过期与 service
 # failed 都判 FAIL，不判 warn —— warn 会被当成「待观察」，而它等不起。
 SNAPSHOT_ROOT=/root/backups/zhihui-v2/snapshots
-newest_snapshot=$(ls -1d "$SNAPSHOT_ROOT"/*/ 2>/dev/null | sort | tail -1)
+# 用 find 而不是 `ls */`：巡检可能被非 root 调用，`*/` 会因读不到 700 目录而
+# 不展开，脚本会误报「没有任何恢复快照」。
+newest_snapshot=$(find "$SNAPSHOT_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 if [ -z "$newest_snapshot" ]; then
     broken "没有任何恢复快照（$SNAPSHOT_ROOT 为空）—— 出事时没有可回滚的完整备份"
 else

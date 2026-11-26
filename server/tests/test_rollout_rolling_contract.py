@@ -32,6 +32,11 @@ awk -v s="$before" 'NR>s && $9 ~ /^5/' "$ACCESS_LOG"
 2026-11-25 实测：这份日志的 5xx 里 8 条属于 `/v1/`，另有 4 条不是 ——
 那 4 条会被算进「本次发版丢了几个请求」。
 
+**其三，只按 `/v1/` 过滤仍然不够（2026-11-26）。** 另一个站点
+`zhijing.kaogong.art` 也代理 `/v1/models`，它上游那台机器当时连不上，7 条 502
+的时间正好落在 v1.6.1 的重启窗口里 —— 于是「零中断」被判成失败，而真正进入
+网关的 8 条请求全部 200。路径前缀不是站点标识，判据改成读网关自己的请求终态。
+
 ## 为什么这两个都算「值得修的缺陷」
 
 后果都不是「发布失败」，而是更麻烦的东西：**发布成功了却看起来像失败**。
@@ -45,7 +50,7 @@ awk -v s="$before" 'NR>s && $9 ~ /^5/' "$ACCESS_LOG"
 | 不变量 | 破坏后的表现 |
 | --- | --- |
 | 版本号先归一化再比对 | 传 `v1.5.92` 时永远匹配不上，成功发布被判失败 |
-| 5xx 只统计 `/v1/` | 无关站点的 5xx 被算成本次发布丢的请求 |
+| 5xx 只统计网关自己的请求终态 | 别的站点同名路径的 5xx 被算成本次发布丢的请求 |
 | 计数与明细都过滤 | 只改一处，明细里仍会出现无关请求 |
 | `--check` 不产生副作用 | 体检变成真发布 |
 | 中继先于网关重启 | 顺序反了，中继重启那 1-2 秒丢请求 |
@@ -125,24 +130,59 @@ class RelayRestartsBeforeGatewayTests(unittest.TestCase):
             '必须提示调用方：中继代码改了却不加参数，中继会继续跑旧代码')
 
 
-class FiveHundredsOnlyCountInferenceTests(unittest.TestCase):
-    """共享 access.log 里还有别的站点，必须只统计推理流量。"""
+class FiveHundredsComeFromGatewayTerminalStatesTests(unittest.TestCase):
+    """判据必须来自网关自己的请求终态，而不是整机共享的 nginx 日志。
 
-    def test_the_awk_filter_is_scoped_to_v1(self):
-        self.assertIn(
-            r'$7 ~ /^\/v1\//', SOURCE,
-            '5xx 统计没有限定 /v1/：共享日志里其他站点的 5xx '
-            '会被算成本次发布丢的请求')
+    ## 2026-11-26 的真实误报
 
-    def test_both_the_count_and_the_listing_are_scoped(self):
-        self.assertEqual(
-            SOURCE.count(r'$7 ~ /^\/v1\//'), 2,
-            '计数和明细是两处 awk，都要过滤，漏一处就前功尽弃')
+    v1.6.1 发布时脚本退出 2，报「窗口内 7 条 502」。查下来 7 条**全部**属于
+    另一个站点 `zhijing.kaogong.art`：它把 `/v1/models` 反代到境外上游，而那台
+    机器当时连不上（`upstream prematurely closed connection`）。时间恰好落在
+    本次重启窗口里，被 `/v1/` 前缀过滤一起算了进来。
+
+    同一窗口里真正进入网关的 8 条请求全部 200 —— 发布本身是干净的。
+
+    `/v1/` 这个前缀两个站点都有，路径过滤天生不够。请求终态表只收网关处理过的
+    请求，是唯一能同时满足「覆盖真实流量」和「排除别的站点」的口径。
+
+    ## 本测试守什么
+
+    | 不变量 | 破坏后的表现 |
+    | --- | --- |
+    | 起点取自 request_outcomes 的 rowid | 回到共享日志，别的站点再次污染判据 |
+    | 起点在重启**之前**取 | 重启期间的请求被漏掉，永远数不到 5xx |
+    | 计数与明细都按 rowid 过滤 | 只改一处，明细里仍会出现无关请求 |
+    | 读不到终态表时 die | 没有判据却退出 0，等于宣称了一个没验证过的零中断 |
+    """
+
+    def test_counts_from_request_outcomes(self):
+        self.assertIn('request_outcomes', SOURCE,
+                      '没有读请求终态表：判据又回到共享日志了')
+        self.assertNotIn(r'$7 ~ /^\/v1\//', SOURCE,
+                         '还在按 /v1/ 前缀过滤共享 access.log：'
+                         '另一个站点同名路径的 5xx 会被算成本次发布丢的请求')
+
+    def test_the_starting_point_is_taken_before_the_restart(self):
+        start = SOURCE.index('max(rowid)')
+        restart = SOURCE.index('systemctl restart "$GATEWAY"')
+        self.assertLess(start, restart, '起点必须在重启之前取，否则窗口为空')
+
+    def test_count_and_detail_are_both_scoped(self):
+        self.assertGreaterEqual(
+            SOURCE.count('rowid > $before'), 2,
+            '计数和明细是两处查询，都要过滤，漏一处就前功尽弃')
+
+    def test_missing_terminal_table_is_fatal(self):
+        self.assertIn('无法证明本次发版零中断', SOURCE,
+                      '读不到终态表时必须 die：没有判据不能宣称零中断')
 
     def test_it_reports_the_window_request_count(self):
-        self.assertIn(
-            '重启窗口内的 5xx', SOURCE,
-            '没有窗口请求数，「零中断」就是一句无法核对的话')
+        self.assertIn('请求 %s 条，5xx %s 条', SOURCE,
+                      '没有窗口请求数，「零中断」就是一句无法核对的话')
+
+    def test_zero_requests_is_called_out(self):
+        self.assertIn('不能据此宣称零中断', SOURCE,
+                      '窗口内 0 条请求时不能算成功 —— 那只是没人在用')
 
 
 class ExitCodesAreDistinctTests(unittest.TestCase):
