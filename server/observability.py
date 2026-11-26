@@ -253,12 +253,19 @@ log = logging.getLogger("workbuddy.audit")
 _NOT_RECORDED_ON_SUCCESS = frozenset({
     '/api/system/internal-session-verify',   # daemon 心跳，正常恒 204
     '/v1/usage',                             # 客户端额度轮询，占全部请求 27%
+    # new-api 兼容的令牌余额接口。与 `/v1/usage` 是同一件事（客户端轮询额度），
+    # 但同一个清单里只写了一个、漏了另一个：2026-11-26 实测 24 小时 1,632 条
+    # 全是 200 completed，而 `/v1/usage` 因为已豁免，只剩 45 条 401 失败记录 ——
+    # 差别就是这一行。错误率的分母平白多背一千多条。
+    '/api/usage/token',
 })
 
 
 def _record_outcome(path: str, status: int) -> bool:
     """这个请求的成功态要不要写进 `request_outcomes`。"""
-    if path not in _NOT_RECORDED_ON_SUCCESS:
+    # 尾斜杠不改变语义：`/api/usage/token` 与 `/api/usage/token/` 两条路由都注册了
+    # （gateway 里成对出现），不归一化就会漏掉一半 —— 豁免清单自己再漂一次。
+    if path.rstrip('/') not in _NOT_RECORDED_ON_SUCCESS:
         return True
     return not (200 <= int(status) < 300)
 
