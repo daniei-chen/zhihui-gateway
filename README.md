@@ -137,7 +137,7 @@ curl https://你的域名/v1/chat/completions \
 - 双账本快照以 main→wallet 顺序短暂获取写锁。完整性与业务一致性检查、隔离恢复在复制后进行。
 - 恢复只写新隔离目录，禁用调用、撤销旧会话、封存凭据，不将旧余额直接启用。
 - 内部密钥已轮换；代码回滚保留新密钥，不重新启用已经撤销的旧凭据。
-- 现网采用排空后受控切换，有短维护窗口，不宣称零停机。历史 unknown、弱口令告警和其余审计项独立跟进。
+- 现网发版走蓝绿切换：新版本先在旁边起一个实例接管新请求，旧实例把在途的流跑完再退出；转发层重启的那一两秒，推理入口临时切到直连。发布脚本自己统计窗口内的请求数与 5xx 数，并把它变成退出码。**「零中断」只在这个窗口范围内成立** —— 看的是那两个数字，不是一句口号。历史 unknown、弱口令告警和其余审计项独立跟进。
 
 </details>
 
@@ -155,7 +155,7 @@ cd zhihui-gateway
 | 你的目标 | 从这里开始 |
 | :--- | :--- |
 | 本地运行、改版或贡献 | [开发指南](docs/DEVELOPMENT.md) · [受控部署](deploy/README.md) · [控制台源码](web/) · [网关服务](server/) |
-| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [1.2.22 变更](CHANGELOG.md) |
+| 理解版本、签名与回滚 | [发布与签名边界](docs/release-signing.md) · [最近的变更](CHANGELOG.md) |
 | 查看首页与视觉实现 | [首页源码](site/home/index.html) · [集成与复现](site/home-source/INTEGRATION.md) |
 | 追溯实现及剩余工作 | [完整更新日志](CHANGELOG.md) · [安全审查报告](docs/SECURITY-AUDIT.md) |
 | 用户文档 | [使用](docs/usage.md) · [功能](docs/features.md) · [截图](docs/screenshots.md) · [开发](docs/DEVELOPMENT.md) · [安全说明](docs/security-notes.md) · [API Token](docs/api-tokens.md) · [账号出口](docs/account-proxy-routes.md) · [审计报告](docs/SECURITY-AUDIT.md) · [发布签名](docs/release-signing.md) |
