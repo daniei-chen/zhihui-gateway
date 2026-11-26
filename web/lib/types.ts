@@ -779,6 +779,14 @@ export interface UsageBreakdown {
   tokens_per_sec?: number | null;
   /** 参与速率计算的请求条数（只覆盖日志保留期内的成功请求） */
   throughput_samples?: number;
+  /**
+   * 逐日用量（只有「按密钥」视图提供）。
+   *
+   * 与上面的合计来自同一份过滤条件，所以 `sum(daily.requests) === requests`。
+   * 某天的 `tokens` 为 null 表示那天有请求没上报 token 数 —— 是「不知道」，
+   * 不是 0，界面上也不该画成 0。
+   */
+  daily?: {day: string; requests: number; tokens: number | null}[];
 }
 
 export interface StatsSummary {

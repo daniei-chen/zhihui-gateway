@@ -442,8 +442,38 @@ export default function StatsPage() {
   );
 }
 
-function BreakdownPanel({
-  title,
+/**
+ * 每个 key 最近几天的用量柱。
+ *
+ * 为什么放这一行：合计只说明「这个 key 用了很多」，说明不了「昨天突然涨」还是
+ * 「一直这么多」。柱高按窗口内峰值归一，所以看的是形状不是绝对值；某天没有
+ * token 数时画一条虚线而不是空柱 —— 那是「不知道」，不是 0。
+ */
+function DailyBars({days, color}: {days: {day: string; requests: number; tokens: number | null}[]; color: string}) {
+  const shown = days.slice(-14);
+  const peak = Math.max(1, ...shown.map((d) => d.tokens ?? 0));
+  return (
+    <div
+      className="mt-1.5 flex h-4 w-full max-w-[140px] items-end gap-[2px]"
+      title={shown.map((d) => `${d.day} ${d.tokens === null ? '—' : fmtCompact(d.tokens)}`).join('\n')}
+    >
+      {shown.map((d) => (
+        <span
+          key={d.day}
+          className="flex-1 rounded-sm"
+          style={{
+            height: d.tokens === null ? '2px' : `${Math.max(10, Math.round((d.tokens / peak) * 100))}%`,
+            background: d.tokens === null ? 'transparent' : color,
+            borderTop: d.tokens === null ? `2px dashed ${color}` : undefined,
+            opacity: d.tokens === null ? 0.45 : 0.8,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BreakdownPanel({  title,
   icon: Icon,
   items,
   currentKeys = false,
@@ -499,6 +529,9 @@ function BreakdownPanel({
                         }}
                       />
                     </div>
+                    {it.daily && it.daily.length > 1 && (
+                      <DailyBars days={it.daily} color={CHART_COLORS[i % CHART_COLORS.length]} />
+                    )}
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">{fmtNumber(it.requests)}</TableCell>
                   <TableCell className="text-xs tabular-nums">{tokens === null ? '—' : fmtCompact(tokens)}</TableCell>

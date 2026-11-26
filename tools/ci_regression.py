@@ -167,6 +167,9 @@ MODULES = (
     # 对不对得上，全靠这个文件。磁盘上 499 个测试文件、门禁只跑 93 个 ——
     # 剩下那 407 个的收敛是另一件事，这里只补上本轮动到的那一个。
     "server.tests.test_platform_key_stats",
+    # 守「磁盘上有、清单里没有」的新测试文件：不写进 MODULES 就永远不执行，
+    # 而写下它的人会以为「我加了测试」。存量 406 个记在白名单里，只许减少。
+    "server.tests.test_v1622_gate_manifest_coverage",
 )
 
 
