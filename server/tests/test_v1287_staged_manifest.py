@@ -72,6 +72,13 @@ class ManifestGeneratorTests(unittest.TestCase):
 
     def test_hashes_come_from_git_not_disk(self):
         """关键：拿一个与磁盘内容不同的 ref，算出来的必须是 ref 的内容。"""
+        # 这条要历史 tag。actions/checkout 默认 fetch-depth: 1 且不拉 tag，
+        # 浅克隆里 v1.2.85 不存在，会让整条门禁红在一个与代码无关的环境差异上。
+        # workflow 侧已补 fetch-depth: 0 + fetch-tags: true；这里再兜一层。
+        probe = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', 'v1.2.85^{commit}'],
+                               cwd=ROOT, capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest('浅克隆没有 v1.2.85 标签（需要 fetch-depth: 0 且 fetch-tags: true）')
         out = self.tmp / 'expected.txt'
         # v1.2.85 的 VERSION 与当前 HEAD 不同
         result = _run_maker(ROOT, 'v1.2.85^{commit}', out, ['VERSION'])
