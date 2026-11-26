@@ -8,8 +8,9 @@
 #
 # 用法：
 #   ./rollout-rolling.sh --check                 # 只体检，不动任何东西
-#   ./rollout-rolling.sh 1.5.59                  # 常态发布（中继代码没变）
+#   ./rollout-rolling.sh 1.5.59                  # 常态发布（默认蓝绿：候选实例先接管流量）
 #   ./rollout-rolling.sh 1.5.59 --relay-changed  # 中继代码也变了，需要一并重启
+#   ./rollout-rolling.sh 1.5.59 --no-blue-green  # 没有候选实例时，退回「重启 + 中继重试」
 #
 # 退出码：0 成功；1 前置条件不满足；2 重启后仍有 5xx（已上线但没做到零中断）。
 set -uo pipefail
@@ -198,7 +199,8 @@ prestart_candidate() {
     if ! systemctl cat "$HELPER.service" >/dev/null 2>&1; then
         printf '   没有候选实例的 unit（%s）\n' "$HELPER"
         if [ "$keep" = 1 ]; then
-            die '蓝绿发布需要候选实例，但这台机器上没有它的 unit'
+            printf '   这台机器上没法蓝绿发布，退回「重启 + 中继重试」的方式。\n'
+            return 1
         fi
         printf '   跳过这一步；这一版无法提前发现「起不来」，失败只能在重启后暴露。\n'
         return 0
@@ -280,7 +282,9 @@ rollout_blue_green() {
     esac
 
     # 候选实例先起来并一直留着 —— 这次不是用它做检查，而是让它真的接流量。
-    prestart_candidate "$version" 1
+    # 起不来就没有第二个实例可切，返回 3 让调用方退回普通发布（不在这里 die：
+    # 「这台机器没有候选实例」不该让发版失败）。
+    prestart_candidate "$version" 1 || return 3
 
     step '把中继流量切到候选实例'
     route_switch new
@@ -340,12 +344,13 @@ rollout_blue_green() {
 }
 
 main() {
-    local version='' relay_changed=0 check_only=0 blue_green=0 arg
+    local version='' relay_changed=0 check_only=0 blue_green=1 arg
     for arg in "$@"; do
         case "$arg" in
             --check) check_only=1 ;;
             --relay-changed) relay_changed=1 ;;
             --blue-green) blue_green=1 ;;
+            --no-blue-green) blue_green=0 ;;
             -*) die "未知参数：$arg" ;;
             *) version="$arg" ;;
         esac
@@ -385,9 +390,12 @@ main() {
         # 蓝绿：候选实例先接流量，再重启主实例，然后切回来 —— 重启期间一个请求都不落空。
         rollout_blue_green "$version"
         local status=$?
-        step '完成'
-        [ "$status" -eq 0 ] && printf '   v%s 已上线（蓝绿切换，重启期间流量在候选实例上）\n' "${version#v}"
-        return "$status"
+        if [ "$status" -ne 3 ]; then
+            step '完成'
+            [ "$status" -eq 0 ] && printf '   v%s 已上线（蓝绿切换，重启期间流量在候选实例上）\n' "${version#v}"
+            return "$status"
+        fi
+        printf '   改用重启方式发布。\n'
     fi
 
     # 再往前一步：真的起一次。配置校验只看静态契约，起不来只有真启动才知道；

@@ -276,11 +276,18 @@ class BlueGreenHandsTheTrafficOverTests(unittest.TestCase):
     不需要重启它。
     """
 
-    def test_it_exists_and_is_opt_in(self):
-        self.assertIn('--blue-green) blue_green=1', SOURCE)
+    def test_blue_green_is_the_default(self):
+        # 默认就走蓝绿；要退回重启必须显式声明。
+        self.assertIn('blue_green=1 arg', SOURCE)
+        self.assertIn('--no-blue-green) blue_green=0', SOURCE)
         self.assertIn('rollout_blue_green "$version"', SOURCE)
-        # 默认路径仍然是重启，蓝绿必须显式要求。
+        # 退回路径仍在：没有候选实例的机器也能发版。
         self.assertIn('    prestart_candidate "$version"\n', SOURCE)
+
+    def test_missing_candidate_falls_back_instead_of_failing(self):
+        self.assertIn('这台机器上没法蓝绿发布，退回', SOURCE)
+        self.assertIn('prestart_candidate "$version" 1 || return 3', SOURCE)
+        self.assertIn('if [ "$status" -ne 3 ]', SOURCE)
 
     def test_route_moves_before_the_old_instance_stops(self):
         switch = SOURCE.index('    route_switch new')
