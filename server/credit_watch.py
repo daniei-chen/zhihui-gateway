@@ -1212,6 +1212,50 @@ def portal_account_consistency_alert() -> list:
              % (len(missing), '、'.join(missing[:5])))]
 
 
+def _account_trend(platform: str, hours: int = 24) -> dict:
+    """按 uid 对比 N 小时前后的单号余额，正数表示这期间**增加**。
+
+    2026-11-26：`workbuddy_low_accounts` 连续响了 19.5 小时，指向的两个号余额
+    其实在回升（每日签到 +100、日消耗约 24）。只报「低于阈值」而不报「在涨还是在
+    掉」，读的人没法判断该不该动手 —— 噪声就是这么来的。
+
+    没有 N 小时前的快照时返回空字典：宁可不判断，也不拿最近一条冒充历史。
+    """
+    row = latest(platform, with_raw=True)
+    if not row:
+        return {}
+    row = dict(row)
+    try:
+        accounts = (json.loads(row['raw'] or '{}')).get('accounts') or []
+    except (ValueError, TypeError):
+        return {}
+    if not accounts:
+        return {}
+    before = db.query_one(
+        'SELECT raw, captured_at FROM platform_credit_snapshots'
+        ' WHERE platform=? AND captured_at <= ?'
+        ' ORDER BY captured_at DESC, id DESC LIMIT 1',
+        (platform, (row['captured_at'] or 0) - hours * 3600))
+    if not before:
+        return {}
+    try:
+        old = json.loads(dict(before)['raw'] or '{}')
+    except (ValueError, TypeError):
+        return {}
+    was = {a.get('uid'): a.get('remain') for a in (old.get('accounts') or [])
+           if a.get('uid')}
+    trend = {}
+    for account in accounts:
+        uid = account.get('uid')
+        if not uid or uid not in was:
+            continue
+        try:
+            trend[uid] = (account.get('remain') or 0) - (was[uid] or 0)
+        except TypeError:
+            continue
+    return trend
+
+
 def workbuddy_alerts() -> list:
     """WorkBuddy 账号池的积分告警。
 
@@ -1286,13 +1330,39 @@ def workbuddy_alerts() -> list:
             '%s %s' % (a.get('nickname') or a.get('uid') or '?',
                        a.get('remain') if a.get('remain') is not None else '?')
             for a in lows[:5])
-        # 每日签到给每个号 +100。只要单号日消耗低于 100，余额就会自己回升 ——
-        # 2026-11-23 实测 ì 与 慢点 的日消耗约 24 分，净增长 +76/天。
-        # 不说这一点，看告警的人会以为需要立刻处理。
-        lines.append(('workbuddy_low_accounts', True,
-                      '%d 个 WorkBuddy 账号余额低于 %d 分（%s）；每日签到各 +100，'
-                      '若日消耗低于 100 会自行回升'
-                      % (len(lows), WB_LOW_ACCOUNT, names)))
+        # 只报「低于阈值」还看不出方向：是明天就用完，还是每天签到就补回来了。
+        # 2026-11-23 这里的注释写的是「日消耗约 24 分，净增长 +76/天」；到 11-26
+        # 实测已经反过来（ì 831→801、慢点 993→905），而告警文案还停在旧结论上。
+        # 所以改成每次都报近 24 小时的实际变化，而不是引用一句会过期的经验。
+        trend = _account_trend('workbuddy')
+        moves = []
+        for account in lows[:5]:
+            uid = account.get('uid')
+            delta = trend.get(uid)
+            if delta is None:
+                continue
+            moves.append('%s %+.0f' % (account.get('nickname') or uid or '?', delta))
+        detail = '%d 个 WorkBuddy 账号余额低于 %d 分（%s）' % (
+            len(lows), WB_LOW_ACCOUNT, names)
+        if moves:
+            detail += '；近 24 小时 %s' % '、'.join(moves)
+        falling = [a for a in lows if (trend.get(a.get('uid')) or 0) < 0]
+        rising = [a for a in lows if (trend.get(a.get('uid')) or 0) > 0]
+        if not falling and rising:
+            # 全部在回升时不该占着告警位：这种状态会持续几十小时，而它不需要处理。
+            detail += '；都在回升（每日签到各 +100），不需要处理'
+            lines.append(('workbuddy_low_accounts', False, detail))
+        else:
+            if falling:
+                fastest = min(falling, key=lambda a: trend.get(a.get('uid')) or 0)
+                per_day = -(trend.get(fastest.get('uid')) or 0)
+                if per_day > 0:
+                    detail += '；其中 %s 掉得最快，按这速度约 %.0f 天用完' % (
+                        fastest.get('nickname') or '?',
+                        (fastest.get('remain') or 0) / per_day)
+            else:
+                detail += '；每日签到各 +100，若日消耗低于 100 会自行回升'
+            lines.append(('workbuddy_low_accounts', True, detail))
     else:
         lines.append(('workbuddy_low_accounts', False,
                       '所有 WorkBuddy 账号余额均高于 %d 分' % WB_LOW_ACCOUNT))

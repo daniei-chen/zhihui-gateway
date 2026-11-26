@@ -69,6 +69,10 @@ MODULES = (
     "server.tests.test_v1274_budget_rejected_unknown",
     "server.tests.test_v1283_budget_alert_thresholds",
     "server.tests.test_v1297_recovery_chain_alert",
+    # 余额告警的方向判断：只报「低于阈值」不报「在涨还是在掉」，读的人判断不了
+    # 急不急。2026-11-26 线上那条 alarm 连续 19.5 小时，文案引用的还是三天前
+    # 已经失效的观察（「日消耗约 24 分，净增长 +76/天」）。
+    "server.tests.test_v1613_low_account_trend",
     "server.tests.test_backup_health_evidence",
     "server.tests.test_audit_notify_config",
     "server.tests.test_audit_regressions",
