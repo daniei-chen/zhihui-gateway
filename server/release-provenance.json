@@ -159,7 +159,7 @@
   },
   "schema": 1,
   "signed": false,
-  "source_commit": "c399ec671b342bf316ec490f71888587cb4a9c67",
+  "source_commit": "687f674207fe6eee388d3a2212023fb154f2ccec",
   "source_input_sha256": "c0ab0f49cf47bbc0126945069a725e38911065e940b787ef3ae2b1f77e11df0a",
   "source_kind": "github-actions-release",
   "version": "1.6.18"
