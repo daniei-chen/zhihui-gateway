@@ -233,6 +233,18 @@ journal=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
 console_count=$(ls /var/www/zhihui-console-releases 2>/dev/null | wc -l)
 printf '  控制台历史版本 %s 个' "$console_count"
 [ "$console_count" -gt 8 ] && printf '（偏多，可清理旧版）\n' || printf '\n'
+# 发布目录是大头：每版约 41 MB，2026-11-26 实测 65 个版本占 2.6 GB。控制台那行
+# 早就有了，发布目录没有 —— 而它比控制台大一个量级，磁盘告警的提示里却只写了个路径。
+release_count=$(ls -1 /opt/workbuddy-manager/releases 2>/dev/null | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$')
+release_mb=$(du -sm /opt/workbuddy-manager/releases 2>/dev/null | cut -f1)
+if [ -n "$release_count" ]; then
+    printf '  发布版本 %s 个、%s MB' "$release_count" "${release_mb:-?}"
+    if [ "${release_count:-0}" -gt 8 ] 2>/dev/null; then
+        printf '（偏多，release.py prune 可清理）\n'
+    else
+        printf '\n'
+    fi
+fi
 
 # inode：空间够但 inode 用完时，所有「看起来正常」的写入都会失败，且不会先变慢。
 # 2026-11-25 实测：已用 26%，其中 releases 下 31 个版本占 5.8 万，年增约 17%，

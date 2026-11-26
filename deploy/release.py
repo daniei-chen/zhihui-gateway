@@ -614,6 +614,61 @@ def cmd_rollback(args) -> int:
     return 0
 
 
+def cmd_prune(args) -> int:
+    """删掉不会再被切回去的旧发布目录。
+
+    为什么需要：`releases/` 每发一版就多一份完整产物（约 41 MB）。2026-11-26
+    实测 65 个版本占 2.6 GB，磁盘 74%，而每轮迭代都要发一版 —— 其中绝大多数
+    永远不会再被 activate。
+
+    刻意保守，三条都要满足才会删：
+      * 不在 `current` 与 `releases/.previous` 里（回滚与 stage 的基线靠它们）；
+      * 不在最近 `--keep` 个里（默认 5，按版本号排序）；
+      * 名字是 `vN.N.N` 的**实体目录**（符号链接、`.previous`、其他文件一概不碰）。
+
+    默认只预演。真正删除必须显式加 `--apply`。
+    """
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        raise ReleaseError(f"releases 根目录不存在：{root}")
+    keep_recent = max(1, int(args.keep))
+
+    def _version_key(path: Path) -> tuple:
+        return tuple(int(part) for part in path.name.lstrip("v").split("."))
+
+    current = _previous(root)
+    stamp = root / ".previous"
+    previous = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else ""
+
+    candidates = [p for p in root.iterdir()
+                  if not p.is_symlink() and p.is_dir() and LABEL.fullmatch(p.name)]
+    candidates.sort(key=_version_key)
+    protected = {name for name in (current, previous) if name}
+    keep = {p.name for p in candidates[-keep_recent:]} | protected
+    doomed = [p for p in candidates if p.name not in keep]
+
+    print(f"== prune {root} ==")
+    print(f"   共 {len(candidates)} 个版本，保留 {len(keep)} 个"
+          f"（最近 {keep_recent} 个 + current + .previous）")
+    if not doomed:
+        print("   没有可清理的目录")
+        return 0
+
+    freed = 0
+    for path in doomed:
+        size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        freed += size
+        print(f"   {'删除' if args.apply else '可删'}  {path.name}  {size / 1048576:.0f} MB")
+    print(f"   合计 {freed / 1048576:.0f} MB")
+    if not args.apply:
+        print("   这是预演，没有删任何东西。确认无误后加 --apply 执行。")
+        return 0
+    for path in doomed:
+        shutil.rmtree(path)
+    print(f"   已删除 {len(doomed)} 个目录，释放约 {freed / 1048576:.0f} MB")
+    return 0
+
+
 def cmd_notes(args) -> int:
     """从 CHANGELOG 生成发布说明。
 
@@ -687,6 +742,11 @@ def main(argv=None) -> int:
 
     rollback = sub.add_parser("rollback", help="切回上一版指针")
     rollback.set_defaults(func=cmd_rollback)
+
+    prune = sub.add_parser("prune", help="清理旧发布目录（默认只预演）")
+    prune.add_argument("--keep", type=int, default=5, help="保留最近几个版本（默认 5）")
+    prune.add_argument("--apply", action="store_true", help="真的删除（默认只预演）")
+    prune.set_defaults(func=cmd_prune)
 
     notes = sub.add_parser("notes", help="从 CHANGELOG 生成发布说明")
     notes.add_argument("version")

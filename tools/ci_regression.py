@@ -75,6 +75,8 @@ MODULES = (
     "server.tests.test_v1613_low_account_trend",
     # 持续 active 的告警，detail 也要刷新：否则库里永远停在第一次进入时的文案。
     "server.tests.test_v1614_alert_detail_refresh",
+    # 发布目录无上限增长：65 个版本 2.6 GB。prune 要能清理，但不能把回滚路径清掉。
+    "server.tests.test_v1618_release_prune",
     "server.tests.test_backup_health_evidence",
     "server.tests.test_audit_notify_config",
     "server.tests.test_audit_regressions",
