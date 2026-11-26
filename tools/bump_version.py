@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """一键把产品版本推到所有发布面，并重新对齐 provenance 哈希。
 
 ## 为什么需要
