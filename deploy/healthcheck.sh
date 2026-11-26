@@ -173,11 +173,22 @@ section '近 24 小时错误率'
 if [ -r "$DB" ]; then
     total=$(sqlite3 -readonly "$DB" \
         "SELECT count(*) FROM request_outcomes WHERE ts > strftime('%s','now')-86400;" 2>/dev/null)
+    # 分母不能直接用总行数：这张表里绝大部分是健康探针（2026-11-26 实测 24 小时
+    # 12,216 条中，/api/readyz 8,375、/api/healthz 1,812、/api/release 892 ——
+    # 探针占了七成以上）。拿总行数当分母，错误率会被稀释三成，读起来比实际好。
+    # 探针本身不算「没机会出错」，它们就该被排除在用户体验之外。
+    inference=$(sqlite3 -readonly "$DB" \
+        "SELECT count(*) FROM request_outcomes WHERE ts > strftime('%s','now')-86400
+         AND endpoint LIKE '/v1/%';" 2>/dev/null)
     errors=$(sqlite3 -readonly "$DB" \
         "SELECT count(*) FROM request_outcomes WHERE ts > strftime('%s','now')-86400 AND http_status >= 500;" 2>/dev/null)
     if [ "${total:-0}" -gt 0 ] 2>/dev/null; then
-        rate=$(awk -v e="${errors:-0}" -v t="$total" 'BEGIN{printf "%.2f", 100*e/t}')
-        printf '  请求 %s，5xx %s（%s%%）\n' "$total" "${errors:-0}" "$rate"
+        base=${inference:-0}
+        case "$base" in '' | *[!0-9]*) base=0 ;; esac
+        [ "$base" -gt 0 ] || base=$total
+        rate=$(awk -v e="${errors:-0}" -v t="$base" 'BEGIN{printf "%.2f", 100*e/t}')
+        printf '  请求 %s（其中推理 %s），5xx %s（按推理算 %s%%）\n' \
+            "$total" "${inference:-0}" "${errors:-0}" "$rate"
         if [ "${errors:-0}" -eq 0 ]; then
             pass '近 24 小时无 5xx'
         elif [ "$(awk -v r="$rate" 'BEGIN{print (r<1)?1:0}')" = 1 ]; then
@@ -190,7 +201,7 @@ if [ -r "$DB" ]; then
             # 规范写得很清楚：报「零中断」时只限定在**部署窗口**内，全天有失败是
             # 正常的，那不是发版责任。巡检这一行的职责是判断「能不能用」——
             # 低于 1% 能用，就该是 ok；占比数字仍照常打印出来，不会被藏起来。
-            printf '  5xx 占比 %s%%（低于 1%%，属上游侧正常波动）\n' "$rate"
+            printf '  低于 1%%，属上游侧正常波动\n'
             pass '近 24 小时 5xx 低于 1%'
         else
             broken "5xx 占比 $rate%，需要排查"

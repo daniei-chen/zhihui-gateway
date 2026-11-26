@@ -261,5 +261,29 @@ class CreditTrendTests(unittest.TestCase):
         self.assertIn('elif [ "$pct" -lt 20 ]', SOURCE)
 
 
+class ErrorRateDenominatorTests(unittest.TestCase):
+    """错误率的分母不能把健康探针算进去。
+
+    2026-11-26 实测：24 小时 12,216 条请求记录里，`/api/readyz` 8,375、
+    `/api/healthz` 1,812、`/api/release` 892 —— 探针占七成以上。拿总行数当分母，
+    错误率被稀释三成，读起来比实际好，这正是规范里「不许把没机会出错当没出错」。
+    """
+
+    def test_counts_inference_requests_separately(self):
+        self.assertIn("endpoint LIKE '/v1/%'", SOURCE)
+
+    def test_prints_both_numbers(self):
+        # 只说「推理 N 条」会藏掉总量；两个都给才看得出来探针占了多少。
+        self.assertIn('其中推理', SOURCE)
+
+    def test_falls_back_when_there_is_no_inference_traffic(self):
+        # 刚上线或流量全来自控制台时，inference 为 0，不能除零。
+        self.assertIn('base=$total', SOURCE)
+
+    def test_verdict_still_uses_the_total_error_count(self):
+        # 判断仍按总 5xx：控制台端点挂了同样是故障，不能因为不算推理就忽略。
+        self.assertIn('[ "${errors:-0}" -eq 0 ]', SOURCE)
+
+
 if __name__ == '__main__':
     unittest.main()
