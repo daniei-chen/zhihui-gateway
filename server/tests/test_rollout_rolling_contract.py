@@ -351,5 +351,40 @@ class RolloutResultIsRecordedTests(unittest.TestCase):
         self.assertIn('不能据此宣称零中断', health)
 
 
+class RelayRestartDoesNotDropTrafficTests(unittest.TestCase):
+    """重启中继那 1-2 秒也不再是盲区。
+
+    中继是单进程：停它、起它，中间没人接流量。以前的做法是「接受这 1-2 秒」。
+    现在先把推理入口切到直连网关（reload 平滑，在途的流不受影响），中继起来后切回。
+
+    2026-11-26 实测过两端：直连时请求出现在网关日志，切回后出现在中继日志。
+    """
+
+    def test_entry_moves_to_direct_before_the_restart(self):
+        switch = SOURCE.index('    switch_inference direct')
+        restart = SOURCE.index('    systemctl restart "$RELAY"')
+        self.assertLess(switch, restart, '必须先把入口切走，再停中继')
+
+    def test_entry_comes_back_after_the_relay_is_ready(self):
+        ready = SOURCE.index('    printf \'   中继已就绪（pid %s）\\n\' "$pid"')
+        back = SOURCE.rindex('    switch_inference relay')
+        self.assertLess(ready, back)
+
+    def test_a_dead_relay_keeps_the_entry_on_direct(self):
+        # 中继起不来时把入口切回去 = 把流量指向一个死端口。留在直连，服务照常。
+        self.assertIn('推理入口保持在直连', SOURCE)
+        self.assertIn('推理入口停在直连', SOURCE)
+
+    def test_the_switch_is_guarded_by_nginx_t(self):
+        body = SOURCE[SOURCE.index('switch_inference() {'):SOURCE.index('restart_relay() {')]
+        self.assertIn('nginx -t', body)
+        self.assertIn('已还原', body)
+
+    def test_healthcheck_reports_where_the_entry_points(self):
+        health = HEALTHCHECK.read_text(encoding='utf-8')
+        self.assertIn('推理入口指向中继', health)
+        self.assertIn('推理入口直连网关', health)
+
+
 if __name__ == '__main__':
     unittest.main()

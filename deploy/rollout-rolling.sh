@@ -110,28 +110,76 @@ current_release() {
     basename "$target"
 }
 
+switch_inference() {
+    local target="$1" port backup
+    case "$target" in
+        relay) port=7867 ;;
+        direct) port=7866 ;;
+        *) die "未知的推理入口：$target" ;;
+    esac
+    # nginx 的 map 是静态文本，改推理入口只能改写这一行再 reload。
+    # reload 是平滑的：旧 worker 把在途的流处理完才退出，新连接立刻按新配置走 ——
+    # 所以切入口这一步本身不丢请求。2026-11-26 实测过两端：直连时请求出现在网关
+    # 日志、切回后出现在中继日志。
+    backup="$MAPFILE.zhihui-bak"
+    cp -a "$MAPFILE" "$backup" || die "备份 $MAPFILE 失败"
+    sed -i "s#http://127.0.0.1:[0-9]*#http://127.0.0.1:$port#" "$MAPFILE" || {
+        cp -a "$backup" "$MAPFILE"
+        die "改写 $MAPFILE 失败，已还原"
+    }
+    if ! nginx -t >/dev/null 2>&1; then
+        cp -a "$backup" "$MAPFILE"
+        die 'nginx 配置校验没过，已还原（推理入口没动）'
+    fi
+    if ! systemctl reload nginx; then
+        cp -a "$backup" "$MAPFILE"
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx
+        die 'nginx reload 失败，已还原推理入口'
+    fi
+    rm -f "$backup"
+    if [ "$target" = relay ]; then
+        printf '   推理入口 -> 中继（%s）\n' "$port"
+    else
+        printf '   推理入口 -> 直连网关（%s）\n' "$port"
+    fi
+}
+
 restart_relay() {
     step "重启中继（加载含空窗重试的新代码）"
-    printf '   注意：中继重启约 1-2 秒，期间经中继的推理请求会失败。\n'
-    printf '   这是它唯一会中断的地方，而中继代码本身很少变。\n'
-    systemctl restart "$RELAY" || die "重启中继失败"
-    local pid
+    # 中继是单进程，停它的那 1-2 秒没人接流量 —— 这是「发版不中断」最后剩下的缺口。
+    # 先把推理入口切到直连网关（reload 平滑，在途的流不受影响），这 1-2 秒里新请求
+    # 直接落到网关；中继起来后再切回来。网关此时没有在重启，所以不需要重试兜底。
+    printf '   先把推理入口切到直连，避开中继重启的那 1-2 秒。\n'
+    switch_inference direct
+    systemctl restart "$RELAY" || {
+        switch_inference relay
+        die "重启中继失败（推理入口已切回中继）"
+    }
+    local pid ready=0
     for _ in $(seq 1 20); do
         sleep 0.5
         pid=$(systemctl show "$RELAY" -p MainPID --value 2>/dev/null)
         if [ -n "$pid" ] && [ "$pid" != 0 ] \
             && curl -sf -o /dev/null --max-time 2 http://127.0.0.1:7867/v1/models 2>/dev/null; then
-            printf '   中继已就绪（pid %s）\n' "$pid"
-            return 0
+            ready=1
+            break
         fi
         # 401 也算活着：它证明中继在转发，只是我们没带令牌
         if curl -s -o /dev/null --max-time 2 -w '%{http_code}' \
             http://127.0.0.1:7867/v1/models 2>/dev/null | grep -q '^401$'; then
-            printf '   中继已就绪（pid %s）\n' "$pid"
-            return 0
+            ready=1
+            break
         fi
     done
-    die '中继重启后 10 秒仍未就绪'
+    if [ "$ready" != 1 ]; then
+        # 中继起不来时**不要**把入口切回去 —— 那等于把流量指向一个死的端口。
+        # 保持直连：服务照常，只是暂时没有重试保护，巡检会把它标成一条警告。
+        printf '\n   中继没起来。推理入口保持在直连，服务不受影响。\n' >&2
+        printf '   修好后重跑本脚本，它会重新尝试切回中继。\n' >&2
+        die '中继重启后 10 秒仍未就绪（推理入口停在直连）'
+    fi
+    printf '   中继已就绪（pid %s）\n' "$pid"
+    switch_inference relay
 }
 
 verify_runtime_config() {

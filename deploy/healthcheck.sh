@@ -141,6 +141,16 @@ grep -q 'zh-relay-inference' "$SITE" 2>/dev/null \
     && pass '站点已接中继' || broken '站点没有接中继，发布时会打断在途调用'
 relay_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7867/v1/models 2>/dev/null)
 [ "$relay_code" = 401 ] && pass '中继在线并转发正常' || broken "中继探测返回 $relay_code（期望 401）"
+# 推理入口现在指向哪里。只看「中继在线」不够：入口停在直连时中继也是活的，
+# 但流量根本没经过它 —— 2026-11-26 起发布脚本会在重启中继期间临时切到直连，
+# 万一脚本被打断，入口就会留在那儿，这一项负责把它显示出来。
+entry_port=$(sed -n 's#.*http://127\.0\.0\.1:\([0-9]*\).*#\1#p' "$MAPFILE" 2>/dev/null | head -1)
+case "$entry_port" in
+    7867) pass '推理入口指向中继（7867）' ;;
+    7866) note '推理入口直连网关（7866）：暂时没有中继重试保护（重启中继期间属正常）' ;;
+    '') broken "读不出推理入口（$MAPFILE）" ;;
+    *) broken "推理入口指向未知端口 $entry_port" ;;
+esac
 
 section '页面'
 for url in / /portal/ /keys/ /dashboard/ /members/; do
