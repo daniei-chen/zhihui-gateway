@@ -66,6 +66,15 @@ async def json_response(send, status, code):
     await send({'type': 'http.response.body', 'body': body})
 
 
+def is_draining_response(response) -> bool:
+    """后端是不是只在「排空、没接单」。
+
+    判据要窄：503 且带 `Retry-After`。drain 中间件（`server/drain.py`）的应答固定
+    带这个头，容量拒绝和上游 503 都不带 —— 那两类重试只会放大故障。
+    """
+    return response.status_code == 503 and 'retry-after' in response.headers
+
+
 class RouteError(RuntimeError):
     pass
 
@@ -152,21 +161,41 @@ class StreamingRelay:
                 return b''.join(chunks)
 
     async def _send_with_startup_retry(self, build):
-        """后端正在重启时等它回来，而不是直接把失败甩给调用方。
+        """后端正在重启或排空时等它回来，而不是直接把失败甩给调用方。
 
-        只有 connect 阶段的失败才重试：连接都没建立，说明上游一个字节都没收到。
+        重试的两种情形都意味着「上游一个字节都没收到」：
+
+        1. connect 阶段失败 —— 旧进程已停、新解释器还没开始 listen；
+        2. 503 且带 `Retry-After` —— 旧进程收到 SIGTERM 后进入排空，drain 中间件
+           对每一条新请求都回这个固定应答，它明确表示没有接单。
+
+        2026-11-26 08:59 实测：重启窗口里唯一落空的那条请求就是第 2 种。中继把它
+        原样透传，客户端看到 503；而新实例在几秒后就已经能服务了。
+
         一旦进入读取阶段就不再重试 —— 那时可能已经在生成答案并计费了。
         """
         last = None
+        draining = None
         for attempt in range(STARTUP_RETRIES):
             try:
-                return await self.client.send(build(), stream=True)
+                response = await self.client.send(build(), stream=True)
             except (httpx.ConnectError, httpx.ConnectTimeout) as error:
                 last = error
-                if attempt + 1 >= STARTUP_RETRIES:
-                    break
-                await asyncio.sleep(STARTUP_RETRY_DELAY * (attempt + 1))
-        raise last
+            else:
+                if not is_draining_response(response):
+                    return response
+                # 排空应答里没有业务数据；关掉它再重试是安全的。
+                if draining is not None:
+                    await draining.aclose()
+                draining = response
+                last = None
+            if attempt + 1 >= STARTUP_RETRIES:
+                break
+            await asyncio.sleep(STARTUP_RETRY_DELAY * (attempt + 1))
+        if draining is not None:
+            # 重试用尽：把最后那条 503 原样交给客户端，不伪造成功、也不换成 502。
+            return draining
+        raise last if last is not None else RuntimeError('relay_startup_retry_exhausted')
 
     def snapshot(self):
         try:

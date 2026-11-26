@@ -108,6 +108,55 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(attempts, [])
 
+    async def test_draining_503_is_retried_instead_of_passed_through(self):
+        """排空期的 503 不是业务失败：等它起来就行。
+
+        2026-11-26 08:59:05 的真实丢单：重启窗口里旧实例正在排空，对每一条新请求
+        回「503 + Retry-After」，中继原样透传，客户端看到失败 —— 而六秒后新实例
+        其实已经能服务。这类应答里没有任何业务数据，重试是安全的。
+        """
+        attempts = []
+
+        async def provider(request):
+            attempts.append(request)
+            if len(attempts) == 1:
+                return httpx.Response(503, stream=BytesBody(),
+                                      headers={'retry-after': '1', 'connection': 'close'})
+            return httpx.Response(200, stream=BytesBody(),
+                                  headers={'content-type': 'text/event-stream'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(attempts), 2, '排空期的 503 被原样透传了')
+        self.assertEqual(self.relay.transport_errors, 0)
+
+    async def test_plain_503_without_retry_after_is_not_retried(self):
+        """容量拒绝与上游 503 不带 Retry-After：重试只会放大故障。"""
+        attempts = []
+
+        async def provider(request):
+            attempts.append(request)
+            return httpx.Response(503, stream=BytesBody(),
+                                  headers={'content-type': 'application/json'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(len(attempts), 1, '没有 Retry-After 的 503 不该被重试')
+
+    async def test_exhausted_draining_retries_still_answer_503(self):
+        """重试用尽时把最后那条 503 交给客户端，不换成 502、也不伪造成功。"""
+        async def provider(request):
+            return httpx.Response(503, stream=BytesBody(), headers={'retry-after': '1'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(response.status_code, 503)
+
     async def test_read_phase_failure_is_not_replayed(self):
         attempts = []
 
