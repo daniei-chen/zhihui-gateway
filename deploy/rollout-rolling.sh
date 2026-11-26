@@ -262,14 +262,15 @@ restart_gateway() {
         printf '   之外，多半是中继没跑上新代码，或这一段流量绕过了中继。\n'
     fi
 
-    check_pages
-
+    # 同上：先落记录，再做页面检查。
     if [ "$failures" -eq 0 ]; then
         record_rollout "$version" '重启' "$total" "$failures" 0 "$([ "$total" -gt 0 ] && printf '窗口内零 5xx' || printf '窗口内 0 条请求')"
-        return 0
+    else
+        record_rollout "$version" '重启' "$total" "$failures" 2 '窗口内有 5xx'
     fi
-    record_rollout "$version" '重启' "$total" "$failures" 2 '窗口内有 5xx'
-    return 2
+    check_pages
+    [ "$failures" -eq 0 ] || return 2
+    return 0
 }
 
 prestart_candidate() {
@@ -425,13 +426,17 @@ rollout_blue_green() {
                  order by rowid limit 10;" | sed 's/^/     /'
     fi
 
-    check_pages
+    # 先落记录再做页面检查：页面检查要发 6 个请求、耗时几秒，万一这期间被打断
+    # （2026-11-26 就有一次远程会话 30 秒超时把脚本杀在页面检查阶段），窗口统计
+    # 这条核心结论已经写下，不会退化成「未走到统计环节」。
     if [ "$failures" -eq 0 ]; then
         record_rollout "$version" '蓝绿' "$total" "$failures" 0 '窗口内零 5xx'
-        return 0
+    else
+        record_rollout "$version" '蓝绿' "$total" "$failures" 2 '窗口内有 5xx'
     fi
-    record_rollout "$version" '蓝绿' "$total" "$failures" 2 '窗口内有 5xx'
-    return 2
+    check_pages
+    [ "$failures" -eq 0 ] || return 2
+    return 0
 }
 
 main() {

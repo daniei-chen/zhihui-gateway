@@ -344,6 +344,14 @@ class RolloutResultIsRecordedTests(unittest.TestCase):
         # --check 不改任何状态，也不该往发布记录里写东西。
         self.assertIn('[ "$CHECK_ONLY" != 1 ]', SOURCE)
 
+    def test_the_window_is_recorded_before_the_page_checks(self):
+        # 页面检查要发 6 个请求、耗时几秒；这期间被打断不该让结论退化成
+        # 「未走到统计环节」—— 2026-11-26 就那么栽过一次：发布明明成功。
+        for mode in ("'蓝绿'", "'重启'"):
+            recorded = SOURCE.index('record_rollout "$version" ' + mode)
+            pages = SOURCE.index('    check_pages\n', recorded)
+            self.assertGreater(pages, recorded, '记录必须在页面检查之前')
+
     def test_healthcheck_shows_the_last_rollout(self):
         health = HEALTHCHECK.read_text(encoding='utf-8')
         self.assertIn("section '最近一次发布'", health)
