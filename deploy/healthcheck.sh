@@ -257,21 +257,48 @@ if [ -r "$DB" ]; then
     latest=$(sqlite3 -readonly "$DB" 'select max(captured_at) from platform_credit_snapshots;' 2>/dev/null)
     if [ -n "$latest" ]; then
         rows=$(sqlite3 -readonly -separator '|' "$DB" \
-            "select platform||'/'||coalesce(account,'-'), ifnull(total,0), ifnull(remain,0)
-             from platform_credit_snapshots where captured_at=$latest
-             order by remain*1.0/nullif(total,0) asc;" 2>/dev/null)
+            "select s.platform||'/'||coalesce(s.account,'-'), ifnull(s.total,0), ifnull(s.remain,0),
+                    ifnull((select p.remain from platform_credit_snapshots p
+                            where p.platform=s.platform
+                              and ifnull(p.account,'')=ifnull(s.account,'')
+                              and p.captured_at <= $latest - 86400
+                            order by p.captured_at desc limit 1), -1)
+             from platform_credit_snapshots s where s.captured_at=$latest
+             order by s.remain*1.0/nullif(s.total,0) asc;" 2>/dev/null)
         # 用 herestring 而不是管道：管道会开子 shell，里面的 pass/note/broken
         # 改不到外层的计数器，结论那一行的数字就会少算。
-        while IFS='|' read -r who total remain; do
+        while IFS='|' read -r who total remain prev; do
             [ -n "$who" ] || continue
             case "$total" in ''|0|0.0|*[!0-9.]*) continue ;; esac
             pct=$(awk -v r="$remain" -v t="$total" 'BEGIN{printf "%.0f", 100*r/t}')
+            # 只报百分比不够：一个 24% 但早就不再被使用的账号，和一个 91% 但每天掉
+            # 一大截的池子，看起来同样「需要担心」—— 实际上前者不用管、后者要动手。
+            # 2026-11-26 的告警噪声就是这么来的：trae 报「剩余 24%」已持续 19 小时，
+            # 而它近 24 小时的消耗是 0。
+            trend=''
+            case "$prev" in
+                '' | -1 | *[!0-9.]*) ;;
+                *)
+                    trend=$(awk -v r="$remain" -v p="$prev" 'BEGIN{
+                        d = p - r
+                        if (d < -0.5) { printf "，近 24 小时增加了 %.0f", -d }
+                        else if (d <= 0.5) { printf "，近 24 小时没有变化" }
+                        else if (r <= 0) { printf "，近 24 小时用了 %.0f，已用完", d }
+                        else {
+                            days = r / d
+                            if (days > 365) printf "，近 24 小时用了 %.0f，按这速度一年以上才用完", d
+                            else if (days < 1) printf "，近 24 小时用了 %.0f，不到 1 天就用完", d
+                            else printf "，近 24 小时用了 %.0f，按这速度约 %.0f 天用完", d, days
+                        }
+                    }')
+                    ;;
+            esac
             if [ "$pct" -lt 10 ]; then
-                broken "$who 剩余 $remain/$total（${pct}%）—— 即将耗尽"
+                broken "$who 剩余 $remain/$total（${pct}%${trend}）—— 即将耗尽"
             elif [ "$pct" -lt 20 ]; then
-                note "$who 剩余 $remain/$total（${pct}%）—— 该充值了"
+                note "$who 剩余 $remain/$total（${pct}%${trend}）—— 该充值了"
             else
-                pass "$who 剩余 $remain/$total（${pct}%）"
+                pass "$who 剩余 $remain/$total（${pct}%${trend}）"
             fi
         done <<< "$rows"
         age=$(( $(date +%s) - latest ))

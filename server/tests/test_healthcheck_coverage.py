@@ -230,5 +230,36 @@ class RecoverySnapshotTests(unittest.TestCase):
                       '快照目录写错或缺失时，这一节会永远显示 ok')
 
 
+class CreditTrendTests(unittest.TestCase):
+    """额度行必须带上「在掉还是在涨」。
+
+    2026-11-26 复核竞品报告时发现：巡检只报百分比，于是「剩 24% 但在涨」和
+    「剩 24% 且在掉」看起来一样急。当时的真实数据里两条额度都在涨（trae 靠每日
+    签到、workbuddy 池靠扩容），而 `workbuddy_low_accounts` 已经连续响了 19 小时。
+    """
+
+    def test_compares_against_a_day_old_snapshot(self):
+        self.assertIn('captured_at <= $latest - 86400', SOURCE)
+
+    def test_says_how_long_it_lasts(self):
+        self.assertIn('按这速度', SOURCE)
+        self.assertIn('天用完', SOURCE)
+
+    def test_says_when_it_is_not_dropping(self):
+        # 「在涨」和「没变」都要能说，否则读的人还是分不清。
+        self.assertIn('近 24 小时增加了', SOURCE)
+        self.assertIn('近 24 小时没有变化', SOURCE)
+
+    def test_survives_a_missing_older_snapshot(self):
+        # 刚上线时没有 24 小时前的快照：这时不能编一个趋势出来。
+        self.assertIn('-1', SOURCE)
+        self.assertIn('*[!0-9.]*) ;;', SOURCE)
+
+    def test_does_not_change_the_verdict(self):
+        # 趋势只是附加信息；分档仍按百分比，否则历史告警会集体变脸。
+        self.assertIn('if [ "$pct" -lt 10 ]', SOURCE)
+        self.assertIn('elif [ "$pct" -lt 20 ]', SOURCE)
+
+
 if __name__ == '__main__':
     unittest.main()
