@@ -1,17 +1,24 @@
 """Retired-provider key usage stays readable without reviving its control plane."""
+import json
 import time
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from server import db, platformpolicy, platformstats, tokensvc
+from server import config, db, platformpolicy, platformstats, tokensvc
 from server.tests._db_fixture import isolate_database
 
 
 class HistoricalKeyStatsRouteTest(unittest.TestCase):
     def setUp(self):
-        isolate_database(self)
+        root = isolate_database(self)
+        users = root / 'users.json'
+        users.write_text(json.dumps({'secret': 'S' * 64, 'api_keys': [],
+                                     'users': [{'username': 'test', 'role': 'admin', 'sv': 0,
+                                                'pwd_hash': 'synthetic-no-login'}]}),
+                         encoding='utf-8')
+        self.enterContext(patch.object(config, 'USERS_FILE', users))
         from server.main import app
         self.client = TestClient(app)
         self.addCleanup(self.client.close)

@@ -97,7 +97,7 @@ class EdgeIdentityProbeTest(unittest.TestCase):
         for scope, role, scopes in [('admin', 'admin', ['*']),
                                    ('readonly', 'viewer', ['read']),
                                    ('keys', 'internal_service', ['keys:read', 'keys:write'])]:
-            row = tokensvc.create_token('bridge-' + scope, scope)
+            row = tokensvc.create_token('bridge-' + scope, scope, None, '管理员')
             ident = self.probe({'Authorization': 'Bearer ' + row['token']})
             self.assertEqual(ident['sub'], 'manager-token:' + str(row['id']))
             self.assertEqual((ident['role'], ident['scopes'], ident['auth_method']),
@@ -140,7 +140,7 @@ class EdgeIdentityProbeTest(unittest.TestCase):
             self.probe(self.cookie())
 
     def test_keys_service_cannot_read_other_management_domains(self):
-        row = tokensvc.create_token('restricted-service', 'keys')
+        row = tokensvc.create_token('restricted-service', 'keys', None, '管理员')
         headers = {'Authorization': 'Bearer ' + row['token']}
         for path in ('/api/accounts', '/api/logs', '/api/status', '/api/settings/github-mirror'):
             result = self.client.get(path, headers=headers)

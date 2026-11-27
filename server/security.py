@@ -770,15 +770,15 @@ def session_version(cfg: dict, username: str) -> int:
     return _session_version_of(row) if row is not None else 0
 
 
-def issuer_session_version(cfg: dict, username: str) -> int:
-    """API Token 绑定用的会话版本：签发人当前 sv，签发人不存在时返回 -1。
+def issuer_session_version(cfg: dict, username: str) -> int | None:
+    """API Token 绑定用的会话版本：签发人当前 sv，签发人不存在时返回 None。
 
     与 `session_version()` 的 0 缺省刻意分开：0 是「真实用户从没改过密码」的
-    合法值，拿它兜底会让「签发人被删号」的令牌重新通行。用 -1 表示「没有这个
-    人」，任何真实 sv 都不等于它，删号因此天然收回令牌。
+    合法值，拿它兜底会让「签发人被删号」的令牌重新通行。None 表示「没有这个
+    人」，任何真实版本都不等于它，删号因此天然收回令牌。
     """
     row = _user_row(cfg, username)
-    return -1 if row is None else _session_version_of(row)
+    return None if row is None else _session_version_of(row)
 
 
 @user_mutation

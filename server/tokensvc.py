@@ -84,7 +84,7 @@ def list_tokens() -> list[dict]:
 
 
 def _issuer_session_version(username: str) -> int:
-    """签发人此刻的会话版本（签发人不存在时为 -1）。
+    """签发人此刻的会话版本；签发人不存在或用户名为空时报错。
 
     在这里统一盖章，而不是让每个调用方自己传：任何一条签发路径都拿不到「没有
     版本的令牌」，也就不会有人忘了传参而留下永久凭据。
@@ -93,7 +93,12 @@ def _issuer_session_version(username: str) -> int:
     都加载完之后，安全。
     """
     from . import security
-    return security.issuer_session_version(security.load_users(), username)
+    if not username:
+        raise ValueError('create_token 必须指定 created_by：令牌要绑定签发人的会话版本')
+    version = security.issuer_session_version(security.load_users(), username)
+    if version is None:
+        raise ValueError(f'签发人不存在，拒绝签发无法回收的令牌：{username}')
+    return version
 
 
 def create_token(name: str, scope: object = 'readonly',
@@ -174,7 +179,7 @@ def usable(row: dict) -> bool:
     return not exp or int(exp) > int(time.time())
 
 
-def session_bound(row: dict, issuer_sv: int) -> bool:
+def session_bound(row: dict, issuer_sv: int | None) -> bool:
     """令牌的会话版本是否仍与签发人一致。
 
     为什么必须有这一条：吊销会话（`security.revoke_sessions`）、改密码、改角色
@@ -184,14 +189,17 @@ def session_bound(row: dict, issuer_sv: int) -> bool:
 
     判据只有一条等式：签发时的版本 == 签发人当前的版本。因此：
       * 改密码 / 改角色 / 吊销会话（都是 sv+1）→ 不等 → 失效；
-      * 签发人被删号 → `issuer_sv` 变成 -1 → 与任何真实版本都不等 → 失效；
+      * 签发人被删号 → `issuer_sv` 为 None → 失效；
       * 升级前签发的令牌没有记录版本（NULL）→ fail-closed，必须重新签发。
 
-    -1 只可能出现在「进程内直接调用 `create_token(created_by=不存在的用户)`」，
-    HTTP 路径的 `created_by` 永远是已验证会话的用户名。
+    版本必须是**非负整数**：`None`（没有版本）与任何负数（被改坏的行）都不参与
+    等式比较，所以这两种行永远不可能「恰好对上」某个签发人。真正的守卫在签发侧
+    （`create_token` 拒绝没有签发人的令牌），这里是纵深防御。
     """
     bound = row.get('session_version')
-    if bound is None:
+    if bound is None or int(bound) < 0:
+        return False
+    if issuer_sv is None or int(issuer_sv) < 0:
         return False
     return int(bound) == int(issuer_sv)
 

@@ -157,9 +157,9 @@ class ReadScopeHttpTest(unittest.TestCase):
         db.connect()
         from server.main import app
         cls.c = TestClient(app)
-        cls.read_token = tokensvc.create_token('qtg-read', 'read')['token']
-        cls.keys_token = tokensvc.create_token('qtg-keys', 'keys')['token']
-        cls.ro_token = tokensvc.create_token('qtg-ro', 'readonly')['token']
+        cls.read_token = tokensvc.create_token('qtg-read', 'read', None, 'admin')['token']
+        cls.keys_token = tokensvc.create_token('qtg-keys', 'keys', None, 'admin')['token']
+        cls.ro_token = tokensvc.create_token('qtg-ro', 'readonly', None, 'admin')['token']
         import time as _t
         cls.since = '2020-01-01'
         db.execute(

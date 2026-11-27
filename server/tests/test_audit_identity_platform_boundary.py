@@ -119,7 +119,7 @@ class ManagementAuditIdentityTest(unittest.TestCase):
         return row
 
     def bearer(self, scope):
-        token = tokensvc.create_token('fixture-' + scope, scope)['token']
+        token = tokensvc.create_token('fixture-' + scope, scope, None, 'operator')['token']
         return {'Authorization': 'Bearer ' + token}
 
     def test_cookie_success_keeps_username_and_request_id_in_ledger(self):

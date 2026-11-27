@@ -57,6 +57,13 @@ class PlatformKeyTest(unittest.TestCase):
         with db._lock:
             db._close_connection_locked()
         config.DB_PATH = Path(self.tmp.name) / 'platforms.db'
+        users = Path(self.tmp.name) / 'users.json'
+        users.write_text(json.dumps({'secret': 'S' * 64, 'api_keys': [],
+                                     'users': [{'username': 'test', 'role': 'admin', 'sv': 0,
+                                                'pwd_hash': 'synthetic-no-login'}]}),
+                         encoding='utf-8')
+        self.old_users = config.USERS_FILE
+        config.USERS_FILE = users
         db.connect()
         from server.main import app
         self.client = TestClient(app)
@@ -68,6 +75,7 @@ class PlatformKeyTest(unittest.TestCase):
         with db._lock:
             db._close_connection_locked()
         config.DB_PATH = self.old_path
+        config.USERS_FILE = self.old_users
         self.tmp.cleanup()
 
     def test_all_allow_deny_combinations(self):

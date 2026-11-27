@@ -173,7 +173,7 @@ os._exit(23)
 
     def test_budget_resolution_rejects_admin_token(self):
         from server import tokensvc
-        token = tokensvc.create_token('financial-token-refusal', 'admin')['token']
+        token = tokensvc.create_token('financial-token-refusal', 'admin', None, 'admin')['token']
         response = self.c.post('/api/budgets/synthetic-request/resolve', headers={'Authorization': 'Bearer ' + token},
                                json={'tokens': 0, 'credit': 0, 'reason': 'synthetic valid reason', 'evidence': 'synthetic valid evidence'})
         self.assertEqual(response.status_code, 403, response.text)

@@ -319,6 +319,27 @@ class ApiTokenTest(unittest.TestCase):
         self.assertEqual(self.c.get('/api/keys', headers=self._bearer(reissued)).status_code, 200,
                          '重新签发的令牌照常可用')
 
+    def test_create_token_requires_a_live_issuer(self) -> None:
+        """没有签发人的令牌没人能按 sv 回收，必须在签发时就拒绝。
+
+        以前不传 created_by 时 `created_by` 为空、签发人不在登记表里，两种都拿
+        不到可校验的版本 —— 那正是「永远吊销不掉」的凭据形态，不能只靠鉴权侧兜。
+        """
+        for creator in ('', '   ', 'no-such-user'):
+            with self.subTest(created_by=creator):
+                with self.assertRaises(ValueError):
+                    tokensvc.create_token('orphan', 'admin', None, creator)
+
+    def test_row_with_negative_session_version_is_rejected(self) -> None:
+        """手工写进库的负数版本不得与任何签发人对上（纵深防御）。"""
+        tok = 'wbt_' + secrets.token_urlsafe(32)
+        db.execute('INSERT INTO api_tokens(name, token_hash, prefix, scope, enabled, '
+                   'expires_at, session_version, created_at, created_by) '
+                   'VALUES(?, ?, ?, ?, 1, NULL, -1, ?, ?)',
+                   ('negative', hashlib.sha256(tok.encode()).hexdigest(), tok[:12],
+                    'admin', int(time.time()), 'admin'))
+        self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 401)
+
     def test_issuer_removal_invalidates_tokens(self) -> None:
         """删号即失效：签发人不在用户表里，其令牌不能继续通行。
 

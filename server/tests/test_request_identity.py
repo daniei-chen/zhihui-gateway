@@ -80,7 +80,9 @@ class _HttpCase(unittest.TestCase):
             db._close_connection_locked()
         config.DB_PATH = self.root / 'request-identity.db'
         config.USERS_FILE = self.root / 'users.json'
-        security.save_users({'secret': 'S' * 64, 'users': [], 'api_keys': []})
+        security.save_users({'secret': 'S' * 64, 'api_keys': [],
+                             'users': [{'username': 'test', 'role': 'admin', 'sv': 0,
+                                        'pwd_hash': 'synthetic-no-login'}]})
         self.base_patch = patch.object(config, 'WB2API_BASE', self.base)
         self.base_patch.start()
         self.key_patch = patch.object(config, 'WB2API_KEY', 'isolated-upstream-test')

@@ -40,7 +40,7 @@ class PortalBonusTests(fixtures.PublicPoolTests):
         data['users'].extend([{'username': 'another-super', 'role': 'admin', 'sv': 1, 'pwd_hash': 'no-login'},
             {'username': 'viewer', 'role': 'viewer', 'sv': 1, 'pwd_hash': 'no-login'}])
         security.save_users(data)
-        machine = tokensvc.create_token('synthetic', 'admin')['token']
+        machine = tokensvc.create_token('synthetic', 'admin', None, 'admin')['token']
         key = keysvc.create_key('synthetic-data-key')['key']
         headers = [self.headers(), {},
             {'cookie': f'{config.COOKIE_NAME}={security.issue_token("reader", "account_admin")}', 'origin': 'http://testserver'},
