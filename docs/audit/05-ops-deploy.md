@@ -298,7 +298,7 @@ nginx :443
 22. **数据库回滚**：只能恢复到阶段 0 的备份；`migrate_admission_policy.py` 的迁移不可逆（P1-6/阶段 2）。
 23. **不要**在已迁移的库上启动旧版本：`sharedadmission.py:112-116`/`:137` 会拒绝，表现为启动失败而非降级。
 24. **中继回滚**：**不要**直接 `systemctl restart zhihui-rolling-relay`——nginx 仍把推理流量指向 7867，重启期间新请求会失败（`deploy/relay-restart-safe.sh` 的注释明确记录了这个中断）。用 `relay-restart-safe.sh`：先把新流量切到主服务（直连），再重启中继。
-25. **代码回滚后的静态入口**：`release.py rollback` 只切 `releases/current`，**不会回滚控制台产物**。公网 `/`、`/login`、`/_next` 由 nginx 从 `/var/www/zhihui-console-current` 与静态池提供（`deploy/nginx/README.md:60,77-79`），回滚后仍是新前端。必须用旧 `web/out` 重新发布：`sudo deploy/publish-console.sh --web <old-webout.tar.gz> --version <old>`；脚本会逐文件校验 `_next/static` 的 size/sha256 和每页链接（`:147-160`）。验收看公网 `https://zhihui.kaogong.art/login` 的 buildId/资源哈希是否与旧版本一致；不要只看 `127.0.0.1:7866`——那是网关自带的 `STATIC_DIR`（`server/main.py:1010,1018`），新旧构建都返回 200。
+25. **代码回滚后的静态入口**：`release.py rollback` 只切 `releases/current`，**不会回滚控制台产物**。公网 `/login` 与 `/_next` 由 nginx 从控制台产物和独立静态池提供；`location /` 指向首页目录 `/var/www/zhihui-home`，首页不属于控制台（`deploy/nginx/README.md:57-67` 的白名单；`publish-console.sh` 的 `PAGES` 也不含 `/`）。回滚后必须用旧 `web/out` 重新发布：`sudo deploy/publish-console.sh --web <old-webout.tar.gz> --version <old>`。脚本逐文件校验 `_next/static` 的 size/sha256（`:147-160`），并逐页检查 `/_next/static` 链接与资源 200（`:174-224`）。静态池默认 `/var/cache/zhihui-static-performance-20261104`（`:12`），与 `docs/OPS-RUNBOOK.md:86` 的 nginx `location ^~ /_next/static/` 一致；`deploy/nginx/README.md:77-79` 写的 `/var/www/zhihui-next-pool/` 是旧口径，发布前以生产站点配置的 `root` 为准，不一致就加 `--static-pool`。验收看公网 `https://zhihui.kaogong.art/login` 的 buildId/资源哈希是否与旧版本一致；不要只看 `127.0.0.1:7866`——那是网关自带的 `STATIC_DIR`（`server/main.py:1010,1018`），新旧构建都返回 200。
 
 ### 只有生产才能验的清单
 - socket activation 是否真的生效（`/proc/<pid>/fd` 里有 `socket:[...]`）。
