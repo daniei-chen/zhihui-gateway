@@ -8,6 +8,7 @@
 - 源码固定为 `daniei-chen/zhihui-gateway` 的完整提交，不把可移动 `main` 当作安装批准。
 - `server/release-provenance.json` 在 GitHub Actions 组装发布包时写入仓库、产品版本和完整 `source_commit`；缺少记录时界面显示“未记录”，不编造 SHA。
 - 发布包与容器制品必须提供 `sha256` 摘要。用户核对摘要后再安装；摘要不符即阻断。
+- 自助更新（`deploy/update.py`）另需 `<包名>.tar.gz.sig`：Ed25519 detached signature，由更新器用受控位置的信任锚验过才安装。摘要来自发布页，与包同一来源，挡不住发布源被接管；签名用的是装机时放下的公钥，才把「谁发的包」和「包从哪台服务器下的」分开。
 - 公开源码不包含服务器私钥、运行数据库、账号或供应商凭据。
 
 ## 当前门禁不能降级
@@ -17,6 +18,8 @@ Ubuntu CI 执行完整隔离测试、前端类型与构建检查、依赖审计�
 国内受控实例仍由 root-owned bootstrap 和可信发布器管理。签名或回执时阻断：签名不符、发布身份不一致、`source_commit` 缺失、清单外代码、摘要不符、健康检查不通过，都不能用“旧安装兼容”放行。
 
 受控 Manager 发布可以使用 Ed25519 信任锚；GitHub Actions 产品 Release 使用提交绑定、SHA-256 产物摘要和草稿核对。两条信任链必须分别标记，不能把未签名的 GitHub 产物伪装成受控 Manager 签名版本。
+
+2026-11-27 起，产品 Release 的发行包也要有一份 `Ed25519` detached signature（主机清单之外的第二类签名对象）：更新器验的是发行包字节，受控发布验的是主机侧 `managed-release.json`，同一个信任锚、两个不同的对象，互相不能替代 —— 签过发行包不等于该主机已批准切换。发布步骤见 `docs/release-process.md` 第 5 步（内部文档，不随发布包分发）。
 
 ## 发布与回退
 

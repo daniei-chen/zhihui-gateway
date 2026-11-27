@@ -113,14 +113,19 @@ class DownloadIntegrityTest(unittest.TestCase):
 
 
 class LegacyUpdaterBoundaryTest(unittest.TestCase):
-    """区分已移除的 OpenSSH 下载 helper 与当前受信 Ed25519 发布合同。"""
+    """区分已移除的 OpenSSH 下载 helper 与当前受信 Ed25519 发布合同。
+
+    2026-11-27（DAN-24）起 Ed25519 校验重新属于更新器（`verify_release_signature`
+    + 受控位置的信任锚），所以这里只钉**旧 OpenSSH 通道**不得回流；「没有签名到底
+    会不会被拒、pip 会不会拿到未验签的清单」由
+    `server/tests/test_updater_supply_chain.py` 用行为证明，不靠这段文本清单。
+    """
 
     def test_key_and_helpers_are_removed(self) -> None:
         src = (_ROOT / 'deploy' / 'update.py').read_text(encoding='utf-8')
         # 注释里允许提到历史（「历史上这里还有一层…签名」），代码符号不允许留
         for token in ('RELEASE_PUBKEY', 'SKIP_SIGNATURE', 'RELEASE_SIGNER_ID',
-                      'def check_signature', 'def download_signature',
-                      'def verify_release_signature', 'ssh-keygen'):
+                      'def check_signature', 'ssh-keygen'):
             self.assertNotIn(token, src, f'{token} 仍在 deploy/update.py 里')
         self.assertFalse((_ROOT / 'deploy' / 'release-signing-key.pub').exists(),
                          '公钥文件还在仓库里')
