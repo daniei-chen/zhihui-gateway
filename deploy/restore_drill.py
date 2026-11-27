@@ -426,7 +426,9 @@ def _verify_application(checkout: Path, commit: str, application: Path, scratch:
     result_file = application / '.application-probe.json'
     result = _read_json(result_file) if result_file.is_file() else {}
     if process.returncode or not isinstance(result, dict) or result.get('ok') is not True:
-        evidence = {name: result[name] for name in ('scope', 'health_status', 'ready_status', 'error', 'blocked_operations')
+        evidence = {name: result[name] for name in ('scope', 'health_status', 'ready_status', 'error',
+                    'blocked_operations', 'runtime_reads', 'missing_release_marker', 'rejected_untrusted_bytecode',
+                    'embedded_platform_required', 'embedded_platform_start_verified', 'external_services_verified')
                     if isinstance(result, dict) and name in result}
         raise ApplicationProbeError(evidence)
     return {**result, 'source_commit': commit}

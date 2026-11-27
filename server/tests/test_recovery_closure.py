@@ -320,10 +320,81 @@ def ready():
         self.assertTrue(report['application_start_verified'])
         self.assertEqual(report['result'], 'application_verified')
         self.assertEqual(report['steps'][-1]['source_commit'], commit)
+        self.assertFalse(report['steps'][-1]['embedded_platform_required'])
+        self.assertFalse(report['steps'][-1]['embedded_platform_start_verified'])
+        self.assertFalse(report['steps'][-1]['external_services_verified'])
         self.assertFalse(report['complete_restore_verified'])
         self.assertFalse(report['offsite_restore_verified'])
         self.assertEqual((self.root / 'original.db').read_bytes(), original)
         self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def add_embedded_platform_fixture(self):
+        package = self.checkout / 'server/qtgcore'
+        package.mkdir()
+        (package / '__init__.py').write_text('')
+        (package / 'runtime.py').write_text(
+            'class Runtime:\n'
+            '    async def startup(self):\n'
+            '        self.started = True\n')
+
+    def test_reviewed_embedded_runtime_is_required_and_recorded(self):
+        self.add_embedded_platform_fixture()
+        action = ('from server.qtgcore.runtime import Runtime\n'
+                  '    runtime = Runtime()\n    await runtime.startup()\n'
+                  '    app.state.rt = runtime')
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 0, report)
+        evidence = report['steps'][-1]
+        self.assertTrue(evidence['embedded_platform_required'])
+        self.assertTrue(evidence['embedded_platform_start_verified'])
+        self.assertFalse(evidence['external_services_verified'])
+        self.assertIn('embedded-platform', evidence['scope'])
+
+    def test_missing_embedded_runtime_cannot_hide_behind_healthy_manager_routes(self):
+        self.add_embedded_platform_fixture()
+        result, report = self.run_probe(self.commit())
+        self.assertEqual(result, 5, report)
+        evidence = report['steps'][-1]
+        self.assertTrue(evidence['embedded_platform_required'])
+        self.assertFalse(evidence['embedded_platform_start_verified'])
+        self.assertFalse(evidence['external_services_verified'])
+        self.assertEqual(evidence['health_status'], 200)
+        self.assertEqual(evidence['ready_status'], 200)
+        self.assertFalse(report['application_start_verified'])
+
+    def test_arbitrary_runtime_placeholder_is_not_embedded_startup_evidence(self):
+        self.add_embedded_platform_fixture()
+        result, report = self.run_probe(self.commit('app.state.rt = object()'))
+        self.assertEqual(result, 5, report)
+        self.assertFalse(report['steps'][-1]['embedded_platform_start_verified'])
+
+    def test_shutdown_failure_cannot_reuse_successful_health_status(self):
+        self.code = self.code.replace('    yield\n', '    yield\n    raise RuntimeError("synthetic shutdown failure")\n')
+        result, report = self.run_probe(self.commit())
+        self.assertEqual(result, 5, report)
+        self.assertEqual(report['steps'][-1]['health_status'], 200)
+        self.assertEqual(report['steps'][-1]['error'], 'RuntimeError')
+        self.assertFalse(report['application_start_verified'])
+
+    def test_platform_engines_and_config_paths_are_explicit_and_owned(self):
+        # The fixture sees only configured paths, never production credentials.
+        action = '''assert os.environ['WB_SHARED_ADMISSION'] == '0'
+    assert os.environ['WB_BACKGROUND_JOBS'] == '0'
+    assert [os.environ['QTG_' + name + '_ENGINE'] for name in
+            ('QODER', 'TRAE', 'WB', 'DOUBAOWORK')] == ['off', 'bff', 'on', 'off']
+    assert os.environ['QTG_CHECKIN_SCHEDULER_ENABLED'] == '0'
+    owned = Path(os.environ['WB_DATA_DIR']).parents[1]
+    for name, value in os.environ.items():
+        if name.startswith('QTG_') and (name.endswith(('_FILE', '_FILES', '_DIR', '_DB'))
+                                      or name.startswith(('QTG_BACKUP_SCRIPT_', 'QTG_BACKUP_GLOB_'))):
+            for path in value.split(','):
+                assert Path(path).is_relative_to(owned), name
+    for name in ('QTG_ADMIN_TOKEN_FILE', 'QTG_EXTRA_PASSWORD_FILES', 'QTG_WB_STATE_FILE',
+                 'QTG_INTERNAL_SERVICE_TOKEN_FILE', 'QTG_IDENTITY_SIGNING_KEY_FILE'):
+        assert name in os.environ
+'''
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 0, report)
 
     def test_external_write_is_blocked_before_any_host_mutation(self):
         protected = self.root / 'outside-state'
@@ -344,7 +415,11 @@ def ready():
     def test_swallowed_external_data_read_cannot_become_healthy_evidence(self):
         protected = self.root / 'outside-credentials'
         protected.write_text('synthetic secret must never be read')
-        action = ('try:\n        Path(' + repr(str(protected))
+        action = ('Path(f"/proc/{os.getpid()}/stat").read_text()\n'
+                  '    __import__("zoneinfo").ZoneInfo("Asia/Shanghai")\n'
+                  '    try:\n        (Path(__file__).resolve().parents[1] / ".version").read_text()\n'
+                  '    except FileNotFoundError:\n        pass\n'
+                  '    try:\n        Path(' + repr(str(protected))
                   + ').read_text()\n    except PermissionError:\n        pass')
         commit = self.commit(action)
         result, report = self.run_probe(commit)
@@ -352,6 +427,84 @@ def ready():
         self.assertFalse(report['application_start_verified'])
         self.assertEqual(report['steps'][-1]['health_status'], 200)
         self.assertGreater(report['steps'][-1]['blocked_operations']['read'], 0)
+        self.assertEqual(report['steps'][-1]['runtime_reads']['self_stat'], 1)
+        self.assertGreater(report['steps'][-1]['runtime_reads']['timezone_data'], 0)
+        self.assertEqual(report['steps'][-1]['missing_release_marker']['reads'], 1)
+        self.assertGreaterEqual(report['steps'][-1]['rejected_untrusted_bytecode']['reads'], 0)
+        self.assertEqual(protected.read_text(), 'synthetic secret must never be read')
+
+    def test_probe_reads_only_its_own_process_stat_and_counts_it(self):
+        action = ('value = Path(f"/proc/{os.getpid()}/stat").read_text()\n'
+                  '    assert value.startswith(str(os.getpid()) + " (")')
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 0, report)
+        evidence = report['steps'][-1]
+        self.assertEqual(evidence['runtime_reads']['self_stat'], 1)
+        self.assertEqual(evidence['blocked_operations'], {'read': 0, 'write': 0, 'network': 0, 'process': 0})
+
+    def test_other_process_stat_is_forbidden_even_when_the_application_swallows_the_error(self):
+        action = ('try:\n        Path(f"/proc/{os.getppid()}/stat").read_text()\n'
+                  '    except PermissionError:\n        pass')
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 5)
+        evidence = report['steps'][-1]
+        self.assertEqual(evidence['health_status'], 200)
+        self.assertEqual(evidence['blocked_operations']['read'], 1)
+
+    def test_timezone_uses_only_the_pinned_runtime_package(self):
+        action = ('import zoneinfo, datetime\n'
+                  '    assert zoneinfo.TZPATH == ()\n'
+                  '    zone = zoneinfo.ZoneInfo("Asia/Shanghai")\n'
+                  '    assert datetime.datetime(2026, 1, 1, tzinfo=zone).utcoffset().total_seconds() == 28800')
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 0, report)
+        evidence = report['steps'][-1]
+        self.assertGreater(evidence['runtime_reads']['timezone_data'], 0)
+        self.assertEqual(evidence['blocked_operations']['read'], 0)
+
+    def test_absent_release_marker_raises_file_not_found_without_faking_a_version(self):
+        action = ('try:\n        (Path(__file__).resolve().parents[1] / ".version").read_text()\n'
+                  '    except FileNotFoundError:\n        pass\n'
+                  '    else:\n        raise AssertionError("missing marker must not produce a version")')
+        result, report = self.run_probe(self.commit(action))
+        self.assertEqual(result, 0, report)
+        evidence = report['steps'][-1]
+        self.assertEqual(evidence['missing_release_marker']['reads'], 1)
+        self.assertEqual(evidence['blocked_operations']['read'], 0)
+
+    def assert_untracked_marker_is_refused(self, kind):
+        (self.checkout / '.gitignore').write_text('.version\n')
+        (self.checkout / 'VERSION').write_text('synthetic-reviewed-version')
+        action = ('try:\n        (Path(__file__).resolve().parents[1] / ".version").read_text()\n'
+                  '    except PermissionError:\n        pass')
+        commit = self.commit(action)
+        marker = self.checkout / '.version'
+        if kind == 'regular':
+            marker.write_text('unreviewed-version-must-not-be-read')
+        elif kind == 'symlink':
+            marker.symlink_to(self.checkout / 'VERSION')
+        elif kind == 'loop':
+            marker.symlink_to(marker.name)
+        else:
+            marker.symlink_to(self.checkout / 'missing-target')
+        self.assertEqual(self.git('status', '--porcelain', '--untracked-files=all'), '')
+        result, report = self.run_probe(commit)
+        self.assertEqual(result, 5, report)
+        self.assertEqual(report['steps'][-1]['health_status'], 200)
+        self.assertEqual(report['steps'][-1]['blocked_operations']['read'], 1)
+        self.assertFalse(report['application_start_verified'])
+
+    def test_existing_ignored_release_marker_is_never_read_as_a_trusted_version(self):
+        self.assert_untracked_marker_is_refused('regular')
+
+    def test_release_marker_symlink_to_reviewed_version_is_still_refused(self):
+        self.assert_untracked_marker_is_refused('symlink')
+
+    def test_dangling_release_marker_symlink_is_not_treated_as_absent(self):
+        self.assert_untracked_marker_is_refused('dangling')
+
+    def test_looping_release_marker_symlink_is_rejected_before_resolution(self):
+        self.assert_untracked_marker_is_refused('loop')
 
     def test_wrong_commit_or_hidden_dirty_bytes_fail_closed(self):
         commit = self.commit()

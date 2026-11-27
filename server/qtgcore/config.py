@@ -293,7 +293,9 @@ def load_settings() -> Settings:
         port=_env_int("port", 8795, 1, 65535),
         docs_enabled=_env_bool("docs_enabled", False),
         log_level=_env_str("log_level", "INFO"),
-        qoder_engine=(_env_str("qoder_engine", _engine_default()) or "off").strip().lower(),
+        # File switches are fallbacks: explicit environment values must not read
+        # host paths at all (including when loading an isolated candidate).
+        qoder_engine=(_env_str("qoder_engine", "") or _engine_default() or "off").strip().lower(),
         qoder_base=_env_str("qoder_base", "http://127.0.0.1:8791"),
         qoder_password_file=_abs(
             "qoder_password_file", "/opt/qoder-hub/secrets/panel_password"
@@ -304,7 +306,7 @@ def load_settings() -> Settings:
             "qoder2_panel_password_file", "/opt/workbuddy-manager/engine/secrets/qoder2_panel_password"
         ),
         qoder2_timezone=_env_str("qoder2_timezone", "Asia/Shanghai"),
-        trae_engine=(_env_str("trae_engine", _trae_engine_default()) or "bff").strip().lower(),
+        trae_engine=(_env_str("trae_engine", "") or _trae_engine_default() or "bff").strip().lower(),
         aiwork_base=_env_str("aiwork_base", "http://127.0.0.1:8080"),
         aiwork_admin_token_file=_abs(
             "aiwork_admin_token_file", "/opt/workbuddy-manager/engine/secrets/aiwork_admin_token"
@@ -312,7 +314,7 @@ def load_settings() -> Settings:
         aiwork_api_key_file=_abs("aiwork_api_key_file", "/opt/workbuddy-manager/engine/secrets/aiwork_api_key"),
         aiwork_db=_abs("aiwork_db", "/opt/trae-work/data/data/aiwork.sqlite"),
         aiwork_log_dir=_abs("aiwork_log_dir", "/opt/trae-work/data/logs"),
-        wb_engine=(_env_str("wb_engine", _wb_engine_default()) or "on").strip().lower(),
+        wb_engine=(_env_str("wb_engine", "") or _wb_engine_default() or "on").strip().lower(),
         wb_api_base=_env_str("wb_api_base", "http://127.0.0.1:7863"),
         wb_panel_base=_env_str("wb_panel_base", "http://127.0.0.1:7864"),
         manager_service_token_file=_abs(
@@ -327,7 +329,7 @@ def load_settings() -> Settings:
         wb_state_file=_abs("wb_state_file", "/opt/workbuddy2api/data/state.json"),
         wb_db=_abs("wb_db", "/opt/workbuddy-manager/data/manager.db"),
         wb_read_mode=_env_str("wb_read_mode", "sqlite"),
-        doubaowork_engine=(_env_str("doubaowork_engine", _doubaowork_engine_default()) or "off").strip().lower(),
+        doubaowork_engine=(_env_str("doubaowork_engine", "") or _doubaowork_engine_default() or "off").strip().lower(),
         doubaowork_base=_env_str("doubaowork_base", "http://127.0.0.1:18789"),
         doubaowork_admin_password_file=_abs(
             "doubaowork_admin_password_file",
