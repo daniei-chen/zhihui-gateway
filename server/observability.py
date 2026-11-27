@@ -51,6 +51,7 @@ from .requestbody import (BodyReadTimeout, BodyReadWindow, BodyDisconnected,
                           BodyEncodingError, BodySizeExceeded, body_frames, content_encoding)
 from starlette.responses import JSONResponse, StreamingResponse
 from dataclasses import dataclass
+from . import auditidentity
 
 # 调用方可以自带 X-Request-ID（K47：edge → Manager → 引擎全链路关联），但它
 # 只是**关联 ID**，不再是执行 ID（RV01）。字符集与长度仍然必须收紧：这个值会
@@ -1563,24 +1564,26 @@ class RequestAuditMiddleware:
                         # 噪声日志（24h 内 645/892 条是匿名 4xx，历史累计 19,558 行
                         # 匿名 /api/me 401），且永久增长。
                         # 只保留四类有追溯价值的：
-                        #   1) 有身份的 /api 操作
+                        #   1) 有身份的写操作或失败请求
                         #   2) 匿名 + 写方法 + **已知端点** 上被 401/403（真实越权尝试）
                         #   3) 任何 5xx（服务端错误与身份无关）
                         #   4) 有身份但路由未匹配（打错的路径也要能追）
-                        # 匿名 GET 4xx 与匿名未匹配探针不再入链；它们的痕迹仍完整
-                        # 保留在 request_outcomes / ip_access_logs / nginx access.log。
+                        # 普通成功 GET/HEAD/OPTIONS 轮询不追加永久哈希链，避免
+                        # 身份恢复后把面板刷新变成同步写放大。敏感读取仍由端点
+                        # 显式 security.audit 留证；所有请求仍保留 request_outcomes。
+                        # 匿名 GET 4xx 与匿名未匹配探针不再入链。
                         route = scope.get('route')
                         matched = route is not None
                         actor_obj = scope.get('state', {}).get('audit_actor') or {}
-                        actor_name = str(actor_obj.get('username') or 'anonymous') if isinstance(actor_obj, dict) else 'anonymous'
+                        actor_name = auditidentity.actor_name(actor_obj)
                         has_identity = bool(actor_obj) and actor_name != 'anonymous'
                         is_write = state.method not in ('GET', 'HEAD', 'OPTIONS')
-                        if (has_identity
+                        if ((has_identity and (is_write or status >= 400 or not matched))
                                 or (is_write and status in (401, 403) and matched)
                                 or status >= 500):
                             from . import ledger
                             action = state.method + ' ' + (getattr(route, 'path', '/api/unmatched') if matched else '/api/unmatched')
-                            ledger.admin(actor_obj, action,
+                            ledger.admin(actor_name, action,
                                          outcome='denied' if status in (401,403) else 'failed' if status >= 400 else 'completed',
                                          status=status, request_id=state.request_id)
                     _outcome_writes+=1

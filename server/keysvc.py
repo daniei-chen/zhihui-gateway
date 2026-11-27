@@ -598,8 +598,8 @@ def validate(key: dict, ip: str, model: str | None,
 
     platform：本次请求的**生效平台**（由入口决定：`/qoder/v1` → qoder、
     `/trae/v1` → trae、其余 → workbuddy，见 `gateway.forced_platform`）。
-    只用于校验 K01-S1 迁移旧 key 的 `legacy_platforms` 平台范围；`wbk_` key
-    没有该字段，行为与从前完全一致。
+    校验密钥授权、迁移旧 key 的 `legacy_platforms` 交集，以及平台是否在营。
+    已下线平台仍可解析历史记录，但不能因为存量授权而恢复数据面调用。
     """
     from . import portalpolicy
     portal_problem = portalpolicy.problem(key, model, mapped_model, platform, listing=is_model_list)
@@ -632,18 +632,16 @@ def validate(key: dict, ip: str, model: str | None,
     # 平台），而 Manager 没有 per-key 平台字段。若迁移时把它丢掉，旧 key 会从
     # "只绑 qoder" 被静默放大成"三平台通用"——这正是计划 §6.2.4 禁止的
     # "不默认全平台"。所以迁移台账保留原值，这里按请求生效平台守住边界。
-    # 状态码用 400：与 realm/模型白名单同属"请求与密钥不匹配"，不是密钥本身坏了。
+    # 未授权平台返回 403；已有授权但平台停用返回 503，避免误导为密钥损坏。
     from . import platformpolicy
-    # `_ACCEPTED` 含已摘除的 qoder：存量密钥里可能还写着它，这里报
-    # 「未知平台」会让一条历史密钥的鉴权 400 —— 那既不是用户填错，
-    # 也不是密钥坏了。让它继续走到下游，由 `runtime.qoder is None`
-    # 给出明确的「平台已下线」。
+    # Keep historical names parseable so management and migration remain usable.
+    # Runtime availability is a separate guard below, independent of old secrets.
     if platform not in platformpolicy._ACCEPTED:
         return Rejection('未知平台', 400, 'invalid_request_error', 'invalid_platform')
     if key.get('platform_policy_valid') is False:
         return Rejection('密钥平台策略损坏，请管理员修复', 403, 'permission_error', 'invalid_key_policy')
-    # 缺 platforms 字段时退回**保守**集合（三平台），不是全集：
-    # 新增豆包工作平台后，旧行不得因"没写这一列"而自动获得它的访问权。
+    # 缺 platforms 字段时退回 DEFAULT_PLATFORMS 的保守集合；新增平台不能
+    # 因为旧行未填写此字段而自动获得访问权。
     platforms = key.get('platforms', list(platformpolicy.DEFAULT_PLATFORMS))
     legacy = key.get('legacy_platforms')
     if legacy is not None:
@@ -654,6 +652,8 @@ def validate(key: dict, ip: str, model: str | None,
         return Rejection(
             f'该密钥仅限 {"/".join(platforms)} 平台使用，当前请求是 {platform} 平台',
             403, 'permission_error', 'platform_not_allowed')
+    if not defer_platform and not platformpolicy.is_enabled(platform):
+        return Rejection('平台已下线', 503, 'service_unavailable', 'platform_disabled')
 
     allow = key['ip_allowlist']
     if allow and not any(ip_matches(ip, c) for c in allow):

@@ -1,15 +1,18 @@
 """用量统计的时区口径与重建（P0 回归）。
 
-真实缺陷：写入用量用本地日期（time.strftime），回填却用 UTC
+历史缺陷：写入用量用本地日期（time.strftime），回填却用 UTC
 （SQLite 的 date(ts,'unixepoch')）。在 UTC+8 的机器上，凌晨 00:00-08:00
 的调用会被算进两个不同的 day，回填时把同一次调用重复计数。
 
-注意：CI 通常跑在 UTC 时区，那里「本地日 == UTC 日」，这个 bug 不会显现。
-因此本文件既有时区无关的断言，也在 test_timezone_forcing.py 里用子进程
-强制 TZ=Asia/Shanghai 做真复现——否则 CI 永远抓不到它。
+当前合同：Python、SQL 和回填统一使用固定 UTC+8 业务日，不随宿主机 TZ 改变。
+用子进程覆盖 UTC、UTC+8、UTC+9，并在北京时间午夜边界核对 Python 与 SQL。
 """
 from __future__ import annotations
 
+import datetime
+import json
+import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -21,10 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from server import config, db  # noqa: E402
 
 
-def local_midnight_plus(minutes: int) -> int:
-    """本地今天 00:minutes（在 UTC+8 下其 UTC 日期是前一天）。"""
-    lt = time.localtime()
-    return int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, minutes, 0, 0, 0, -1)))
+def business_midnight_plus(minutes: int) -> int:
+    """北京时间今天 00:minutes，不依赖执行测试的机器时区。"""
+    return db.day_start_ts() + minutes * 60
 
 
 class UsageTimezone(unittest.TestCase):
@@ -67,17 +69,43 @@ class UsageTimezone(unittest.TestCase):
 
     # ── 口径一致性（时区无关）────────────────────────────
     def test_day_of_and_sql_agree(self) -> None:
-        ts = local_midnight_plus(30)
+        ts = business_midnight_plus(30)
         via_py = db.day_of(ts)
         via_sql = db.query_one(
             f'SELECT {db.day_sql("ts")} AS d FROM (SELECT {ts} AS ts)'
         )['d']
         self.assertEqual(via_py, via_sql, 'Python 与 SQL 的取日口径必须一致')
 
-    def test_day_of_follows_local_timezone(self) -> None:
-        """helper 必须跟随本地时区，而不是固定 UTC。"""
-        ts = local_midnight_plus(30)
-        self.assertEqual(db.day_of(ts), time.strftime('%Y-%m-%d', time.localtime(ts)))
+    def test_day_of_uses_business_timezone_across_host_timezones(self) -> None:
+        """UTC+8 的午夜边界必须与宿主机时区无关。"""
+        cases = (
+            ('2026-11-26T15:59:59+00:00', '2026-11-26'),
+            ('2026-11-26T16:00:00+00:00', '2026-11-27'),
+            ('2026-11-26T23:30:00+00:00', '2026-11-27'),
+            ('2026-11-27T16:00:00+00:00', '2026-11-28'),
+        )
+        timestamps = [int(datetime.datetime.fromisoformat(value).timestamp()) for value, _ in cases]
+        expected = [[day, day] for _, day in cases]
+        script = '''
+import json, sqlite3, sys, time
+from server import db
+if hasattr(time, "tzset"):
+    time.tzset()
+with sqlite3.connect(":memory:") as conn:
+    print(json.dumps([
+        [db.day_of(ts), conn.execute("SELECT " + db.day_sql("?"), (ts,)).fetchone()[0]]
+        for ts in json.loads(sys.argv[1])
+    ]))
+'''
+        for host_tz in ('UTC0', 'CST-8', 'JST-9'):
+            with self.subTest(host_tz=host_tz):
+                result = subprocess.run(
+                    [sys.executable, '-B', '-c', script, json.dumps(timestamps)],
+                    cwd=Path(__file__).resolve().parents[2],
+                    env={**os.environ, 'TZ': host_tz}, capture_output=True,
+                    text=True, check=True, timeout=15,
+                )
+                self.assertEqual(json.loads(result.stdout), expected)
 
     def test_day_sql_is_not_naive_utc(self) -> None:
         """SQL 表达式必须带时区修饰符（这正是当初出错的地方）。
@@ -98,8 +126,8 @@ class UsageTimezone(unittest.TestCase):
 
     # ── 不再重复计数 ────────────────────────────────────
     def test_backfill_after_bump_has_no_gap(self) -> None:
-        """按 bump_usage 语义写入本地日后，回填应无缺口。"""
-        ts = local_midnight_plus(30)
+        """按 bump_usage 语义写入业务日后，回填应无缺口。"""
+        ts = business_midnight_plus(30)
         self._seed(ts)
         self._daily(ts)
         res = db.backfill_usage_from_logs()
@@ -107,7 +135,7 @@ class UsageTimezone(unittest.TestCase):
         self.assertEqual(len(db.query('SELECT day FROM usage_daily')), 1)
 
     def test_backfill_does_not_create_second_day(self) -> None:
-        ts = local_midnight_plus(30)
+        ts = business_midnight_plus(30)
         self._seed(ts)
         db.backfill_usage_from_logs()
         days = [r['day'] for r in db.query('SELECT day FROM usage_daily')]
@@ -116,7 +144,7 @@ class UsageTimezone(unittest.TestCase):
     # ── 重建清理污染（不依赖机器时区）────────────────────
     def test_rebuild_removes_polluted_rows(self) -> None:
         """污染用一个「多出来的 day 行」模拟，任何时区都能构造。"""
-        ts = local_midnight_plus(30)
+        ts = business_midnight_plus(30)
         self._seed(ts)
         real_day = db.day_of(ts)
         # 造一个额外的（错误的）日行，模拟历史上被算到另一天
@@ -140,7 +168,7 @@ class UsageTimezone(unittest.TestCase):
         )
 
     def test_rebuild_is_idempotent(self) -> None:
-        ts = local_midnight_plus(30)
+        ts = business_midnight_plus(30)
         self._seed(ts)
         db.rebuild_usage_from_logs()
         first = db.query_one('SELECT COUNT(*) c, SUM(requests) r FROM usage_daily')

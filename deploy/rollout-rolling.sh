@@ -12,7 +12,8 @@
 #   ./rollout-rolling.sh 1.5.59 --relay-changed  # 中继代码也变了，需要一并重启
 #   ./rollout-rolling.sh 1.5.59 --no-blue-green  # 没有候选实例时，退回「重启 + 中继重试」
 #
-# 退出码：0 成功；1 前置条件不满足；2 重启后仍有 5xx（已上线但没做到零中断）。
+# 退出码：0 必需检查通过；1 前置/切换失败；2 切换后检查失败或窗口有 5xx。
+# request_outcomes 只证明已进入网关且已完成的请求，不证明入口和在途长流零中断。
 set -uo pipefail
 
 # 站点配置是 0600 root，重启服务也要 root。所以整个脚本按 root 跑，
@@ -66,7 +67,7 @@ record_rollout() {
     local version="$1" mode="$2" requests="$3" failures="$4" status="$5" note="$6"
     [ "$RECORDED" = 1 ] && return 0
     RECORDED=1
-    printf '{"started_at":"%s","ended_at":"%s","version":"%s","mode":"%s","requests":%s,"failures":%s,"exit":%s,"note":"%s"}\n' \
+    printf '{"started_at":"%s","ended_at":"%s","version":"%s","mode":"%s","requests":%s,"failures":%s,"exit":%s,"note":"%s","evidence_scope":"gateway_completed_requests","zero_downtime_verified":false}\n' \
         "$STARTED_AT" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$version" "$mode" \
         "${requests:-null}" "${failures:-null}" "$status" "$note" \
         >> "$ROLLOUT_LOG" 2>/dev/null \
@@ -149,11 +150,14 @@ restart_relay() {
     # 中继是单进程，停它的那 1-2 秒没人接流量 —— 这是「发版不中断」最后剩下的缺口。
     # 先把推理入口切到直连网关（reload 平滑，在途的流不受影响），这 1-2 秒里新请求
     # 直接落到网关；中继起来后再切回来。网关此时没有在重启，所以不需要重试兜底。
-    printf '   先把推理入口切到直连，避开中继重启的那 1-2 秒。\n'
+    local direct_code
+    direct_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        http://127.0.0.1:7866/readyz 2>/dev/null) || direct_code=000
+    [ "$direct_code" = 200 ] || die '主网关未就绪，不能把推理入口切到直连'
+    printf '   先把推理入口切到已就绪的直连网关，避开中继重启的那 1-2 秒。\n'
     switch_inference direct
     systemctl restart "$RELAY" || {
-        switch_inference relay
-        die "重启中继失败（推理入口已切回中继）"
+        die "重启中继失败（推理入口保持在直连，不切回未就绪的中继）"
     }
     local pid ready=0
     for _ in $(seq 1 20); do
@@ -220,7 +224,7 @@ restart_gateway() {
     # 进入网关的 8 条请求全部 200。`/v1/` 这个前缀两个站点都有，路径过滤不够。
     #
     # 请求终态表只收网关真正处理过的请求，天然排除别的站点。
-    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;')
+    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;') || before=''
     case "$before" in
         ''|*[!0-9]*) die "读不到请求终态表（$DB），无法证明本次发版零中断";;
     esac
@@ -240,16 +244,20 @@ restart_gateway() {
     # 最后几条终态的落库是请求结束时写的，留 2 秒再数。
     sleep 2
     local total failures
-    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;")
-    case "$total" in ''|*[!0-9]*) total=0;; esac
-    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;")
-    case "$failures" in ''|*[!0-9]*) failures=0;; esac
+    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;") || total=''
+    case "$total" in ''|*[!0-9]*)
+        record_rollout "$version" '重启' '' '' 2 '无法读取发布窗口请求数'
+        return 2;; esac
+    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;") || failures=''
+    case "$failures" in ''|*[!0-9]*)
+        record_rollout "$version" '重启' "$total" '' 2 '无法读取发布窗口失败数'
+        return 2;; esac
 
     step '重启窗口内的流量（按网关自己的请求终态）'
     printf '   请求 %s 条，5xx %s 条\n' "$total" "$failures"
     if [ "$failures" -eq 0 ]; then
         if [ "$total" -gt 0 ]; then
-            printf '   —— 零中断（窗口内有真实请求）\n'
+            printf '   —— 已记录请求中未发现 5xx；入口失败和在途长流仍需独立证据\n'
         else
             printf '   —— 窗口内 0 条请求：不能据此宣称零中断\n'
         fi
@@ -262,13 +270,18 @@ restart_gateway() {
         printf '   之外，多半是中继没跑上新代码，或这一段流量绕过了中继。\n'
     fi
 
-    # 同上：先落记录，再做页面检查。
+    # 必需检查完成后才能记录成功。中途退出由 EXIT trap 留下未完成记录。
+    check_pages
+    local checks_status=$?
+    if [ "$checks_status" -ne 0 ]; then
+        record_rollout "$version" '重启' "$total" "$failures" 2 '页面或 readyz 检查失败'
+        return 2
+    fi
     if [ "$failures" -eq 0 ]; then
         record_rollout "$version" '重启' "$total" "$failures" 0 "$([ "$total" -gt 0 ] && printf '窗口内零 5xx' || printf '窗口内 0 条请求')"
     else
         record_rollout "$version" '重启' "$total" "$failures" 2 '窗口内有 5xx'
     fi
-    check_pages
     [ "$failures" -eq 0 ] || return 2
     return 0
 }
@@ -353,18 +366,24 @@ route_switch() {
 
 check_pages() {
     step '页面与就绪探针'
-    local url code
+    local url code failed=0
     for url in / /portal/ /keys/ /dashboard/ /members/; do
-        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://zhihui.kaogong.art$url" 2>/dev/null)
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://zhihui.kaogong.art$url" 2>/dev/null) || code=000
         printf '   %-12s %s\n' "$url" "$code"
-        [ "$code" = 200 ] || printf '   ^^ 这个页面不是 200\n'
+        if [ "$code" != 200 ]; then
+            printf '   ^^ 这个页面不是 200\n' >&2
+            failed=1
+        fi
     done
-    printf '   readyz       %s\n' "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null)"
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:7866/readyz 2>/dev/null) || code=000
+    printf '   readyz       %s\n' "$code"
+    [ "$code" = 200 ] || failed=1
+    return "$failed"
 }
 
 rollout_blue_green() {
     local version="${1#v}" before ready=0 total failures
-    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;')
+    before=$(db_scalar 'select ifnull(max(rowid),0) from request_outcomes;') || before=''
     case "$before" in
         ''|*[!0-9]*) die "读不到请求终态表（$DB），无法证明本次发版零中断";;
     esac
@@ -406,16 +425,20 @@ rollout_blue_green() {
 
     # 最后几条终态的落库是请求结束时写的，留 2 秒再数。
     sleep 2
-    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;")
-    case "$total" in ''|*[!0-9]*) total=0;; esac
-    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;")
-    case "$failures" in ''|*[!0-9]*) failures=0;; esac
+    total=$(db_scalar "select count(*) from request_outcomes where rowid > $before;") || total=''
+    case "$total" in ''|*[!0-9]*)
+        record_rollout "$version" '蓝绿' '' '' 2 '无法读取发布窗口请求数'
+        return 2;; esac
+    failures=$(db_scalar "select count(*) from request_outcomes where rowid > $before and http_status >= 500;") || failures=''
+    case "$failures" in ''|*[!0-9]*)
+        record_rollout "$version" '蓝绿' "$total" '' 2 '无法读取发布窗口失败数'
+        return 2;; esac
 
     step '发布窗口内的流量（按网关自己的请求终态）'
     printf '   请求 %s 条，5xx %s 条\n' "$total" "$failures"
     if [ "$failures" -eq 0 ]; then
         if [ "$total" -gt 0 ]; then
-            printf '   —— 零中断（窗口内有真实请求）\n'
+            printf '   —— 已记录请求中未发现 5xx；入口失败和在途长流仍需独立证据\n'
         else
             printf '   —— 窗口内 0 条请求：不能据此宣称零中断\n'
         fi
@@ -426,15 +449,18 @@ rollout_blue_green() {
                  order by rowid limit 10;" | sed 's/^/     /'
     fi
 
-    # 先落记录再做页面检查：页面检查要发 6 个请求、耗时几秒，万一这期间被打断
-    # （2026-11-26 就有一次远程会话 30 秒超时把脚本杀在页面检查阶段），窗口统计
-    # 这条核心结论已经写下，不会退化成「未走到统计环节」。
+    # 页面/readyz 是发布门禁，不得在它们执行之前写一条成功记录。
+    check_pages
+    local checks_status=$?
+    if [ "$checks_status" -ne 0 ]; then
+        record_rollout "$version" '蓝绿' "$total" "$failures" 2 '页面或 readyz 检查失败'
+        return 2
+    fi
     if [ "$failures" -eq 0 ]; then
         record_rollout "$version" '蓝绿' "$total" "$failures" 0 '窗口内零 5xx'
     else
         record_rollout "$version" '蓝绿' "$total" "$failures" 2 '窗口内有 5xx'
     fi
-    check_pages
     [ "$failures" -eq 0 ] || return 2
     return 0
 }
@@ -507,7 +533,7 @@ main() {
     local status=$?
 
     step '完成'
-    [ "$status" -eq 0 ] && printf '   v%s 已上线，重启窗口零中断\n' "${version#v}"
+    [ "$status" -eq 0 ] && printf '   v%s 已上线，必需页面与就绪检查通过（不代表已证明零中断）\n' "${version#v}"
     return "$status"
 }
 

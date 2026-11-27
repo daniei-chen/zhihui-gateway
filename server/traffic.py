@@ -52,7 +52,7 @@ REDACT_KEYS = (
     'token', 'access_token', 'refresh_token', 'password', 'secret',
     'x-device-token', 'x-wb-token',
 )
-#: 正文里的个人标识。工具参数不动 —— 那是排障的核心内容。
+#: 正文里的个人标识。保留工具结构，字符串参数也遵守同一脱敏规则。
 _PII = (
     (re.compile(r'\b1[3-9]\d{9}\b'), '<手机号>'),
     (re.compile(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b'), '<邮箱>'),
@@ -66,6 +66,7 @@ _STATS = {'written': 0, 'dropped': 0, 'truncated': 0, 'failed': 0}
 #: 开关缓存：热路径不能每请求查一次数据库。
 _FLAG = {'value': None, 'expires': 0.0}
 _FLAG_TTL = 5.0
+_FLAG_LOCK = threading.Lock()
 
 
 class Trace:
@@ -83,6 +84,25 @@ class Trace:
         self.response = None
 
 
+def _refresh_flag_locked() -> None:
+    """Refresh one process's cache. Callers hold _FLAG_LOCK across a refresh."""
+    try:
+        setting = db.get_setting('traffic.tap', True)
+        if type(setting) is not bool:
+            setting = None
+    except Exception:  # noqa: BLE001 - 正文记录在状态未知时关闭
+        setting = None
+    _FLAG['setting'] = setting
+    _FLAG['value'] = setting is True
+    _FLAG['expires'] = time.monotonic() + _FLAG_TTL
+
+
+def invalidate_flag() -> None:
+    """A completed settings write must supersede any in-flight old refresh."""
+    with _FLAG_LOCK:
+        _FLAG['expires'] = 0.0
+
+
 def _flag() -> bool:
     """是否开启抓包：环境变量是**总开关**，数据库开关只能在其内临时收紧。
 
@@ -91,20 +111,42 @@ def _flag() -> bool:
     """
     if not config.TRAFFIC_TAP:
         return False
-    now = time.time()
-    if _FLAG['expires'] > now:
+    # A warm inference-path read must not wait behind a settings-page DB read.
+    if _FLAG['expires'] > time.monotonic():
         return bool(_FLAG['value'])
-    try:
-        setting = db.get_setting('traffic.tap', True)
-    except Exception:  # noqa: BLE001 - 数据库不可用时按「开启」处理会在故障期落盘
-        setting = False
-    _FLAG['value'] = setting is not False
-    _FLAG['expires'] = now + _FLAG_TTL
-    return bool(_FLAG['value'])
+    with _FLAG_LOCK:
+        if _FLAG['expires'] <= time.monotonic():
+            _refresh_flag_locked()
+        return bool(_FLAG['value'])
 
 
 def enabled() -> bool:
     return _flag()
+
+
+def setting_status() -> dict:
+    """Read the saved intent and refresh this instance; other instances use TTL.
+
+    ``effective`` and ``pending`` describe this instance, not an unverified
+    fleet-wide acknowledgement. Existing traces may still finish after disable.
+    """
+    with _FLAG_LOCK:
+        _refresh_flag_locked()
+        desired = _FLAG.get('setting')
+        effective = bool(config.TRAFFIC_TAP and _FLAG['value'])
+    reason = ('environment_disabled' if not config.TRAFFIC_TAP else
+              'settings_unavailable' if desired is None else None)
+    payload = {
+        'setting': desired, 'desired': desired, 'enabled': effective,
+        'effective': effective, 'effective_scope': 'instance', 'pending': False,
+        'blocked_reason': reason, 'cache_seconds': _FLAG_TTL,
+        'propagation_seconds': _FLAG_TTL,
+    }
+    if reason == 'environment_disabled' and desired is True:
+        payload['blocked_by'] = 'WB_TRAFFIC_TAP=0'
+    elif reason == 'settings_unavailable':
+        payload['blocked_by'] = 'settings_unavailable'
+    return payload
 
 
 def base_dir() -> Path:
@@ -362,6 +404,9 @@ def _prepare(payload: dict) -> bytes:
 
 def _write_payload(payload: dict) -> None:
     """真正落盘。只在后台线程里执行。"""
+    # One final boundary for stream/json/error, metadata and derived diff. Do
+    # not depend on each producer remembering to scrub a newly added field.
+    payload = _scrub(payload)
     raw = _prepare(payload)
 
     root = base_dir()
@@ -491,7 +536,7 @@ def _finish(trace: Trace) -> None:
         'client': trace.client,
         'gateway': trace.gateway,
         'diff': _diff(trace.client, trace.gateway),
-        'response': trace.response,
+        'response': _scrub(trace.response),
         'model': {
             'requested': (trace.client or {}).get('model') if isinstance(trace.client, dict) else None,
             'mapped': (trace.gateway or {}).get('model') if isinstance(trace.gateway, dict) else None,
@@ -612,7 +657,9 @@ def read_record(request_id: str) -> dict | None:
     for day in sorted((p for p in root.glob('*') if p.is_dir()), reverse=True):
         for path in day.glob(f'*-{safe}.json.gz'):
             with gzip.open(path, 'rb') as handle:
-                return json.loads(handle.read())
+                # Historical captures may predate the unified write boundary.
+                # Redact their API/export projection without rewriting files.
+                return _scrub(json.loads(handle.read()))
     return None
 
 
@@ -670,13 +717,14 @@ def sweep() -> dict:
 
 
 def render_html(record: dict) -> str:
-    """导出单文件 HTML：把三份内容与差异放在一页里，可直接发给别人看。
+    """导出单文件 HTML：把三份内容与差异放在一页里，仍需按用户内容保管。
 
     **所有内容都要 HTML 转义**：正文是用户写的，里面出现 `<script>` 是完全正常的
     （有人就在问前端问题）。不转义的话，这个导出文件一打开就会执行对方的脚本 ——
     而它恰恰是要发给同事看的。
     """
     import html as html_mod
+    record = _scrub(record)
 
     def dump(value) -> str:
         return html_mod.escape(json.dumps(value, ensure_ascii=False, indent=2))

@@ -8,6 +8,7 @@ set is the repeatable release gate for a clean checkout with synthetic data.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -21,6 +22,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
+    "server.tests.test_v12100_trae_native",
+    "server.tests.test_platform_policy",
+    "server.tests.test_version_candidate_provenance",
+    "server.tests.test_audit_deploy_failure_paths",
+    "server.tests.test_audit_identity_platform_boundary",
+    "server.tests.test_security_audit_hardening",
+    "server.tests.test_ci_required_gates",
     "server.tests.test_v133_release_hardening",
     "server.tests.test_v12149_post_migration_cleanup",
     "server.tests.test_v12152_rollout_script",
@@ -147,7 +155,6 @@ MODULES = (
     # 四源对照（schema 默认值 / 源码默认值 / 进程环境 / unit 声明）同理：它早就
     # 写好、也早就该跑，却一直不在门禁里 —— 而它偏偏是唯一能挡住「schema 与
     # 源码默认值悄悄分叉」的那条。
-    "server.tests.test_config_contract",
     "server.tests.test_config_drift",
     # 协议面「静默走错路」的两处：都是给客户端**错误的信号**，不是崩溃，
     # 所以异常监控与既有测试都抓不到它们。
@@ -554,18 +561,11 @@ MODULES = (
 
 
 def frontend_suite() -> dict:
-    """跑 web 的前端用例（`npm test`：`lib/*.test.mjs` + `tests/*.test.cjs`）。
+    """Run both frontend suites; release callers require them explicitly.
 
-    ## 为什么接在这里
-
-    CI 的 `quality.yml` 目前只跑 `node --test lib/*.test.mjs` —— **只覆盖一半**：
-    `web/tests/` 下那 12 个 `.test.cjs` 文件（控制台状态机、i18n、静态导出等）
-    从来没在 CI 上跑过。而修改 workflow 需要令牌带 `workflow` scope，本仓库的令牌
-    没有（2026-11-24 实测：`gist, read:org, repo`），所以先接进门禁：
-    **每次本地验证都跑**，覆盖面立刻补齐，不必等权限。
-
-    整套 244 例实测 2.5 秒，代价可以忽略；找不到 npm 时跳过而不是失败 ——
-    门禁的职责是"这台机器能验的都验了"，不是"必须装 Node"。
+    Backend-only jobs leave frontend validation to the dedicated quality job.
+    Local missing dependencies remain visible as skipped; --require-frontend
+    turns that result into a failing gate instead of silently publishing it.
     """
     npm = shutil.which('npm') or shutil.which('npm.cmd')
     if not npm:
@@ -600,6 +600,8 @@ def frontend_suite() -> dict:
         match = re.search(r'\bpass\s+(\d+)\s*$', line)
         if match:
             passed = int(match.group(1))
+    if passed == 0:
+        return {'ok': False, 'reason': 'frontend reported no passing tests'}
     print(f'前端用例通过 {passed} 例（npm test）')
     return {'ok': True, 'passed': passed}
 
@@ -628,14 +630,8 @@ def static_suite() -> dict:
     模块级早已 import 过的模块。那 3 处已修掉，所以 F811 现在只查生产代码：
     测试里的参数遮蔽是正当写法，收进来只会变成噪声墙。
     """
-    exe = shutil.which('ruff')
-    if exe:
-        base = [exe, 'check']
-    else:
-        exe = shutil.which('python') or shutil.which('python3')
-        if not exe:
-            return {'skipped': True, 'reason': 'ruff/python not found'}
-        base = [exe, '-m', 'ruff', 'check']
+    # Use this interpreter's pinned tool, not an unrelated global ruff/python.
+    base = [sys.executable, '-m', 'ruff', 'check']
 
     checks = (
         (['server', 'deploy', 'tools', '--select', 'F821'],
@@ -664,7 +660,21 @@ def static_suite() -> dict:
     return {'ok': True}
 
 
-def main() -> int:
+def _gate_result(result: dict, *, required: bool) -> dict:
+    value = {**result, 'required': required}
+    if required and (value.get('skipped') or value.get('ok') is not True):
+        value['ok'] = False
+        value.setdefault('reason', 'required suite did not complete successfully')
+    return value
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--require-frontend', action='store_true',
+                        help='fail if frontend dependencies or tests are unavailable')
+    parser.add_argument('--require-static', action='store_true',
+                        help='fail if the pinned Python static checker is unavailable')
+    args = parser.parse_args(argv)
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
     if os.environ.get("ZH_CI_NET_ISOLATED") == "1":
@@ -679,8 +689,12 @@ def main() -> int:
         result = unittest.TextTestRunner(verbosity=1).run(suite)
         # 前端用例放在 Python 套件之后：Python 失败时先看到 Python 的报告，
         # 不必等一套无关的 Node 进程。
-        frontend = frontend_suite()
-        static = static_suite()
+        frontend = _gate_result(frontend_suite(), required=args.require_frontend)
+        static = _gate_result(static_suite(), required=args.require_static)
+        for name, gate in (('frontend', frontend), ('static', static)):
+            if gate.get('required') and gate.get('ok') is not True:
+                print(f'{name} required gate failed: {gate.get("reason", gate)}',
+                      file=sys.stderr)
         summary = {
             "modules": list(MODULES),
             "tests": result.testsRun,

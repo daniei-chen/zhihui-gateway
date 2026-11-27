@@ -87,8 +87,9 @@ jobs:
 
       - name: 后端单元测试
         run: |
-          python3 -m pip install --quiet -r server/requirements.txt
-          python3 tools/ci_regression.py
+          python3 -m pip install --quiet --require-hashes -r server/requirements.hashes.txt
+          python3 -m pip install --quiet --require-hashes -r tools/requirements-ci.txt
+          python3 tools/ci_regression.py --require-frontend --require-static
 
       - name: 组装发布目录
         id: pack
@@ -217,7 +218,8 @@ jobs:
           echo "${TAG}" > "$STAGE/.version"
           # 把不可伪造的 GitHub 提交绑定进发布包；仓库里的 provenance 模板不可能
           # 预先知道自己未来的提交 SHA，因此这里在打包时写入实际 checkout 提交。
-          python3 - "$STAGE/server/release-provenance.json" "$TAG" "$GITHUB_SHA" <<'PY'
+          SOURCE_COMMIT=$(git rev-parse HEAD)
+          python3 - "$STAGE/server/release-provenance.json" "$TAG" "$SOURCE_COMMIT" <<'PY'
           import json
           import pathlib
           import sys
@@ -226,6 +228,8 @@ jobs:
           value = json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
           value.update({
               'candidate_only': False,
+              'production_deployed': False,
+              'frontend_rebuilt': True,
               'release_id': tag,
               'signed': False,
               'source_commit': commit,

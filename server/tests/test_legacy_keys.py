@@ -275,22 +275,26 @@ class LegacyResolveTest(_LegacyTestBase):
         self._migrate()
         key = keysvc.resolve(token)
         self.assertEqual(key['legacy_platforms'], ['qoder'])
-        self.assertIsNone(keysvc.validate(key, '1.2.3.4', 'glm-5.2', platform='qoder'))
+        self.assertEqual(keysvc.validate(key, '1.2.3.4', 'glm-5.2', platform='qoder').code,
+                         'platform_disabled')
         for wrong in ('trae', 'workbuddy'):
             with self.subTest(platform=wrong):
                 reason = keysvc.validate(key, '1.2.3.4', 'glm-5.2', platform=wrong)
                 self.assertIsNotNone(reason)
                 self.assertEqual(getattr(reason, 'code', ''), 'platform_not_allowed')
 
-    def test_full_platform_scope_allowed_everywhere(self) -> None:
+    def test_full_platform_scope_does_not_reenable_retired_platforms(self) -> None:
         token = _qtg_token()
         self._insert_qtg_key(token, platforms=_ALL_PLATFORMS)
         self._migrate()
         key = keysvc.resolve(token)
         for platform in ('qoder', 'trae', 'workbuddy'):
             with self.subTest(platform=platform):
-                self.assertIsNone(
-                    keysvc.validate(key, '1.2.3.4', 'glm-5.2', platform=platform))
+                rejected = keysvc.validate(key, '1.2.3.4', 'glm-5.2', platform=platform)
+                if platform == 'workbuddy':
+                    self.assertIsNone(rejected)
+                else:
+                    self.assertEqual(rejected.code, 'platform_disabled')
 
     def test_ip_allowlist_and_models_migrated(self) -> None:
         token = _qtg_token()

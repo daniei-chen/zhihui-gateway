@@ -211,11 +211,17 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         boom = httpx.ConnectError('refused')
         client = _Client(raise_on_send=boom)
         with mock.patch.object(trae_native.config, 'http_client', return_value=client), \
-                mock.patch.object(trae_native.gateway, '_record'):
-            with self.assertRaises(httpx.ConnectError):
-                await trae_native.trae_native_messages(
-                    _request(), _body(), {'id': 1}, '1.2.3.4', 'trae/x', 'x',
-                    'ua', _Upstream(base_url='http://up', api_key='k'), True, None)
+                mock.patch.object(trae_native.gateway, '_record') as record:
+            result = await trae_native.trae_native_messages(
+                _request(), _body(), {'id': 1}, '1.2.3.4', 'trae/x', 'x',
+                'ua', _Upstream(base_url='http://up', api_key='k'), True, None)
+        self.assertEqual(result.status_code, 502)
+        payload = json.loads(result.body)
+        self.assertEqual(payload['type'], 'error')
+        self.assertEqual(payload['error']['type'], 'api_error')
+        self.assertEqual(payload['error']['code'], 'upstream_unavailable')
+        self.assertNotIn('refused', result.body.decode(), 'private transport detail stays in server logs')
+        self.assertEqual(record.call_args.args[4], 502)
         self.assertEqual(client.closed, 1, '开流失败也要关客户端')
 
     async def test_accept_header_announces_event_stream(self):

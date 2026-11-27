@@ -131,7 +131,7 @@ class DailyKeyQuotaTest(unittest.TestCase):
         budget.forwarded()
         state.terminal_state = 'cancelled'
         budget.settle(None, 0, 0, None)
-        old = int(time.mktime(time.strptime('2026-10-28', '%Y-%m-%d')))
+        old = db.day_start_ts('2026-10-28')
         db.execute('UPDATE budget_reservations SET created_at=?,updated_at=?', (old, old))
         self.assertTrue(budget.resolve(state.request_id, 25, 0.2, 'admin', 'synthetic provider receipt'))
         self.assertFalse(budget.resolve(state.request_id, 25, 0.2, 'admin', 'synthetic retry'))

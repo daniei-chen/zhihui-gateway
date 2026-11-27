@@ -3,7 +3,8 @@
 路由形状沿用密钥那套（`/api/keys/{id}` 的风格）：`/api/red-packets/{id}`。
 
 **权限**：只有管理员能创建与收回 —— 红包是**发放额度**的动作，消耗的是账号池
-的积分/token（真金白银）。查看（列表与详情）对登录用户开放，与密钥列表一致。
+的积分/token（真金白银）。查看（列表与详情）对登录用户开放，但领取码本身是
+可消费的凭据，仅管理员可取回；其他身份只能查看不含领取能力的摘要。
 """
 from __future__ import annotations
 
@@ -71,9 +72,9 @@ def create_packet(body: PacketIn, request: Request,
 
 @router.get('')
 def list_packets(user: dict = Depends(security.current_user)) -> list[dict]:
-    """红包列表（不含明文 key —— 库里也没有）。"""
+    """红包列表；领取码与创建/分享权限一致，只向管理员返回。"""
     rows = redpacket.list_packets()
-    if user.get('role') == 'account_admin':
+    if user.get('role') != 'admin':
         rows = [{**row, 'code': ''} for row in rows]
     return rows
 
@@ -85,7 +86,7 @@ def packet_detail(packet_id: int,
     out = redpacket.packet_detail(packet_id)
     if out is None:
         raise HTTPException(status_code=404, detail='红包不存在')
-    if user.get('role') == 'account_admin':
+    if user.get('role') != 'admin':
         out = {**out, 'code': ''}
     return out
 
