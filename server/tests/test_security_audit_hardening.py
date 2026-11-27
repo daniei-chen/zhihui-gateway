@@ -132,9 +132,16 @@ class PortalFailureBoundsTests(unittest.TestCase):
         for name in ('bob', 'carol', 'dana', 'erin'):
             portal._portal_user_record('198.51.100.1', name)
         self.assertEqual(len(portal._PORTAL_USER_FAILS), 3)
-        self.assertTrue(portal._portal_user_blocked('198.51.100.1', 'ALICE'))
-        self.assertTrue(portal._portal_user_blocked('198.51.100.1', 'erin'))
-        self.assertFalse(portal._portal_user_blocked('198.51.100.1', 'bob'))
+        # 判定已归 SQLite 的 `blocked_until` 独占（审计 D-2）；这张表退回来源统计
+        # 与容量边界，这里只校验它的边界行为：键归一化、容量上限、不互相顶替。
+        self.assertIn(('198.51.100.1', 'alice'), portal._PORTAL_USER_FAILS)
+        self.assertEqual(portal._PORTAL_USER_FAILS[('198.51.100.1', 'alice')][0],
+                         portal._PORTAL_USER_MAX)
+        # bob 在表里（第 2 个身份）但只失败过 1 次：额度按身份各自计算，不互相顶替。
+        self.assertEqual(portal._PORTAL_USER_FAILS[('198.51.100.1', 'bob')][0], 1)
+        # 表满之后的新身份被拒（容量边界），已存在的身份保留自己的额度。
+        self.assertTrue(portal._portal_user_capacity_blocked('198.51.100.1', 'ERIN'))
+        self.assertFalse(portal._portal_user_capacity_blocked('198.51.100.1', 'ALICE'))
 
     def test_expired_entries_are_removed_from_both_tables(self):
         for index in range(3):
@@ -145,7 +152,7 @@ class PortalFailureBoundsTests(unittest.TestCase):
         self.assertEqual(portal._PORTAL_IP_FAILS, {})
         self.assertEqual(portal._PORTAL_USER_FAILS, {})
         portal._portal_user_record('203.0.113.1', 'new-user')
-        self.assertFalse(portal._portal_user_blocked('203.0.113.1', 'new-user'))
+        self.assertIn(('203.0.113.1', 'new-user'), portal._PORTAL_USER_FAILS)
 
     def test_success_only_clears_matching_source_and_identity(self):
         for name in ('alice', 'bob'):

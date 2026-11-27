@@ -341,8 +341,14 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(5):
             response = await self.call('POST', '/api/portal/login', headers={'origin': 'http://testserver'}, json={'username': 'alice', 'password': 'wrong'})
             self.assertEqual(response.status_code, 401)
+        # 以前这里断言 429：账号锁与内存 (ip, 账号) 计数取「与」时，同一 IP 连续失败
+        # 之后连正确密码也进不来——这正是「匿名者 5 次错密码就能把用户关在门外」的
+        # 那一面（审计 D-2）。现在账号维度单独生效、只拦错密码，所以正确密码照常
+        # 登录并清锁；锁定期内错密码仍被拒由 test_portal_lockout_contract 钉住。
+        self.assertGreater(store.user('alice')['blocked_until'], 0)
         response = await self.call('POST', '/api/portal/login', headers={'origin': 'http://testserver'}, json={'username': 'alice', 'password': 'synthetic-password'})
-        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(store.user('alice')['blocked_until'], 0)
         headers = self.headers()
         response = await self.call('PATCH', '/api/portal-admin/users/alice', headers=self.admin, json={'enabled': False})
         self.assertEqual(response.status_code, 200, response.text)

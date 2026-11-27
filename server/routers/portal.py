@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import re
 import secrets
 import time
@@ -19,6 +20,7 @@ from ..services.asyncwork import joined_thread
 router = APIRouter(prefix='/api/portal', tags=['user-portal'])
 admin_router = APIRouter(prefix='/api/portal-admin', tags=['user-portal-admin'])
 COOKIE = 'zh-user-portal'
+log = logging.getLogger('workbuddy.portal')
 _login_active = 0
 _PORTAL_IP_FAILS: dict[str, list] = {}
 _PORTAL_USER_FAILS: dict[tuple[str, str], list] = {}
@@ -83,9 +85,16 @@ def _portal_ip_clear(ip: str) -> None:
         _PORTAL_IP_FAILS.pop(ip, None)
 
 
-def _portal_user_blocked(ip: str, username: str) -> bool:
-    key = (ip, username.strip().lower())
-    return _portal_failure_blocked(_PORTAL_USER_FAILS, key, _PORTAL_USER_MAX)
+def _portal_account_sources(username: str) -> int:
+    """这个账号在本进程内被几个不同来源打过（只用于锁定日志）。
+
+    账号维度已归 SQLite 的 `blocked_until` 独占（审计 D-2），内存这张
+    `(ip, 账号)` 计数退回来源统计与容量边界。触发锁定时扫一遍就够：
+    表有 `_PORTAL_FAIL_MAX_ENTRIES` 上限，且只在一个账号刚撞到阈值时发生。
+    """
+    key = username.strip().lower()
+    with _PORTAL_IP_LOCK:
+        return sum(1 for (_, name) in _PORTAL_USER_FAILS if name == key)
 
 
 def _portal_user_capacity_blocked(ip: str, username: str) -> bool:
@@ -104,6 +113,19 @@ def _portal_user_record(ip: str, username: str) -> None:
 def _portal_user_clear(ip: str, username: str) -> None:
     with _PORTAL_IP_LOCK:
         _PORTAL_USER_FAILS.pop((ip, username.strip().lower()), None)
+
+
+def _portal_note_account_lockout(username: str, failures: int) -> None:
+    """账号失败数刚好撞到阈值时记一条结构化日志（口径同 `security` 那一侧）。
+
+    只在触发那一刻记一次；`_portal_account_sources` 顺手带上「被几个来源打过」，
+    否则线上看到的只是一串 401/429，分不清撞库和用户自己记错密码。
+    """
+    if failures != _PORTAL_USER_MAX:
+        return
+    log.warning('portal_login_lockout account=%s fails=%d sources=%d window_seconds=%d',
+                security.log_text(username), failures, _portal_account_sources(username),
+                _PORTAL_IP_WINDOW)
 
 
 def same_origin(request):
@@ -162,11 +184,11 @@ async def login(request: Request, body: dict = Body(...)):
             with store.transaction() as conn:
                 row = conn.execute('SELECT * FROM portal_users WHERE username=?', (username.strip(),)).fetchone()
                 user = dict(row) if row else None
-            if (user and user['blocked_until'] > store.now()
-                    and _portal_user_blocked(ip, username)):
-                # 账号级锁定只对“同一来源 IP 的连续失败”生效，防止他人用 5 次错密码
-                # 永久锁死受害者账号；受害者从新 IP 仍可用正确密码登录并清锁。
-                raise HTTPException(status_code=429, detail='登录尝试过多，请稍后重试')
+            # 账号维度以 SQLite 的 blocked_until 为准，**独立于来源 IP**（审计 D-2）。
+            # 以前这里与内存 (ip, 账号) 计数取「与」，于是锁定期内换一个干净 IP 就能
+            # 接着试——账号锁对分布式撞库永远不生效。现在只在密码**错误**时据此
+            # 拒绝：锁定期内正确密码照常放行，否则 5 次错密码就能把用户关在门外。
+            locked = bool(user) and user['blocked_until'] > store.now()
             if not user:
                 security.dummy_verify(password)
             valid = bool(user and user['enabled'] and security.verify_pwd(password, user['pwd_hash']))
@@ -176,13 +198,17 @@ async def login(request: Request, body: dict = Body(...)):
                     if fresh:
                         failures = fresh['failed_logins'] + 1
                         conn.execute('UPDATE portal_users SET failed_logins=?,blocked_until=? WHERE id=?',
-                                     (failures, store.now() + 600 if failures >= 5 else 0, user['id']))
+                                     (failures, store.now() + _PORTAL_IP_WINDOW
+                                      if failures >= _PORTAL_USER_MAX else 0, user['id']))
+                        _portal_note_account_lockout(username, failures)
                     _portal_ip_record(ip)
                     _portal_user_record(ip, username)
                     rejected = True
                 else:
                     conn.execute('UPDATE portal_users SET failed_logins=0,blocked_until=0 WHERE id=?', (user['id'],))
             if rejected:
+                if locked:
+                    raise HTTPException(status_code=429, detail='登录尝试过多，请稍后重试')
                 raise HTTPException(status_code=401, detail='用户名或密码错误')
             return user
         user = await joined_thread(verify)

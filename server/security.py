@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -20,6 +21,8 @@ from fastapi import Depends, HTTPException, Request
 from . import auditidentity, config, tokensvc, userroles
 from .iputil import client_ip
 from .iputil import _is_trusted_proxy  # noqa: SLF001 —— 与 client_ip 同一份可信代理判据
+
+log = logging.getLogger('workbuddy.security')
 
 
 # ── 密码哈希 ─────────────────────────────────────────────
@@ -588,7 +591,9 @@ def _load_fails_once() -> None:
                 _fail[address]=counts
         for row in db.query('SELECT username, fails, first FROM login_fails_user WHERE first > ?',
                             (now - LOCK_SECONDS,)):
-            _user_fail[str(row['username'])] = [int(row['fails'] or 0), float(row['first'] or now)]
+            # 第三段是本次进程内见过的来源集合：只用于锁定日志/快照的
+            # 「被几个 IP 打过」，不入库（重启后从空集合重新累积）。
+            _user_fail[str(row['username'])] = [int(row['fails'] or 0), float(row['first'] or now), set()]
     except Exception:  # noqa: BLE001  旁路：表未建/库不可读时与旧行为一致
         pass
 
@@ -663,20 +668,89 @@ def _prune(store: dict[str, list]) -> None:
 
 
 @_serialized_login_counters
-def login_blocked(ip: str, username: str | None = None) -> bool:
+def ip_login_blocked(ip: str) -> bool:
+    """按来源 IP 的锁定：单机爆破的限速闸门。
+
+    调用方在**密码校验之前**用它硬拦：这是唯一还在真正限制「每秒能猜几次」的
+    东西，拦在 KDF 之前才拦得住（拒绝成本最低）。
+    """
     _load_fails_once()
     now = time.time()
     cnt, first = _fail.get(ip, [0, 0.0])
-    if cnt >= MAX_FAILS and (now - first) < LOCK_SECONDS:
+    return cnt >= MAX_FAILS and (now - first) < LOCK_SECONDS
+
+
+@_serialized_login_counters
+def account_locked(username: str) -> bool:
+    """按账号的锁定：分布式撞库的判据，**不看来源 IP**。
+
+    ## 2026-11-28 审计 D-1：以前要求同 IP 也有失败，账号锁被架空
+
+    v2.10.2 起这里额外要求 `_fail[ip]` 也有计数（`icnt > 0`），意图是防止匿名者
+    用 5 次错密码把管理员锁在门外：干净 IP 不受他人制造的账号锁定影响。
+    代价是账号锁对**轮换 IP 的撞库者**从来不会生效——他每次换 IP，`icnt` 恒为 0。
+
+    现在把「防匿名锁死」从**入口闸门**换成**判定粒度**：账号维度单独生效，
+    但只在密码错误时据此拒绝。锁定期内正确密码照常放行，所以匿名者锁不住
+    任何知道密码的人；他也拿不到额外尝试，因为他的错密码一样被拒。
+    见 `routers/auth.py::_complete_login` 与 `tests/test_login_lockout_contract.py`。
+    """
+    _load_fails_once()
+    now = time.time()
+    entry = _user_fail.get(username.lower())
+    return bool(entry) and entry[0] >= MAX_FAILS and (now - entry[1]) < LOCK_SECONDS
+
+
+def login_blocked(ip: str, username: str | None = None) -> bool:
+    """两个维度任一锁定即为真（判断「这个来源还能不能试」用 `ip_login_blocked`）。"""
+    if ip_login_blocked(ip):
         return True
-    if username:
-        key = username.lower()
-        ucnt, ufirst = _user_fail.get(key, [0, 0.0])
-        if ucnt >= MAX_FAILS and (now - ufirst) < LOCK_SECONDS:
-            icnt, ifirst = _fail.get(ip, [0, 0.0])
-            if icnt > 0 and (now - ifirst) < LOCK_SECONDS:
-                return True
-    return False
+    return bool(username) and account_locked(username)
+
+
+def _account_sources(entry: list) -> set:
+    """账号条目里的来源集合（老条目/回载条目只有两段，补一个空集合）。"""
+    if len(entry) < 3 or not isinstance(entry[2], set):
+        entry[2:] = [set()]
+    return entry[2]
+
+
+def _note_account_lockout(key: str, entry: list) -> None:
+    """账号失败数**刚好**撞到阈值时记一条结构化日志。
+
+    只在触发那一刻记一次：锁定期内的后续失败不刷屏，但 `login_lockout_snapshot`
+    会一直报着这个账号，直到窗口过去或被一次成功登录清掉。
+
+    `sources` 上限就是 `MAX_FAILS`：阈值是 5，触发时最多 5 个来源；之后再记也
+    没有判定价值，而不封顶会让攻击者用海量 IP 撑爆内存。
+    """
+    if entry[0] != MAX_FAILS:
+        return
+    log.warning('login_lockout account=%s fails=%d sources=%d window_seconds=%d',
+                log_text(key), entry[0], len(_account_sources(entry)), LOCK_SECONDS)
+
+
+def login_lockout_snapshot(limit: int = 20) -> dict:
+    """当前锁定期的登录锁定快照（运维巡检用，不含任何凭据或口令信息）。
+
+    为什么要有：账号锁独立生效之后，「谁被锁着、被几个来源打的」只存在内存里，
+    事后翻日志只能看到触发那一行。巡检脚本要能在**正在发生**时看见它，否则
+    撞库和正常用户输错无法区分。挂在 `/api/health/alerts`（仅回环）上。
+    """
+    with _failures_lock:
+        now = time.time()
+        accounts = [
+            {'account': log_text(key), 'fails': int(entry[0]),
+             'sources': len(_account_sources(entry)),
+             'age_seconds': int(now - entry[1])}
+            for key, entry in _user_fail.items()
+            if entry[0] >= MAX_FAILS and (now - entry[1]) < LOCK_SECONDS
+        ]
+        locked_ips = sum(1 for entry in _fail.values()
+                         if entry[0] >= MAX_FAILS and (now - entry[1]) < LOCK_SECONDS)
+    accounts.sort(key=lambda item: (-item['fails'], item['account']))
+    return {'accounts': accounts[:limit], 'account_count': len(accounts),
+            'locked_ips': locked_ips}
 
 
 @_serialized_login_counters
@@ -706,12 +780,17 @@ def record_fail(ip: str, username: str | None = None) -> int:
 
     if username:
         key = username.lower()
-        ucnt, ufirst = _user_fail.get(key, [0, 0.0])
-        if (now - ufirst) >= LOCK_SECONDS:
-            ucnt, ufirst = 0, now
-        _user_fail[key] = [ucnt + 1, ufirst]
-        _mirror_fail('user', key, ucnt + 1, ufirst)
-        counted = max(counted, ucnt + 1)
+        entry = _user_fail.get(key)
+        if entry is None or (now - entry[1]) >= LOCK_SECONDS:
+            entry = [0, now, set()]
+        entry[0] += 1
+        sources = _account_sources(entry)
+        if len(sources) < MAX_FAILS:
+            sources.add(ip)
+        _user_fail[key] = entry
+        _mirror_fail('user', key, entry[0], entry[1])
+        counted = max(counted, entry[0])
+        _note_account_lockout(key, entry)
 
     _prune(_fail)
     _prune(_user_fail)

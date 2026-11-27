@@ -663,6 +663,9 @@ def health_alerts(request: Request):
         'count': len(active),
         'active': active,
         'notify': notify.status(),
+        # 登录锁定（审计 D-1/D-2）：账号锁独立生效之后，锁定只存在内存里，
+        # 巡检脚本要能在**正在发生**时看见「谁被锁着、被几个来源打的」。
+        'login_lockouts': security.login_lockout_snapshot(),
     }, headers={'Cache-Control': 'no-store'})
 
 
