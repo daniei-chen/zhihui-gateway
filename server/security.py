@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 
-from . import config, tokensvc, userroles
+from . import auditidentity, config, tokensvc, userroles
 from .iputil import client_ip
 from .iputil import _is_trusted_proxy  # noqa: SLF001 —— 与 client_ip 同一份可信代理判据
 
@@ -936,6 +936,9 @@ def _current_user(request: Request) -> dict:
 
 def current_user(request: Request) -> dict:
     user = _current_user(request)
+    # Authentication succeeded: retain its identity even when a scope guard
+    # below rejects the operation. Copy only the credential-free audit fields.
+    auditidentity.bind(request, user)
     if user.get('role') == userroles.ACCOUNT_ADMIN and not user.get('scope'):
         if not userroles.account_route_allowed(request.method, request.url.path):
             raise HTTPException(status_code=403, detail='管理员仅可添加账号，其他操作需要超级管理员权限')
@@ -989,7 +992,6 @@ def current_user(request: Request) -> dict:
         if not (is_read and in_scope and not blocked):
             raise HTTPException(status_code=403,
                                 detail='只读服务令牌仅允许读取既有数据（不得写、不得读凭据/用户面）')
-    request.state.audit_actor = user.get('username', 'anonymous')
     return user
 
 

@@ -28,15 +28,21 @@ class ReleaseConsistencyTests(unittest.TestCase):
         self.assertEqual(changelog, server_changelog)
         self.assertRegex(changelog, rf'(?m)^## \[{re.escape(version)}\]')
 
-    def test_provenance_cannot_remain_an_old_candidate(self):
+    def test_provenance_matches_version_and_distinguishes_source_from_release(self):
         version = (ROOT / 'VERSION').read_text(encoding='ascii').strip()
         provenance = json.loads(
             (ROOT / 'server/release-provenance.json').read_text(encoding='utf-8')
         )
         self.assertEqual(provenance['version'], version)
         self.assertEqual(provenance['release_id'], f'v{version}')
-        self.assertFalse(provenance['candidate_only'])
-        self.assertEqual(provenance['source_kind'], 'github-actions-release')
+        if provenance['candidate_only']:
+            self.assertEqual(provenance['source_kind'], 'source-candidate')
+            self.assertIs(provenance['production_deployed'], False)
+            self.assertIsNone(provenance['source_commit'])
+            self.assertIs(provenance['signed'], False)
+        else:
+            self.assertEqual(provenance['source_kind'], 'github-actions-release')
+            self.assertRegex(provenance['source_commit'], r'^[0-9a-f]{40}$')
 
         writer = json.loads(
             (ROOT / 'server/writer-capabilities.json').read_text(encoding='utf-8')

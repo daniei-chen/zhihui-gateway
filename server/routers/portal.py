@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import secrets
+import time
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -25,29 +26,56 @@ _PORTAL_IP_LOCK = __import__('threading').Lock()
 _PORTAL_IP_MAX = 10
 _PORTAL_USER_MAX = 5
 _PORTAL_IP_WINDOW = 600
+_PORTAL_FAIL_MAX_ENTRIES = 4096
+_PORTAL_FAIL_PRUNE_SECONDS = 30
+_portal_fail_prune_at = 0.0
+
+
+def _portal_prune_failures(now: float, *, full: bool = False) -> None:
+    """Called with the lock held; expire state, never evict an active limiter."""
+    global _portal_fail_prune_at
+    if not full and now < _portal_fail_prune_at:
+        return
+    for failures in (_PORTAL_IP_FAILS, _PORTAL_USER_FAILS):
+        for key, (_, first) in list(failures.items()):
+            if now - first >= _PORTAL_IP_WINDOW:
+                failures.pop(key, None)
+    _portal_fail_prune_at = now + _PORTAL_FAIL_PRUNE_SECONDS
+
+
+def _portal_failure_blocked(failures: dict, key, maximum: int | None) -> bool:
+    with _PORTAL_IP_LOCK:
+        now = time.monotonic()
+        _portal_prune_failures(now, full=len(failures) >= _PORTAL_FAIL_MAX_ENTRIES)
+        count, first = failures.get(key, [0, now])
+        if now - first >= _PORTAL_IP_WINDOW:
+            failures.pop(key, None)
+            return False
+        if key in failures:
+            return maximum is not None and count >= maximum
+        # A full table must not forget a blocked identity to admit a new one.
+        # Existing identities retain their own allowance; new ones retry after
+        # expiry or a successful login frees a slot.
+        return len(failures) >= _PORTAL_FAIL_MAX_ENTRIES
+
+
+def _portal_failure_record(failures: dict, key) -> None:
+    with _PORTAL_IP_LOCK:
+        now = time.monotonic()
+        _portal_prune_failures(now, full=len(failures) >= _PORTAL_FAIL_MAX_ENTRIES)
+        count, first = failures.get(key, [0, now])
+        if now - first >= _PORTAL_IP_WINDOW:
+            count, first = 0, now
+        if key in failures or len(failures) < _PORTAL_FAIL_MAX_ENTRIES:
+            failures[key] = [count + 1, first]
 
 
 def _portal_ip_blocked(ip: str) -> bool:
-    import time
-    with _PORTAL_IP_LOCK:
-        count, first = _PORTAL_IP_FAILS.get(ip, [0, 0.0])
-        return count >= _PORTAL_IP_MAX and time.time() - first < _PORTAL_IP_WINDOW
+    return _portal_failure_blocked(_PORTAL_IP_FAILS, ip, _PORTAL_IP_MAX)
 
 
 def _portal_ip_record(ip: str) -> None:
-    import time
-    with _PORTAL_IP_LOCK:
-        now = time.time()
-        count, first = _PORTAL_IP_FAILS.get(ip, [0, now])
-        if now - first >= _PORTAL_IP_WINDOW:
-            count, first = 0, now
-        _PORTAL_IP_FAILS[ip] = [count + 1, first]
-        if len(_PORTAL_IP_FAILS) > 4096:
-            for key, value in list(_PORTAL_IP_FAILS.items()):
-                if now - value[1] >= _PORTAL_IP_WINDOW:
-                    _PORTAL_IP_FAILS.pop(key, None)
-            while len(_PORTAL_IP_FAILS) > 4096:
-                _PORTAL_IP_FAILS.pop(next(iter(_PORTAL_IP_FAILS)))
+    _portal_failure_record(_PORTAL_IP_FAILS, ip)
 
 
 def _portal_ip_clear(ip: str) -> None:
@@ -56,22 +84,21 @@ def _portal_ip_clear(ip: str) -> None:
 
 
 def _portal_user_blocked(ip: str, username: str) -> bool:
-    import time
     key = (ip, username.strip().lower())
-    with _PORTAL_IP_LOCK:
-        count, first = _PORTAL_USER_FAILS.get(key, [0, 0.0])
-        return count >= _PORTAL_USER_MAX and time.time() - first < _PORTAL_IP_WINDOW
+    return _portal_failure_blocked(_PORTAL_USER_FAILS, key, _PORTAL_USER_MAX)
+
+
+def _portal_user_capacity_blocked(ip: str, username: str) -> bool:
+    # A password reset clears the authoritative account lock in SQLite. Keep
+    # its existing recovery behavior: local count thresholds are checked only
+    # together with that lock below; capacity alone can reject before DB work.
+    key = (ip, username.strip().lower())
+    return _portal_failure_blocked(_PORTAL_USER_FAILS, key, None)
 
 
 def _portal_user_record(ip: str, username: str) -> None:
-    import time
     key = (ip, username.strip().lower())
-    with _PORTAL_IP_LOCK:
-        now = time.time()
-        count, first = _PORTAL_USER_FAILS.get(key, [0, now])
-        if now - first >= _PORTAL_IP_WINDOW:
-            count, first = 0, now
-        _PORTAL_USER_FAILS[key] = [count + 1, first]
+    _portal_failure_record(_PORTAL_USER_FAILS, key)
 
 
 def _portal_user_clear(ip: str, username: str) -> None:
@@ -123,7 +150,7 @@ async def login(request: Request, body: dict = Body(...)):
     if not isinstance(username, str) or not isinstance(password, str) or len(username) > 64 or len(password) > 256:
         raise HTTPException(status_code=400, detail='登录格式无效')
     ip = client_ip(request)
-    if _portal_ip_blocked(ip):
+    if _portal_ip_blocked(ip) or _portal_user_capacity_blocked(ip, username):
         raise HTTPException(status_code=429, detail='登录尝试过多，请稍后重试')
     global _login_active
     if _login_active >= 4:

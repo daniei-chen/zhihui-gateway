@@ -1305,7 +1305,7 @@ def preauthorize_body(request: Request, *, anthropic: bool = False):
         hint = request.headers.get('x-qtg-platform', '')
         explicit = bool(hint.strip()) or any(
             original == f'/{p}/v1' or original.startswith(f'/{p}/v1/')
-            for p in platformpolicy.PLATFORMS)
+            for p in platformpolicy._ACCEPTED)
         try:
             selected = platformpolicy.select(original, hint)
         except platformpolicy.PlatformConflict as error:

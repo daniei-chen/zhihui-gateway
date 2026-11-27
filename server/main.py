@@ -493,6 +493,7 @@ from .portalregistration import BODY_LIMIT as REGISTRATION_BODY_LIMIT
 LOGIN_BODY_LIMIT = 64 * 1024
 API_PATH_LIMITS={**{path:MAX_PACKAGE_BODY_BYTES for path in PACKAGE_UPLOAD_PATHS},
                  '/api/portal/register':REGISTRATION_BODY_LIMIT,
+                 '/api/portal/login':LOGIN_BODY_LIMIT,
                  '/api/login':LOGIN_BODY_LIMIT}
 
 

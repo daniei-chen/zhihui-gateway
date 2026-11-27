@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import urlopen
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from server import budget, budgetowner, config, db, security, tokensvc
+from server import budget, budgetowner, config, db, platformpolicy, security, tokensvc
 from server.routers import gateway
 
 
@@ -45,6 +46,11 @@ class LiveHttpPlatformFlowTest(unittest.TestCase):
         self.spec_patch = patch.object(gateway, '_THREEWAY_SPEC', {
             'qoder': (self.base, str(secret)), 'trae': (self.base, str(secret))})
         self.spec_patch.start()
+        # These are synthetic online providers; real retired-platform defaults
+        # must stay closed even when historical keys and secrets remain.
+        self.enterContext(patch.dict(platformpolicy.PLATFORM_SPEC, {
+            name: replace(platformpolicy.spec(name), enabled=True)
+            for name in ('qoder', 'trae')}))
         db.connect()
         from server.main import app
         self.client = TestClient(app)

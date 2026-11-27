@@ -41,10 +41,7 @@ def list_records(limit: int = Query(50, ge=1, le=500),
 def status(user: dict = Depends(security.require_panel_reader)) -> dict:
     """开关、计数、保留策略。排查「为什么没有记录」时先看这里。"""
     payload = traffic.stats()
-    try:
-        payload['setting'] = db.get_setting(SETTING_KEY, True)
-    except Exception:  # noqa: BLE001 - 数据库异常不该让状态页 500
-        payload['setting'] = None
+    payload.update(traffic.setting_status())
     return payload
 
 
@@ -60,7 +57,7 @@ def read_one(request_id: str, user: dict = Depends(security.require_panel_reader
 
 @router.get('/{request_id}/export', response_class=HTMLResponse)
 def export_one(request_id: str, user: dict = Depends(security.require_panel_reader)) -> HTMLResponse:
-    """导出单文件 HTML：内联全部内容，可以直接发给别人。"""
+    """导出单文件 HTML；已定义字段脱敏后仍应按用户内容保管。"""
     record = traffic.read_record(request_id)
     if record is None:
         raise HTTPException(status_code=404,
@@ -77,19 +74,25 @@ def set_enabled(body: dict, user: dict = Depends(security.require_admin)) -> dic
 
     · 环境变量是**总开关**。总开关关闭时这里写成什么都不生效 —— 返回 `blocked_by`
       让调用方知道原因，而不是静默成功。
-    · 开关状态有 5 秒缓存（热路径不能每请求查库），所以切换后立刻发的请求可能
-      仍按旧值处理。
+    · 当前实例写入后立即刷新；其他实例按 5 秒缓存周期刷新。effective 是当前实例
+      的状态，不假称已收到所有实例的生效确认。关闭也不删除在途或已存内容。
     """
     if 'enabled' not in body:
         raise HTTPException(status_code=400, detail='缺少 enabled 字段')
-    enabled = bool(body['enabled'])
+    if type(body['enabled']) is not bool:
+        raise HTTPException(status_code=400, detail='enabled 必须为布尔值')
+    enabled = body['enabled']
     db.execute('INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)',
                (SETTING_KEY, 'true' if enabled else 'false'))
-    applied = traffic.enabled()
-    payload = {'setting': enabled, 'effective': applied, 'cache_seconds': 5}
-    if enabled and not applied:
-        payload['blocked_by'] = 'WB_TRAFFIC_TAP=0'
+    traffic.invalidate_flag()
+    payload = traffic.setting_status()
+    if payload.get('blocked_by') == 'WB_TRAFFIC_TAP=0':
         payload['detail'] = '抓包总开关由部署环境控制，当前关闭；改环境变量并重启后才会生效'
-    if not enabled:
-        payload['detail'] = '已停止记录新请求；已落盘的记录按保留期清理'
+    elif payload['blocked_reason'] == 'settings_unavailable':
+        payload['detail'] = '开关已保存，但读取状态失败；当前实例暂不记录新请求'
+    elif not payload['effective']:
+        payload['detail'] = ('当前实例已停止记录新请求；其他实例按 5 秒缓存周期刷新。'
+                             '在途请求可能继续收尾，已落盘记录按保留期清理')
+    else:
+        payload['detail'] = '当前实例已开启记录新请求；其他实例按 5 秒缓存周期刷新'
     return payload

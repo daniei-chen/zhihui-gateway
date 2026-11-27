@@ -19,7 +19,7 @@ class PlatformSpec:
     """一个平台的静态属性。**不要在任何地方再写死平台名元组。**"""
 
     name: str
-    enabled: bool = False          # 在营：对外枚举/UI 切换器/`/api/platforms` 只认这些
+    enabled: bool = False          # 在营：枚举与数据面授权均只允许启用的平台
     default_grant: bool = False    # 进 `DEFAULT_PLATFORMS`（代建/回填的保守集合）
     adapter: str = ''              # 引擎运行时属性名 `rt.<adapter>`；空=无独立引擎
     passthrough: bool = False      # 直连自己的上游（`_THREEWAY_SPEC` 的键集合）
@@ -43,7 +43,7 @@ PLATFORM_SPEC: dict[str, PlatformSpec] = {
     # 与 qoder 同样处理 —— `enabled=False` 让它从 `PLATFORMS` / `DEFAULT_PLATFORMS`
     # / `/api/platforms` / UI 切换器里一并消失，但保留在 `PLATFORM_SPEC` 中，
     # 这样存量密钥若还写着 'trae'，`normalize()` 仍能解析（否则整条鉴权链路 500），
-    # 真正的请求会因运行时没有该引擎而得到明确的「平台已下线」错误。
+    # 真正的请求由 keysvc.validate 显式拒绝，不依赖旧引擎或 secret 是否残留。
     'trae': PlatformSpec(
         name='trae', enabled=False, default_grant=False,
         adapter='trae', passthrough=True, realm_scoped=False, quota_4xx=True,
@@ -65,6 +65,12 @@ PLATFORM_SPEC: dict[str, PlatformSpec] = {
 def spec(name: str):
     """按名字取平台属性；未知平台返回 None。"""
     return PLATFORM_SPEC.get((name or '').strip().lower())
+
+
+def is_enabled(name: str) -> bool:
+    """Data-plane availability; historical parsing must not grant runtime use."""
+    platform = spec(name)
+    return bool(platform and platform.enabled)
 
 
 def passthrough_names() -> tuple:
@@ -92,9 +98,8 @@ PLATFORMS = tuple(n for n, s in PLATFORM_SPEC.items() if s.enabled)
 # 还写着 `qoder`。如果 `normalize()` 直接抛 ValueError，那些**存量数据**
 # 会让整个鉴权链路 500 —— 一个已经不用了的平台不该把在线服务搞挂。
 #
-# 留着的语义是「**可识别、但不可用**」：解析能过，真正的请求会因为
-# `runtime.qoder is None` 而失败（那是明确的「平台已下线」错误，
-# 不是「配置非法」）。
+# 留着的语义是「**可识别、但不可用**」：历史数据解析能过，真正的请求
+# 在 keysvc.validate 的平台启用检查中失败（「平台已下线」，不是「配置非法」）。
 #
 # 判断「某个平台是否还在服务」请一律用 `PLATFORMS`，不要用这个。
 _ACCEPTED = tuple(PLATFORM_SPEC)
@@ -156,7 +161,7 @@ def select(path, header='', model=None):
             break
     hint = (header or '').strip().lower()
     # `_ACCEPTED` 而非 `PLATFORMS`：`X-QTG-Platform: qoder` 属于「已知但已下线」，
-    # 应该走到下游被明确拒绝（runtime.qoder is None），而不是在这里报
+    # 应该走到统一授权检查被明确拒绝，而不是在这里报
     # 「Unknown」——那条错误会让排障方向变成「是不是拼错了平台名」。
     if hint and hint not in _ACCEPTED:
         raise PlatformConflict('Unknown X-QTG-Platform', 'invalid_platform')

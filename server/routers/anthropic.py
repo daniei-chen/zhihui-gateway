@@ -1319,10 +1319,6 @@ async def messages(request: Request):
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
     wire = await gateway._prepare_forward_async(key,payload, request=request)
-    # 0.1.1：trae 的 OpenAI 端点不透传 tools，走原生 Anthropic 直通
-    if getattr(request.state, 'requested_platform', '') == 'trae':
-        return await trae_native_messages(request, body, key, ip, model,
-                                          mapped or '', ua, upstream, stream, session_key)
     if isinstance(wire, JSONResponse):
         error = json.loads(wire.body).get('error') or {}
         error_type = error.get('type', 'api_error')
@@ -1333,6 +1329,11 @@ async def messages(request: Request):
         if wire.headers.get('Retry-After'):
             response.headers['Retry-After'] = wire.headers['Retry-After']
         return response
+    # Any native adapter must observe preparation's budget/authorization refusal
+    # before it is allowed to contact an upstream.
+    if getattr(request.state, 'requested_platform', '') == 'trae':
+        return await trae_native_messages(request, body, key, ip, model,
+                                          mapped or '', ua, upstream, stream, session_key)
     started = time.time()
 
     # U13（2026-10-28）：与 gateway `_chat` **共用同一套预算对象**（连接 / 首包 /

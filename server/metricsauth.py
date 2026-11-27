@@ -7,7 +7,7 @@ import stat
 
 from fastapi import Request
 
-from . import config, security
+from . import auditidentity, config, security
 
 
 def _collector_secret() -> str:
@@ -39,7 +39,7 @@ def require_metrics(request: Request) -> dict:
         configured = ''
     if configured and supplied and secrets.compare_digest(configured.encode(), supplied.encode()):
         actor = {'username': 'collector:metrics', 'role': 'metrics', 'scope': 'metrics'}
-        request.state.audit_actor = actor['username']
+        auditidentity.bind(request, actor)
         return actor
     # Existing session/admin API tokens remain useful for manual diagnosis.
     # A collector secret is not registered in tokensvc and cannot pass this path.

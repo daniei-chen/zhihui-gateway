@@ -169,17 +169,22 @@ def install_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # Pydantic validator contexts may contain exception objects, which are
+        # not JSON serializable. Keep the public location/type/message contract
+        # without echoing credentials in raw input or private validator context.
+        details = [{name: item[name] for name in ('type', 'loc', 'msg') if name in item}
+                   for item in exc.errors()[:8]]
         return JSONResponse(
             status_code=422,
             content={
                 # `detail` 保持 FastAPI 默认形状（校验错误列表）。控制台与既有
                 # 测试按这个字段取值，只给 `error` 会让它们读不到。
-                "detail": exc.errors()[:8],
+                "detail": details,
                 "error": {
                     "code": "validation_error",
                     "message": "请求参数不合法",
                     "type": "invalid_request_error",
-                    "details": exc.errors()[:8],
+                    "details": details,
                 },
             },
         )

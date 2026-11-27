@@ -87,8 +87,9 @@ class PlatformKeyTest(unittest.TestCase):
     def test_legacy_policy_intersection_cannot_expand(self):
         key = keysvc.create_key('legacy', platforms=['qoder', 'trae'])
         key['legacy_platforms'] = ['qoder']
-        self.assertIsNone(keysvc.validate(key, '127.0.0.1', None,
-                                         is_model_list=True, platform='qoder'))
+        self.assertEqual(keysvc.validate(key, '127.0.0.1', None,
+                                         is_model_list=True, platform='qoder').code,
+                         'platform_disabled')
         self.assertEqual(keysvc.validate(key, '127.0.0.1', None,
                                         is_model_list=True, platform='trae').status, 403)
 

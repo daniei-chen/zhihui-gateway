@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,11 @@ class _Fixture(unittest.TestCase):
         fake_key.write_text('mock-platform-key', encoding='utf-8')
         self.stack.enter_context(mock.patch.object(gateway, '_THREEWAY_SPEC', {
             p: (f'http://{p}.mock', str(fake_key)) for p in ('doubaowork', 'trae')}))
+        # This fixture models online synthetic providers to exercise routing
+        # and ledger isolation; real retired-platform defaults remain closed.
+        self.stack.enter_context(mock.patch.dict(platformpolicy.PLATFORM_SPEC, {
+            name: replace(platformpolicy.spec(name), enabled=True)
+            for name in ('doubaowork', 'trae')}))
         self.stack.enter_context(mock.patch.object(gateway, '_REJECTION_RETRY_DELAY_S', 0))
         self.stack.enter_context(mock.patch.object(gateway, '_rejection_retry_limit', return_value=2))
         self.stack.enter_context(mock.patch.object(gateway, 'RATE_MAX_PER_MIN', 0))

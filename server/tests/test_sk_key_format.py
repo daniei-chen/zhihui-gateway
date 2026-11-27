@@ -44,7 +44,8 @@ class KeyFormatTests(unittest.TestCase):
                      'daily_token_quota', 'daily_credit_quota', 'created_at'):
             self.assertEqual(after[name], before[name])
         self.assertIsNotNone(keysvc.validate(after, '127.0.0.1', 'fixture', platform='workbuddy'))
-        self.assertIsNone(keysvc.validate(after, '127.0.0.1', 'fixture', platform='qoder'))
+        self.assertEqual(keysvc.validate(after, '127.0.0.1', 'fixture', platform='qoder').code,
+                         'platform_disabled')
         self.assertEqual(db.query_one('SELECT COUNT(*) n FROM legacy_qtg_keys')['n'], 0)
 
     def test_old_wbk_keys_remain_supported_until_explicit_rotation(self):
