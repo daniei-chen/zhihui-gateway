@@ -213,13 +213,26 @@ def prepare(key, body, *, encoded_body=None):
             # 加「最近 15 分钟」时间窗会让未核对的历史成本被放行 —— 那是安全问题，
             # 不是自愈。正确解法是把 unknown 核对掉（portal-admin 已有
             # GET/POST /wallet-pending 接口），而不是自动放行。
+            #
+            # DAN-23：但「核对掉」不能是唯一出口 —— 那就等于把闸做成终态。
+            # 断连留下的 unknown 没有任何可核的事实（上游没发 usage），人工也
+            # 核不出金额，于是一把密钥会因为一次按 Esc 长期不可用。
+            # 这里沿用项目已有的「处理期限」：`archive_overdue_unknowns` 超过
+            # WB_BUDGET_REVIEW_DEADLINE_DAYS（默认 7 天）仍无上游证据的行会标成
+            # 「已归档待核对」。已归档的行**不再阻塞准入、也不再占用估算** ——
+            # 它是「查过、没有证据、平台承担未知差额」的结论，不是没结论。
+            # 行本身仍是 unknown，随时可人工 resolve；一旦迟到证据到达，分类会
+            # 变成 charged_partial/usage_present 并重新计入（宁可重报）。
+            #
+            # 未归档的 unknown 仍然 fail-closed：上面那两条拒绝原样保留。
             outstanding_total = db.query_one(
                 'SELECT COALESCE(SUM(MAX(0,reserved_tokens-charged_tokens)),0) AS held,'
                 "COALESCE(SUM(CASE WHEN state='unknown' AND reserved_tokens<=0 "
                 'THEN 1 ELSE 0 END),0) AS missing_estimate,'
                 "COALESCE(SUM(CASE WHEN state='unknown' THEN 1 ELSE 0 END),0) AS unknown_count "
-                "FROM budget_reservations WHERE key_id=? AND state IN ('reserved','forwarded','unknown')",
-                (key['id'],))
+                "FROM budget_reservations WHERE key_id=? AND state IN ('reserved','forwarded','unknown')"
+                " AND coalesce(resolution,'') NOT LIKE ?",
+                (key['id'], ARCHIVE_RESOLUTION_PREFIX + '%'))
             total_held = int(outstanding_total['held'])
             if q and outstanding_total['missing_estimate']:
                 raise BudgetRejected('存在缺少 Token 预估的待核对请求，请先核对', 'total_token_unconfirmed')
@@ -315,7 +328,18 @@ def settle(usage, pt, ct, credit):
     ct = ((measured.completion_tokens or 0) if isinstance(usage, dict) and 'completion_tokens' in usage
           else metering._int_or_none(ct)[0] or 0)
     credit = metering.parse_credit(credit)[0]
-    known = (state.terminal_state == 'completed' and measured.complete
+    # DAN-23：终态描述的是**客户端**怎么走的，不是费用是否确定。
+    #
+    # 上游已经把完整 usage 发下来了（prompt/completion/credit 齐全且自洽），
+    # 客户端随后才断开 —— 这笔费用是确定的，唯一的「未知」是调用方为什么走。
+    # 此前这里只认 `completed`，于是这类请求带着 charged_tokens/charged_credit
+    # 落成 `unknown`，进入人工核对队列；而对 credit 配额密钥，任意一条 unknown
+    # 就是一道没有时间窗的闸（`credit_quota_unconfirmed`）——
+    # **一次按 Esc 就能让密钥长期不可用**，队列里却没有事实可核。
+    #
+    # 只放宽这一种：用量证据必须完整自洽。缺任一字段、或 usage 非法、或
+    # 两个 token 字段与落库值不一致，仍然留在 `unknown` 待核对。
+    known = (state.terminal_state in ('completed', 'client_cancelled') and measured.complete
              and not measured.malformed and measured.storage_tokens() == (pt, ct))
     if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
     # 明确的客户端拒绝：上游在参数校验阶段就打回了，没有执行任何推理。

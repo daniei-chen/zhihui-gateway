@@ -598,6 +598,10 @@ PYTEST_MODULES = (
     # DAN-13：红包零份额 / 0 额度 = 不限。用 pytest 的夹具隔离数据目录，
     # unittest 发现不到顶层函数，必须放这一组。
     "server.tests.test_dan13_redpacket_zero_share",
+    # DAN-23：流式断连必须收敛到确定结算，且不能把有额度密钥锁成终态。
+    # 三条都先红后绿（修前 3 failed，修后 3 passed）—— 其中两条走真实 ASGI
+    # 断连（上游发一帧就挂住，客户端在流中途挂断），不是手搓的假输入。
+    "server.tests.test_dan23_disconnect_convergence",
 )
 
 
