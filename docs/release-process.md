@@ -243,6 +243,14 @@ gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 即可恢复，不需要重新打包。私钥保管与信任锚的边界见
 [release-signing.md](release-signing.md)。
 
+2026-11-27（DAN-52）起**发布 tag 必须等于包内 `.version`**：签名对的是包字节而不是
+版本，所以一个签过名的旧包挂到新 tag 下时验签照样通过。更新器现在比对发布 tag 与
+包内 `.version`（后者在签过的字节里），不一致即拒绝；同时拒绝目标版本低于当前已装
+版本（以及无法比较的情况）。确实要回退时用 `--allow-downgrade` /
+`WB_ALLOW_DOWNGRADE=1`，每次放行都会写进 `<数据目录>/update-audit.jsonl`。所以
+**打包时不要手改 `.version` 或把旧产物挂到新 release 上**：两者对不上，用户侧会在
+「发布标签与包内版本不一致」处停下。细节见 [deploy/README.md](../deploy/README.md)。
+
 ## 发布包字节的可复现性
 
 CI 打包时固定了文件排序、mtime 与属主，并让 gzip 不写时间戳（`gzip -n`）。同一份
