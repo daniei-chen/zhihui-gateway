@@ -178,7 +178,9 @@ class HourlyEndpointTest(_Case):
         而断言找的是「当前小时」的桶 —— 每小时边界上都可能偶发失败一次。
         钉进当前小时后，无论什么时候跑都落在同一个桶里。
         """
-        day = time.strftime('%Y-%m-%d')
+        # 与生产同口径（db.day_of，固定 UTC+8）；原先用 time.strftime 跟随
+        # 进程时区，UTC 主机上 16:00Z 之后「今天」会算成前一天。
+        day = self.db.day_of()
         hour = self.db.hour_of()
         start = self.db.hour_start_ts(day=day, hour=hour)
         self._log(start + 1, status=429, pt=0, ct=0)
