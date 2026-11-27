@@ -159,7 +159,7 @@
     "server/tests/test_audit_20261029_security.py": "914692f0adb50737f913d88b01267ab406b63fa53388cbbc660989a246062f0e",
     "server/tests/test_audit_20261029_web_gate.py": "b62c4d41de274827ec6a6141fde5c6cd73660fbdbcee8e35514a787c13791df2",
     "server/tests/test_audit_deploy_failure_paths.py": "40e1a355cf422f4df716dc363a5bb37c6127917de358a8bd231976612f049fce",
-    "server/tests/test_audit_finance_repairs.py": "8ed41be9852cb6d6708303d77e58f282d595602a3c165ac2f8c2bf232b524541",
+    "server/tests/test_audit_finance_repairs.py": "6f3751a712945b95efd12eec10ccb38e2d217b984e0c673e2d97523d79be925b",
     "server/tests/test_audit_identity_platform_boundary.py": "4e95c6251b68ff02b2fd86314344dbf363c35527c3f94091235392bdbc050356",
     "server/tests/test_audit_regressions.py": "fa2536191e0f9c40e906a3f6fe75b00dd98d455a9ff3595c2e474d46c89e056a",
     "server/tests/test_audit_restore_evidence.py": "27c32289939c3198f169d4eb9aee988b5440ac8963d25ccc7338e4ea90f90ff3",
