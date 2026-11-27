@@ -155,6 +155,7 @@ def test_disconnect_after_complete_usage_settles_at_the_measured_amount(state, m
     assert row['charged_tokens'] == 22 and row['charged_credit'] == 0.123456
     assert row['state'] == 'settled'
 
+
 def test_stream_disconnect_does_not_permanently_lock_key(state, monkeypatch):
     """上游没回用量就断连：预留只能是「待核对」，不能变成密钥的终态。
 
@@ -226,6 +227,7 @@ def test_cancelled_unknown_stops_holding_the_token_estimate_after_the_deadline(s
                                json={'model': 'deepseek-v4-flash',
                                      'messages': [{'role': 'user', 'content': 'again'}]},
                                headers={'Authorization': 'Bearer ' + key['key']})
+
     _aged()
     blocked = call()
     assert blocked.status_code == 429 and 'insufficient_quota' in blocked.text
