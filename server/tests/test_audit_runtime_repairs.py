@@ -132,12 +132,12 @@ def test_output_reservation_is_global_or_cohort_wide_and_released_after_terminal
                 'usage':{'prompt_tokens':1,'completion_tokens':1,'credit':0}})
         monkeypatch.setattr(config,'http_client',lambda *a,**kw:httpx.AsyncClient(transport=httpx.MockTransport(handler)))
         app=FastAPI();app.include_router(gateway.router)
-        coordinators=[Coordinator(state/'output-cohort.db',{'active':8,'large':8,'bytes':200000,'preauth':8,
+        coordinators=[Coordinator(state/'output-cohort.db',{'active':8,'large':8,'bytes':120000,'preauth':8,
             'queue':8,'queue_per_key':8,'key_default':4,'key_quota':1}) for _ in range(2)] if shared else []
         first_wrapper=observability.RequestAuditMiddleware(app,shared=coordinators[0] if shared else None)
         second_wrapper=observability.RequestAuditMiddleware(app,shared=coordinators[1]) if shared else first_wrapper
         for wrapper in (first_wrapper,second_wrapper):
-            wrapper.maximum_body_bytes=200000;wrapper.minimum_body_bytes=64
+            wrapper.maximum_body_bytes=120000;wrapper.minimum_body_bytes=64
         key=keysvc.create_key('synthetic output capacity')['key']
         options={'headers':{'authorization':'Bearer '+key},'json':{'model':'m','messages':[{'role':'user','content':'hi'}]}}
         first=None
@@ -146,8 +146,15 @@ def test_output_reservation_is_global_or_cohort_wide_and_released_after_terminal
                        httpx.AsyncClient(transport=httpx.ASGITransport(app=second_wrapper),base_url='http://synthetic') as b:
                 first=asyncio.create_task(a.post('/v1/chat/completions',**options))
                 await asyncio.wait_for(entered.wait(),3)
+                # Initial output promises use the configured 64 KiB cap; actual
+                # buffers/JSON grow later. One request fits, two promises do not.
+                # A tiny wire rounded to 64 KiB would reject even the first.
+                assert 60000 < first_wrapper.inflight_body_bytes <= 120000
+                if shared:
+                    assert coordinators[0].snapshot()['body_bytes'] == first_wrapper.inflight_body_bytes
                 rejected=await b.post('/v1/chat/completions',**options)
                 assert rejected.status_code==503,rejected.text
+                assert rejected.json()['error']['code']=='gateway_capacity_exceeded'
                 assert len(calls)==1  # memory refused BEFORE supplier dispatch/spend
                 if terminal=='cancel':
                     first.cancel()

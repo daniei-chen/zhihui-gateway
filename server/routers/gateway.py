@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 from .. import config, db, iputil, keysvc, upstreamsvc, platformpolicy
-from .. import observability, requestperf, metering, traffic
+from .. import observability, requestperf, metering, traffic, protocolerrors
 from ..outputlimits import OutputLimitExceeded
 from ..requestbody import (BodyReadTimeout, BodyReadWindow, BodyEncodingError,
                           BodySizeExceeded, body_frames, content_encoding)
@@ -138,7 +138,8 @@ def _threeway_upstream(name: str) -> dict | None:
 def _oai_error(message: str, status: int = 400, err_type: str = 'invalid_request_error',
                code: str | None = None, hint: str | None = None, *,
                request_id: str | None = None,
-               upstream_request_id: str | None = None) -> JSONResponse:
+               upstream_request_id: str | None = None,
+               retry_after: int | None = None) -> JSONResponse:
     """OpenAI 形状的错误体。
 
     `hint` 对应上游 2026-09-16 新增的 `error.gateway_hint`：与 message **并列**的
@@ -157,11 +158,11 @@ def _oai_error(message: str, status: int = 400, err_type: str = 'invalid_request
     if hint:
         err['gateway_hint'] = hint
     body: dict = {'error': err}
-    if request_id:
-        body['request_id'] = request_id
-    if upstream_request_id:
-        body['upstream_request_id'] = upstream_request_id
-    return JSONResponse(body, status_code=status)
+    state = observability.current.get()
+    return protocolerrors.response(body, status,
+        request_id=request_id or (state.request_id if state else None),
+        upstream_request_id=upstream_request_id,
+        headers={'Retry-After': str(retry_after)} if retry_after is not None else None)
 
 
 def _oai_error_with_blip(message: str, status: int = 502, exc=None,
@@ -175,8 +176,7 @@ def _oai_error_with_blip(message: str, status: int = 502, exc=None,
 
     退避策略：单次返回头，不在网关内累计（保留每请求独立判断语义）。
     """
-    resp = _oai_error(message, status, err_type, code)
-    resp.headers['Retry-After'] = '5'
+    resp = _oai_error(message, status, err_type, code, retry_after=5)
     resp.headers['X-Upstream-Blip'] = '1'
     return resp
 
@@ -191,16 +191,7 @@ def _oai_error_with_blip_body(message: str, status: int = 502, exc=None,
     + message 末尾提示）任何 OpenAI 兼容客户端都能从 message/原样 JSON 拿到。
     """
     suffix = ' 请等 5 秒后重试'
-    body = {'error': {
-        'message': message + suffix,
-        'type': err_type,
-        'code': code,
-        'retry_after_seconds': 5,
-    }}
-    resp = JSONResponse(body, status_code=status)
-    resp.headers['Retry-After'] = '5'
-    resp.headers['X-Upstream-Blip'] = '1'
-    return resp
+    return _oai_error_with_blip(message + suffix, status, exc, err_type, code)
 
 
 def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONResponse:
@@ -227,15 +218,8 @@ def _oai_error_throttled(message: str, code: str, retry_after: int) -> JSONRespo
     **两个都写，谁通就用谁** —— 只写一个的话，另一条路径上的人什么都拿不到。
     """
     suffix = ' 请等 %d 秒后重试' % retry_after
-    body = {'error': {
-        'message': message + suffix,
-        'type': 'rate_limit_error',
-        'code': code,
-        'retry_after_seconds': retry_after,
-    }}
-    resp = JSONResponse(body, status_code=429)
-    resp.headers['Retry-After'] = str(retry_after)
-    return resp
+    return _oai_error(message + suffix, 429, 'rate_limit_error', code,
+                      retry_after=retry_after)
 
 
 #: 上游转发过等待时间的次数。
@@ -270,19 +254,35 @@ def _upstream_retry_after(resp) -> int | None:
     超过两小时按脏数据丢弃（与上游侧同一口径），避免把异常值当成让客户端等两小时。
     **拿不到就不写字段**，而不是写 0 —— 一个假的等待时间比没有更糟。
     """
+    from ..protocolerrors import retry_after_seconds
     try:
-        raw = resp.headers.get('retry-after')
+        return retry_after_seconds(resp.headers)
     except Exception:      # noqa: BLE001
         return None
-    if not raw:
-        return None
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    if value < 0 or value > 7200:
-        return None
-    return value
+
+
+def _upstream_error_response(data: object, resp: object, *, fallback: str = '') -> JSONResponse:
+    """One HTTP rejection contract for buffered and pre-stream Chat errors."""
+    state = observability.current.get()
+    wait = _upstream_retry_after(resp)
+    payload = data if isinstance(data, dict) else {
+        'error': {'message': data if isinstance(data, str) and data else fallback}}
+    out = protocolerrors.response(payload, resp.status_code,
+        request_id=state.request_id if state else None,
+        upstream_request_id=_upstream_request_id(resp),
+        headers={'Retry-After': str(wait)} if wait is not None else None)
+    if wait is not None:
+        out.headers['Retry-After'] = str(wait)
+        _RETRY_AFTER_FORWARDED['count'] += 1
+        logger.info('上游返回 %s 且给出等待时间 %s 秒，已转发 Retry-After',
+                    resp.status_code, wait)
+    return out
+
+
+def _response_capacity_error() -> JSONResponse:
+    observability.mark_error('gateway_capacity_exceeded')
+    return _oai_error('响应处理容量已满，请稍后重试', 503, 'server_error',
+                      'gateway_capacity_exceeded', retry_after=1)
 
 
 # ── 上游「明确拒绝且未处理」的有界重试（2026-10-28）────────────────────────
@@ -597,12 +597,30 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
         return None, _oai_error('请求体编码仅支持 identity 或 gzip' if unsupported else 'gzip 请求体损坏或未完整传输',
                                 415 if unsupported else 400, 'invalid_request_error', str(exc))
     except observability.CapacityError:
-        return None, _oai_error('大上下文处理容量已满，请稍后重试',503,'server_error','gateway_capacity_exceeded')
+        return None, _oai_error('大上下文处理容量已满，请稍后重试',503,'server_error',
+                                'gateway_capacity_exceeded', retry_after=1)
     except Exception:  # noqa: BLE001
         return None, _oai_error('读取请求体失败', 400)
 
+    from ..services.asyncwork import loop_callback
+    from .. import memorybudget
+    request_state = observability.current.get()
+    reserve_objects = loop_callback(getattr(request_state, 'reserve_decoded_body', None))
+    # Protocol adapters may keep the source tree while constructing a Chat tree.
+    # Reserve that workspace before decoding; check both retained trees again
+    # before preparation instead of replacing the source graph's charge.
+    graph_copies = 2 if getattr(request_state, 'protocol', None) in ('anthropic', 'responses') else 1
+
     def parse():
+        if reserve_objects is not None:
+            reserve_objects(graph_copies * memorybudget.json_allocation_bound(chunks))
         value = json.loads(b''.join(chunks))
+        retained = memorybudget.retained_json_bytes(value)
+        if reserve_objects is not None:
+            reserve_objects(graph_copies * retained)
+        if request_state is not None:
+            request_state.input_json_identity = id(value)
+            request_state.input_json_bytes = retained
         invalid = _invalid_unicode_path(value) if isinstance(value, dict) else None
         return value, invalid
     try:
@@ -610,6 +628,9 @@ async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse |
         from .. import requestperf
         with requestperf.measure('json_parse'):
             body, invalid = await joined_thread(parse)
+    except observability.CapacityError:
+        return None, _oai_error('JSON 对象处理容量已满，请稍后重试', 503,
+                                'server_error', 'gateway_capacity_exceeded', retry_after=1)
     except Exception:  # noqa: BLE001
         return None, _oai_error('请求体不是合法 JSON', 400)
     if not isinstance(body, dict):
@@ -1141,16 +1162,63 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
 
 
 async def _record_async(*args, **kwargs) -> None:
-    """在线程里跑 `_record`：它是 1 个事务 + 5～7 条语句 + 至少一次 fsync。
+    """Persist off-loop and retain request ownership through repeated cancellation.
 
-    直接在事件循环上跑会把所有在途 SSE 流一起卡住（`db` 是同步 SQLite）。
-    `asyncio.to_thread` 会复制 contextvars，所以 `_record` 里读的
-    `observability.current` 与 `forced_platform` 仍然是**这个请求**的。
-
-    流式响应的 `finally` 不走这里：那里 await 会在取消/关闭时丢掉结算，
-    丢一行账比阻塞一会儿更糟。
+    The bounded persistence lane keeps an accepted transaction/spool attempt alive
+    until it finishes. Streaming finalizers use the same path, so a slow SQLite
+    writer cannot stall unrelated SSE responses or outlive an already-freed lease.
     """
-    await asyncio.to_thread(_record, *args, **kwargs)
+    from ..services import persistence
+    await persistence.run(_record, *args, **kwargs)
+
+
+async def _record_cancelled_response(key, ip, model, mapped, data, started, ua,
+                                     *, effort=None, session_key=None):
+    """Keep a fully parsed supplier receipt even if the caller left during parse."""
+    state = observability.current.get()
+    if state is not None:
+        state.http_status = 499
+        state.terminal_state, state.error_stage = 'client_cancelled', 'client'
+    usage = _response_usage(data)
+    await _record_async(key, ip, model, mapped, 499,
+        observability.usage_int(usage.get('prompt_tokens')),
+        observability.usage_int(usage.get('completion_tokens')),
+        int((time.time() - started) * 1000), ua,
+        'client cancelled while parsing the complete upstream response', False,
+        usage=usage, effort=effort, session_key=session_key)
+
+
+async def _response_json_async(response, *, cancelled_receipt=None):
+    """Reserve object/decode memory before parsing a buffered provider response."""
+    from .. import memorybudget
+    from ..services.asyncwork import joined_thread, loop_callback
+    from ..outputlimits import FAILURE_ENVELOPE_BYTES
+    reserve = loop_callback(getattr(observability.current.get(), 'reserve_output_body', None))
+    raw = response.content
+    parsed = []
+
+    def parse():
+        if reserve is not None:
+            reserve(2 * len(raw) + memorybudget.json_allocation_bound((raw,))
+                    + FAILURE_ENVELOPE_BYTES)
+        value = response.json()
+        # One reference to the already-budgeted graph, not a response copy. A
+        # joined worker may finish parsing after its caller has been cancelled.
+        parsed.append(value)
+        if reserve is not None:
+            reserve(2 * len(raw) + memorybudget.retained_json_bytes(value)
+                    + FAILURE_ENVELOPE_BYTES)
+        return value
+
+    try:
+        return await joined_thread(parse)
+    except asyncio.CancelledError:
+        if parsed and cancelled_receipt is not None:
+            await cancelled_receipt(parsed[0])
+        raise
+    except observability.CapacityError:
+        from ..deadline import RetainedMemoryExceeded
+        raise RetainedMemoryExceeded('Gateway retained-memory capacity is full') from None
 
 
 def _global_ip_blocked(ip: str) -> bool:
@@ -2585,10 +2653,8 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
         return _oai_error('请求转换后不是可转发的合法 JSON',400,
                           'invalid_request_error','invalid_forward_json')
     except observability.CapacityError:
-        response = _oai_error('入站与转发请求体容量已满，请稍后重试',503,
-                              'server_error','gateway_capacity_exceeded')
-        response.headers['Retry-After'] = '1'
-        return response
+        return _oai_error('入站与转发请求体容量已满，请稍后重试',503,
+                          'server_error','gateway_capacity_exceeded', retry_after=1)
     except budget.BudgetRejected as exc:
         # U21：预算拒绝的原因本身就是稳定码（budget_pending / insufficient_quota /
         # credit_quota_exhausted / ledger_backpressure …），直接沿用。
@@ -2599,12 +2665,8 @@ def _prepare_forward(key,body, *, reserve=None, check_cancelled=None, defer_forw
         _retry_after = getattr(exc, 'retry_after', None)
         if _retry_after:
             _err_type = 'server_error' if exc.status >= 500 else 'insufficient_quota'
-            _body = {'error': {'message': str(exc), 'type': _err_type,
-                               'code': exc.code,
-                               'retry_after_seconds': int(_retry_after)}}
-            _resp = JSONResponse(_body, status_code=exc.status)
-            _resp.headers['Retry-After'] = str(int(_retry_after))
-            return _resp
+            return _oai_error(str(exc), exc.status, _err_type, exc.code,
+                              retry_after=int(_retry_after))
         return _oai_error(str(exc),exc.status,'server_error' if exc.status >= 500 else 'insufficient_quota',exc.code)
     if state and getattr(state, 'performance', None):
         state.performance.size('forward_bytes', len(wire))
@@ -2635,6 +2697,9 @@ async def _prepare_forward_async(key, body, *, request=None):
     loop = asyncio.get_running_loop()
     state = observability.current.get()
     original_reserve = getattr(state, 'reserve_wire_body', None)
+    from .. import memorybudget
+    from ..services.asyncwork import loop_callback
+    decoded_reserve = loop_callback(getattr(state, 'reserve_decoded_body', None))
     output_reserve=getattr(state,'reserve_output_body',None)
     if output_reserve is not None:
         from ..outputlimits import maximum_bytes, FAILURE_ENVELOPE_BYTES, declared_output_bytes
@@ -2671,8 +2736,8 @@ async def _prepare_forward_async(key, body, *, request=None):
                 'gateway_capacity_exceeded',
                 hint=('in-flight response reservations reached the memory ceiling; '
                       'this is a capacity guard, not a key, quota or model problem. '
-                      'Retry shortly, or lower the concurrency of long-output requests.'))
-            response.headers['Retry-After'] = '1'
+                      'Retry shortly, or lower the concurrency of long-output requests.'),
+                retry_after=1)
             return response
     cancelled = threading.Event()
     reserved = 0
@@ -2686,8 +2751,10 @@ async def _prepare_forward_async(key, body, *, request=None):
         check_cancelled()
         if original_reserve is None or size <= reserved:
             return
-        # 只在跨过阶梯时才真去协调器预留；中间的 64 KiB 块只更新本地计数。
-        target = _reserve_step(size)
+        # A single partial encoder block is already the complete wire body; it
+        # gains no batching benefit from rounding a tiny request to 64 KiB.
+        # Larger bodies retain the ladder's bounded coordinator call count.
+        target = size if size <= _RESERVE_STEPS[0] else _reserve_step(size)
         if target <= reserved:
             reserved = size
             return
@@ -2706,9 +2773,15 @@ async def _prepare_forward_async(key, body, *, request=None):
         reserved = target
 
     def work():
+        source_bytes = (getattr(state, 'input_json_bytes', 0)
+                        if getattr(state, 'input_json_identity', id(body)) != id(body) else 0)
+        if decoded_reserve is not None:
+            decoded_reserve(source_bytes + memorybudget.retained_json_bytes(body))
         with requestperf.measure('forward_prepare'):
             result = _prepare_forward(key, body, reserve=reserve, check_cancelled=check_cancelled,
                                       defer_forwarded=True)
+        if decoded_reserve is not None:
+            decoded_reserve(source_bytes + memorybudget.retained_json_bytes(body))
         requestperf.mark('forward_prepared')
         return result
 
@@ -2950,8 +3023,12 @@ async def _chat(request: Request, upstream_path: str):
             latency = int((time.time() - started) * 1000)
             usage = {}
             try:
-                data = resp.json()
+                data = await _response_json_async(resp, cancelled_receipt=lambda value:
+                    _record_cancelled_response(key, ip, requested_model or '', mapped or '',
+                        value, started, ua, effort=effort, session_key=session_key))
                 usage = _response_usage(data)
+            except OutputLimitExceeded:
+                raise
             except Exception:
                 data = None
             # 抓包：上游回什么就记什么（含错误体）。放在这里而不是各个 return
@@ -2996,38 +3073,12 @@ async def _chat(request: Request, upstream_path: str):
             )
             if resp.status_code < 400:
                 return converted
-            # 上游的等待时间此前在这里被丢掉：body 原样透传，响应头没人接。
-            # 现在把它转发出去 —— 头 + body 双写，理由见 `_oai_error_throttled`
-            # 的说明（头在反代链路上不稳，体字段客户端能可靠读到）。
-            wait = _upstream_retry_after(resp)
-            if data is not None:
-                if wait is not None and isinstance(data, dict):
-                    err = data.get('error')
-                    if isinstance(err, dict) and 'retry_after_seconds' not in err:
-                        err['retry_after_seconds'] = wait
-                out = JSONResponse(data, status_code=resp.status_code)
-            else:
-                body = {'error': {'message': resp.text[:1000], 'type': 'api_error'}}
-                if wait is not None:
-                    body['error']['retry_after_seconds'] = wait
-                out = JSONResponse(body, status_code=resp.status_code)
-            if wait is not None:
-                out.headers['Retry-After'] = str(wait)
-                _RETRY_AFTER_FORWARDED['count'] += 1
-                # 记一行，让这个转发**可被事后验证**。
-                #
-                # 2026-11-15 实现这条转发时想端到端验证它，结果发现做不到：
-                # 上游的 429/503 是外部条件，没法主动构造；而请求记录里
-                # 只存状态码与错误文本，**不存响应头**。
-                #
-                # 于是「这条转发有没有真的生效」在当时无法回答 ——
-                # 只能靠单测说「函数返回了正确的数」。
-                #
-                # 有了这行，下次上游真给出等待时间时，日志里会留下一条。
-                # 频率不高（24 小时内上游 5xx 约几十次），info 级别不会吵。
-                logger.info('上游返回 %s 且给出等待时间 %s 秒，已转发 Retry-After',
-                            resp.status_code, wait)
-            return out
+            return _upstream_error_response(data, resp, fallback=resp.text[:1000])
+        except deadline_mod.RetainedMemoryExceeded:
+            await _record_async(key, ip, requested_model or '', mapped or '', 503, 0, 0,
+                    int((time.time() - started) * 1000), ua, 'response memory capacity full', False,
+                    effort=effort, session_key=session_key)
+            return _response_capacity_error()
         except OutputLimitExceeded:
             _mark_output_limit_failure()
             message = 'Upstream output exceeds the configured byte limit'
@@ -3088,8 +3139,7 @@ async def _chat(request: Request, upstream_path: str):
                     observability.usage_int(usage.get('completion_tokens')),
                     int((time.time() - started) * 1000), ua, text[:500], True,
                     usage=usage, effort=effort, session_key=session_key)
-            return Response(early, status_code=resp.status_code,
-                            media_type=resp.headers.get('content-type', 'application/json'))
+            return _upstream_error_response(data, resp, fallback=text[:4096])
     except (asyncio.CancelledError, GeneratorExit) as exc:
         _mark_pre_stream_failure(exc)
         await _record_async(key, ip, requested_model or '', mapped or '', 499, 0, 0,
@@ -3199,6 +3249,10 @@ async def _chat(request: Request, upstream_path: str):
                 audit.error_code='upstream_timeout'
                 logger.warning('stream budget exceeded request_id=%s kind=%s',
                                state.request_id if state else None, exc.kind)
+            elif isinstance(exc, deadline_mod.RetainedMemoryExceeded):
+                error_text='网关响应处理容量已满，本次回答已中止'
+                audit.error_stage='admission'
+                audit.error_code='gateway_capacity_exceeded'
             elif isinstance(exc, OutputLimitExceeded):
                 # 0.1.6: 输出字节上限必须先于 generic 归类，否则会被记成
                 # transport_error/502，导致「上游已生成但被截断」不可归因、usage 丢失。
@@ -3230,7 +3284,7 @@ async def _chat(request: Request, upstream_path: str):
                     resp,client,timeout=deadline_mod.close_timeout(budgets))
             finally:
                 usage=audit.usage
-                _record(key,ip,requested_model or '',mapped or '',status_code,
+                await _record_async(key,ip,requested_model or '',mapped or '',status_code,
                         observability.usage_int(usage.get('prompt_tokens')),observability.usage_int(usage.get('completion_tokens')),
                         int((time.time()-started)*1000),ua,error_text,True,usage=usage,first_token=first_token_ms, effort=effort, session_key=session_key)
 

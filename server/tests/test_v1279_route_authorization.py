@@ -42,6 +42,9 @@ ANONYMOUS_BY_DESIGN = {
     'gateway.py:list_models',
     'gateway.py:key_usage',
     'gateway.py:usage_v1',
+    # Token balance calls _authorize_usage_key(request); missing/revoked credentials
+    # are exercised through HTTP in test_usage_token_protocol.
+    'gateway.py:usage_token',
     'responses.py:responses_root',
     'responses.py:responses_v1',
     'anthropic.py:messages',

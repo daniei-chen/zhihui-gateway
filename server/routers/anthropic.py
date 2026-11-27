@@ -39,7 +39,7 @@ from ..outputlimits import bounded_events, OutputLimitExceeded, output_limit_fai
 from ..inputcontent import UnsupportedContentError
 
 from .. import config, db, iputil, keysvc, upstreamsvc
-from .. import observability
+from .. import observability, protocolerrors
 from .. import deadline as deadline_mod
 # responses 只为复用推理凭据的编解码（`_encode_credential` / `_decode_credential`）：
 # Anthropic 的 `signature` 与 Responses 的 `encrypted_content` 语义完全相同——
@@ -64,7 +64,8 @@ _STOP_REASON = {
 
 def _err(message: str, status: int = 400, err_type: str = 'invalid_request_error',
          hint: str | None = None, *, code: object = None,
-         upstream_request_id: str | None = None) -> JSONResponse:
+         upstream_request_id: str | None = None,
+         retry_after: int | None = None) -> JSONResponse:
     """Anthropic 风格的错误体。
 
     与 OpenAI 的区别不只是字段名：Anthropic 把错误包在 `{"type":"error","error":{...}}`
@@ -81,11 +82,10 @@ def _err(message: str, status: int = 400, err_type: str = 'invalid_request_error
         err['code'] = str(code)[:128]
     body = {'type': 'error', 'error': err}
     state = observability.current.get()
-    if state:
-        body['request_id'] = state.request_id
-    if upstream_request_id:
-        body['upstream_request_id'] = upstream_request_id
-    return JSONResponse(body, status_code=status)
+    return protocolerrors.response(body, status, protocol='anthropic',
+        request_id=state.request_id if state else None,
+        upstream_request_id=upstream_request_id,
+        headers={'Retry-After': str(retry_after)} if retry_after is not None else None)
 
 
 def _upstream_error(data: object, status: int, headers: dict) -> JSONResponse:
@@ -107,9 +107,11 @@ def _upstream_error(data: object, status: int, headers: dict) -> JSONResponse:
     if state:
         state.error_stage = 'upstream'
         state.terminal_state = 'upstream_error'
-    return _err(str(message)[:4096], status, str(error.get('type') or 'api_error')[:64],
+    return _err(str(message)[:4096], status,
+                str(error.get('type') or protocolerrors.error_type(status, 'anthropic'))[:64],
                 hint=gateway._error_hint(data), code=error.get('code'),
-                upstream_request_id=request_id)
+                upstream_request_id=request_id,
+                retry_after=protocolerrors.retry_after_seconds(headers))
 
 
 def _error_diagnostic(response: JSONResponse, status: int) -> str:
@@ -224,7 +226,8 @@ def _authorize(request: Request, model: str | None, *,
     key, token = _resolve_key(request)
     if not token:
         logger.warning('未取到令牌，收到的请求头: %s', _header_names(request))
-        return None, ip, _err('缺少 API Key：请在 x-api-key 或 Authorization: Bearer 中提供', 401, 'authentication_error')
+        return None, ip, _err('缺少 API Key：请在 x-api-key 或 Authorization: Bearer 中提供',
+                             401, 'authentication_error', code='missing_api_key')
     if key is None:
         # 「配了却 401」几乎只能靠这行定位：候选个数/长度说明客户端发了什么，
         # 前缀是密钥的**公开部分**（面板列表里就显示它），便于比对是哪一把；
@@ -241,14 +244,12 @@ def _authorize(request: Request, model: str | None, *,
             len(request.headers.get('authorization', '')),
             _header_names(request),
         )
-        return None, ip, _err('API Key 无效', 401, 'authentication_error')
+        return None, ip, _err('API Key 无效', 401, 'authentication_error', code='invalid_api_key')
 
     key, ip, error = gateway._authorize_key(request, key, ip, model,
                                           is_model_list=(model is None), mapped=mapped)
     if error is not None:
-        value = json.loads(error.body).get('error') or {}
-        return key, ip, _err(value.get('message', '请求被拒绝'), error.status_code,
-                             value.get('type', 'permission_error'), code=value.get('code'))
+        return key, ip, protocolerrors.adapt(error, protocol='anthropic')
     return key, ip, None
 
 
@@ -1255,13 +1256,8 @@ async def messages(request: Request):
     """Anthropic Messages API。"""
     body, err = await gateway._read_json_body(request)
     if err:
-        # 保留网关注入的状态码语义：413（体太大）与 400（JSON 非法）是两回事。
-        # 一律写死 400 会让客户端在「体太大」时误判为格式问题——它只会原样重试，
-        # 而不会去压缩上下文或调大上限（gateway 那条路给的就是 413 + 调参建议）。
-        if getattr(err, 'status_code', 0) == 413:
-            return _err('请求体超过上限：请压缩上下文或附件。'
-                        '该上限由本网关设置（环境变量 WB_GATEWAY_MAX_BODY_MB）', 413)
-        return _err('请求体不是合法 JSON 对象')
+        # Preserve 408/413/415/503 and retry advice from the shared body guard.
+        return protocolerrors.adapt(err, protocol='anthropic')
 
     model = body.get('model')
     if not isinstance(model, str) or not model.strip():
@@ -1296,7 +1292,7 @@ async def messages(request: Request):
     try:
         payload = to_openai_request(body)
     except Exception as exc:  # noqa: BLE001
-        gateway._record(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
+        await gateway._record_async(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
         return _err(f'请求转换失败：{exc}',code=getattr(exc,'code',None))
 
     if mapped:
@@ -1313,22 +1309,12 @@ async def messages(request: Request):
     upstream, upstream_error = gateway._upstream_for(
         key, ip=ip, model=model, mapped=mapped or '', ua=ua)
     if upstream_error is not None:
-        detail = json.loads(upstream_error.body).get('error') or {}
-        return _err(detail.get('message', '上游不可用'), upstream_error.status_code,
-                    'api_error', code=detail.get('code'))
+        return protocolerrors.adapt(upstream_error, protocol='anthropic')
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
     wire = await gateway._prepare_forward_async(key,payload, request=request)
     if isinstance(wire, JSONResponse):
-        error = json.loads(wire.body).get('error') or {}
-        error_type = error.get('type', 'api_error')
-        if error_type == 'server_error':
-            error_type = 'api_error'
-        response = _err(error.get('message', '请求无法转发'), wire.status_code,
-                        error_type, code=error.get('code'))
-        if wire.headers.get('Retry-After'):
-            response.headers['Retry-After'] = wire.headers['Retry-After']
-        return response
+        return protocolerrors.adapt(wire, protocol='anthropic')
     # Any native adapter must observe preparation's budget/authorization refusal
     # before it is allowed to contact an upstream.
     if getattr(request.state, 'requested_platform', '') == 'trae':
@@ -1356,8 +1342,12 @@ async def messages(request: Request):
             latency = int((time.time() - started) * 1000)
             usage: dict = {}
             try:
-                data = resp.json()
+                data = await gateway._response_json_async(resp, cancelled_receipt=lambda value:
+                    gateway._record_cancelled_response(key, ip, model, mapped or '',
+                        value, started, ua, session_key=session_key))
                 usage = gateway._response_usage(data)
+            except OutputLimitExceeded:
+                raise
             except Exception:  # noqa: BLE001
                 data = None
             if resp.status_code < 400:
@@ -1369,7 +1359,7 @@ async def messages(request: Request):
                     # 400 而不是 502：上游与账号都正常，是这一次的输出预算不够。
                     # 不记 `_mark_invalid_response` / `_mark_output_limit_failure` ——
                     # 那两个是「上游坏了」的口径，会把健康账号推进冷却。
-                    gateway._record(key, ip, model, mapped or '', 400,
+                    await gateway._record_async(key, ip, model, mapped or '', 400,
                                     _as_int(usage.get('prompt_tokens')),
                                     _as_int(usage.get('completion_tokens')), latency,
                                     ua, str(exc), False, usage=usage, session_key=session_key)
@@ -1378,7 +1368,7 @@ async def messages(request: Request):
                 except Exception as exc:
                     if isinstance(exc,OutputLimitExceeded):gateway._mark_output_limit_failure()
                     else:gateway._mark_invalid_response()
-                    gateway._record(key, ip, model, mapped or '', 502,
+                    await gateway._record_async(key, ip, model, mapped or '', 502,
                                     _as_int(usage.get('prompt_tokens')),
                                     _as_int(usage.get('completion_tokens')), latency,
                                     ua, str(exc), False, usage=usage, session_key=session_key)
@@ -1389,7 +1379,7 @@ async def messages(request: Request):
             # 都在这一份里，分开取就会出现「某条协议缓存永远是空的」（issue #69）。
             error_response = (_upstream_error(data if data is not None else resp.text,
                               resp.status_code, resp.headers) if resp.status_code >= 400 else None)
-            gateway._record(
+            await gateway._record_async(
                 key, ip, model, mapped or '', resp.status_code,
                 _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
                 latency, ua, _error_diagnostic(error_response, resp.status_code)
@@ -1399,10 +1389,15 @@ async def messages(request: Request):
             if error_response is not None:
                 return error_response
             return converted
+        except deadline_mod.RetainedMemoryExceeded:
+            await gateway._record_async(key, ip, model, mapped or '', 503, 0, 0,
+                            int((time.time() - started) * 1000), ua,
+                            'response memory capacity full', False, session_key=session_key)
+            return protocolerrors.adapt(gateway._response_capacity_error(), protocol='anthropic')
         except OutputLimitExceeded:
             gateway._mark_output_limit_failure()
             message='Upstream output exceeds the configured byte limit'
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0,
                             int((time.time() - started) * 1000), ua, message, False,
                             session_key=session_key)
             return _err(message, 502, 'api_error', code='upstream_output_limit')
@@ -1412,14 +1407,16 @@ async def messages(request: Request):
             failure = deadline_mod.classify_budget_exceeded(exc)
             gateway._mark_pre_stream_failure(exc)
             latency = int((time.time() - started) * 1000)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                             failure.message, False, session_key=session_key)
             return _err(failure.message, 502, 'api_error', code='upstream_timeout')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False,
                             session_key=session_key)
-            return _err(gateway._public_upstream_error(upstream), 502, 'api_error')
+            return protocolerrors.adapt(
+                gateway._oai_error_with_blip(gateway._public_upstream_error(upstream), 502, exc),
+                protocol='anthropic')
 
     # ── 流式 ────────────────────────────────────────────────
     client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
@@ -1433,7 +1430,7 @@ async def messages(request: Request):
     except (asyncio.CancelledError, GeneratorExit) as exc:
         gateway._mark_pre_stream_failure(exc)
         await gateway._close_pending_response(resp, client, budgets)
-        gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+        await gateway._record_async(key, ip, model, mapped or '', 499, 0, 0,
                         int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
                         session_key=session_key)
         raise
@@ -1442,15 +1439,17 @@ async def messages(request: Request):
         failure = deadline_mod.classify_budget_exceeded(exc)
         gateway._mark_pre_stream_failure(exc)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+        await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                         failure.message, True, session_key=session_key)
         return _err(failure.message, 502, 'api_error', code='upstream_timeout')
     except Exception as exc:  # noqa: BLE001
         await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True,
+        await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True,
                         session_key=session_key)
-        return _err(gateway._public_upstream_error(upstream), 502, 'api_error')
+        return protocolerrors.adapt(
+            gateway._oai_error_with_blip(gateway._public_upstream_error(upstream), 502, exc),
+            protocol='anthropic')
 
     status_code = resp.status_code
     # U13：流中错误帧要带上游请求 ID。开流之后状态码已定，ID 是客户端唯一还能
@@ -1469,13 +1468,13 @@ async def messages(request: Request):
             text = captured.decode('utf-8', 'replace')
         except (asyncio.CancelledError, GeneratorExit) as exc:
             gateway._mark_pre_stream_failure(exc)
-            gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 499, 0, 0,
                             int((time.time() - started) * 1000), ua, 'client cancelled before stream', True,
                             session_key=session_key)
             raise
         except (deadline_mod.BudgetExceeded, deadline_mod.ErrorBodyTooLarge) as exc:
             gateway._mark_pre_stream_failure(exc)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0,
                             int((time.time() - started) * 1000), ua, str(exc), True,
                             session_key=session_key)
             code = 'upstream_timeout' if isinstance(exc, deadline_mod.BudgetExceeded) else 'upstream_invalid_body'
@@ -1491,7 +1490,7 @@ async def messages(request: Request):
             data = text
         error_response = _upstream_error(data, status_code, resp.headers)
         usage = gateway._response_usage(data)
-        gateway._record(key, ip, model, mapped or '', status_code,
+        await gateway._record_async(key, ip, model, mapped or '', status_code,
                         _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
                         latency, ua, _error_diagnostic(error_response, status_code), True, usage=usage,
                         session_key=session_key)
@@ -1560,6 +1559,10 @@ async def messages(request: Request):
             audit.error_code = 'upstream_timeout'
             logger.warning('stream budget exceeded request_id=%s kind=%s',
                            state.request_id if state else None, failure.kind)
+        except deadline_mod.RetainedMemoryExceeded:
+            error_text='网关响应处理容量已满，本次回答已中止'
+            audit.error_stage='admission'
+            audit.error_code='gateway_capacity_exceeded'
         except OutputLimitExceeded:
             error_text='Upstream output exceeds the configured byte limit'
             audit.error_stage='protocol'
@@ -1627,7 +1630,7 @@ async def messages(request: Request):
                         resp,client,timeout=deadline_mod.close_timeout(budgets))
                 finally:
                     usage=audit.usage
-                    gateway._record(key,ip,model,mapped or '',resp.status_code,
+                    await gateway._record_async(key,ip,model,mapped or '',resp.status_code,
                         _as_int(usage.get('prompt_tokens')),_as_int(usage.get('completion_tokens')),
                         int((time.time()-started)*1000),ua,error_text,True,
                         usage=usage,first_token=first_token_ms,session_key=session_key)
@@ -1662,9 +1665,7 @@ async def count_tokens(request: Request):
     # （gateway._read_json_body 逐块累加、不信任 Content-Length，正是为此）。
     body, err = await gateway._read_json_body(request)
     if err:
-        if getattr(err, 'status_code', 0) == 413:
-            return _err('请求体超过上限：请精简后再试', 413)
-        return _err('请求体不是 JSON 对象')
+        return protocolerrors.adapt(err, protocol='anthropic')
 
     # 完整鉴权：早先这里只挑了个「能解析的密钥」就放行，把停用 / 过期 / 配额 /
     # IP 白名单 / 限流**全漏了**——被吊销的密钥照样能调这个端点。现在与

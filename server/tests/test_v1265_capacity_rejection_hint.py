@@ -49,8 +49,14 @@ class CapacityRejectionIsActionableTests(unittest.TestCase):
         self.assertIn('concurrency of long-output requests', block)
 
     def test_retry_after_is_kept(self):
+        import json
+        from server.routers.gateway import _oai_error
         block = rejection_block()
-        self.assertIn("Retry-After", block)
+        self.assertIn('retry_after=1', block)
+        response = _oai_error('capacity guard', 503, 'server_error',
+                              'gateway_capacity_exceeded', retry_after=1)
+        self.assertEqual(response.headers['Retry-After'], '1')
+        self.assertEqual(json.loads(response.body)['error']['retry_after_seconds'], 1)
 
     def test_it_logs_the_occupancy(self):
         """没有占用数字，事后判断不了是并发多还是单个请求太大。"""

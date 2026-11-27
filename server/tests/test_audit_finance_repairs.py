@@ -375,7 +375,7 @@ def test_restore_digest_mismatch_prevents_sidecar_write_and_verified_status(tmp_
                 kwargs['stdout'].write(archive_bytes.getvalue())
                 kwargs['stdout'].flush()
 
-        def communicate(self):
+        def communicate(self, **kwargs):
             return b'', b''
 
         def wait(self):

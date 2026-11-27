@@ -31,8 +31,36 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Resolve and validate immutable release source
+        id: source
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 tools/release_policy.py resolve --tag "$REQUESTED_TAG"
+
+  quality:
+    needs: resolve
+    uses: ./.github/workflows/quality.yml
+    with:
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+
   release:
+    needs: [resolve, quality]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -42,57 +70,45 @@ jobs:
     # 供后面的 installer 作业复用同一个 tag（workflow_dispatch 时 tag 来自输入）
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      draft_writable: ${{ steps.publish.outputs.draft_writable }}
     steps:
       - name: 解析版本号
         id: vars
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          QUALITY_SHA: ${{ needs.quality.outputs.source_sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          test "$SOURCE_SHA" = "$QUALITY_SHA"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.vars.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
           fetch-depth: 0
 
-      - name: 安装 Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Download the same static export used by quality HTTP tests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          # 22 起才有 ESM 的 TypeScript type stripping：几处「借 Node 直接跑真实 .ts
-          # 实现」的用例（async-state / display-prefs 等）在 20 上会自我 skip —— 也就是
-          # 那些断言在 CI 里从来没跑过。升到 22 让它们真正执行。
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          name: ${{ needs.quality.outputs.frontend_artifact }}
+          path: web/out
 
-      - name: 构建前端静态导出
-        working-directory: web
+      - name: Verify source and static bytes before packaging
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
         run: |
-          npm ci
-          npm run build:export
-
-      - name: 校验构建产物
-        run: |
-          test -f web/out/index.html || { echo "构建失败：缺少 web/out/index.html"; exit 1; }
-          echo "构建产物大小：$(du -sh web/out | cut -f1)"
-
-      - name: 后端语法与导入自检
-        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          python3 tools/ci_artifacts.py verify --source-sha "$EXPECTED_SOURCE_SHA"
           python3 -m compileall -q server
-          echo "后端语法检查通过"
-
-      - name: 后端单元测试
-        run: |
-          python3 -m pip install --quiet --require-hashes -r server/requirements.hashes.txt
-          python3 -m pip install --quiet --require-hashes -r tools/requirements-ci.txt
-          python3 tools/ci_regression.py --require-frontend --require-static
 
       - name: 组装发布目录
         id: pack
+        env:
+          QUALITY_SOURCE_SHA: ${{ needs.quality.outputs.source_sha }}
+          QUALITY_FRONTEND_ARTIFACT: ${{ needs.quality.outputs.frontend_artifact }}
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
           STAGE="workbuddy-manager-${TAG}"
@@ -221,6 +237,7 @@ jobs:
           SOURCE_COMMIT=$(git rev-parse HEAD)
           python3 - "$STAGE/server/release-provenance.json" "$TAG" "$SOURCE_COMMIT" <<'PY'
           import json
+          import os
           import pathlib
           import sys
 
@@ -234,6 +251,10 @@ jobs:
               'signed': False,
               'source_commit': commit,
               'source_kind': 'github-actions-release',
+              'quality_source_commit': os.environ['QUALITY_SOURCE_SHA'],
+              'quality_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'quality_run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'quality_frontend_artifact': os.environ['QUALITY_FRONTEND_ARTIFACT'],
               'version': tag.removeprefix('v'),
           })
           pathlib.Path(path).write_text(
@@ -403,6 +424,7 @@ jobs:
           head -26 RELEASE_NOTES.md
 
       - name: 创建 Release 并上传产物
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -410,6 +432,7 @@ jobs:
           STAGE="${{ steps.pack.outputs.stage }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             if [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" = "true" ]; then
+              echo "draft_writable=true" >> "$GITHUB_OUTPUT"
               echo "Release $TAG 还是草稿，覆盖产物"
               gh release upload "$TAG" "${STAGE}.tar.gz" "${STAGE}.zip" --clobber
               # A previous failed/restarted run may have left a draft with stale
@@ -420,6 +443,7 @@ jobs:
               # **已发布的 Release 绝不覆盖产物**：发布说明里印着 sha256，用户侧的
               # 更新器就是拿它核对的 —— 换掉字节流等于让所有人的更新校验失败
               # （旧版本那套「有 .sig 就不覆盖」的规则，现在针对的是摘要）。
+              echo "draft_writable=false" >> "$GITHUB_OUTPUT"
               echo "Release $TAG 已发布：不覆盖既有产物（发布说明里的 sha256 已公布）"
               echo "  确需重新发布：先删掉整个 Release 再重跑本流程"
             fi
@@ -428,6 +452,7 @@ jobs:
             # `releases/latest`（面板与更新器的版本检查都是它）会跳过草稿，所以
             # 「CI 先建、维护者核对后发布」这段窗口里，用户侧只会看到上一个已发布
             # 的版本，不会出现「点了更新却拿到半成品」。
+            echo "draft_writable=true" >> "$GITHUB_OUTPUT"
             gh release create "$TAG" \
               --draft \
               --title "$TAG" \
@@ -457,7 +482,7 @@ jobs:
       - name: 解析镜像名
         # GHCR 要求仓库名全小写，而 repository_owner 可能含大写。
         # build-push-action 的 tags 里没法做大小写转换，先在这里算好。
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: steps.publish.outputs.draft_writable == 'true'
         id: image
         run: |
           IMAGE="ghcr.io/${{ github.repository_owner }}/workbuddy-manager"
@@ -469,17 +494,17 @@ jobs:
       - name: 设置 QEMU
         # 跨架构构建 arm64 层需要它：runner 是 amd64，模拟出 arm64 执行环境
         continue-on-error: true
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: steps.publish.outputs.draft_writable == 'true'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: 设置 Buildx
         continue-on-error: true
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: steps.publish.outputs.draft_writable == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: 登录 GHCR
         continue-on-error: true
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: steps.publish.outputs.draft_writable == 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -492,18 +517,17 @@ jobs:
         # 创建，很容易被误读成「发版失败」。加 continue-on-error 后，镜像推不上去
         # 只影响这一步，发布结果不受牵连。
         continue-on-error: true
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: steps.publish.outputs.draft_writable == 'true'
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
+          context: ${{ steps.pack.outputs.stage }}
           # 多平台必须走 buildx 并直接 push：本地镜像库放不下多架构的 manifest list
           platforms: linux/amd64,linux/arm64
           push: true
-          # 镜像标签用小写（GHCR 要求），去掉 v 前缀
+          # 草稿仅推版本标签；latest 只能由独立稳定晋级工作流移动
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.vars.outputs.version }}
-            ${{ steps.image.outputs.name }}:latest
           # 关掉 provenance 证明：它会在 manifest list 里塞入 attestation 条目，
           # 某些旧版 Docker（< 25）拉取时会报 unknown/unknown platform。
           # 本项目不依赖该证明，关掉换来更干净的索引。
@@ -532,7 +556,7 @@ jobs:
       # 用户在未登录状态下 `docker pull` 会 401（管理端镜像当年也踩过这一步）。
       - name: 解析上游镜像名
         # GHCR 仓库名必须全小写（与上面管理端镜像同理）
-        if: steps.pack.outputs.has_upstream == '1' && (github.event_name == 'push' || inputs.tag != '')
+        if: steps.pack.outputs.has_upstream == '1' && steps.publish.outputs.draft_writable == 'true'
         id: upstream_image
         run: |
           IMAGE="ghcr.io/${{ github.repository_owner }}/workbuddy2api"
@@ -541,7 +565,7 @@ jobs:
       - name: 构建并推送上游镜像（amd64 + arm64）
         # 与管理端镜像同属**附属产物**：推不上去只影响这一步，发布结果不受牵连。
         continue-on-error: true
-        if: steps.pack.outputs.has_upstream == '1' && (github.event_name == 'push' || inputs.tag != '')
+        if: steps.pack.outputs.has_upstream == '1' && steps.publish.outputs.draft_writable == 'true'
         id: build_upstream
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -550,7 +574,6 @@ jobs:
           push: true
           tags: |
             ${{ steps.upstream_image.outputs.name }}:${{ steps.vars.outputs.version }}
-            ${{ steps.upstream_image.outputs.name }}:latest
           labels: |
             org.opencontainers.image.version=${{ steps.vars.outputs.version }}
             dev.workbuddy.upstream-id=${{ steps.pack.outputs.upstream_id }}
@@ -561,10 +584,29 @@ jobs:
         run: |
           echo "上游镜像：${{ steps.upstream_image.outputs.name }}@${{ steps.build_upstream.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
 
+      - name: Record immutable image evidence for later stable promotion
+        if: steps.build.outcome == 'success' && steps.build_upstream.outcome == 'success' && steps.publish.outputs.draft_writable == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.vars.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.resolve.outputs.source_sha }}
+          MANAGER_IMAGE: ${{ steps.image.outputs.name }}
+          MANAGER_DIGEST: ${{ steps.build.outputs.digest }}
+          UPSTREAM_IMAGE: ${{ steps.upstream_image.outputs.name }}
+          UPSTREAM_DIGEST: ${{ steps.build_upstream.outputs.digest }}
+        run: |
+          python3 tools/release_policy.py manifest --output release-images.json
+          test "$(gh release view "$RELEASE_TAG" --json isDraft -q .isDraft)" = true
+          gh release upload "$RELEASE_TAG" release-images.json --clobber
+
       - name: 部署说明
         run: |
           cat <<'EOF' >> $GITHUB_STEP_SUMMARY
-          ## 发布完成（**草稿**，尚未对用户可见）
+          ## 发布产物检查完成
+
+          草稿构建只更新版本镜像标签，不移动 `latest`。公开正式 Release 后，
+          Stable image promotion 会验证本次质量证据及 digest，再晋级稳定镜像。
+          已发布 Release 的补跑不改写资产或镜像。
 
           资产：
           - `${{ steps.pack.outputs.stage }}.tar.gz`
@@ -619,13 +661,14 @@ jobs:
   # uv.exe 兜底（首次启动联网准备环境），不阻断出包。
   installer:
     needs: release
+    if: needs.release.outputs.draft_writable == 'true'
     runs-on: windows-2022
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: ${{ needs.release.outputs.source_sha }}
           # build.ps1 用 git describe 取版本号写进 exe 的文件属性
           fetch-depth: 0
 

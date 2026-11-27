@@ -76,3 +76,13 @@ def close():
     if _file is not None:
         _file.close()
     _owner = _pid = _file = _database = None
+
+
+def close_after_drain(drained):
+    """A timed-out shutdown must not declare a still-writing owner dead."""
+    from . import drain
+    from .services import persistence
+    if not drained or drain.total_in_flight() or persistence.snapshot()['owned_calls']:
+        return False
+    close()
+    return True

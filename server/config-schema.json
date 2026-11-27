@@ -9,7 +9,7 @@
     "WB_TRAFFIC_TAP": {"type":"boolean","sensitive":false,"default":false,"consumers":["server/config.py","server/traffic.py"],"description":"Master switch for call tapping: request and response bodies are kept on this host for the retention window. The panel toggle can only tighten it. Off by default so bodies never leave the upstream path unless explicitly enabled."},
     "WB_TRAE_TIMEOUT": {"type":"integer","sensitive":false,"default":120,"minimum":5,"maximum":3600,"unit":"seconds","consumers":["server/config.py"],"description":"Timeout for the legacy Trae engine client. Registered late: it was read from the environment but missing from this schema, so setting it aborted startup with unknown_variable."},
     "WB_BLOCKING_THREADS": {"type":"integer","sensitive":false,"default":16,"minimum":4,"maximum":64,"unit":"threads","consumers":["server/threadpools.py"],"description":"Worker threads for blocking work; clamped to 4-64. Too few starves SQLite/JSON work, too many wastes memory."},
-    "WB_GATEWAY_BODY_PHYSICAL_FACTOR": {"type":"integer","sensitive":false,"default":3,"minimum":1,"maximum":8,"unit":"x logical bytes","consumers":["server/observability.py"],"description":"Memory multiplier applied to INPUT bodies when accounting the admission budget: the raw buffer, the second read copy and the parsed object graph coexist. Output buffers are NOT multiplied."},
+    "WB_GATEWAY_BODY_PHYSICAL_FACTOR": {"type":"integer","sensitive":false,"default":3,"minimum":1,"maximum":8,"unit":"x logical bytes","consumers":["server/observability.py"],"description":"Raw-input and serialization workspace multiplier. JSON object allocations are separately reserved before parsing and verified by retained object size. Actual decoded output growth is also reserved. Shared and local admission charge the same retained-memory byte amount; this is not total process RSS."},
     "WB_GATEWAY_QUEUE_DEPTH": {"type":"integer","sensitive":false,"default":64,"minimum":1,"unit":"tickets","consumers":["server/observability.py"],"description":"Maximum waiting tickets before request-body allocation. Bounded on purpose: an unbounded queue turns overload into memory growth instead of a fast rejection."},
     "WB_GATEWAY_QUEUE_PER_KEY": {"type":"integer","sensitive":false,"default":4,"minimum":1,"unit":"tickets","consumers":["server/observability.py"],"description":"Per-key waiting-ticket cap; keeps one busy key from occupying the whole queue."},
     "WB_QODER_ACCOUNTS_DIR": {"type":"string","sensitive":false,"default":"/opt/qoder-hub/accounts","consumers":["server/externalplatforms.py"],"description":"Directory holding the Qoder account JSON files."},
@@ -31,7 +31,8 @@
       ],
       "default": 67108864,
       "minimum": 1,
-      "unit": "bytes"
+      "unit": "retained-memory bytes",
+      "description": "Aggregate conservative request, JSON-object, serialization and decoded-output memory reservations. Shared admission protocol 2 applies one identical ceiling across peers; changing from protocol 1 requires a proven-drained resource-coordinator migration."
     },
     "WB_GATEWAY_MAX_RESPONSE_MB": {
       "type": "integer",

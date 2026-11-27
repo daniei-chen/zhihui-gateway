@@ -47,7 +47,10 @@ def test_every_platform_has_an_upstream_id():
     from server.qtgcore.routers import compat_fixes
 
     mapped = set(compat_fixes._PLAT_TO_UPSTREAM)
-    assert mapped == set(CORE), f'映射不一致: 缺 {set(CORE) - mapped}，多 {mapped - set(CORE)}'
+    # Historical IDs remain addressable for retained account/usage evidence;
+    # they do not put retired providers back into the active grant set.
+    assert set(CORE) <= mapped, f'在营平台缺映射: {set(CORE) - mapped}'
+    assert mapped <= set(platformpolicy.PLATFORM_SPEC), f'未知平台映射: {mapped - set(platformpolicy.PLATFORM_SPEC)}'
     # id 必须唯一且是正整数
     ids = list(compat_fixes._PLAT_TO_UPSTREAM.values())
     assert len(ids) == len(set(ids)), f'upstream_id 重复: {ids}'
@@ -71,27 +74,35 @@ def test_platform_routing_whitelist_covers_qtgcore_hosted_platforms():
     判据不写死平台名，而是从 main.py 的源码里读出那个元组，再与
     `qtgcore` 里真正实现了账号接口的平台集合比对。
     """
-    source = (ROOT / 'main.py').read_text(encoding='utf-8')
-    match = re.search(r'if platform in \(([^)]*)\) and _qtg_should_route', source)
-    assert match, 'main.py 里找不到平台路由白名单，正则需要更新（实现变了？）'
-    whitelist = {s.strip().strip('"\'') for s in match.group(1).split(',') if s.strip()}
-
-    # 由 qtgcore 托管数据面的平台 = compat 层声明支持的那些（workbuddy 走 manager 原生）
+    import asyncio
+    from unittest import mock
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from server import security
+    from server.main import _qtg_platform_route
     from server.qtgcore.routers import compat_fixes
-
     hosted = set(compat_fixes._PLAT_TO_UPSTREAM) - {'workbuddy'}
-    missing = hosted - whitelist
-    assert not missing, (
-        f'main.py 平台路由白名单缺少 {sorted(missing)}：'
-        f'这些平台的 /api/* 会落到 manager 原生 handler（串台）'
-    )
+    assert hosted, 'fixture must cover at least one compatibility provider'
+    for platform in sorted(hosted):
+        for transport in ('query', 'header'):
+            request = Request({'type': 'http', 'method': 'GET', 'path': '/api/accounts',
+                'query_string': f'platform={platform}'.encode() if transport == 'query' else b'',
+                'headers': [(b'x-qtg-platform', platform.encode())] if transport == 'header' else []})
+            seen = []
+            async def handler(incoming):
+                seen.append((incoming.scope['path'], incoming.state.qtg_platform))
+                return JSONResponse({'ok': True})
+            with mock.patch.object(security, 'current_user', return_value={'role': 'admin', 'username': 'fixture'}):
+                result = asyncio.run(_qtg_platform_route(request, handler))
+            assert result.status_code == 200
+            assert seen == [('/__qtg/api/accounts', platform)], (platform, transport, seen)
 
 
-def test_default_platforms_is_a_strict_subset_of_all():
-    """授予集必须是全集的真子集：两者相等意味着「新增平台自动对所有密钥生效」。"""
-    assert set(platformpolicy.DEFAULT_PLATFORMS) < set(CORE), (
-        'DEFAULT_PLATFORMS 等于 PLATFORMS —— 新增平台会自动进入默认授予集（权限放大）'
-    )
+def test_default_platforms_only_grant_the_approved_active_provider():
+    """With one active provider, subset equality is valid; retired grants are not."""
+    assert set(platformpolicy.DEFAULT_PLATFORMS) == {'workbuddy'}
+    assert set(platformpolicy.DEFAULT_PLATFORMS) <= set(CORE)
+    assert not platformpolicy.PlatformSpec('new-fixture', enabled=True).default_grant
 
 
 def test_every_adapter_is_exported():

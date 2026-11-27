@@ -106,6 +106,7 @@ _PAGES_WITH_LIES = {
 #     它没到就不能渲染那张配置表单，判据是 `if (!cfg)`。
 # 两者表达的是同一件事（主数据没就绪就不往下渲染），所以这里接受任一写法。
 _GUARD_MARKERS = (
+    'if ((needsUpstream && !cfg)',
     'isInitialFailed || isInitialLoading',
     'if (!cfg)',
 )

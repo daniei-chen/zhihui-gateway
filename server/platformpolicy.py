@@ -203,10 +203,14 @@ class PlatformRoutingMiddleware:
                 try:
                     chosen = select(path, hint)
                 except PlatformConflict as exc:
-                    from starlette.responses import JSONResponse
-                    await JSONResponse({'error': {'message': str(exc), 'code': exc.code,
-                                                  'type': 'invalid_request_error'}},
-                                       status_code=400)(scope, receive, send)
+                    from . import observability, protocolerrors
+                    request_id = observability.new_request_id()
+                    await protocolerrors.response(
+                        {'error': {'message': str(exc), 'code': exc.code,
+                                   'type': 'invalid_request_error'}}, 400,
+                        protocol=protocolerrors.protocol_for_path(path),
+                        request_id=request_id,
+                        headers={'X-Request-ID': request_id})(scope, receive, send)
                     return
                 scope['zhihui.original_path'] = path
                 current_platform.set(chosen if chosen != 'workbuddy' else '')

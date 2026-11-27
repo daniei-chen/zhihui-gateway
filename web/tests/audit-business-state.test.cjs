@@ -93,6 +93,370 @@ const find = (tree, type, predicate = () => true) => {
 };
 const button = (tree, text) => find(tree, 'Button', props => JSON.stringify(props.children)?.includes(text));
 
+function liveAsyncHook(h) {
+  return load('lib/use-async-data.ts', {
+    react: h.react, '@/lib/async-state': load('lib/async-state.ts'),
+  });
+}
+
+function trafficFixture() {
+  const h = hooks(), reads = {status: [], listing: [], detail: [], writes: []};
+  const timers = new Map(); let timerId = 0;
+  const request = (kind, extra = {}) => {
+    const entry = {...deferred(), ...extra}; reads[kind].push(entry); return entry.promise;
+  };
+  const loaded = load('app/(main)/traffic/page.tsx', common(h, {
+    '@/lib/use-async-data': liveAsyncHook(h),
+    '@/lib/format': {fmtDateTime: String, fmtNumber: String, fmtLatency: String},
+    '@/lib/api': {trafficApi: {
+      status: () => request('status'),
+      list: (limit, filters) => request('listing', {limit, filters}),
+      read: (id, signal) => request('detail', {id, signal}),
+      setEnabled: enabled => request('writes', {enabled}),
+      exportUrl: id => '/export/' + id,
+    }},
+    globals: {AbortController, setInterval: fn => {timers.set(++timerId, fn); return timerId;},
+      clearInterval: id => timers.delete(id), document: {hidden: false, addEventListener() {}, removeEventListener() {}}},
+  }));
+  const render = () => h.render(loaded.default);
+  const settle = async () => { await flush(); const tree = render(); h.effects(); await flush(); return tree; };
+  const start = async () => {render(); h.effects(); await flush();};
+  const ready = async (status = {enabled: true, desired: true, effective: true}) => {
+    await start(); reads.status[0].resolve(status);
+    reads.listing[0].resolve({records: ['A', 'B'].map(request_id => ({request_id, status: 200, ts: 1, size: 1}))});
+    await settle();
+  };
+  const row = index => nodes(render()).filter(node => node.type === 'TableRow' && node.props.onClick)[index].props;
+  return {h, reads, timers, render, settle, start, ready, row};
+}
+
+test('traffic detail ownership survives out-of-order replies and closing a pending drawer', async () => {
+  const f = trafficFixture(); await f.ready();
+  f.row(0).onClick(); f.row(1).onClick();
+  assert.equal(f.reads.detail[0].signal.aborted, true);
+  assert.equal(find(f.render(), 'Drawer').open, true);
+  const detail = id => ({request_id: id, status: 200, latency_ms: 1, client: {marker: 'detail-' + id}});
+  f.reads.detail[1].resolve(detail('B')); await f.settle();
+  f.reads.detail[0].resolve(detail('A')); await f.settle();
+  assert.match(JSON.stringify(find(f.render(), 'Drawer')), /detail-B/);
+  assert.doesNotMatch(JSON.stringify(find(f.render(), 'Drawer')), /detail-A/);
+  f.row(0).onClick();
+  find(f.render(), 'Drawer').onOpenChange(false);
+  assert.equal(f.reads.detail[2].signal.aborted, true);
+  f.reads.detail[2].resolve(detail('A')); await f.settle();
+  assert.equal(find(f.render(), 'Drawer').open, false);
+  f.h.unmount();
+});
+
+test('traffic renders independent status, rejects obsolete filters and joins slow background reads', async () => {
+  const f = trafficFixture(); await f.start();
+  f.reads.status[0].resolve({enabled: true}); await f.settle();
+  assert.equal(button(f.render(), 'traffic.disable').disabled, false);
+  for (const tick of f.timers.values()) tick();
+  await flush();
+  assert.equal(f.reads.listing.length, 1, 'polling must join the still-pending list');
+  button(f.render(), 'traffic.filterError').onClick(); await f.settle();
+  assert.equal(f.reads.listing[1].filters.status, 'error');
+  button(f.render(), 'traffic.filterOk').onClick(); await f.settle();
+  assert.equal(f.reads.listing[2].filters.status, 'ok');
+  f.reads.listing[2].resolve({records: [{request_id: 'current', ts: 2, status: 200}]}); await f.settle();
+  f.reads.listing[0].resolve({records: [{request_id: 'obsolete', ts: 1, status: 500}]});
+  f.reads.listing[1].reject(new Error('obsolete error')); await f.settle();
+  assert.doesNotMatch(JSON.stringify(f.render()), /obsolete/);
+  f.row(0).onClick();
+  assert.equal(f.reads.detail[0].id, 'current');
+  f.h.unmount();
+  assert.equal(f.reads.detail[0].signal.aborted, true);
+});
+
+test('traffic setting follows saved intent and serializes duplicate mutations without arbitrary delays', async () => {
+  const f = trafficFixture();
+  await f.ready({enabled: false, effective: false, desired: true, setting: true});
+  const toggle = button(f.render(), 'traffic.disable').onClick;
+  toggle(); toggle();
+  assert.equal(f.reads.writes.length, 1);
+  assert.equal(f.reads.writes[0].enabled, false);
+  f.reads.writes[0].resolve({desired: false, effective: false}); await flush();
+  const newest = f.reads.status.at(-1);
+  assert.notEqual(newest, f.reads.status[0]);
+  newest.resolve({enabled: false, effective: false, desired: false, setting: false}); await f.settle();
+  assert.equal(button(f.render(), 'traffic.enable').disabled, false);
+  f.h.unmount();
+});
+
+function settingsIsolationFixture(initialTab) {
+  const h = hooks(), reads = {cfg: [], modelMap: [], users: [], catalog: []}, writes = [], notices = [];
+  const mutations = {cfg: [], addUser: [], updateUser: [], removeUser: []};
+  const location = {href: ''};
+  let tab = initialTab, admin = true, username = 'admin';
+  const request = kind => {const entry = deferred(); reads[kind].push(entry); return entry.promise;};
+  const mutate = (kind, extra) => {
+    const entry = {...deferred(), ...extra}; mutations[kind].push(entry); return entry.promise;
+  };
+  const loaded = load('app/(main)/settings/layout.tsx', common(h, {
+    'next/dynamic': {default: () => 'DynamicPanel'},
+    'next/navigation': {usePathname: () => '/settings/' + tab},
+    '@/lib/i18n': {t: String, tp: String},
+    '@/lib/display-prefs': {getExpiryDailyGroup: () => false},
+    '@/lib/settings-tabs': load('lib/settings-tabs.ts'),
+    '@/lib/platform-context': {usePlatform: () => ({platform: 'workbuddy'})},
+    '@/lib/schedule-validation': {scheduleDelayError: () => ''},
+    '@/lib/managed-user-password': load('lib/managed-user-password.ts'),
+    '@/lib/use-async-data': liveAsyncHook(h),
+    '@/lib/auth-context': {useAuth: () => ({isAdmin: admin, me: {username, role: admin ? 'admin' : 'viewer'}})},
+    '@/lib/toast': {notify: {ok: value => notices.push(value), err: value => notices.push(value),
+      warn: value => notices.push(value), info: value => notices.push(value)}},
+    '@/lib/api': {errText: String, upstreamApi: {models: () => request('catalog')}, settingsApi: {
+      upstream: () => request('cfg'), modelMap: () => request('modelMap'), users: () => request('users'),
+      saveModelMap(body) {const entry = {...deferred(), body}; writes.push(entry); return entry.promise;},
+      saveUpstream: body => mutate('cfg', {body}),
+      addUser: body => mutate('addUser', {body}),
+      updateUser: (name, body) => mutate('updateUser', {name, body}),
+      removeUser: name => mutate('removeUser', {name}),
+    }},
+    globals: {window: {location}},
+  }));
+  const render = () => h.render(() => loaded.default({children: null}));
+  const settle = async () => {render(); h.effects(); await flush(); const tree = render(); h.effects(); return tree;};
+  return {h, reads, writes, mutations, notices, location, render, settle,
+    setTab: value => {tab = value;}, setAdmin: value => {admin = value;}, setUsername: value => {username = value;}};
+}
+
+test('settings independent tools render without upstream, model-map or user-list requests', async () => {
+  for (const tab of ['proxy', 'tokens', 'system', 'backup', 'changelog', 'about', 'steward', 'alerts']) {
+    const f = settingsIsolationFixture(tab); const tree = await f.settle();
+    assert.deepEqual(Object.fromEntries(Object.entries(f.reads).map(([key, value]) => [key, value.length])),
+      {cfg: 0, modelMap: 0, users: 0, catalog: 0}, tab);
+    assert.ok(nodes(tree).some(node => node.type === 'SectionTabs'), tab);
+    assert.equal(nodes(tree).some(node => node.type === 'LoadError' && node.props.variant === 'page'), false, tab);
+    f.h.unmount();
+  }
+});
+
+test('settings users and model mappings load independently of a stalled or failed upstream', async () => {
+  const f = settingsIsolationFixture('upstream'); await f.settle();
+  assert.equal(f.reads.cfg.length, 1);
+  f.setTab('users'); await f.settle();
+  assert.equal(f.reads.users.length, 1);
+  f.reads.users[0].resolve([]); await f.settle();
+  assert.equal(find(f.render(), 'Tabs').value, 'users');
+  f.reads.cfg[0].reject(new Error('obsolete upstream failure')); await f.settle();
+  assert.equal(find(f.render(), 'Tabs').value, 'users');
+  f.setTab('models'); await f.settle();
+  assert.equal(f.reads.modelMap.length, 1);
+  f.reads.modelMap[0].resolve({'existing-alias': 'existing-target'}); await f.settle();
+  assert.equal(find(f.render(), 'Tabs').value, 'models');
+  assert.match(JSON.stringify(find(f.render(), 'TabsContent', props => props.value === 'models')), /existing-alias/);
+  assert.equal(f.reads.cfg.length, 1);
+  f.h.unmount();
+});
+
+const initialUpstream = clear => ({available: true, schedule: {checkin_enabled: true},
+  upstash: {url: clear ? 'https://previous.upstash.io' : ''}});
+function scheduleCard(f) {
+  return {type: 'div', props: find(f.render(), 'div', props =>
+    props.className === 'rounded-[20px] bg-muted px-3.5 py-3'
+      && JSON.stringify(props.children).includes('定时任务'))};
+}
+function startUpstreamWrite(f, kind) {
+  if (kind === 'group') {
+    find(f.render(), 'Switch', props => props['aria-label'] === '自动签到').onCheckedChange(false);
+    return button(scheduleCard(f), 'common.save').onClick();
+  }
+  if (kind === 'json') {
+    find(f.render(), 'button', props => JSON.stringify(props.children).includes('settings.advanced')).onClick();
+    find(f.render(), 'Textarea', props => props.value.includes('checkin_enabled')).onChange({target: {value: '{"checkin_enabled": false}'}});
+    const card = find(f.render(), 'div', props => props.className === 'space-y-2'
+      && JSON.stringify(props.children).includes('"schedule"'));
+    return button({type: 'div', props: card}, 'common.save').onClick();
+  }
+  if (kind === 'clear') return find(f.render(), 'ConfirmDialog', props => props.title === 'settings.upstashClearTitle').onConfirm();
+  find(f.render(), 'Input', props => props.placeholder === 'https://xxx-12345.upstash.io')
+    .onChange({target: {value: 'https://confirmed.upstash.io'}});
+  find(f.render(), 'Input', props => props.placeholder === 'settings.upstashTokenPlaceholder')
+    .onChange({target: {value: 'synthetic-new-token'}});
+  return find(f.render(), 'Button', props => props.onClick?.name === 'saveUpstash').onClick();
+}
+for (const kind of ['group', 'json', 'upstash', 'clear']) {
+  test(`upstream ${kind} success in a paused tab refreshes its own configuration on return`, async () => {
+    const f = settingsIsolationFixture('upstream'); await f.settle();
+    f.reads.cfg[0].resolve(initialUpstream(kind === 'clear')); await f.settle();
+    const saving = startUpstreamWrite(f, kind);
+    assert.equal(f.mutations.cfg.length, 1);
+    f.setTab('proxy'); await f.settle();
+    f.mutations.cfg[0].resolve({available: true}); await saving; await f.settle();
+    assert.equal(f.reads.cfg.length, 1, 'hidden success must wait for the actual configuration tab');
+    assert.equal(f.reads.users.length, 0);
+    assert.equal(f.reads.modelMap.length, 0);
+    f.setTab('upstream'); await f.settle();
+    assert.equal(f.reads.cfg.length, 2, 'returning must issue or join a real GET');
+    const confirmed = {available: true, schedule: {checkin_enabled: false},
+      upstash: {url: kind === 'upstash' ? 'https://confirmed.upstash.io' : ''}};
+    f.reads.cfg[1].resolve(confirmed); await f.settle();
+    assert.equal(find(f.render(), 'Switch', props => props['aria-label'] === '自动签到').checked, false);
+    assert.equal(find(f.render(), 'Input', props => props.placeholder === 'https://xxx-12345.upstash.io').value,
+      confirmed.upstash.url);
+    assert.equal(nodes(scheduleCard(f)).some(node => node.type === 'Button'
+      && JSON.stringify(node.props.children).includes('settings.revert')), false, 'the saved baseline must be refreshed');
+    if (kind === 'json') {
+      assert.equal(JSON.parse(find(f.render(), 'Textarea', props => props.value.includes('checkin_enabled')).value).checkin_enabled, false);
+    }
+    f.h.unmount();
+  });
+}
+
+function fillNewUser(f, username = 'new-operator') {
+  find(f.render(), 'Input', props => props.id === 'new-user-username').onChange({target: {value: username}});
+  find(f.render(), 'Input', props => props.id === 'new-user-password').onChange({target: {value: 'synthetic-long-password'}});
+}
+function startUserWrite(f, kind) {
+  if (kind === 'addUser') { fillNewUser(f); return button(f.render(), 'keys.create').onClick(); }
+  const row = {type: 'TableRow', props: find(f.render(), 'TableRow', props =>
+    JSON.stringify(props.children).includes('existing-operator'))};
+  if (kind === 'updateUser') return find(row, 'Select').onValueChange('admin');
+  return find(row, 'ConfirmDialog').onConfirm();
+}
+for (const kind of ['addUser', 'updateUser', 'removeUser']) {
+  test(`user ${kind} success in a paused tab refreshes its own list on return`, async () => {
+    const f = settingsIsolationFixture('users'); await f.settle();
+    f.reads.users[0].resolve([{username: 'existing-operator', role: 'account_admin'}]); await f.settle();
+    const saving = startUserWrite(f, kind);
+    assert.equal(f.mutations[kind].length, 1);
+    f.setTab('proxy'); await f.settle();
+    f.mutations[kind][0].resolve({}); await saving; await f.settle();
+    assert.equal(f.reads.users.length, 1);
+    assert.equal(f.reads.cfg.length, 0);
+    assert.equal(f.reads.modelMap.length, 0);
+    f.setTab('users'); await f.settle();
+    assert.equal(f.reads.users.length, 2, 'a completed paused scope must still refresh after a write');
+    const confirmed = kind === 'addUser'
+      ? [{username: 'existing-operator', role: 'account_admin'}, {username: 'new-operator', role: 'account_admin'}]
+      : kind === 'updateUser' ? [{username: 'existing-operator', role: 'admin'}] : [];
+    f.reads.users[1].resolve(confirmed); await f.settle();
+    const content = {type: 'TabsContent', props: find(f.render(), 'TabsContent', props => props.value === 'users')};
+    const rows = nodes(content).filter(node => node.type === 'TableRow');
+    assert.equal(rows.length, confirmed.length + 1);
+    if (kind === 'addUser') assert.match(JSON.stringify(rows), /new-operator/);
+    if (kind === 'updateUser') assert.equal(find(rows[1], 'Select').value, 'admin');
+    f.h.unmount();
+  });
+}
+
+test('a late upstream save cannot clear a new user scope token draft or unlock its mutation', async () => {
+  const f = settingsIsolationFixture('upstream'); await f.settle();
+  f.reads.cfg[0].resolve(initialUpstream(false)); await f.settle();
+  const staleSave = startUpstreamWrite(f, 'upstash');
+  f.setUsername('another-admin'); await f.settle();
+  f.reads.cfg[1].resolve(initialUpstream(false)); await f.settle();
+  const currentSave = startUpstreamWrite(f, 'upstash');
+  assert.equal(f.mutations.cfg.length, 2);
+  f.mutations.cfg[0].resolve({}); await staleSave; await f.settle();
+  assert.equal(f.notices.length, 0);
+  assert.equal(f.reads.cfg.length, 2, 'obsolete write must not supersede the current read');
+  assert.equal(find(f.render(), 'Input', props => props.placeholder === 'settings.upstashTokenPlaceholder').value, 'synthetic-new-token');
+  assert.equal(find(f.render(), 'Button', props => props.onClick?.name === 'saveUpstash').disabled, true);
+  f.mutations.cfg[1].resolve({}); await flush();
+  assert.equal(f.reads.cfg.length, 3);
+  f.reads.cfg[2].resolve(initialUpstream(false)); await currentSave;
+  f.h.unmount();
+});
+
+test('a late user create cannot clear the new auth scope draft or unlock its pending create', async () => {
+  const f = settingsIsolationFixture('users'); await f.settle();
+  f.reads.users[0].resolve([]); await f.settle();
+  const staleSave = startUserWrite(f, 'addUser');
+  f.setUsername('another-admin'); await f.settle();
+  f.reads.users[1].resolve([]); await f.settle();
+  fillNewUser(f, 'current-scope-user');
+  const currentSave = button(f.render(), 'keys.create').onClick();
+  f.mutations.addUser[0].resolve({}); await staleSave; await f.settle();
+  assert.equal(f.notices.length, 0);
+  assert.equal(f.reads.users.length, 2);
+  assert.equal(find(f.render(), 'Input', props => props.id === 'new-user-username').value, 'current-scope-user');
+  assert.equal(button(f.render(), 'keys.create').disabled, true);
+  f.mutations.addUser[1].resolve({}); await flush();
+  f.reads.users[2].resolve([{username: 'current-scope-user', role: 'account_admin'}]); await currentSave;
+  f.h.unmount();
+});
+
+for (const kind of ['updateUser', 'removeUser']) {
+  test(`an obsolete ${kind} result cannot refresh, notify or redirect a new permission scope`, async () => {
+    const f = settingsIsolationFixture('users'); await f.settle();
+    f.reads.users[0].resolve([{username: 'existing-operator', role: 'account_admin'}]); await f.settle();
+    const saving = startUserWrite(f, kind);
+    f.setTab('proxy'); f.setAdmin(false); await f.settle();
+    f.mutations[kind][0].resolve({relogin_required: true}); await saving; await f.settle();
+    assert.equal(f.notices.length, 0);
+    assert.equal(f.location.href, '');
+    assert.equal(f.reads.users.length, 1);
+    f.setTab('users'); await f.settle();
+    assert.equal(f.reads.users.length, 2, 'only the new scope may own the resume read');
+    f.reads.users[1].resolve([{username: 'current-scope', role: 'account_admin'}]); await f.settle();
+    const content = JSON.stringify(find(f.render(), 'TabsContent', props => props.value === 'users'));
+    assert.match(content, /current-scope/);
+    assert.doesNotMatch(content, /existing-operator/);
+    f.h.unmount();
+  });
+}
+
+for (const pauseDuring of ['write', 'refresh']) {
+  test(`model map saved during a tab change (${pauseDuring}) remains the base of the next replacement`, async () => {
+    const f = settingsIsolationFixture('models'); await f.settle();
+    f.reads.modelMap[0].resolve({'existing-alias': 'existing-target'});
+    f.reads.catalog[0].resolve({models: [{id: 'known-model'}]}); await f.settle();
+    const fill = alias => {
+      find(f.render(), 'Input', props => props.placeholder === 'gpt-4o-mini').onChange({target: {value: alias}});
+      find(f.render(), 'Select', props => props.value === '').onValueChange('known-model');
+    };
+    fill('confirmed-alias');
+    const saving = button(f.render(), 'settings.mapAdd').onClick();
+    if (pauseDuring === 'refresh') {
+      f.writes[0].resolve(f.writes[0].body); await flush();
+      assert.equal(f.reads.modelMap.length, 2);
+    }
+    f.setTab('users'); await f.settle();
+    f.reads.users[0].resolve([]); await f.settle();
+    if (pauseDuring === 'write') f.writes[0].resolve(f.writes[0].body);
+    else f.reads.modelMap[1].resolve({'obsolete-read': 'old-target'});
+    await saving; await f.settle();
+    const beforeReturn = f.reads.modelMap.length;
+    f.setTab('models'); await f.settle();
+    assert.equal(f.reads.modelMap.length, beforeReturn + 1,
+      'returning must issue or join one real read, not treat a paused no-op as confirmation');
+    const pendingView = JSON.stringify(find(f.render(), 'TabsContent', props => props.value === 'models'));
+    assert.match(pendingView, /confirmed-alias/);
+    assert.doesNotMatch(pendingView, /obsolete-read/);
+    f.reads.modelMap.at(-1).resolve(f.writes[0].body); await f.settle();
+    fill('next-alias');
+    const nextSave = button(f.render(), 'settings.mapAdd').onClick();
+    assert.equal(f.writes.length, 2);
+    assert.equal(f.writes[1].body['existing-alias'], 'existing-target');
+    assert.equal(f.writes[1].body['confirmed-alias'], 'known-model');
+    assert.equal(f.writes[1].body['next-alias'], 'known-model');
+    f.writes[1].resolve(f.writes[1].body); await flush();
+    f.reads.modelMap.at(-1).resolve(f.writes[1].body); await nextSave;
+    f.h.unmount();
+  });
+}
+
+test('a model map write completed in a paused, obsolete permission scope cannot restore its snapshot', async () => {
+  const f = settingsIsolationFixture('models'); await f.settle();
+  f.reads.modelMap[0].resolve({}); f.reads.catalog[0].resolve({models: [{id: 'known-model'}]}); await f.settle();
+  find(f.render(), 'Input', props => props.placeholder === 'gpt-4o-mini').onChange({target: {value: 'old-scope-alias'}});
+  find(f.render(), 'Select', props => props.value === '').onValueChange('known-model');
+  const saving = button(f.render(), 'settings.mapAdd').onClick();
+  f.setTab('proxy'); f.setAdmin(false); await f.settle();
+  f.writes[0].resolve(f.writes[0].body); await saving;
+  f.setTab('models'); await f.settle();
+  f.reads.modelMap.at(-1).resolve({'read-only-scope': 'current-target'}); await f.settle();
+  const content = JSON.stringify(find(f.render(), 'TabsContent', props => props.value === 'models'));
+  assert.doesNotMatch(content, /old-scope-alias/);
+  assert.match(content, /read-only-scope/);
+  assert.equal(button(f.render(), 'settings.mapAdd').disabled, true);
+  assert.equal(f.notices.length, 0);
+  f.h.unmount();
+});
+
 test('successful confirmation clears the real password dialog and rejects same-turn duplicate clicks', async () => {
   const owner = hooks(), dialog = hooks(), saved = deferred(), calls = [];
   const api = {errText: String, settingsApi: {updateUser(name, body) { calls.push({name, body}); return saved.promise; }}};

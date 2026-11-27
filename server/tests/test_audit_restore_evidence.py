@@ -51,7 +51,7 @@ class RestoreEvidenceTest(unittest.TestCase):
                 return SimpleNamespace(stdout=io.BytesIO(), wait=lambda: 0, returncode=0)
             self.assertEqual(command[0], 'age')
             kwargs['stdout'].write(self.archive)
-            return SimpleNamespace(communicate=lambda: (None, b''), returncode=0)
+            return SimpleNamespace(communicate=lambda **_: (None, b''), returncode=0)
 
         with mock.patch.object(drill.subprocess, 'Popen', side_effect=start):
             code = drill.main([str(self.snapshot), *args])

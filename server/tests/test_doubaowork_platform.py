@@ -6,6 +6,7 @@
 import json
 import sqlite3
 import unittest
+from unittest import mock
 
 from starlette.requests import Request
 
@@ -33,22 +34,18 @@ RAW_UNKNOWN = dict(RAW_READY, id='a4', state='weird-new-state', in_flight=0)
 
 
 class PlatformEnumTests(unittest.TestCase):
-    def test_all_platforms_include_doubaowork(self):
-        self.assertIn('doubaowork', platformpolicy.PLATFORMS)
+    def test_retired_doubaowork_stays_parseable_without_becoming_available(self):
+        self.assertIn('doubaowork', platformpolicy.PLATFORM_SPEC)
+        self.assertIn('doubaowork', platformpolicy._ACCEPTED)
+        self.assertNotIn('doubaowork', platformpolicy.PLATFORMS)
+        self.assertFalse(platformpolicy.is_enabled('doubaowork'))
+        self.assertEqual(platformpolicy.normalize(['doubaowork']), ['doubaowork'])
 
-    def test_default_platforms_follow_the_new_three(self):
-        """2026-11-19：豆包工作进默认集合，qoder 移除。
-
-        这条测试守的是「权限放大」：新平台曾经不能自动进默认集合。
-        但现在豆包已接入（顶替 qoder 的位置），它必须默认可用；
-        而 qoder 已经整体摘除，留在默认集合里会让 normalize 产出
-        一个 PLATFORMS 里不存在的平台。
-        """
-        self.assertIn('doubaowork', platformpolicy.DEFAULT_PLATFORMS)
-        self.assertNotIn('qoder', platformpolicy.DEFAULT_PLATFORMS,
-                         'qoder 已摘除，不得出现在默认授予集合')
-        self.assertEqual(list(platformpolicy.DEFAULT_PLATFORMS),
-                         ['workbuddy', 'trae', 'doubaowork'])
+    def test_default_grants_follow_the_current_single_platform_policy(self):
+        """Retaining a historical adapter or stored key never grants its use."""
+        self.assertEqual(list(platformpolicy.DEFAULT_PLATFORMS), ['workbuddy'])
+        for retired in ('qoder', 'trae', 'doubaowork'):
+            self.assertNotIn(retired, platformpolicy.DEFAULT_PLATFORMS)
         # 默认集合必须是全集子集，否则 normalize 会产出非法平台
         self.assertTrue(set(platformpolicy.DEFAULT_PLATFORMS)
                         <= set(platformpolicy.PLATFORMS))
@@ -120,13 +117,16 @@ class MigrationTests(unittest.TestCase):
 
 
 class AuthzPlatformTests(unittest.TestCase):
-    def test_header_query_and_path_all_resolve(self):
-        self.assertEqual(authz.platform_of(make_request([(b'x-qtg-platform', b'doubaowork')])),
-                         'doubaowork')
-        self.assertEqual(authz.platform_of(make_request(query=b'platform=doubaowork')),
-                         'doubaowork')
-        self.assertEqual(authz.platform_of(make_request(path='/doubaowork/v1/models')),
-                         'doubaowork')
+    def test_header_query_and_path_resolve_an_explicitly_enabled_candidate(self):
+        # Only the fixture enables the historical provider. This still catches
+        # a future activation that accidentally falls back to the all-platform sentinel.
+        with mock.patch.object(platformpolicy, 'PLATFORMS', ('workbuddy', 'doubaowork')):
+            self.assertEqual(authz.platform_of(make_request([(b'x-qtg-platform', b'doubaowork')])),
+                             'doubaowork')
+            self.assertEqual(authz.platform_of(make_request(query=b'platform=doubaowork')),
+                             'doubaowork')
+            self.assertEqual(authz.platform_of(make_request(path='/doubaowork/v1/models')),
+                             'doubaowork')
 
     def test_unresolved_keeps_legacy_sentinel(self):
         self.assertEqual(authz.platform_of(make_request()), '三平台')

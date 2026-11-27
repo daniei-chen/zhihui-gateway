@@ -19,6 +19,7 @@ import time
 
 #: `_reap` 的最小间隔。取值权衡见 `_reap` 的注释：死 owner 的租约最多多滞留这么久。
 _REAP_INTERVAL_S = 10.0
+RESPONSE_BUDGET_PROTOCOL = 2
 
 
 class Unavailable(RuntimeError):
@@ -35,10 +36,10 @@ class Coordinator:
         if (set(self.policy) != required or any(type(v) is not int or v < 1
                                                for v in self.policy.values())):
             raise ValueError('invalid_shared_admission_policy')
-        # Old peers reserved request bodies only. They cannot safely share the
-        # same byte budget with a peer that also reserves decoded/translated
-        # responses. A policy mismatch requires a proven-drained migration.
-        self.encoded = json.dumps(dict(self.policy,response_budget_protocol=1),sort_keys=True,separators=(',',':'))
+        # Old peers sent logical bytes while local admission charged physical
+        # bytes. They cannot share a budget with peers charging object graphs
+        # and identical physical reservations across local/shared admission. A policy mismatch requires a proven-drained migration.
+        self.encoded = json.dumps(dict(self.policy,response_budget_protocol=RESPONSE_BUDGET_PROTOCOL),sort_keys=True,separators=(',',':'))
         self._owner = owner or budgetowner.identity
         self._alive = alive or budgetowner.alive
         #: 上一次清理死 owner 租约的单调时间。`_reap` 曾经在**每个**事务里跑一次
@@ -106,16 +107,19 @@ CREATE TABLE IF NOT EXISTS admission_leases(
 CREATE INDEX IF NOT EXISTS admission_owner ON admission_leases(owner);
 CREATE INDEX IF NOT EXISTS admission_key ON admission_leases(key_id);
 ''')
-        with self._transaction() as conn:
+        with self._transaction(initializing=True) as conn:
             self._reap(conn)
             row = conn.execute('SELECT value FROM admission_policy WHERE id=1').fetchone()
             if row and row[0] != self.encoded:
-                raise Unavailable('shared_admission_policy_conflict')
+                raise Unavailable(
+                    'shared_admission_policy_conflict: candidate cannot serve; '
+                    'drain and stop every old cohort peer, then inspect '
+                    'deploy/migrate_admission_policy.py before applying the resource-only migration')
             conn.execute('INSERT INTO admission_policy VALUES(1,?) '
                          'ON CONFLICT(id) DO UPDATE SET value=excluded.value', (self.encoded,))
 
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, *, initializing=False):
         conn = self._connect()
         try:
             info = self.path.lstat()
@@ -125,6 +129,11 @@ CREATE INDEX IF NOT EXISTS admission_key ON admission_leases(key_id);
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute('SELECT value FROM admission_policy WHERE id=1').fetchone()
             if row and row[0] != self.encoded:
+                if initializing:
+                    raise Unavailable(
+                        'shared_admission_policy_conflict: candidate cannot serve; '
+                        'drain and stop every old cohort peer, then inspect '
+                        'deploy/migrate_admission_policy.py before applying the resource-only migration')
                 raise Unavailable('shared_admission_policy_changed')
             with self.mutex:
                 pending = tuple(self.pending_releases)

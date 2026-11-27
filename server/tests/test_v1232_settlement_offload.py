@@ -52,16 +52,14 @@ class SettlementOffloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured['kwargs'], {'credit': 1.5, 'session_key': 's'})
 
 
-class StreamingSettlementStaysSynchronousTests(unittest.TestCase):
-    """流式响应的 finally 不走线程：那里 await 会在取消/关闭时丢掉结算。"""
+class StreamingSettlementIsOwnedTests(unittest.TestCase):
+    """流式与非流式使用同一条可取消但必须完成写入的持久化通道。"""
 
-    def test_stream_generator_finally_keeps_the_synchronous_call(self):
+    def test_stream_generator_finally_uses_owned_offload(self):
         source = (__import__('pathlib').Path(__file__).parents[2] / 'server' / 'routers' /
                   'gateway.py').read_text(encoding='utf-8')
-        # 生成器里那处必须是同步调用
-        self.assertIn("_record(key,ip,requested_model or '',mapped or '',status_code,", source)
-        self.assertNotIn("await _record_async(key,ip,requested_model or '',mapped or '',status_code,",
-                         source)
+        self.assertIn("await _record_async(key,ip,requested_model or '',mapped or '',status_code,", source)
+        self.assertNotIn("\n                _record(key,ip,requested_model or '',mapped or '',status_code,", source)
 
 
 if __name__ == '__main__':

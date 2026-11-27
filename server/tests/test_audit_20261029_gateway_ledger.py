@@ -314,12 +314,14 @@ class ErrorLifetimeTest(_Fixture):
             with self.mock_transport(respond, clients), mock.patch.dict(os.environ, {'WB_TOTAL_TIMEOUT_S': '0.06'}):
                 started = time.monotonic()
                 result = self.post(protocol, stream=True)
-            self.assertEqual(result.status_code, 502, result.text)
+            self.assertEqual(result.status_code, 503, result.text)
+            self.assertEqual(result.json()['error']['code'], 'upstream_error_body_timeout')
+            self.assertEqual(len(streams), 1, 'a rejected upstream request must not be replayed')
             self.assertLess(time.monotonic() - started, 1)
             self.assertTrue(all(c.is_closed for c in clients))
             self.assertTrue(all(s.closed for s in streams))
             row = db.query_one('SELECT terminal_state FROM request_logs ORDER BY id DESC LIMIT 1')
-            self.assertEqual(row[0], 'transport_error')
+            self.assertEqual(row[0], 'upstream_error')
 
     def test_oversized_error_body_is_bounded_and_never_retried(self):
         for protocol in PROTOCOLS:

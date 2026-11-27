@@ -102,7 +102,8 @@ class CachesAreSeparateTests(unittest.TestCase):
         self.assertIn('_COLUMN_CACHES.setdefault(slot', MAIN)
 
     def test_old_single_cache_is_gone(self):
-        self.assertNotIn('_TTFT_CACHE', MAIN,
+        bindings = {node.id for node in ast.walk(TREE) if isinstance(node, ast.Name)}
+        self.assertNotIn('_TTFT_CACHE', bindings,
                          '旧的那份单一缓存还在，会和新的混用')
 
 

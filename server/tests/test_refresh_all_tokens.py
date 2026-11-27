@@ -24,6 +24,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fastapi import HTTPException  # noqa: E402
+from starlette.requests import Request  # noqa: E402
 
 from server import security  # noqa: E402
 from server.routers import accounts  # noqa: E402
@@ -50,8 +51,14 @@ class RefreshAllTokensOrchestrationTest(unittest.TestCase):
         with mock.patch.object(accounts.wb2api, 'list_auth_accounts',
                                lambda auth_dir=None: account_list), \
              mock.patch.object(accounts, '_refresh_one_token', fake_refresh), \
-             mock.patch.object(accounts.reload, 'restart_now', fake_reload):
-            out = asyncio.run(accounts.refresh_all_tokens(user={'role': 'admin'}))
+             mock.patch.object(accounts.reload, 'restart_now', fake_reload), \
+             mock.patch.object(accounts.accountguard, 'guard_account_action') as guard:
+            request = Request({'type': 'http', 'method': 'POST',
+                               'path': '/api/accounts/refresh-tokens', 'headers': []})
+            out = asyncio.run(accounts.refresh_all_tokens(request, upstream_id=None,
+                                                         user={'role': 'admin'}))
+            guard.assert_called_once_with(request, count=len(account_list),
+                what='一键刷新全部 Token', batch=True, enforce_batch_max=False)
         return out, reload_calls
 
     def test_aggregates_and_reloads_once(self) -> None:

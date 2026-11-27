@@ -43,18 +43,9 @@ SOURCE = GATEWAY
 
 
 def _load_helper():
-    """取出 `_oai_error_throttled` 的源码并单独执行，避免 import 整个路由模块。"""
-    tree = ast.parse(SOURCE)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == '_oai_error_throttled':
-            module = ast.Module(body=[node], type_ignores=[])
-            namespace = {}
-            # 函数体只用 JSONResponse
-            from fastapi.responses import JSONResponse
-            namespace['JSONResponse'] = JSONResponse
-            exec(compile(module, '<helper>', 'exec'), namespace)   # noqa: S102
-            return namespace['_oai_error_throttled']
-    raise AssertionError('没找到 _oai_error_throttled')
+    """Exercise the real helper and its shared error/identity dependencies."""
+    from server.routers.gateway import _oai_error_throttled
+    return _oai_error_throttled
 
 
 class ItSendsRetryAfterTests(unittest.TestCase):

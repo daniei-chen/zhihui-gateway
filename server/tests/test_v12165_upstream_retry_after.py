@@ -39,7 +39,7 @@ def _load_helper():
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == '_upstream_retry_after':
             module = ast.Module(body=[node], type_ignores=[])
-            namespace = {}
+            namespace = {'__name__': 'server.routers.gateway', '__package__': 'server.routers'}
             exec(compile(module, '<helper>', 'exec'), namespace)   # noqa: S102
             return namespace['_upstream_retry_after']
     raise AssertionError('没找到 _upstream_retry_after')
@@ -113,11 +113,22 @@ class TheErrorBranchForwardsItTests(unittest.TestCase):
         self.assertIn("out.headers['Retry-After']", SOURCE)
 
     def test_body_field_is_written(self):
-        self.assertIn("'retry_after_seconds'", SOURCE)
+        import json
+        from types import SimpleNamespace
+        from server.routers.gateway import _upstream_error_response
+        result = _upstream_error_response({'error': {'message': 'limited'}},
+            SimpleNamespace(status_code=429, headers={'retry-after': '30'}))
+        self.assertEqual(json.loads(result.body)['error']['retry_after_seconds'], 30)
 
-    def test_it_does_not_overwrite_the_upstream_field(self):
-        """上游若已给出自己的字段值，保留它的，别覆盖成头部那个。"""
-        self.assertIn("'retry_after_seconds' not in err", SOURCE)
+    def test_header_and_body_cannot_give_conflicting_delays(self):
+        """The validated HTTP delay is authoritative for both client channels."""
+        import json
+        from server.protocolerrors import response
+        original = {'error': {'message': 'limited', 'retry_after_seconds': 99}}
+        converted = response(original, 429, headers={'Retry-After': '30'})
+        self.assertEqual(converted.headers['retry-after'], '30')
+        self.assertEqual(json.loads(converted.body)['error']['retry_after_seconds'], 30)
+        self.assertEqual(original['error']['retry_after_seconds'], 99)
 
 
 class ItSaysWhyTests(unittest.TestCase):

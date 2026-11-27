@@ -41,6 +41,7 @@ import threading
 import time
 import unittest
 import uuid
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -50,7 +51,7 @@ from urllib.request import urlopen
 from fastapi.testclient import TestClient
 
 from server import (budget, budgetowner, config, db, migrations,
-                    observability, security, tokensvc)
+                    observability, platformpolicy, security, tokensvc)
 from server.routers import gateway
 
 HEX32 = re.compile(r'[0-9a-f]{32}\Z')
@@ -89,6 +90,9 @@ class _HttpCase(unittest.TestCase):
         self.spec_patch = patch.object(gateway, '_THREEWAY_SPEC', {
             'qoder': (self.base, str(secret)), 'trae': (self.base, str(secret))})
         self.spec_patch.start()
+        self.enterContext(patch.dict(platformpolicy.PLATFORM_SPEC, {
+            name: replace(platformpolicy.spec(name), enabled=True)
+            for name in ('qoder', 'trae')}))
         db.connect()
         budget.initialize()
         from server.main import app

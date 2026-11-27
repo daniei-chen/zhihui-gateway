@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run the deterministic release regression set.
 
-The repository also contains historical audit and deployment-environment suites.
-Those suites remain useful during an environment-specific audit, but this small
-set is the repeatable release gate for a clean checkout with synthetic data.
+Every test module is assigned to its unittest or pytest loader. Tests use
+temporary data and a local synthetic provider; checks that require external
+deployment artifacts or a different operating system retain explicit skip reasons.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -57,8 +58,7 @@ MODULES = (
     "server.tests.test_release_provenance_integrity",
     # 2026-11-23 审计：473 个测试模块里只有 34 个被收录，439 个从没在门禁里跑过。
     # 抽样 4 个与积分/签到/快照相关的模块全部通过 —— 说明它们是好的，只是漏了。
-    # 不一次全收：全量跑会卡在 test_upstreams 的 tearDown（阻塞），
-    # 所以按「已证明可靠」逐个收。
+    # 当时按主题逐步纳入；2026-11-27 已收完全部存量并对两个 loader 校验非空。
     "server.tests.test_credits_flow",
     "server.tests.test_credits_snapshot",
     "server.tests.test_checkin_logs_realm",
@@ -70,9 +70,7 @@ MODULES = (
     "server.tests.test_pool_snapshot_history_isolation",
     "server.tests.test_v1277_account_pool_alerts",
     # 告警与运维主题补收（2026-11-23 逐个单独跑通后入清单）。
-    # 同批的 test_audit_runtime_repairs 不收：108 个用例通过、6 个
-    # （同一条参数化测试的变体）因 TimeoutError 失败，看起来是该测试
-    # 自身的 body 下限设置与请求体大小不匹配，不是产品缺陷，但也修不动。
+    # test_audit_runtime_repairs 的夹具边界已修复，现由下方 PYTEST_MODULES 强制运行。
     "server.tests.test_v1269_model_completion_alert",
     "server.tests.test_v1274_budget_rejected_unknown",
     "server.tests.test_v1283_budget_alert_thresholds",
@@ -94,11 +92,8 @@ MODULES = (
     # 这批是「钱」相关的不变量：预授权、日额度、结算真相、并发原子性。
     # 之前一条都没在门禁里跑过，等于账本逻辑没有自动守卫。
     #
-    # 注意：清单里的模块必须**只依赖 unittest 与标准库**。CI 的 manager job
-    # 不安装 pytest，混进 pytest 风格的测试会让整条流水线报
-    # `ModuleNotFoundError: No module named 'pytest'`。
-    # test_budget_batch_bounds 与 test_audit_finance_repairs 就属于这种，
-    # 因此不收 —— 它们仍可单独用 pytest 跑。
+    # unittest 不会发现顶层 pytest 函数。此类文件放入 PYTEST_MODULES，
+    # CI 使用 hash 锁定的 pytest 依赖；缺少依赖、收集失败或模块零用例均失败。
     "server.tests.test_daily_key_quota",
     "server.tests.test_budget_kill_closure",
     "server.tests.test_daily_plan",
@@ -296,7 +291,6 @@ MODULES = (
     "server.tests.test_manual_disabled",
     "server.tests.test_max_tokens_clamp",
     "server.tests.test_max_tokens_e2e",
-    "server.tests.test_merge_page_latency",
     "server.tests.test_metering_attribution",
     "server.tests.test_metrics_auth",
     "server.tests.test_model_catalog",
@@ -557,7 +551,89 @@ MODULES = (
     "server.tests.test_web_a11y",
     "server.tests.test_web_dangerous_actions",
     "server.tests.test_web_wiring",
+    # Audit closure: every historical unittest suite and new regression runs.
+    "server.tests.test_audit_20261029_security",
+    "server.tests.test_audit_stats_public_scope",
+    "server.tests.test_command_palette",
+    "server.tests.test_doubaowork_platform",
+    "server.tests.test_issue39_estimate_effort",
+    "server.tests.test_issue69_cache_tokens",
+    "server.tests.test_preauth_body",
+    "server.tests.test_protocol_error_closure",
+    "server.tests.test_qoder_checkin_evidence",
+    "server.tests.test_recovery_closure",
+    "server.tests.test_refresh_all_tokens",
+    "server.tests.test_refresh_plan",
+    "server.tests.test_release_quality_closure",
+    "server.tests.test_runtime_ownership_memory",
+    "server.tests.test_rolling_stream_evidence",
+    "server.tests.test_settings_contract",
+    "server.tests.test_speed_boundaries",
+    "server.tests.test_steward",
+    "server.tests.test_unknown_archive",
+    "server.tests.test_v004_managed_update_boundary",
+    "server.tests.test_v12137_snapshot_gauge_always_emitted",
+    "server.tests.test_v12156_stale_transactions",
+    "server.tests.test_v12160_context_metric",
+    "server.tests.test_v1279_route_authorization",
 )
+
+
+# Pytest functions cannot be discovered by unittest; this suite is mandatory.
+PYTEST_MODULES = (
+    "server.tests.test_merge_page_latency",
+    "server.tests.test_audit_20261029_web_gate",
+    "server.tests.test_audit_finance_repairs",
+    "server.tests.test_audit_runtime_repairs",
+    "server.tests.test_audit_security_repairs",
+    "server.tests.test_budget_batch_bounds",
+    "server.tests.test_merge_read_integrity",
+    "server.tests.test_merge_remaining_boundaries",
+    "server.tests.test_platform_integration_guards",
+    "server.tests.test_workbench_registration",
+)
+
+
+def pytest_suite() -> dict:
+    """Run function/fixture suites with the same temporary data and loopback provider.
+
+    Missing pytest, collection errors, zero tests and timeouts are failures.
+    Disable third-party auto-loaded plugins to keep clean checkouts reproducible.
+    """
+    with tempfile.TemporaryDirectory(prefix='zhihui-ci-pytest-') as temporary:
+        report = Path(temporary) / 'results.xml'
+        command = [sys.executable, '-B', '-m', 'pytest', '-q', '--tb=short',
+                   '-p', 'no:cacheprovider', f'--junitxml={report}']
+        command.extend(name.replace('.', '/') + '.py' for name in PYTEST_MODULES)
+        environment = {**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1',
+                       'PYTHONDONTWRITEBYTECODE': '1'}
+        try:
+            proc = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
+                                  text=True, encoding='utf-8', errors='replace', timeout=600)
+            tree = ET.parse(report)
+            suites = list(tree.getroot().iter('testsuite'))
+            counts = {name: sum(int(row.get(name, '0')) for row in suites)
+                      for name in ('tests', 'failures', 'errors', 'skipped')}
+        except (OSError, ValueError, ET.ParseError, subprocess.TimeoutExpired) as exc:
+            return {'ok': False, 'required': True, 'reason': str(exc)}
+        passed = counts['tests'] - counts['failures'] - counts['errors'] - counts['skipped']
+        cases = list(tree.getroot().iter('testcase'))
+        empty_modules = [name for name in PYTEST_MODULES if not any(
+            case.get('classname', '') == name or case.get('classname', '').startswith(name + '.')
+            for case in cases)]
+        ok = (proc.returncode == 0 and passed > 0 and not empty_modules
+              and not counts['failures'] and not counts['errors'])
+        if not ok:
+            output = (proc.stdout or '') + (proc.stderr or '')
+            print('\n'.join(line[:1000] for line in output.splitlines()[-45:]), file=sys.stderr)
+        print(f'历史 pytest 回归：{passed} passed / {counts["skipped"]} skipped')
+        skipped = [{'test': row.get('classname', '') + '.' + row.get('name', ''),
+                    'reason': row.find('skipped').get('message', '')}
+                   for row in tree.getroot().iter('testcase') if row.find('skipped') is not None]
+        return {'ok': ok, 'required': True, 'returncode': proc.returncode,
+                **counts, 'passed': passed, 'skipped_tests': skipped,
+                'empty_modules': empty_modules,
+                'modules': list(PYTEST_MODULES)}
 
 
 def frontend_suite() -> dict:
@@ -679,19 +755,28 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(ROOT))
     if os.environ.get("ZH_CI_NET_ISOLATED") == "1":
         subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
+    from server.tests.synthetic_provider import synthetic_provider
     with tempfile.TemporaryDirectory(prefix="zhihui-ci-data-",
-                                     ignore_cleanup_errors=True) as data_dir:
+                                     ignore_cleanup_errors=True) as data_dir, synthetic_provider() as provider:
         os.environ["WB_DATA_DIR"] = data_dir
         suite = unittest.TestSuite()
         loader = unittest.defaultTestLoader
+        empty_modules = []
         for name in MODULES:
-            suite.addTests(loader.loadTestsFromName(name))
+            loaded = loader.loadTestsFromName(name)
+            if loaded.countTestCases() == 0:
+                empty_modules.append(name)
+            suite.addTests(loaded)
         result = unittest.TextTestRunner(verbosity=1).run(suite)
+        backend_nonempty = result.testsRun > 0 and not empty_modules
+        if not backend_nonempty:
+            print(f'Backend discovery produced empty modules: {empty_modules}', file=sys.stderr)
+        historical = pytest_suite()
         # 前端用例放在 Python 套件之后：Python 失败时先看到 Python 的报告，
         # 不必等一套无关的 Node 进程。
         frontend = _gate_result(frontend_suite(), required=args.require_frontend)
         static = _gate_result(static_suite(), required=args.require_static)
-        for name, gate in (('frontend', frontend), ('static', static)):
+        for name, gate in (('historical_pytest', historical), ('frontend', frontend), ('static', static)):
             if gate.get('required') and gate.get('ok') is not True:
                 print(f'{name} required gate failed: {gate.get("reason", gate)}',
                       file=sys.stderr)
@@ -701,6 +786,10 @@ def main(argv: list[str] | None = None) -> int:
             "failures": len(result.failures),
             "errors": len(result.errors),
             "skips": len(result.skipped),
+            "empty_modules": empty_modules,
+            "skipped_tests": [{"test": case.id(), "reason": reason} for case, reason in result.skipped],
+            "loopback_provider": provider,
+            "historical_pytest": historical,
             "frontend": frontend,
             "static": static,
             "network_namespace_isolated": os.environ.get("ZH_CI_NET_ISOLATED") == "1",
@@ -717,6 +806,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     return 0 if (result.wasSuccessful()
+                 and backend_nonempty
+                 and historical.get('ok') is True
                  and frontend.get('ok') is not False
                  and static.get('ok') is not False) else 1
 

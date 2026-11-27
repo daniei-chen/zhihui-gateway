@@ -1,120 +1,144 @@
-"""v1.2.156：清掉同版本的陈旧空事务。
+"""Migration cleanup preserves all transaction evidence, including abandoned attempts.
 
-## 垃圾从哪来
-
-`prepare` 常被乐观锁拒（「多了一个写入者」），而**被拒的尝试也会留下一个事务目录**。
-
-2026-11-15 清点：26 个事务里 **11 个是这种情况** —— 9 个空 phase（被拒）、
-2 个 prepared（成功但没 run）。每个约 1 MB，单看不值一提，
-但**没有任何东西清理它们**，会随每次发布累积。
-
-## 安全边界，缺一不可
-
-| 边界 | 破坏后的后果 |
-| --- | --- |
-| 只动同一个版本号 | 跨版本扫会删掉别的版本的记录 |
-| 只动空 phase / prepared | 删掉 complete 的事务等于删审计记录 |
-| 绝不动本次事务 | 把正在收尾的自己删了 |
-| **版本号解析失败就整段跳过** | **表达式退化成正则 `*`，会清掉所有事务** |
-
-最后一条是这里最危险的地方：`"${version_tag}"*` 在 version_tag 为空时
-变成 `*`，匹配整个 transactions 目录。
-
-## 本测试守什么
-
-前面四条边界各一条断言；另外**单独验证版本号解析正则的实际行为**
-（用 Python 复刻同一模式，比对真实事务名），而不是只找字符串。
+Old string checks expected recursive deletion by version prefix. The current
+completed-transaction contract retains history; run the actual script with a
+temporary state directory and a fake service controller.
 """
 from __future__ import annotations
 
-import re
-import unittest
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
 
-SCRIPT = Path(__file__).resolve().parents[2] / 'deploy' / 'post-migration-cleanup.sh'
-SOURCE = SCRIPT.read_text(encoding='utf-8')
-
-
-class ItClearsStaleTransactionsTests(unittest.TestCase):
-    def test_it_has_the_section(self):
-        self.assertIn('陈旧空事务', SOURCE)
-
-    def test_it_deletes_them(self):
-        self.assertIn('rm -rf "$d"', SOURCE)
+SCRIPT = Path(__file__).resolve().parents[2] / 'deploy/post-migration-cleanup.sh'
 
 
-class ItRefusesToCrossVersionsTests(unittest.TestCase):
-    def test_it_scopes_by_version_prefix(self):
-        self.assertIn('"${version_tag}"*/', SOURCE,
-                      '没有按版本号收窄范围')
+@unittest.skipUnless(os.name == 'posix' and shutil.which('bash'), 'requires Bash')
+class TransactionEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='zhihui-cleanup-evidence-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.state = self.root / 'state'
+        self.transactions = self.state / 'transactions'
+        self.transactions.mkdir(parents=True)
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        controller = self.bin / 'systemctl'
+        controller.write_text('''#!/bin/bash
+printf '%s\\n' "$*" >> "$CLEANUP_COMMAND_LOG"
+if [ "$1" = is-failed ]; then exit 1; fi
+if [ "$1" = daemon-reload ] && [ "${CLEANUP_FAIL_RELOAD:-0}" = 1 ]; then exit 1; fi
+if [ "$1" = show ]; then printf 'synthetic-next-run\\n'; fi
+exit 0
+''')
+        controller.chmod(0o755)
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count('STATE=/opt/zhihui-release/writer-state'), 1)
+        self.script = self.root / 'cleanup.sh'
+        self.script.write_text(source.replace('STATE=/opt/zhihui-release/writer-state',
+                                             f'STATE="{self.state}"'))
+        self.env = {**os.environ, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH'],
+                    'CLEANUP_COMMAND_LOG': str(self.root / 'commands.log')}
+        self.markers = [self.state / (name + '.start-blocked') for name in
+                        ('workbuddy-web.service', 'workbuddy-web-helper.service')]
+        for marker in self.markers:
+            marker.write_text('block-start')
+        for name, phase in (('v12155a-current', 'complete'), ('v12155b-empty', ''),
+                            ('v12155c-prepared', 'prepared'), ('v12155d-complete', 'complete'),
+                            ('v12154a-prepared', 'prepared'), ('foreign-name', 'prepared')):
+            path = self.transactions / name
+            path.mkdir()
+            (path / 'active.json').write_text(json.dumps({'phase': phase}, indent=2))
+            (path / 'evidence.bin').write_bytes(b'preserve-exactly\x00' + name.encode())
+        self.before = self.snapshot()
 
-    def test_it_skips_when_parsing_fails(self):
-        """**最重要的一条**：version_tag 为空时表达式变成 `*`，会清掉所有事务。"""
-        self.assertIn('[ -z "$version_tag" ]', SOURCE,
-                      '没检查解析结果，空值会扫全表')
-        idx = SOURCE.find('[ -z "$version_tag" ]')
-        window = SOURCE[idx:idx + 300]
-        self.assertIn('跳过', window, '解析失败时没有跳过')
+    def snapshot(self):
+        return {str(path.relative_to(self.transactions)): path.read_bytes()
+                for path in self.transactions.rglob('*') if path.is_file()}
 
+    def run_cleanup(self, transaction='v12155a-current', **environment):
+        return subprocess.run(['bash', str(self.script), transaction], env={**self.env, **environment},
+                              capture_output=True, text=True, timeout=10)
 
-class ItNeverTouchesCompletedOrItsOwnTests(unittest.TestCase):
-    def test_it_skips_its_own_transaction(self):
-        self.assertIn('[ "$name" = "$TXN" ] && continue', SOURCE,
-                      '会把自己删掉')
+    def assert_guard_refuses_without_mutations(self, transaction='v12155a-current'):
+        before = self.snapshot()
+        self.assertNotEqual(self.run_cleanup(transaction).returncode, 0)
+        self.assertTrue(all(path.read_text() == 'block-start' for path in self.markers))
+        self.assertFalse((self.root / 'commands.log').exists())
+        self.assertEqual(self.snapshot(), before)
 
-    def test_it_only_acts_on_empty_or_prepared(self):
-        self.assertIn('""|prepared)', SOURCE,
-                      '没把范围限制在空 phase / prepared')
-        # complete 必须落到保留分支
-        idx = SOURCE.find('"")|prepared)') if '"")|prepared)' in SOURCE else SOURCE.find('""|prepared)')
-        self.assertGreater(idx, 0)
-        window = SOURCE[idx:idx + 700]
-        self.assertIn('保留', window, 'complete 的事务没有明确的保留分支')
+    def test_success_preserves_own_other_versions_and_abandoned_evidence(self):
+        result = self.run_cleanup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.snapshot(), self.before)
+        self.assertTrue(all(not path.exists() for path in self.markers))
 
+    def test_failed_service_verification_preserves_every_transaction(self):
+        result = self.run_cleanup(CLEANUP_FAIL_RELOAD='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.snapshot(), self.before)
 
-class TheVersionPatternWorksTests(unittest.TestCase):
-    """用 Python 复刻脚本里的正则，拿真实事务名验证它。"""
+    def test_prepared_and_empty_phase_never_open_start_gates(self):
+        for transaction in ('v12155b-empty', 'v12155c-prepared', 'missing'):
+            with self.subTest(transaction=transaction):
+                self.assertNotEqual(self.run_cleanup(transaction).returncode, 0)
+                self.assertTrue(all(path.exists() for path in self.markers))
+                self.assertFalse((self.root / 'commands.log').exists())
+                self.assertEqual(self.snapshot(), self.before)
 
-    #: 与脚本里 sed 的 ``s/^\(v[0-9]\{1,\}\)[a-z].*/\1/p`` 等价
-    PATTERN = re.compile(r'^(v[0-9]{1,})[a-z]')
+    def test_embedded_complete_text_and_malformed_json_are_not_completion(self):
+        journal = self.transactions / 'v12155a-current' / 'active.json'
+        for value in ('{"phase":"prepared","nested":{"phase":"complete"}}',
+                      '{broken "phase":"complete"', '[]'):
+            with self.subTest(value=value):
+                journal.write_text(value)
+                self.assertNotEqual(self.run_cleanup().returncode, 0)
+                self.assertTrue(all(path.exists() for path in self.markers))
+                self.assertFalse((self.root / 'commands.log').exists())
 
-    def test_it_extracts_the_version_from_real_names(self):
-        for name, want in (('v12155a-release-20261115', 'v12155'),
-                           ('v12149b-release-20261115', 'v12149'),
-                           ('v12140a-release-20261115', 'v12140')):
-            with self.subTest(name=name):
-                m = self.PATTERN.match(name)
-                self.assertIsNotNone(m, '解析不出：' + name)
-                self.assertEqual(m.group(1), want)
+    def test_empty_unknown_and_path_traversal_identifiers_fail_without_effects(self):
+        for value in ('', '../v12155a-current', '/tmp/current', '..', 'name\nother'):
+            with self.subTest(value=value):
+                self.assertNotEqual(self.run_cleanup(value).returncode, 0)
+                self.assertTrue(all(path.exists() for path in self.markers))
+                self.assertEqual(self.snapshot(), self.before)
+                self.assertFalse((self.root / 'commands.log').exists())
 
-    def test_it_returns_nothing_for_a_foreign_name(self):
-        """格式不认识时必须解析不出来 —— 那样脚本会跳过整段。"""
-        for name in ('weird-format', '', 'release-20261115', 'v-abc'):
-            with self.subTest(name=name):
-                self.assertIsNone(self.PATTERN.match(name),
-                                  '不该解析出东西：%r' % name)
+    def test_symlink_transaction_cannot_borrow_external_completion(self):
+        outside = self.root / 'outside-transaction'
+        outside.mkdir()
+        journal = outside / 'active.json'
+        journal.write_text('{"phase":"complete"}')
+        (self.transactions / 'linked-transaction').symlink_to(outside, target_is_directory=True)
+        self.assert_guard_refuses_without_mutations('linked-transaction')
+        self.assertEqual(journal.read_text(), '{"phase":"complete"}')
 
-    def test_same_version_names_share_the_prefix(self):
-        """同一版本的不同尝试必须共享前缀，否则清理不到它们。"""
-        a = self.PATTERN.match('v12155a-release-20261115').group(1)
-        b = self.PATTERN.match('v12155b-release-20261115').group(1)
-        self.assertEqual(a, b)
+    def test_symlink_journal_cannot_borrow_external_completion(self):
+        outside = self.root / 'outside-journal.json'
+        outside.write_text('{"phase":"complete"}')
+        journal = self.transactions / 'v12155a-current' / 'active.json'
+        journal.unlink()
+        journal.symlink_to(outside)
+        self.assert_guard_refuses_without_mutations()
+        self.assertEqual(outside.read_text(), '{"phase":"complete"}')
 
-    def test_different_versions_do_not_share_the_prefix(self):
-        a = self.PATTERN.match('v12155a-release-20261115').group(1)
-        b = self.PATTERN.match('v12154a-release-20261115').group(1)
-        self.assertNotEqual(a, b, '不同版本共享前缀会导致跨版本清理')
+    def test_duplicate_phase_is_invalid_in_either_order(self):
+        journal = self.transactions / 'v12155a-current' / 'active.json'
+        for value in ('{"phase":"prepared","phase":"complete"}',
+                      '{"phase":"complete","phase":"prepared"}'):
+            with self.subTest(value=value):
+                journal.write_text(value)
+                self.assert_guard_refuses_without_mutations()
 
-
-class TheReasonIsWrittenDownTests(unittest.TestCase):
-    def test_it_records_the_measured_counts(self):
-        self.assertIn('26 个事务', SOURCE, '没写出清点结果')
-        self.assertIn('11 个', SOURCE)
-        self.assertIn('57 MB', SOURCE, '没写出完整事务有多大，读者不知道这笔账')
-
-    def test_it_says_why_this_is_dangerous(self):
-        self.assertIn('宁可不动', SOURCE,
-                      '没写出「宁可不动也不能动错」这个取舍')
+    def test_oversized_complete_journal_is_rejected_before_cleanup(self):
+        journal = self.transactions / 'v12155a-current' / 'active.json'
+        journal.write_text(json.dumps({'phase': 'complete', 'padding': 'x' * (1024 * 1024)}))
+        self.assert_guard_refuses_without_mutations()
 
 
 if __name__ == '__main__':

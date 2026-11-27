@@ -633,12 +633,13 @@ def model_completion_alert(n: int, failed: int) -> tuple[bool, str]:
 def evaluate_backup_health(now):
     """Missing/unreadable/invalid reports are unknown, never a healthy backup."""
     import json
+    from .backupstatus import report_age
     latest = config.BACKUP_STATUS_FILE
     offsite = _offsite_configured()
     try:
         data = json.loads(latest.read_text())
         size = data.get('bytes')
-        age = now - latest.stat().st_mtime
+        age = report_age(data, latest.stat().st_mtime, now)
         valid = (data.get('restore_check') == 'ok'
                  and isinstance(size, int) and not isinstance(size, bool) and size > 0
                  and age >= -300)
@@ -653,10 +654,12 @@ def evaluate_backup_health(now):
         return
     transition('backup_status_unavailable', False, '')
     transition('backup_stale', age > 26*3600, 'verified backup report older than 26 hours')
-    transition('backup_publish', offsite and data.get('offsite') is not True,
-               'encrypted offsite publication not verified')
-    transition('backup_size', offsite and size > 45*1024**2,
-               'backup approaching 50 MiB ciphertext limit')
+    from .backupstatus import verified_public_readback
+    from .offsitebackup import MAX_CIPHER_BYTES
+    transition('backup_publish', offsite and not verified_public_readback(data, now),
+               'fresh independent encrypted offsite readback not verified')
+    transition('backup_size', offsite and size > int(MAX_CIPHER_BYTES * 0.9),
+               'backup approaching configured ciphertext size limit')
 
     # ── 恢复链整链（2026-11-15）──────────────────────────────────────────
     #
@@ -1266,13 +1269,14 @@ def backup_age_seconds(now=None) -> int | None:
     不是「零秒前刚备份过」。
     """
     import json
+    from .backupstatus import report_age
     latest = getattr(config, 'BACKUP_STATUS_FILE', None)
     if latest is None:
         return None
     now = int(time.time()) if now is None else int(now)
     try:
         data = json.loads(Path(latest).read_text())
-        age = now - Path(latest).stat().st_mtime
+        age = report_age(data, Path(latest).stat().st_mtime, now)
     except (OSError, ValueError, AttributeError, TypeError):
         return None
     # 与 `evaluate_backup_health` 用同一套有效性判据，避免两处结论不一致。

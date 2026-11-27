@@ -101,6 +101,8 @@ export const NAV_COMMANDS: readonly NavSeed[] = [
    keywords: 'stats statistics usage 统计 用量'},
   {href: '/logs', labelKey: 'nav.logs', groupKey: 'nav.groupGovernance',
    keywords: 'logs log 日志'},
+  {href: '/traffic', labelKey: 'nav.traffic', groupKey: 'nav.groupGovernance',
+   keywords: 'traffic capture request 流量 抓包 请求', adminOnly: true},
   {href: '/security', labelKey: 'nav.security', groupKey: 'nav.groupGovernance',
    keywords: 'security ip allow deny 安全 白名单'},
   {href: '/settings', labelKey: 'nav.settings', groupKey: 'nav.groupGovernance',

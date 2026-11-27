@@ -80,6 +80,11 @@ import random
 import time
 from dataclasses import dataclass, replace
 from typing import Any, AsyncIterator, Callable
+from .outputlimits import OutputLimitExceeded
+
+
+class RetainedMemoryExceeded(OutputLimitExceeded):
+    """Local response memory is full; distinct from the provider byte cap."""
 
 #: 预算超限的 `kind` 只在这里落日志（见 `classify_budget_exceeded`）。
 #: 命名沿用项目惯例 `workbuddy.<模块>`。
@@ -482,7 +487,17 @@ async def decoded_bytes(response, maximum=None):
             raise OutputLimitExceeded('Upstream response exceeds the configured byte limit')
         if decoder and (decoder.unconsumed_tail or decoder.unused_data):
             raise OutputLimitExceeded('Upstream compressed response exceeds the supported limit')
-        if chunk:yield chunk
+        if chunk:
+            from . import observability
+            reserve = getattr(observability.current.get(), 'reserve_output_body', None)
+            if reserve is not None:
+                try:
+                    # Actual decoded growth supersedes the client's token hint.
+                    # Buffered paths may hold both bytearray and final bytes.
+                    reserve(2 * decoded + 4096)
+                except observability.CapacityError:
+                    raise RetainedMemoryExceeded('Gateway retained-memory capacity is full') from None
+            yield chunk
     if decoder and not decoder.eof:
         raise ValueError('Truncated compressed upstream response')
 
@@ -491,7 +506,7 @@ async def buffered_post(client, url, *, content, headers, deadline):
     """Bound decoded bytes and first-byte time before buffering a response."""
     import httpx
     from . import observability
-    from .outputlimits import maximum_bytes, OutputLimitExceeded
+    from .outputlimits import maximum_bytes
     started = time.monotonic()
     request_headers=dict(headers)
     request_headers['Accept-Encoding']='gzip, deflate, identity'
@@ -506,23 +521,18 @@ async def buffered_post(client, url, *, content, headers, deadline):
     _state = observability.current.get()
     if _state is not None and getattr(_state, 'first_byte_ms', None) is None:
         _state.first_byte_ms = int((time.monotonic() - started) * 1000)
-    maximum=65536 if response.status_code>=400 else maximum_bytes()
-    data=bytearray()
     try:
-        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
-            data.extend(chunk)
         clean_headers={k:v for k,v in response.headers.items() if k.lower() not in
                        ('content-encoding','content-length','transfer-encoding')}
+        if response.status_code >= 400:
+            raw = await read_error_body(response, deadline, preserve_status=True)
+            return httpx.Response(response.status_code, headers=clean_headers,
+                                  content=raw, request=request)
+        maximum = maximum_bytes()
+        data = bytearray()
+        async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
+            data.extend(chunk)
         return httpx.Response(response.status_code,headers=clean_headers,content=bytes(data),request=request)
-    except OutputLimitExceeded:
-        if response.status_code < 400:
-            raise
-        # The HTTP status is known even when the error payload is too large to
-        # trust/parse. Do not turn a provider's explicit 4xx into a retryable 502.
-        return httpx.Response(response.status_code,request=request,json={'error':{
-            'type':'upstream_invalid_body','code':'upstream_error_body_too_large',
-            'message':'Upstream error body exceeded the supported size limit',
-            'upstream_http_status':response.status_code,'retry_policy':{'retry':False}}})
     finally:
         await observability.close_stream(response,None,timeout=deadline.budgets.client_cancel_s)
 
@@ -533,20 +543,37 @@ class ErrorBodyTooLarge(ValueError):
 
 async def read_error_body(response, deadline: Deadline, maximum: int = 65536, *, preserve_status=False) -> bytes:
     """An error response is not exempt from the request's time/space budget."""
-    from .outputlimits import OutputLimitExceeded
+    import json
     result = bytearray()
+    status = getattr(response, 'status_code', 0)
+    keep_status = preserve_status and 400 <= status <= 599
+    failure = None
+    chunk = None
     try:
         async for chunk in iterate_with_budgets(decoded_bytes(response,maximum),deadline,maximum=maximum):
             result.extend(chunk)
     except OutputLimitExceeded as exc:
-        status=getattr(response,'status_code',0)
-        if preserve_status and 400<=status<=599:
-            import json
-            return json.dumps({'error':{'type':'upstream_invalid_body',
-                'code':'upstream_error_body_too_large','retry_policy':{'retry':False},
-                'message':'Upstream error body exceeded the supported size limit',
-                'upstream_http_status':status}}).encode()
-        raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB') from exc
+        if not keep_status:
+            raise ErrorBodyTooLarge('upstream error body exceeds 64 KiB') from exc
+        failure = ('upstream_error_body_too_large',
+                   'Upstream error body exceeded the supported size limit')
+    except BudgetExceeded:
+        if not keep_status:
+            raise
+        failure = ('upstream_error_body_timeout',
+                   'Upstream rejected the request; its error body did not finish in time')
+    except Exception:
+        if not keep_status:
+            raise
+        failure = ('upstream_error_body_unreadable',
+                   'Upstream rejected the request; its error body could not be read')
+    if failure:
+        # Drop provider buffers and leave the exception/traceback scope before
+        # allocating this fixed, sub-4096-byte diagnostic. Never echo exceptions.
+        result.clear()
+        chunk = None
+        return json.dumps({'error': {'code': failure[0], 'message': failure[1],
+            'upstream_http_status': status, 'retry_policy': {'retry': False}}}).encode()
     return bytes(result)
 
 

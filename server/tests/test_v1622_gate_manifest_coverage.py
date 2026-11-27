@@ -11,55 +11,24 @@
 
 ## 本测试守什么
 
-不要求立刻把 406 个存量全部纳入 —— 那是一次改 400 多个模块的改动，失败原因无法
-逐个定位，属于规范里说的「无法审阅的规模」。这里守的是**不许再新增**：
+2026-11-27 已分批核对并纳入全部存量，原白名单已清空。这里守的是：
 
   * 磁盘上有、清单里没有、又不在存量白名单里 → 失败，并指出是哪个文件；
-  * 白名单只许减少：某个文件被纳入清单后，从白名单里删掉它是**进步**，
-    而把它加回白名单是**退步**（`KNOWN_UNCOUNTED` 里不应出现已在清单的文件）。
+  * 顶层函数测试必须进入 pytest loader，不能被 unittest 零用例静默通过；
+  * 清单不能重复，已纳入的文件不能重新成为遗漏例外。
 """
 from __future__ import annotations
 
 from pathlib import Path
-import re
+import ast
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = ROOT / 'server' / 'tests'
 GATE = ROOT / 'tools' / 'ci_regression.py'
 
-#: 2026-11-26 的存量：这些测试文件还没进门禁，需要逐个收敛。
-#: **只许删，不许加。** 每纳入一个就从这里划掉一个。
-KNOWN_UNCOUNTED = frozenset({
-    'server.tests.test_v004_managed_update_boundary',
-    'server.tests.test_audit_20261029_security',
-    'server.tests.test_audit_20261029_web_gate',
-    'server.tests.test_audit_finance_repairs',
-    'server.tests.test_audit_runtime_repairs',
-    'server.tests.test_audit_security_repairs',
-    'server.tests.test_budget_batch_bounds',
-    'server.tests.test_command_palette',
-    'server.tests.test_doubaowork_platform',
-    'server.tests.test_issue39_estimate_effort',
-    'server.tests.test_issue69_cache_tokens',
-    'server.tests.test_merge_read_integrity',
-    'server.tests.test_merge_remaining_boundaries',
-    'server.tests.test_platform_integration_guards',
-    'server.tests.test_preauth_body',
-    'server.tests.test_qoder_checkin_evidence',
-    'server.tests.test_refresh_all_tokens',
-    'server.tests.test_refresh_plan',
-    'server.tests.test_settings_contract',
-    'server.tests.test_speed_boundaries',
-    'server.tests.test_steward',
-    'server.tests.test_unknown_archive',
-    'server.tests.test_v004_managed_update_boundary',
-    'server.tests.test_v12137_snapshot_gauge_always_emitted',
-    'server.tests.test_v12156_stale_transactions',
-    'server.tests.test_v12160_context_metric',
-    'server.tests.test_v1279_route_authorization',
-    'server.tests.test_workbench_registration',
-})
+#: 2026-11-27 全部存量已纳入；保留空集合以守住原来的单向收敛合同。
+KNOWN_UNCOUNTED = frozenset()
 
 
 def _modules_on_disk() -> set[str]:
@@ -72,9 +41,15 @@ def _modules_on_disk() -> set[str]:
 
 def _modules_in_gate() -> set[str]:
     text = GATE.read_text(encoding='utf-8')
-    start = text.index('MODULES = (')
-    end = text.index('\n)', start)
-    return set(re.findall(r'"(server\.tests\.[^"]+)"', text[start:end]))
+    modules = set()
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                and target.id in ('MODULES', 'PYTEST_MODULES') for target in node.targets):
+            values = ast.literal_eval(node.value)
+            assert not modules.intersection(values), 'a test module must not run in both loaders'
+            assert len(values) == len(set(values)), 'duplicate gate module'
+            modules.update(values)
+    return modules
 
 
 class GateManifestCoverageTests(unittest.TestCase):
@@ -102,6 +77,20 @@ class GateManifestCoverageTests(unittest.TestCase):
     def test_known_list_entries_actually_exist(self):
         missing = sorted(name for name in KNOWN_UNCOUNTED if not (TESTS_DIR / f'{name.split(".")[-1]}.py').is_file())
         self.assertEqual(missing, [], '白名单里有已经不存在的文件，删掉它们：\n  ' + '\n  '.join(missing))
+
+    def test_function_tests_are_assigned_to_the_pytest_loader(self):
+        from tools.ci_regression import MODULES, PYTEST_MODULES
+        misplaced = []
+        for name in _modules_in_gate():
+            path = TESTS_DIR / (name.rsplit('.', 1)[-1] + '.py')
+            functions = [node for node in ast.parse(path.read_text(encoding='utf-8')).body
+                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and node.name.startswith('test_')]
+            if functions and name in MODULES:
+                misplaced.append(name)
+            if name in PYTEST_MODULES:
+                self.assertTrue(functions, f'{name}: pytest module must expose test functions')
+        self.assertEqual(misplaced, [], 'unittest does not execute top-level pytest functions')
 
 
 if __name__ == '__main__':

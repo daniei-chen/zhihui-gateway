@@ -516,7 +516,7 @@ export const upstreamApi = {
     get<UpstreamStatus>('/api/status',
                         upstreamId == null ? undefined : {upstream_id: upstreamId}),
   /** 上游模型简表；realm 非空时只返回该版本的条目 */
-  models: (realm?: Realm) => get<ModelListResponse>('/api/models', {realm}),
+  models: (realm?: Realm, signal?: AbortSignal) => get<ModelListResponse>('/api/models', {realm}, signal),
 };
 
 /* ── 模型中心 ───────────────────────────────────────── */
@@ -723,6 +723,12 @@ export interface TrafficRecordSummary {
 export interface TrafficStatus {
   enabled: boolean;
   setting?: boolean | null;
+  desired?: boolean;
+  effective?: boolean;
+  effective_scope?: 'instance';
+  pending?: boolean;
+  blocked_reason?: string | null;
+  propagation_seconds?: number;
   retention_hours: number;
   max_records: number;
   limit_bytes: number;
@@ -760,7 +766,8 @@ export const trafficApi = {
   status: () => get<TrafficStatus>('/api/traffic/status'),
   list: (limit = 50, filters: TrafficFilters = {}) =>
     get<{enabled: boolean; records: TrafficRecordSummary[]}>('/api/traffic', {limit, ...filters}),
-  read: (id: string) => get<TrafficRecord>(`/api/traffic/${encodeURIComponent(id)}`),
+  read: (id: string, signal?: AbortSignal) =>
+    get<TrafficRecord>(`/api/traffic/${encodeURIComponent(id)}`, undefined, signal),
   setEnabled: (enabled: boolean) =>
     post<{setting: boolean; effective: boolean; detail?: string; blocked_by?: string}>(
       '/api/traffic/setting', {enabled}),
