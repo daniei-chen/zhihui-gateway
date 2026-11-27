@@ -155,6 +155,39 @@ def test_zero_user_charge_does_not_assert_unknown_supplier_cost_is_zero(state,mo
     assert portalwallet.platform_costs_page()['cost_complete'] is False
 
 
+@pytest.mark.parametrize('error_stage,released',[('upstream',False),(None,True)])
+def test_upstream_rejection_is_not_released_as_a_gateway_rejection(state,monkeypatch,error_stage,released):
+    """上游看过并拒绝的 4xx 可能已计费，不能按「未到达供应商」释放。
+
+    `terminal_state='rejected'` 只说明最终状态码是 4xx，不说明是谁拒绝的：
+    上游渠道拒绝（11128 `channel_check_rejected`）同样是 400。`budget.settle`
+    用 `error_stage != 'upstream'` 区分两者，这里必须用同一份判据。
+    """
+    from server import budget, db, keysvc, observability, portalstore as store, portalwallet
+
+    made = portal_key()
+    key = keysvc.resolve(made['key'])
+    audit = observability.RequestAudit('synthetic-rejected', '/v1/chat/completions', 'POST',
+                                       'openai', time.monotonic())
+    token = observability.current.set(audit)
+    try:
+        budget.prepare(key, {'model': 'deepseek-v4-flash', 'messages': []})
+        budget.forwarded()
+        audit.terminal_state = 'rejected'
+        db.add_request_log(ts=int(time.time()), request_id=audit.request_id, key_id=key['id'],
+                           status=400, terminal_state='rejected', error_stage=error_stage,
+                           error='{"code":11128,"msg":"channel_check_rejected"}' if error_stage else 'invalid request')
+        budget.finish(audit)
+    finally:
+        observability.current.reset(token)
+    monkeypatch.setenv('WB_PORTAL_AUTO_CLOSE_REJECTED', '1')
+    assert portalwallet.auto_close_rejected() == (1 if released else 0)
+    with store.transaction() as conn:
+        spend = conn.execute('SELECT state FROM portal_spends WHERE request_id=?',
+                             (audit.request_id,)).fetchone()[0]
+    assert spend == ('settled' if released else 'unknown')
+
+
 @pytest.mark.parametrize('credit,expected',[(0.1234567,123457),('0.1000000000000000055511151231257827',100000),('0.123456499999999999999999',123456),('1e-7',0)])
 def test_precision_settles_once_and_next_user_request_works(state,provider,monkeypatch,credit,expected):
     from fastapi import FastAPI
@@ -222,7 +255,13 @@ def test_reset_epoch_survives_reconcile_without_recharging_history(state):
 
 
 @pytest.mark.parametrize('complete',[False,True])
-def test_cancellation_releases_user_balance_and_retains_known_supplier_cost(state, monkeypatch,complete):
+def test_cancellation_charges_known_supplier_cost(state, monkeypatch,complete):
+    """客户端取消不再免单：回执里已知的上游费用必须扣到用户身上。
+
+    断连是调用方自己可制造的状态，所以「取消即零结清」等于免费消费公共池。
+    只要主库已提交的回执带有 supplier_units（上游实测扣费），就按它扣用户；
+    `usage_complete` 只影响 `amount_units`（用户应扣的旧字段），不影响本条判定。
+    """
     from server import budget, db, keysvc, observability, portalstore as store, portalwallet
     from server.routers import gateway
 
@@ -251,8 +290,11 @@ def test_cancellation_releases_user_balance_and_retains_known_supplier_cost(stat
         settlement = conn.execute('SELECT * FROM portal_settlements WHERE request_id=?',
                                    (audit.request_id,)).fetchone()
         assert settlement['supplier_units'] == 123456
-        assert settlement['charged_units'] == 0 and settlement['platform_units'] == 123456
-    assert portalwallet.platform_costs_page()['platform_units'] == 123456
+        assert settlement['charged_units'] == 123456 and settlement['platform_units'] == 0
+        # The frozen grant is only partly returned: the known cost stays charged.
+        assert conn.execute("SELECT remaining_units FROM portal_bonus_grants WHERE id=?",
+                            ('a' * 32,)).fetchone()[0] == 10_000_000 - 123456
+    assert portalwallet.platform_costs_page()['platform_units'] == 0
     # Paired recovery must use supplier_units even if token completeness kept
     # the user's amount_units unknown. The snapshot contains synthetic data only.
     from server import portalrecovery
@@ -322,7 +364,8 @@ def test_real_asgi_disconnect_preserves_supplier_cost(state, provider, monkeypat
     assert portalwallet.auto_close_client_cancelled() == 1
     with store.transaction() as conn:
         settlement = conn.execute('SELECT * FROM portal_settlements WHERE request_id=?', (rid,)).fetchone()
-        assert settlement['supplier_units'] == 123456 and settlement['platform_units'] == 123456
+        assert settlement['supplier_units'] == 123456
+        assert settlement['charged_units'] == 123456 and settlement['platform_units'] == 0
 
 
 @pytest.mark.parametrize('matching',[False,True])
