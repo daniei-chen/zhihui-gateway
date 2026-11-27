@@ -166,6 +166,17 @@ def prepare(key, body, *, encoded_body=None):
                              'daily_token_quota,daily_credit_quota FROM api_keys WHERE id=?', (key['id'],))
         if fresh is None: raise BudgetRejected('密钥已被删除', 'invalid_api_key')
         limited = bool(fresh['quota'] or fresh['quota_credit'] or fresh['daily_token_quota'] or fresh['daily_credit_quota'])
+        if not limited:
+            # DAN-13：`not limited`（额度全 0）= 「不限」——但这条契约只对管理员
+            # **显式**不设额度成立。红包把总额拆成 N 份，0 的份额不是「不限」，
+            # 而是「这一份没分到钱」（拆包侧已改成绝不再产出 0，见
+            # redpacket.split_amount；库里已有的份额改不了，也不该改）。
+            # 这类密钥在这里拒绝服务：放它过去，等于把一份残渣当成无限额度的钥匙。
+            from . import redpacket
+            if redpacket.zero_share_amount(int(key['id'])) is not None:
+                raise BudgetRejected(
+                    '该密钥是一份 0 额度的红包份额，已拒绝服务；请联系发红包的管理员重新发放',
+                    'zero_share_quota', status=403)
         states = "('reserved','forwarded','unknown')" if limited else "('reserved','forwarded')"
         if limited:
             # A-002 修复（2026-10-27 审计 S1）：unknown = 「上游没回 usage，等核对」。

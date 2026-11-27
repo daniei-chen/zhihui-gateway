@@ -483,6 +483,9 @@ CREATE TABLE IF NOT EXISTS red_packet_shares (
   claimed_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_packet_shares ON red_packet_shares(packet_id);
+-- 反查「这把密钥是不是红包份额（以及它分到多少）」用：消费侧的额度判定
+-- （budget.prepare）在不限额密钥上要读一次，不能全表扫。
+CREATE INDEX IF NOT EXISTS idx_packet_shares_key ON red_packet_shares(key_id);
 
 -- 多上游接入点（账号池分组）。
 --
