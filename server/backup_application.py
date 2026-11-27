@@ -365,7 +365,6 @@ def verify_paired_archive(archive, destination, receipt):
         with path.open('xb') as output:
             os.chmod(path, 0o600)
             with archive.extractfile(member) as source:
-                import shutil
                 shutil.copyfileobj(source, output)
     restored = restore_quarantine(root, Path(destination) / 'quarantine-verification', receipt['manifest_sha256'])
     if restored.get('quarantined') is not True:

@@ -4,8 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import tarfile
 from unittest import mock
 
+from server import backup_application as backup
 from server import budget, budgetowner, config, db, keysvc, observability, portalbilling
 from server import portalstore as store, portalwallet as wallet, portalrecovery as recovery
 from server.tests import test_user_portal as fixtures
@@ -388,6 +390,31 @@ class PortalCloseoutTests(fixtures.PortalTests):
         self.assertTrue(restored['quarantined'])
         with closing(sqlite3.connect(target / 'user-portal.sqlite3')) as connection:
             self.assertEqual(connection.execute("SELECT value FROM portal_settings WHERE key='restore_quarantine'").fetchone()[0], 'true')
+
+    async def test_backup_verification_of_paired_ledgers_restores_and_quarantines(self):
+        """每日备份自身的配对校验必须是真跑一次，不是只检查源码里有没有 import。
+
+        `backup_application.verify_paired_archive()` 在 v1.6.28 里因为函数体内
+        `import shutil` 把 `shutil` 变成局部名，`:354` 的 `shutil.disk_usage()`
+        直接 UnboundLocalError —— 而它唯一的调用点 `main():485` 外层没有
+        try/except，于是只要门户库存在，每日备份整次失败、`latest.json` 不更新。
+        `test_v12145_backup_stale_scratch.py` 只对源码做正则 grep，抓不到这一条。
+        """
+        args = await self.prepare_snapshot()
+        args.pop('offline_confirmed')
+        result = recovery.create_paired_snapshot(**args)
+        bundle = self.root / 'application.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as archive:
+            archive.add(args['destination'], arcname='paired-ledgers')
+        destination = self.root / 'verify-paired'
+        destination.mkdir()
+        with tarfile.open(bundle) as archive:
+            checked = backup.verify_paired_archive(archive, destination, result)
+        self.assertEqual(checked['restore_check'], 'ok')
+        self.assertIs(checked['quarantined'], True)
+        self.assertEqual(checked['manifest_sha256'], result['manifest_sha256'])
+        self.assertTrue(
+            (destination / 'quarantine-verification' / 'RESTORED-QUARANTINE.json').is_file())
 
     async def test_pair_refuses_wallet_settlement_without_main_receipt(self):
         args = await self.prepare_snapshot()
