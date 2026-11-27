@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from pathlib import Path
-import fcntl,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
+import hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 # Recovery invokes this file directly with Python's isolated mode (-I), which
 # intentionally omits the script directory from import search.  Keep the
@@ -371,11 +371,27 @@ def verify_paired_archive(archive, destination, receipt):
         raise RuntimeError('paired recovery was not quarantined')
     return {'restore_check': 'ok', 'quarantined': True, 'manifest_sha256': receipt['manifest_sha256']}
 
+def exclusive_lock(handle):
+    """独占非阻塞锁；拿不到锁抛 BlockingIOError。
+
+    Unix 用 fcntl.flock，Windows 没有 fcntl 用 msvcrt 锁同一段字节，
+    语义一致：冲突立即失败而不是等待。恢复/备份脚本在 Windows 原生
+    启动器（windows/）下也能跑起来，不再因顶层 import fcntl 直接崩。
+    """
+    if os.name == 'nt':
+        import msvcrt
+        handle.seek(0)
+        try:msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
+        except OSError as exc:raise BlockingIOError(exc.errno,'lock is held') from exc
+        return
+    import fcntl
+    fcntl.flock(handle.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+
 def main():
     os.umask(0o077)
     BASE.mkdir(mode=0o700,parents=True,exist_ok=True); BASE.chmod(0o700)
     lock=(BASE/'backup.lock').open('a')
-    try:fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+    try:exclusive_lock(lock)
     except BlockingIOError:raise RuntimeError('backup already running')
     # 清理上一次被中断留下的临时工作区。
     #

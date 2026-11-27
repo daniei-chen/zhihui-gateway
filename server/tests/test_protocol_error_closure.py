@@ -12,7 +12,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from server import config, db, deadline, keysvc, observability, protocolerrors
+from server import budgetowner, config, db, deadline, keysvc, observability, protocolerrors
 from server.routers import gateway
 from server.qtgcore.errors import install_handlers
 
@@ -121,6 +121,9 @@ class ProtocolErrorEndpointTests(unittest.TestCase):
             db._conn.close()
         db._conn = None
         config.DB_PATH, config.USERS_FILE, config.STATIC_DIR = cls.original
+        # 预算归属锁的文件句柄是模块级全局的，不关就删不掉临时目录：
+        # Windows 上这是 WinError 32，POSIX 允许删打开中的文件所以从未暴露。
+        budgetowner.close()
         cls.directory.cleanup()
 
     def setUp(self):

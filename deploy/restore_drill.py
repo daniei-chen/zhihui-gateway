@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import os
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -336,7 +337,10 @@ def _verify_data(archive: Path, metadata: dict, regular: dict, scratch: Path, ap
             restored[name] = target
     for path in restored.values():
         deadline = time.monotonic() + SQLITE_TIMEOUT
-        with sqlite3.connect(path.as_uri() + '?mode=ro&immutable=1', uri=True, timeout=1) as connection:
+        # sqlite3 的 with 只管事务，不关连接：连接留着等于文件句柄留着，Windows 上
+        # 临时目录随后就删不掉（WinError 32）；POSIX 只是把 fd 拖到 GC。
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro&immutable=1',
+                                     uri=True, timeout=1)) as connection:
             connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 32 * 1024 * 1024)
             connection.execute('PRAGMA trusted_schema=OFF')
             connection.execute('PRAGMA query_only=ON')

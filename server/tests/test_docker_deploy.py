@@ -591,7 +591,8 @@ class DockerAssetsTest(unittest.TestCase):
         import subprocess
         r = subprocess.run(
             [sys.executable, str(_ROOT / 'dev' / 'check_dockerfile.py')],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=60,
         )
         self.assertEqual(r.returncode, 0,
                          'Dockerfile 结构自检失败：' + r.stdout + r.stderr)
@@ -609,7 +610,8 @@ class DockerAssetsTest(unittest.TestCase):
             self.skipTest('本环境没有 bash')
         r = subprocess.run(
             [sys.executable, str(_ROOT / 'dev' / 'check_dockerfile_build.py')],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=180,
         )
         self.assertEqual(r.returncode, 0,
                          '前端阶段分支判定不正确：' + r.stdout + r.stderr)

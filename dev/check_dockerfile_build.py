@@ -58,6 +58,7 @@ def run_case(label: str, setup, shell: str) -> tuple[int, str]:
                   .replace('/dist', _posix(tmp / 'dist'))
                   .replace('/build', _posix(tmp / 'build')))
         r = subprocess.run(['bash', '-c', s], capture_output=True, text=True,
+                           encoding='utf-8', errors='replace',
                            env={**os.environ, 'NPM_REGISTRY': ''})
         return r.returncode, (r.stdout + r.stderr)
     finally:
@@ -73,7 +74,7 @@ def main() -> int:
     # 场景 A：有完整产物（发布包 / CI）→ 应直接复用，不跑 npm
     def setup_a(tmp: Path) -> None:
         (tmp / 'src' / 'out').mkdir(parents=True)
-        (tmp / 'src' / 'out' / 'index.html').write_text('<html>prebuilt</html>')
+        (tmp / 'src' / 'out' / 'index.html').write_text('<html>prebuilt</html>', encoding='utf-8')
 
     rc, out = run_case('A', setup_a, shell)
     if rc != 0 or '跳过构建' not in out:
@@ -83,7 +84,7 @@ def main() -> int:
     # 场景 C：产物不完整（有 out/ 但缺 index.html）→ 必须识别为无效并尝试构建
     def setup_c(tmp: Path) -> None:
         (tmp / 'src' / 'out').mkdir(parents=True)
-        (tmp / 'src' / 'out' / 'foo.txt').write_text('x')
+        (tmp / 'src' / 'out' / 'foo.txt').write_text('x', encoding='utf-8')
 
     rc, out = run_case('C', setup_c, shell)
     if '在容器内构建' not in out:
@@ -93,7 +94,7 @@ def main() -> int:
     # 场景 B：完全没有 out/（git clone）→ 应尝试容器内构建
     def setup_b(tmp: Path) -> None:
         (tmp / 'src' / 'app').mkdir(parents=True)
-        (tmp / 'src' / 'package.json').write_text('{}')
+        (tmp / 'src' / 'package.json').write_text('{}', encoding='utf-8')
 
     rc, out = run_case('B', setup_b, shell)
     if '在容器内构建' not in out:

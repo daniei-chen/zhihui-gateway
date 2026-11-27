@@ -204,7 +204,7 @@ class TrafficPrivacyAndSettingsTests(unittest.TestCase):
         captured = next((self.root / 'traffic').glob('*/*.json.gz'))
         with gzip.open(captured, 'rt') as handle:
             raw = handle.read()
-        index = (self.root / 'traffic/index.jsonl').read_text()
+        index = (self.root / 'traffic/index.jsonl').read_text(encoding='utf-8')
         for forbidden in ('13800138000', 'synthetic@example.invalid', 'synthetic-bearer-secret'):
             self.assertNotIn(forbidden, raw)
             self.assertNotIn(forbidden, index)
