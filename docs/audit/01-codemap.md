@@ -308,7 +308,7 @@ export WB_DATA_DIR=$(mktemp -d /tmp/wbdata-XXXX)
 
 | 目录 | 职责 | 文本行 | 测试覆盖（实测） | 主要风险 |
 |---|---|---|---|---|
-| `server/`（非测试） | 网关 + 折进来的 qtg 控制面 | 82,036 | 203 模块中 183 个被 ≥1 测试文件直接 import（90%）；但 20 个 0 引用（含 6 个死模块） | **S4 服务↔路由成环**、**S5 三 router 互联**、S9 双服务同进程、S8 router 直写 SQL、S1 更新器双份 |
+| `server/`（非测试） | 网关 + 折进来的 qtg 控制面 | 82,036 | 203 模块中 183 个被 ≥1 测试文件直接 import（90%）；但 20 个 0 引用（含 5 个死模块 + `relay_app.py` 配置加载） | **S4 服务↔路由成环**、**S5 三 router 互联**、S9 双服务同进程、S8 router 直写 SQL、S1 更新器双份 |
 | `server/tests/` | 回归门禁主体 | 112,448 | 自身即测试；6,206 用例 | 引用面广≠覆盖深（`credit_watch` 1,451 行 / 3 个测试） |
 | `web/` | Next 控制台 + 静态导出 | 70,637 | 47 文件 / 226 `test()`；本机因缺 `node_modules` 只 19/34 可见通过 | 版本偏斜（eslint-config-next 16.4.3）、文档版本漂移 |
 | `site/` | 内容寻址首页/登录资产 | 72,734 | `site/tests/` 5 文件（`home-import.test.mjs`） | 166 个二进制 + 4 份 10.7 MB `thinker.glb`（同 blob）占 pack 主体 |

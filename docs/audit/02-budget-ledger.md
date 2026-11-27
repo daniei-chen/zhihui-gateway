@@ -5,7 +5,7 @@
 - **方法**：只读。`grep -n` / `sed -n` 定点读码；5 个独立探针直连真实模块复现状态机行为，脚本已随交付放在 `probes/`（`probe_replay_dan23.py`、`probe_d3.py`、`probe_d12.py`、`probe_lim.py`、`probe_reset.py`，均**写在仓库外**、跑在临时库上）；pytest 只用现成 venv，`WB_DATA_DIR=/tmp/wb-audit-d`，不写仓库。
 - **复现方式**：任意探针 `cd /tmp && WB_DATA_DIR=/tmp/wb-x D:/AI/capy/work/venvs/zhihui-gateway/Scripts/python.exe <probes/xxx.py>`（脚本内路径为仓库绝对路径，换机器需改一行）。
 - **未改动任何仓库文件**，未 commit / push / PR。
-- **结论条数**：17 条（P1 × 6、P2 × 6、P3 × 5）。其中 D-01～D-13 由本人独立复现，D-14～D-17 由子代理取证后经我复核代码并重跑探针确认。
+- **结论条数**：16 条（P1 × 6、P2 × 6、P3 × 4）；D-09 已撤回，不计入。其中 D-01～D-13 由本人独立复现，D-14～D-17 由子代理取证后经我复核代码并重跑探针确认。
 
 ---
 
