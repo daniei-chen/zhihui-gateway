@@ -57,7 +57,7 @@ class KeysScopeTest(unittest.TestCase):
         cls._tmp.cleanup()
 
     def _token(self, scope: str) -> dict:
-        return tokensvc.create_token(f'k01s2-{scope}', scope, None, 'test')
+        return tokensvc.create_token(f'k01s2-{scope}', scope, None, 'admin')
 
     def _h(self, scope: str) -> dict:
         return {'Authorization': f"Bearer {self._token(scope)['token']}"}

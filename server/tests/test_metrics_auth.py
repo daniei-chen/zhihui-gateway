@@ -78,7 +78,7 @@ class MetricsAuthTest(unittest.TestCase):
     def test_admin_tokens_qualify_and_other_existing_scopes_do_not(self):
         for scope, expected in (('admin', 200), ('readonly', 403), ('keys', 403)):
             with self.subTest(scope=scope):
-                token = tokensvc.create_token('metrics-' + scope, scope)['token']
+                token = tokensvc.create_token('metrics-' + scope, scope, None, 'operator')['token']
                 self.client.cookies.clear()
                 result = self.client.get('/metrics', headers={'Authorization': 'Bearer ' + token})
                 self.assertEqual(result.status_code, expected, result.text)

@@ -80,7 +80,7 @@ class CreditReconcileGuardTest(unittest.TestCase):
                                 (key_id,))['used_credit_units'] or 0)
 
     def _h(self, scope: str) -> dict:
-        tok = tokensvc.create_token('u03-' + scope, scope, None, 'test')
+        tok = tokensvc.create_token('u03-' + scope, scope, None, 'root')
         return {'Authorization': 'Bearer ' + tok['token']}
 
     # ── 1. 90 天裁剪后重建：绝不返还已消耗配额 ───────────────────────────

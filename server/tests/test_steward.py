@@ -792,7 +792,7 @@ class RouteTests(unittest.TestCase):
     def test_real_machine_tokens_cannot_access_human_steward_endpoints(self):
         self.app.dependency_overrides.clear()
         for scope in tokensvc.SCOPES:
-            token = tokensvc.create_token('fixture-' + scope, scope)['token']
+            token = tokensvc.create_token('fixture-' + scope, scope, None, 'admin')['token']
             for method, path, body in [('GET', 'status', None), ('GET', 'alerts', None), ('GET', 'settings', None),
                                        ('POST', 'chat', {'question': 'hi'}), ('PUT', 'settings', {}), ('POST', 'test-mail', None)]:
                 with self.subTest(scope=scope, method=method, path=path):

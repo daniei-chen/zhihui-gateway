@@ -413,6 +413,11 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   scope        TEXT    NOT NULL,
   enabled      INTEGER NOT NULL DEFAULT 1,
   expires_at   INTEGER,
+  -- 签发人（users.json 里该用户）在**签发那一刻**的会话版本 sv。鉴权时要求它与
+  -- 签发人当前的 sv 相等：改密码 / 改角色 / 手动吊销会话（都是 sv+1）因此天然
+  -- 收回该用户签发的全部令牌。NULL = 本次升级之前签发的旧令牌（没有可校验的
+  -- 版本），一律 fail-closed，必须重新签发（见 docs/api-tokens.md）。
+  session_version INTEGER,
   created_at   INTEGER NOT NULL,
   created_by   TEXT    NOT NULL DEFAULT '',
   last_used_at INTEGER,
@@ -757,6 +762,11 @@ def replace_database(staging: Path) -> None:
 # 因此新增字段必须显式 ALTER。每条用 PRAGMA 检测后再加，可重复执行。
 _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # (表名, 列名, 列定义)
+    # 令牌绑定的会话版本（DAN-11）。可空：存量库升级后既有令牌为 NULL ——
+    # 即「升级前签发、没有版本可校验」，鉴权时 fail-closed（必须重新签发）。
+    # 不在这里给默认值：sv 是每个用户各自的，填 0 会让「签发人被删 / 已被吊销」
+    # 的旧令牌重新可用，正是要修的洞。
+    ('api_tokens', 'session_version', 'INTEGER'),
     ('request_logs', 'credit', 'REAL'),
     ('usage_daily', 'credit', 'REAL NOT NULL DEFAULT 0'),
     # 首字延迟：可空（历史记录与非流式请求为 NULL）

@@ -305,7 +305,7 @@ class ManagedSessionBoundaryTest(unittest.TestCase):
     def test_revoked_cookie_and_admin_service_token_cannot_write(self):
         security.revoke_sessions('root')
         self.assertEqual(self.upload(self.headers('root')).status_code, 401)
-        token = self.tokensvc.create_token('synthetic-update-boundary', 'admin')['token']
+        token = self.tokensvc.create_token('synthetic-update-boundary', 'admin', None, 'root')['token']
         self.assertEqual(self.upload({'Authorization': 'Bearer ' + token}).status_code, 403)
         self.assertEqual(self.package.read_bytes(), b'previous-synthetic-package')
 

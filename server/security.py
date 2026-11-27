@@ -747,26 +747,44 @@ def clear_fail(ip: str, username: str | None = None) -> None:
         _unmirror_fail('user', username.lower())
 
 
+def _user_row(cfg: dict, username: str) -> dict | None:
+    return next((u for u in cfg.get('users', []) if u.get('username') == username), None)
+
+
+def _session_version_of(row: dict) -> int:
+    try:
+        return int(row.get('sv') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 # ── 会话吊销 ─────────────────────────────────────────────
 # 每个用户带一个会话版本号 sv（存在 users.json 的该用户条目上，缺省 0）。
-# 递增它 = 立即让该用户已签发的所有 cookie 失效。用于：
+# 递增它 = 立即让该用户已签发的所有 cookie 与该用户签发的全部 API Token 失效。用于：
 #   - 改密码后（被盗会话不能继续用）
 #   - 改角色后（旧权限快照作废）
 #   - 管理员手动「吊销会话」
 # 为什么不用全局 epoch：那会连带把其他用户的登录踢掉，属于过度杀伤。
 def session_version(cfg: dict, username: str) -> int:
-    for u in cfg.get('users', []):
-        if u.get('username') == username:
-            try:
-                return int(u.get('sv') or 0)
-            except (TypeError, ValueError):
-                return 0
-    return 0
+    row = _user_row(cfg, username)
+    return _session_version_of(row) if row is not None else 0
+
+
+def issuer_session_version(cfg: dict, username: str) -> int | None:
+    """API Token 绑定用的会话版本：签发人当前 sv，签发人不存在时返回 None。
+
+    与 `session_version()` 的 0 缺省刻意分开：0 是「真实用户从没改过密码」的
+    合法值，拿它兜底会让「签发人被删号」的令牌重新通行。None 表示「没有这个
+    人」，任何真实版本都不等于它，删号因此天然收回令牌。
+    """
+    row = _user_row(cfg, username)
+    return None if row is None else _session_version_of(row)
 
 
 @user_mutation
 def revoke_sessions(username: str) -> int:
-    """递增该用户的会话版本，返回新值。其全部既有 cookie 立即失效。"""
+    """递增该用户的会话版本，返回新值。其全部既有 cookie 与它签发的 API Token
+    立即失效（令牌记录的是签发时的版本，见 tokensvc.session_bound）。"""
     cfg = load_users()
     new_sv = 0
     for u in cfg.get('users', []):
@@ -870,18 +888,27 @@ def _bearer_token(request: Request) -> str:
     return tok if tok.startswith(tokensvc.TOKEN_PREFIX) else ''
 
 
-def _token_identity(request: Request, token: str) -> dict:
+def _token_identity(request: Request, token: str, cfg: dict) -> dict:
     """作用域化 API Token 的身份解析（见 docs/api-tokens.md）。
 
-    角色由 token 的 **scope** 决定（不查用户表，避免与用户表产生暧昧耦合）；
-    失败时**不区分**「不存在 / 已停用 / 已过期」，只回一个笼统的 401，不给探测者
-    信号。失败使用独立的 Token/IP 计数；Token 成功不能清除密码登录失败。
+    角色由 token 的 **scope** 决定，但**能不能用**由签发人决定：令牌必须仍然
+    对应一个存在的签发人，且令牌记录的会话版本等于签发人当前的 sv。吊销会话 /
+    改密码 / 改角色都会让 sv+1，于是这些动作天然收回该用户签发的全部令牌
+    （DAN-11：以前令牌与用户表零耦合，一次会话泄露能被洗成永久凭据）。
+
+    失败时**不区分**「不存在 / 已停用 / 已过期 / 版本不符 / 签发人已删除」，
+    只回一个笼统的 401，不给探测者信号。失败使用独立的 Token/IP 计数；
+    Token 成功不能清除密码登录失败。
     """
     ip = client_ip(request)
     if token_login_blocked(ip):
         raise HTTPException(status_code=429,detail='请求过于频繁，请稍后重试')
     row = tokensvc.resolve(token)
-    if not row or not tokensvc.usable(row):
+    ok = bool(row) and tokensvc.usable(row)
+    if ok:
+        issuer = issuer_session_version(cfg, str(row.get('created_by') or ''))
+        ok = tokensvc.session_bound(row, issuer)
+    if not ok:
         record_token_fail(ip)
         audit(None, 'token_rejected', '', f'来源 {ip}')
         raise HTTPException(status_code=401, detail='未登录')
@@ -930,7 +957,7 @@ def _current_user(request: Request) -> dict:
             session_err = exc
     token = _bearer_token(request)
     if token:
-        return _token_identity(request, token)
+        return _token_identity(request, token, cfg)
     raise session_err or HTTPException(status_code=401, detail='未登录')
 
 

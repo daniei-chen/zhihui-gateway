@@ -8,8 +8,10 @@
   * **token 管理接口只接受会话**——泄露的 token 不能拿来自助提权；
   * **高危接口只接受会话**——即便 token 是 admin scope（更新、清日志、用户管理…）；
   * 过期 / 停用 / 删除后**立即失效**（逐次校验，无缓存）；
-  * 失败**不泄露原因**（不存在 / 停用 / 过期 都是同一个 401）；
-  * 令牌不绑定用户：改动用户表不影响已签发的令牌。
+  * 失败**不泄露原因**（不存在 / 停用 / 过期 / 版本不符 都是同一个 401）；
+  * 令牌钉在**签发人的会话版本**上：签发人改密、吊销会话、被删号之后立即失效
+    （DAN-11：曾经「令牌与用户表零耦合」，于是被盗会话签发的令牌活过任何吊销）；
+  * 升级前签发、没有会话版本的令牌一律 fail-closed，必须重新签发。
 
 注意：鉴权**会话优先**，而 `TestClient` 自带 cookie jar——若登录后不清空，
 后续带 Bearer 的请求会被会话顶掉，用例会全部「假通过」（其实测的是会话）。
@@ -17,13 +19,16 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import sys
 import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -31,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from server import config, db, security, tokensvc  # noqa: E402
+from server.tests._db_fixture import isolate_database  # noqa: E402
 
 
 class ApiTokenTest(unittest.TestCase):
@@ -80,9 +86,9 @@ class ApiTokenTest(unittest.TestCase):
 
     # ── 工具 ─────────────────────────────────────────────
     @contextmanager
-    def _as_session(self):
+    def _as_session(self, username: str = 'admin', password: str = 'admin-pw'):
         """以**会话**身份执行，退出时清空 cookie jar。"""
-        r = self.c.post('/api/login', json={'username': 'admin', 'password': 'admin-pw'})
+        r = self.c.post('/api/login', json={'username': username, 'password': password})
         self.assertEqual(r.status_code, 200, r.text)
         self.c.cookies.update(dict(r.cookies))
         try:
@@ -90,9 +96,10 @@ class ApiTokenTest(unittest.TestCase):
         finally:
             self.c.cookies.clear()
 
-    def _mint(self, name: str, scope: str = 'readonly', expires_at=None) -> str:
+    def _mint(self, name: str, scope: str = 'readonly', expires_at=None, *,
+              username: str = 'admin', password: str = 'admin-pw') -> str:
         """用会话创建一个令牌，返回明文。"""
-        with self._as_session() as c:
+        with self._as_session(username, password) as c:
             r = c.post('/api/tokens',
                        json={'name': name, 'scope': scope, 'expires_at': expires_at})
         self.assertEqual(r.status_code, 200, r.text)
@@ -248,18 +255,111 @@ class ApiTokenTest(unittest.TestCase):
         self.assertIn('delete_token', actions)
         self.assertNotIn(tok, json.dumps(logs, ensure_ascii=False), '审计日志绝不能出现明文令牌')
 
-    def test_token_does_not_depend_on_users_table(self) -> None:
-        """令牌不绑定用户：改动用户表不影响已签发的令牌。"""
+    # ── DAN-11：令牌必须能被会话吊销回收 ─────────────────
+    def test_revoke_sessions_immediately_kills_issued_tokens(self) -> None:
+        """DAN-11：会话吊销必须同时回收该会话签发的令牌。
+
+        修复前：`revoke_sessions()` 只递增 `users.json` 里的 sv，而令牌存在
+        SQLite `api_tokens` 表里，两者零耦合 —— 一次会话泄露就能被洗成永久的
+        admin 凭据，改密、踢会话、事后发现泄露都回收不了。
+        """
+        tok = self._mint('washed', 'admin')
+        self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 200)
+        security.revoke_sessions('admin')
+        r = self.c.get('/api/keys', headers=self._bearer(tok))
+        self.assertEqual(r.status_code, 401, '吊销会话后该会话签发的令牌必须立即失效')
+        self.assertEqual(r.json().get('detail'), '未登录', '失败原因不得外泄')
+
+    def test_password_change_kills_issued_tokens(self) -> None:
+        """改密码是「怀疑会话泄露」时最常见的动作，它同样收回令牌。"""
+        tok = self._mint('pwd-bound', 'admin')
+        original = security.load_users()
+        try:
+            with self._as_session() as c:
+                r = c.patch('/api/users/admin', json={'password': 'Rotated-Admin-Pw-2026'})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 401,
+                             '改密码后旧令牌必须失效')
+        finally:
+            security.save_users(original)
+
+    def test_revoke_of_one_user_keeps_other_users_tokens(self) -> None:
+        """吊销按用户生效：踢掉 admin 的会话不该连带踢掉别的用户签发的令牌。"""
+        with self._as_session() as c:
+            r = c.post('/api/users', json={'username': 'ops', 'password': 'Ops-Password-2026',
+                                           'role': 'admin'})
+            self.assertEqual(r.status_code, 200, r.text)
+        try:
+            tok = self._mint('ops-token', 'admin', username='ops', password='Ops-Password-2026')
+            self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 200)
+            security.revoke_sessions('admin')
+            self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 200,
+                             'admin 被吊销不影响 ops 的令牌')
+        finally:
+            with self._as_session() as c:
+                c.delete('/api/users/ops')
+
+    def test_pre_upgrade_token_without_session_version_is_rejected(self) -> None:
+        """升级前签发的令牌没有会话版本可校验 → fail-closed，必须重新签发。
+
+        按**旧表结构**的列清单直接插一行（刻意不写新增的版本列），模拟升级前留下
+        的令牌：这类令牌无法被 sv 回收，唯一安全的处理是拒绝。迁移路径就是管理员
+        用会话重新签发一枚 —— 后半段断言它照常可用。
+        """
+        legacy = 'wbt_' + secrets.token_urlsafe(32)
+        db.execute('INSERT INTO api_tokens(name, token_hash, prefix, scope, enabled, '
+                   'expires_at, created_at, created_by) VALUES(?, ?, ?, ?, 1, NULL, ?, ?)',
+                   ('legacy', hashlib.sha256(legacy.encode()).hexdigest(), legacy[:12],
+                    'admin', int(time.time()), 'admin'))
+        r = self.c.get('/api/keys', headers=self._bearer(legacy))
+        self.assertEqual(r.status_code, 401, '没有会话版本的旧令牌必须拒绝')
+        self.assertEqual(r.json().get('detail'), '未登录', '失败原因不得外泄')
+
+        reissued = self._mint('legacy-reissued', 'admin')
+        self.assertEqual(self.c.get('/api/keys', headers=self._bearer(reissued)).status_code, 200,
+                         '重新签发的令牌照常可用')
+
+    def test_create_token_requires_a_live_issuer(self) -> None:
+        """没有签发人的令牌没人能按 sv 回收，必须在签发时就拒绝。
+
+        以前不传 created_by 时 `created_by` 为空、签发人不在登记表里，两种都拿
+        不到可校验的版本 —— 那正是「永远吊销不掉」的凭据形态，不能只靠鉴权侧兜。
+        """
+        for creator in ('', '   ', 'no-such-user'):
+            with self.subTest(created_by=creator):
+                with self.assertRaises(ValueError):
+                    tokensvc.create_token('orphan', 'admin', None, creator)
+
+    def test_row_with_negative_session_version_is_rejected(self) -> None:
+        """手工写进库的负数版本不得与任何签发人对上（纵深防御）。"""
+        tok = 'wbt_' + secrets.token_urlsafe(32)
+        db.execute('INSERT INTO api_tokens(name, token_hash, prefix, scope, enabled, '
+                   'expires_at, session_version, created_at, created_by) '
+                   'VALUES(?, ?, ?, ?, 1, NULL, -1, ?, ?)',
+                   ('negative', hashlib.sha256(tok.encode()).hexdigest(), tok[:12],
+                    'admin', int(time.time()), 'admin'))
+        self.assertEqual(self.c.get('/api/keys', headers=self._bearer(tok)).status_code, 401)
+
+    def test_issuer_removal_invalidates_tokens(self) -> None:
+        """删号即失效：签发人不在用户表里，其令牌不能继续通行。
+
+        旧行为「令牌与用户表无关」正是 P1-1 的成因（删掉被盗账号、删掉攻击者
+        自建的账号，都收不回它签发的令牌）。恢复用户后令牌重新可用，说明这是
+        绑定而不是永久烧毁。
+        """
         tok = self._mint('decoupled', 'admin')
         cfg = security.load_users()
+        users = cfg['users']
         cfg['users'] = []
         security.save_users(cfg)
         try:
-            self.assertEqual(self.c.get('/api/me', headers=self._bearer(tok)).status_code, 200)
+            self.assertEqual(self.c.get('/api/me', headers=self._bearer(tok)).status_code, 401,
+                             '签发人已被删除时令牌必须失效')
         finally:
-            cfg['users'] = [{'username': 'admin', 'role': 'admin',
-                             'pwd_hash': security.make_hash('admin-pw')}]
+            cfg['users'] = users
             security.save_users(cfg)
+        self.assertEqual(self.c.get('/api/me', headers=self._bearer(tok)).status_code, 200,
+                         '签发人恢复后令牌随之恢复')
 
 
 class WriteEndpointScopeMatrixTest(unittest.TestCase):
@@ -540,6 +640,44 @@ class ExportRequiresSessionTest(unittest.TestCase):
         data = json.loads(response.body)
         self.assertEqual(set(data[0]), {'platform', 'uid', 'name', 'realm', 'state', 'credits', 'expires_iso'})
         self.assertNotIn('must-not-export', response.body.decode())
+
+
+class TokenSessionVersionMigrationTest(unittest.TestCase):
+    """存量库升级：新增的会话版本列由幂等补列迁移补上，旧令牌保持不可用。
+
+    为什么单独测：新列缺失时 `create_token()` 会直接 OperationalError（列不存在），
+    而 `_migrate()` 是每次 `connect()` 都跑的补列机制 —— 只有真正走一遍「旧形状的
+    库 → 正常启动」才能证明升级后既能落库、旧令牌也不会被悄悄填成可用版本。
+    """
+
+    def test_upgrade_adds_column_and_leaves_legacy_rows_fail_closed(self) -> None:
+        root = isolate_database(self)
+        users = root / 'users.json'
+        users.write_text(json.dumps({
+            'secret': 'S' * 64, 'api_keys': [],
+            'users': [{'username': 'admin', 'role': 'admin', 'sv': 3}],
+        }), encoding='utf-8')
+        with mock.patch.object(config, 'USERS_FILE', users):
+            # 回到升级前的形状：没有版本列，库里留着一枚旧令牌。
+            db.execute('ALTER TABLE api_tokens DROP COLUMN session_version')
+            legacy = 'wbt_' + secrets.token_urlsafe(32)
+            db.execute('INSERT INTO api_tokens(name, token_hash, prefix, scope, enabled, '
+                       'expires_at, created_at, created_by) VALUES(?, ?, ?, ?, 1, NULL, ?, ?)',
+                       ('legacy', hashlib.sha256(legacy.encode()).hexdigest(), legacy[:12],
+                        'admin', int(time.time()), 'admin'))
+            with db._lock:
+                db._close_connection_locked()
+            db.connect()  # 正常启动路径：补列迁移在这里发生
+
+            columns = {r[1] for r in db.query('PRAGMA table_info(api_tokens)')}
+            self.assertIn('session_version', columns, '升级必须把会话版本列补上')
+            row = db.query_one("SELECT session_version FROM api_tokens WHERE name = 'legacy'")
+            self.assertIsNone(row['session_version'],
+                              '旧令牌不得被填成任何可校验的版本（那等于让泄露的旧令牌复活）')
+
+            fresh = tokensvc.create_token('after-upgrade', 'admin', None, 'admin')
+            created = tokensvc.resolve(fresh['token'])
+            self.assertEqual(created['session_version'], 3, '升级后签发的令牌钉在签发人当前 sv 上')
 
 
 if __name__ == '__main__':

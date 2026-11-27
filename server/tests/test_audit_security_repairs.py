@@ -26,7 +26,7 @@ def control(state,monkeypatch):
        'users':[{'username':'admin','role':'admin','pwd_hash':security.make_hash('SyntheticRoot!2026'),'sv':1},
                 {'username':'limited','role':'account_admin','pwd_hash':security.make_hash('SyntheticLimited!2026'),'sv':1}]})
     credentials={name:security.issue_token(name,role) for name,role in [('admin','admin'),('limited','account_admin')]}
-    credentials['readonly']=tokensvc.create_token('synthetic-readonly','readonly')['token']
+    credentials['readonly']=tokensvc.create_token('synthetic-readonly','readonly',None,'admin')['token']
     # HTTP authorization does not require the production lifespan (which owns
     # background collectors and engine credentials). All adapters below are local.
     client=TestClient(app)
