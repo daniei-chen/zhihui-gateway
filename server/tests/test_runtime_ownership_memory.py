@@ -362,10 +362,13 @@ class PersistenceOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(tuple(record), (9, 3, 'client_cancelled', 499))
                 self.assertEqual(db.query_one('SELECT used_tokens FROM api_keys WHERE id=?',
                                              (key['id'],))['used_tokens'], 12)
-                # Preserve the existing reconciliation contract for cancellations;
-                # known token facts are retained without calling it completed.
-                self.assertEqual(db.query_one('SELECT state,charged_tokens FROM budget_reservations '
-                                              'WHERE key_id=?', (key['id'],))['state'], 'unknown')
+                # DAN-23：取消发生在完整回执解析之后 —— 上游 usage 已把费用定死
+                # （9+3 token 已经记进 used_tokens），预留随之结清，不再落成
+                # 「待核对」。断言比原来更严：连 charged_tokens 一起钉住，
+                # 既证明用量事实留住了，也证明它被当成确定费用而不是悬案。
+                row = db.query_one('SELECT state,charged_tokens FROM budget_reservations '
+                                   'WHERE key_id=?', (key['id'],))
+                self.assertEqual((row['state'], row['charged_tokens']), ('settled', 12))
                 self.assertEqual((middleware.active, middleware.inflight_body_bytes,
                                   middleware.lifetime_active), (0, 0, 0))
 

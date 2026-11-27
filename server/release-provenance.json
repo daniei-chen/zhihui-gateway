@@ -203,7 +203,7 @@
     "server/tests/test_rolling_relay.py": "83d148a634f10f1d279a59964a07e19461563d7c97848a8fd3b4fcb9220e1c00",
     "server/tests/test_rolling_stream_evidence.py": "b34960f1204d61ff7e5c3298d070e86858ba6dd66e7cf0bafc4d4620845bfc98",
     "server/tests/test_rollout_rolling_contract.py": "5adc0a107756be17528fc047d2d3a28cdaeaea2f3e10d0db07676409e66d1e16",
-    "server/tests/test_runtime_ownership_memory.py": "f96e536ea930bc6da07099096afd3ae9166db252c9e1cab11bb222f15c4776a9",
+    "server/tests/test_runtime_ownership_memory.py": "8179422b63f2b9834593ef1fe7cf4ee4b1b3842a032cb312754f40e30eaaefc6",
     "server/tests/test_security_audit_fixes.py": "71239d75c0cf7b608af31c0fbec9ce83394a2729efd00fee3e1012c8376075ce",
     "server/tests/test_security_audit_hardening.py": "bc8b2f26d41906568b13c3c75772cbf1a4c763fac333f160b612fb383f7a769e",
     "server/tests/test_sk_key_format.py": "7fa1cac33d1f9b802d0b5a91012a22a8047d691f61691384cdb52b1e38936b2d",
