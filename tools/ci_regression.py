@@ -591,6 +591,9 @@ PYTEST_MODULES = (
     "server.tests.test_merge_remaining_boundaries",
     "server.tests.test_platform_integration_guards",
     "server.tests.test_workbench_registration",
+    # DAN-13：红包零份额 / 0 额度 = 不限。用 pytest 的夹具隔离数据目录，
+    # unittest 发现不到顶层函数，必须放这一组。
+    "server.tests.test_dan13_redpacket_zero_share",
 )
 
 

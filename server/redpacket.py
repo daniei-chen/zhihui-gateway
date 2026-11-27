@@ -39,8 +39,9 @@ import json
 import math
 import secrets
 import time
+from decimal import Decimal, InvalidOperation
 
-from . import db, keysvc
+from . import db, keylimits, keysvc
 
 # 额度类别。两者的**限制对象不同**，不只是单位不同：
 #   · credit —— 限制上游返回的真实扣费（usage.credit）。口径准：同样 1M token，
@@ -73,48 +74,75 @@ class RedPacketError(ValueError):
     """参数不合法。路由层把它翻成 400。"""
 
 
+def _units(total: float, kind: str) -> int:
+    """把总额换算成最小单位的**整数个数**；不是整单位就抛 RedPacketError。
+
+    每份最终都会成为一把密钥的额度，而额度必须是最小单位的整数倍（积分
+    0.01、token 1）。总额不是整单位时（0.045 积分、2.5 个 token）**没有精确
+    解**：浮点拆分会把差额静默吞掉（实测 0.045 分 4 份合计只有 0.04），只能拒绝。
+
+    Decimal 而不是浮点：`0.045 * 100 == 4.499999999999999`，`round` 给出 4，
+    正好丢掉那 0.005。
+    """
+    unit = MIN_UNIT[kind]
+    try:
+        count = Decimal(str(total)) / Decimal(str(unit))
+    except (InvalidOperation, ValueError, TypeError):
+        raise RedPacketError('总额不是合法的数值') from None
+    if count != count.to_integral_value():
+        if kind == KIND_TOKEN:
+            raise RedPacketError('总额必须是整数（token 的最小单位是 1 个）')
+        raise RedPacketError(
+            f'总额必须是 {unit:g} 的整数倍（每份都得是最小单位的整数倍）')
+    return int(count)
+
+
 def split_amount(total: float, shares: int, kind: str,
                  mode: str = MODE_LUCKY) -> list[float]:
-    """把 total 分成 shares 份。调用方须先过 `validate`。
+    """把 total 分成 shares 份，每份都是**最小单位的正整数倍**。
 
-    拼手气用**二倍均值法**：每份的随机上限是「当前剩余均值 × 2」。
+    为什么先在整数单位上拆：这个函数产出的每个数都会被当成一把密钥的额度，
+    而额度 0 在 keylimits 里的语义是「**不限**」。用浮点直接拆，`round` 能把
+    一份压到 0 或负数 —— `split_amount(0.03, 5, 'credit', MODE_EVEN)` 给出
+    `[0.01, 0.01, 0.01, 0.0, 0.0]`（三份钱、两份无限额度），
+    `split_amount(3, 3, 'token', MODE_LUCKY)` 可能给出 `[2, 1, 0]`。
+    换成整数单位后每份天然 ≥ 1 个单位；总额不够每份一个单位
+    （`shares * unit > total`）时显式抛错，绝不静默发一份 0 出去。
 
-    为什么要设上限：不设的话第一份可能抽走绝大部分（均匀随机会这样），
+    拼手气用**二倍均值法**：每份的随机上限是「当前剩余均值 × 2」，下限是一个
+    最小单位。为什么要设上限：不设的话第一份可能抽走绝大部分（均匀随机会这样），
     后面的人拿到接近 0——那是 bug 不是惊喜。上限保证了**越往后越稳**，
     同时保留随机性（有人多有人少，但不会有人什么都拿不到）。
 
-    均分先换算成整数最小单位，再用商和余数分配；余数每份补一个单位，
-    保证每份为正、总额守恒，且各份最多相差一个最小单位。
+    均分用商与余数：余数每份补一个单位，各份最多相差一个最小单位。
     """
     unit = MIN_UNIT[kind]
     decimals = 2 if kind == KIND_CREDIT else 0
+    scale = 10 ** decimals
+    units_total = _units(total, kind)
+    if units_total < shares:
+        need = float(Decimal(str(unit)) * shares)
+        raise RedPacketError(
+            f'总额太小：{shares} 份每份至少 {unit:g}，合计至少 {need:g}')
 
     if mode == MODE_EVEN:
-        scale = 10 ** decimals
-        each, extra = divmod(round(total * scale), shares)
-        return [(each + (i < extra)) / scale for i in range(shares)]
-
-    # 拼手气
-    out: list[float] = []
-    remaining = float(total)
-    for i in range(shares - 1):
-        left = shares - i
-        # 上限 = 剩余均值 × 2；下限 = 最小单位。
-        # 两者相等时（剩余刚好够每人一份最小值）不随机，直接取最小值，
-        # 避免 uniform 的下界越界。
-        hi = remaining / left * 2
-        lo = unit
-        if hi <= lo:
-            amt = round(lo, decimals)
-        else:
-            amt = round(secrets.SystemRandom().uniform(lo, hi), decimals)
-            # 舍入可能把 amt 顶到 hi 之上（或压到 lo 之下），钳一下：
-            # 越界会让后面的人拿不到最小值，最后一份变成负数。
-            amt = min(max(amt, lo), round(remaining - lo * (left - 1), decimals))
-        out.append(amt)
-        remaining = round(remaining - amt, decimals)
-    out.append(round(remaining, decimals))
-    return out
+        each, extra = divmod(units_total, shares)
+        parts = [each + (1 if i < extra else 0) for i in range(shares)]
+    else:
+        rng = secrets.SystemRandom()
+        parts = []
+        remaining = units_total
+        for i in range(shares - 1):
+            left = shares - i
+            hi = remaining / left * 2          # 剩余均值 × 2（单位：最小单位）
+            amt = 1 if hi <= 1 else int(round(rng.uniform(1, hi)))
+            # 钳位：至少 1 个单位，且给后面每份留够 1 个单位 —— 少了这一步
+            # 最后一份会在整数上变成 0 甚至负数。
+            amt = min(max(amt, 1), remaining - (left - 1))
+            parts.append(amt)
+            remaining -= amt
+        parts.append(remaining)
+    return [p / scale for p in parts]
 
 
 def validate(total: float, shares: int, kind: str, mode: str,
@@ -142,7 +170,6 @@ def validate(total: float, shares: int, kind: str, mode: str,
     if kind == KIND_TOKEN and not names:
         raise RedPacketError('Token 红包必须限定模型范围（token 数与模型强相关）')
 
-    unit = MIN_UNIT[kind]
     if not isinstance(shares, int) or isinstance(shares, bool) or shares < 1:
         raise RedPacketError('份数必须是正整数')
     if shares > MAX_SHARES:
@@ -156,12 +183,14 @@ def validate(total: float, shares: int, kind: str, mode: str,
         finite = False
     if not finite:
         raise RedPacketError('总额必须是有限数值')
-    # 关键约束：分到每份不能低于最小单位。
-    # 不拦的话 split_amount 会产出 0 或负数的份额，那些 key 等于一建出来
-    # 就超限（配额 0 = 不限！见 keysvc 的语义），反而变成无限额度的钥匙。
-    if total < unit * shares:
+    # 关键约束：每份至少一个最小单位，且总额必须是整单位（否则拆不出精确的等额）。
+    # 不拦的话 split_amount 会产出 0 份额，而那些 key 的额度是 0 —— 0 在
+    # keylimits 里的语义是「不限」，于是一份残渣变成无限额度的钥匙。
+    unit = MIN_UNIT[kind]
+    if _units(total, kind) < shares:
+        need = float(Decimal(str(unit)) * shares)
         raise RedPacketError(
-            f'总额太小：{shares} 份每份至少 {unit}，合计至少 {unit * shares}')
+            f'总额太小：{shares} 份每份至少 {unit:g}，合计至少 {need:g}')
 
     if ttl_days is not None:
         if not isinstance(ttl_days, int) or isinstance(ttl_days, bool) or ttl_days < 1:
@@ -183,6 +212,16 @@ def create_packet(name: str, kind: str, total: float, shares: int,
     validate(total, shares, kind, mode, ttl_days, models)
 
     amounts = split_amount(total, shares, kind, mode)
+    # 兜底：算出来的份额一旦是 0，落到 create_key 就是一把「不限额度」的密钥
+    # （0 = 显式不限额，见 keylimits）。split_amount 已经保证每份 ≥ 一个最小
+    # 单位，这里再用 require_positive 拦一次 —— 将来谁改坏了拆包逻辑，坏的是
+    # 建包失败（400），而不是悄悄发出一把无限额度的钥匙。
+    quota_field = 'quota' if kind == KIND_TOKEN else 'quota_credit'
+    for amount in amounts:
+        try:
+            keylimits.require_positive(quota_field, amount)
+        except ValueError as exc:
+            raise RedPacketError(f'拆包结果存在非正份额，已拒绝创建：{exc}') from exc
     expires_at = int(time.time()) + (ttl_days or DEFAULT_TTL_DAYS) * 86400
     title = db._clean(name, 64) or '红包'
     # 抽奖码：token_urlsafe(16) ≈ 128 位熵（22 字符）。
@@ -276,6 +315,24 @@ def _models_of(raw: object) -> list[str]:
     except (TypeError, ValueError):
         return []
     return [str(x) for x in out] if isinstance(out, list) else []
+
+
+def zero_share_amount(key_id: int) -> float | None:
+    """该密钥若是红包发出来的**非正额度**份额，返回它的金额；否则 None。
+
+    存量数据**只读**：修复之后不会再产出新的 0 份额（见 split_amount 与
+    create_packet），但库里已经发出去的改不了，也不该悄悄改 —— 份额金额、
+    领取记录、详情页照旧可读。这里只回答一个问题：「这把密钥是不是一份没分到
+    钱的残渣」。消费侧（`budget.prepare`）据此拒绝服务，而不是把额度 0 读成
+    「不限」。
+    """
+    row = db.query_one('SELECT amount FROM red_packet_shares WHERE key_id = ?',
+                       (int(key_id),))
+    if row is None:
+        return None
+    amount = float(row['amount'])
+    # NaN 同样算残渣（NaN > 0 为假）：脏数据不该被当成合法额度放行。
+    return None if amount > 0 else amount
 
 
 def list_packets() -> list[dict]:

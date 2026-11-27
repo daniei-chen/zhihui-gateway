@@ -1,4 +1,12 @@
-"""Strict numeric limits shared by HTTP models and internal key writers."""
+"""Strict numeric limits shared by HTTP models and internal key writers.
+
+**0 = 不限额度**（`validate` 接受 0 并原样返回），但这条契约只在调用方
+**显式**给 0 时成立 —— 不配上限的密钥一直是项目的正常形态，不能禁掉。
+
+额度也可能是**算出来的**（红包把总额拆成 N 份）。那种场合的 0 不是「不限额」，
+而是「这一份没分到钱」：顺着 0 的语义走下去，一份残渣就变成一把无限额度的
+密钥。算出来的额度必须走 `require_positive`，0 一律拒绝。
+"""
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
@@ -36,4 +44,19 @@ def validate(name: str, value: object) -> int | float:
     result = float(number)
     if units != units.to_integral_value() or Decimal(str(result)) * 1_000_000 != units:
         raise ValueError(f'{name} must be representable in whole credit micro-units')
+    return result
+
+
+def require_positive(name: str, value: object) -> int | float:
+    """按 `validate` 归一化，但**不接受 0**。
+
+    用于「额度是算出来的」那条路径（见模块头）：红包拆出来的一份金额如果是 0，
+    那不是「不限额度」，而是「这份没分到钱」—— 必须当场失败，而不是让调用方拿着
+    一个恰好等于 0 的计算结果落到 `validate` 的「显式 0 = 不限」语义上。
+    调用方**显式**要求不限额时继续用 `validate`。
+    """
+    result = validate(name, value)
+    if not result:
+        raise ValueError(
+            f'{name} must be a positive amount; only an explicit 0 means unlimited')
     return result
