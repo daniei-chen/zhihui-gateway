@@ -155,7 +155,7 @@ _SNIPPET = textwrap.dedent(
         'today': gateway._usage_today(),
     }))
     """
-).replace('__ROOT__', str(ROOT)).replace('__FIXED__', str(_FIXED_TS))
+).replace('__ROOT__', ROOT.as_posix()).replace('__FIXED__', str(_FIXED_TS))
 
 
 class TimezoneInvarianceTest(unittest.TestCase):
