@@ -288,15 +288,17 @@ nginx :443
 16. `systemctl show workbuddy-web.socket -p Listen` 确认 socket 单元是否安装（B5：`install.sh` 不装）。
 
 ### 阶段 4：切流（只有生产能做）
-17. `bash deploy/rollout-rolling.sh --blue-green <version>`。**先读 P0-2**：当前脚本在 `route_switch old` 后 1 秒就停候选，长流会被截断。若本次升级有长流式请求，建议手工在 `:423` 的 `sleep 1` 后加在途检查（或先 `systemctl stop` 前查 `request_outcomes`）。
-18. 观察 `request_outcomes` 的 5xx 率与 `relay` 的 `interrupted` 计数（脚本 `:460` 会统计，但流式截断不一定落 5xx）。
-19. `bash deploy/relay-restart-safe.sh` 若需要重启中继。
+17. **激活目标版本**：`python deploy/release.py activate <version>`；确认 `releases/current` 已指向该版本。`deploy/rollout-rolling.sh:501` 会校验，未激活会直接退出，不会切流。
+18. `bash deploy/rollout-rolling.sh --blue-green <version>`。**先读 P0-2**：当前脚本在 `route_switch old` 后 1 秒就停候选，长流会被截断。若本次升级有长流式请求，建议手工在 `:423` 的 `sleep 1` 后加在途检查（或先 `systemctl stop` 前查 `request_outcomes`）。
+19. 观察 `request_outcomes` 的 5xx 率与 `relay` 的 `interrupted` 计数（脚本 `:460` 会统计，但流式截断不一定落 5xx）。
+20. `bash deploy/relay-restart-safe.sh` 若需要重启中继。
 
 ### 阶段 5：回滚（只有生产能做）
-20. **代码回滚**：`python deploy/release.py rollback`（切 `releases/current` 指针）→ `systemctl restart workbuddy-web`。
-21. **数据库回滚**：只能恢复到阶段 0 的备份；`migrate_admission_policy.py` 的迁移不可逆（P1-6/阶段 2）。
-22. **不要**在已迁移的库上启动旧版本：`sharedadmission.py:112-116`/`:137` 会拒绝，表现为启动失败而非降级。
-23. **中继回滚**：`systemctl restart zhihui-rolling-relay` 是安全的（无状态），但 `relay-restart-safe.sh` 会短暂切到直连。
+21. **代码回滚**：`python deploy/release.py rollback`（切 `releases/current` 指针）→ `systemctl restart workbuddy-web`。
+22. **数据库回滚**：只能恢复到阶段 0 的备份；`migrate_admission_policy.py` 的迁移不可逆（P1-6/阶段 2）。
+23. **不要**在已迁移的库上启动旧版本：`sharedadmission.py:112-116`/`:137` 会拒绝，表现为启动失败而非降级。
+24. **中继回滚**：**不要**直接 `systemctl restart zhihui-rolling-relay`——nginx 仍把推理流量指向 7867，重启期间新请求会失败（`deploy/relay-restart-safe.sh` 的注释明确记录了这个中断）。用 `relay-restart-safe.sh`：先把新流量切到主服务（直连），再重启中继。
+25. **代码回滚后的静态入口**：`release.py rollback` 只切指针，仍需确认 `/`、`/login` 与 `/_next` 指向旧产物（`deploy/rollout-rolling.sh` 的静态切换步骤会校验）。
 
 ### 只有生产才能验的清单
 - socket activation 是否真的生效（`/proc/<pid>/fd` 里有 `socket:[...]`）。

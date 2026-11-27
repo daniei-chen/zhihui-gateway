@@ -184,7 +184,7 @@ GET  /api/accounts        -> 200
 | 路径穿越（上传/导出） | 无。账号上传文件名只用于展示，落盘用 uid；备份解包有成员名校验 | `server/routers/accounts.py:188-270`（`upload_accounts`）、`server/routers/accounts.py:173`（`_persist_uploaded_account`）、`server/backup_application.py:188`（`if '..' in parts`） |
 | SSRF | 有防护。`_reject_internal_host` 拦回环/链路本地/元数据域名 | `server/services/wb2api.py:2125`、`server/tests/test_ssrf_guard.py` 通过 |
 | YAML 加载 | 无。全仓不使用 `yaml` | `grep -rn "yaml" server --include=*.py` → 0 |
-| 备份里的明文凭据 | 有加密（age/X25519 或 AES-256-GCM），且 `backup_application.py` 只写密文 | `server/offsitebackup.py:122-129`（`openssl cms -encrypt`）、`server/backup_application.py:1`（docstring） |
+| 备份里的明文凭据 | **本地归档是明文**：`recovery-<ts>.tar.gz` 含 `manager.db`、`users.json`、上游 auth 与主机元数据，`backup_application.py:435–524` 不加密；只有异地发布 `offsitebackup.py:122-129` 用 `openssl cms -encrypt` 写密文。两者必须区分（`docs/DISASTER-RECOVERY.md` 已区分） | `sed -n '430,530p' server/backup_application.py`；`grep -n 'encrypt' server/offsitebackup.py` |
 | 上游凭据掩码 | 已掩码。`/api/settings/upstream` 返回 `device_token` 等敏感字段为 `***` | `server/services/wb2api.py:1593`（`load_upstream_config` docstring）、`server/routers/settings.py:41-43` |
 | 网关密钥明文 | 只在创建时返回一次；`GET /api/keys` 不返回明文 | `server/keysvc.py:...`（`create` 返回 `secret`，`list` 不返回） |
 | 抓包脱敏 | `REDACT_KEYS` 覆盖 `authorization`/`device_token`/`cookie`/`api_key` 等；`_scrub` 在写入前统一执行 | `server/traffic.py:50-54`、`:164`、`:727` |

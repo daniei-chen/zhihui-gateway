@@ -127,13 +127,13 @@
 | `server/qtgcore/manager_session.py` | 59 | 1 | |
 | `server/userstore.py` | 57 | 2 | |
 | `server/routers/engine.py` | 56 | 1 | |
-| `server/relay_app.py` | 44 | **0** | 死模块（4 行 docstring 的 app 桩） |
+| `server/relay_app.py` | 44 | **0** | 配置加载入口（`rolling-relay.service:19`），非死代码 |
 | `server/services/filelock.py` | 36 | 5 | |
 | `server/services/native_modality.py` | 24 | 1 | |
 
 另有一类"**只有测试引用、产品代码不 import**"的 11 个模块（多为 `qtgcore` 里被 `main.py` 用 `from .qtgcore.routers import (…)` 之外的方式接线，或纯测试夹具）：
 `qtgcore/adapters/workbuddy.py`(1,383)、`trae2.py`(743)、`doubaowork.py`(712)、`qtgcore/authz.py`(675)、`backup_application.py`(531)、`qtgcore/routers/proxy.py`(460)、`qoder2.py`(421)、`diagnostics.py`(176)、`serve.py`(108)、`budget_reconcile.py`(33)、`pooledhttp.py`(16)。
-其中 `serve.py` 是**生产入口**（`deploy/systemd/INSTALL.md:15`），`workbuddy/trae2/qoder2/doubaowork` 经 `qtgcore/adapters/__init__.py` 注册表动态取用——说明**"零 importer"不等于死代码**，S7 的判定都额外人工核对了字符串引用。
+其中 `serve.py` 是**生产入口**（`deploy/systemd/INSTALL.md:15`），`workbuddy/trae2/qoder2/doubaowork` 经 `qtgcore/adapters/__init__.py` 注册表动态取用——说明**"零 importer"不等于死代码**，S7 的判定都额外人工核对了字符串引用；`relay_app.py` 是例外，它由 systemd 配置加载（`deploy/rolling-relay.service:19`），不在死模块清单里。
 
 ---
 
@@ -222,10 +222,10 @@ export WB_DATA_DIR=$(mktemp -d /tmp/wbdata-XXXX)
 - 为什么是问题：这类守卫是**协议污染防线**（注释写得很清楚），三份拷贝意味着修一处漏两处；它已经在 `outputlimits.py` 有一半抽象，剩下三处没收敛。
 - 怎么验：`grep -rn "_check_item_budget\|_mark_first_byte" server/routers/*.py`。
 
-### S7（低）6 个模块零引用（含测试），累计 1,144 行
+### S7（低）5 个模块零引用（含测试），累计 1,100 行
 
-`server/qtgcore/capabilities.py`(416)、`server/qtgcore/routeaudit.py`(321)、`server/qtgcore/adapters/qoder.py`(151)、`server/qtgcore/adapters/trae.py`(128)、`server/tools/platform_selfcheck.py`(84)、`server/relay_app.py`(44) —— 6 个合计 1,144 行。另有 `server/deploy/update.py` 同样 0 importer，但它是 CLI（见 §2.3 脚注）。
-- 判定方法（比 grep 更硬）：AST 导入图里这 6 个模块的 importer 集合为空；再对 `routeaudit`/`capabilities`/`trae`/`qoder` 做字符串引用检索（排除注释），唯一的命中是 `main.py:678,710` 的**注释**和 `qtgcore/routers/__init__.py:7` 的说明文字。
+`server/qtgcore/capabilities.py`(416)、`server/qtgcore/routeaudit.py`(321)、`server/qtgcore/adapters/qoder.py`(151)、`server/qtgcore/adapters/trae.py`(128)、`server/tools/platform_selfcheck.py`(84) —— 5 个合计 1,100 行。`server/relay_app.py`(44) 虽然 0 importer，但由 `deploy/rolling-relay.service:19` 以 `uvicorn server.relay_app:app` 启动，是配置加载的生产入口，不计入死模块。另有 `server/deploy/update.py` 同样 0 importer，但它是 CLI（见 §2.3 脚注）。
+- 判定方法（比 grep 更硬）：AST 导入图里这 5 个模块的 importer 集合为空；再对 `routeaudit`/`capabilities`/`trae`/`qoder` 做字符串引用检索（排除注释），唯一的命中是 `main.py:678,710` 的**注释**和 `qtgcore/routers/__init__.py:7` 的说明文字。
 - 为什么是问题：`adapters/trae.py`、`qoder.py` 与活的 `trae2.py`(743 行)、`qoder2.py`(421 行) 同名同形（函数名 Jaccard 0.44 / 0.67），后来者极易改错文件；`routeaudit.py` 指向一个本仓库不存在的 `qtg` 包（`:19` `python -m qtg.routeaudit`）。
 - 怎么验：附录 A 脚本的"zero importers"段；`grep -rn "routeaudit" server --include=*.py | grep -v tests`。
 
@@ -356,7 +356,7 @@ for f in sorted(code,key=lambda x:-os.path.getsize(x)):
     m=mod(f); prod=impr(m,code)-{f}
     if not prod: print('NO-PROD-IMPORTER %-44s tests=%d'%(f,len(impr(m,tests))))
 # 本机实测输出：code_modules=203 test_files=521，18 行 NO-PROD-IMPORTER
-# （7 个测试也不引用 = §S7 的 6 个 + deploy/update.py；11 个只有测试引用 = §2.3 脚注）
+# （7 个测试也不引用 = §S7 的 5 个 + deploy/update.py + relay_app.py（配置加载）；11 个只有测试引用 = §2.3 脚注）
 ```
 
 ## 附录 B：重复度复现

@@ -227,12 +227,13 @@ g=json.load(open('docs/protected-customizations.json'));print([(k, k in p) for k
 - **为什么是问题**：不是功能错误，是**可观测性撒谎**：日志里的 0 会被读成「没有需要零结清的行」，实际是「这段代码永远返回 0」。排障时会把「为什么 unknown 不减」指向错误的组件。
 - **怎么验**：临时库上跑一轮 `reconcile_zero_reservation_unknowns(now)`，任何输入都返回 0；`grep -n "missing_estimate" server/budget.py` 只有 231/237 两处，且判据 `reserved_tokens<=0` 与新写入路径互斥。
 
-### D-09 · P3 · 日配额的在途占用只统计「今天创建」的行，跨午夜的长流不占额度
+### D-09 · P3 · ~~日配额的在途占用只统计「今天创建」的行，跨午夜的长流不占额度~~ **已撤回（2026-11-28）**
 
-- **file:line**：`server/budget.py:256-263`（`outstanding` 用 `coalesce(request_logs.ts, b.created_at)` 落在 `[start, end)` 内才算 held；`held` 在 263 行）、注释 `budget.py:254-255` 声称相反
-- **现象**：`request_logs.ts` 在请求**结束**时才写，未结束的流没有该行 → 回落到 `created_at`。昨天 23:50 开始、今天 00:10 才结束的流，在今天的日配额计算里既不占 `held`（created_at 在昨天），也还没进 `daily['tokens']`（`key_daily_usage` 按 `event_ts` 记账）→ 这 20 分钟窗口内该密钥可以再打满一整天的额度。
-- **为什么是问题**：额度超发窗口与「每日重置」这个产品语义直接相关；注释 `budget.py:250-251`（"Active streams still carry over midnight until their terminal facts arrive"）描述的是**意图**，代码做的是**相反**的事，下一个改这段的人会按注释推断。
-- **怎么验**：造一条 `created_at = 昨天 23:50, state='forwarded', reserved_tokens=100000` 的行，`dailyquota.snapshot` 为今天 0，然后 `prepare()` 一个当天额度 100000 的密钥 → 通过（应当被 held 拦下）；把 `created_at` 改成今天再跑 → 拒绝。
+- **撤回原因**：原结论误读了 `server/budget.py:256-261` 的 SQL。`outstanding` 查询为 `WHERE b.key_id=? AND (b.state IN ('reserved','forwarded') OR (b.state='unknown' AND …日期…))`——**`reserved`/`forwarded` 分支不带日期条件**，昨天创建、今天仍在途的流照样计入 `held`；日期过滤只作用于 `unknown` 分支。`server/tests/test_daily_replay_boundaries.py::test_daily_token_hold_for_active_cross_midnight_request_survives_raised_parallelism` 已覆盖该行为。
+
+- **保留的文本**：`budget.py:254-255` 的注释仍然成立（"Active streams still carry over midnight until their terminal facts arrive"），不是「注释与代码相反」。
+
+- **结论**：原 P3 条目撤销，P3 总数 14→13；不进入路线图。
 
 ### D-10 · P3 · `settle()` 的 UPDATE 没有 owner/fence 守卫，`finish()` 有 —— 安全性完全依赖外层事务
 
