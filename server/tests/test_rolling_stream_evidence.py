@@ -4,6 +4,7 @@ import copy
 from contextlib import redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -15,6 +16,12 @@ from unittest import mock
 from deploy import verify_rolling_streams as proof
 
 
+@unittest.skipIf(os.name == 'nt',
+                 'stream/cutover ordering needs sub-millisecond timestamps: measured '
+                 'time.monotonic_ns() quantized to 1 ms on Windows (n % 1000000 == 0) and '
+                 'asyncio.sleep(0.02) takes 31 ms, so a frame and a cutover land on the same '
+                 'tick and the strict first_ns < at_ns < last_ns invariant is a coin flip. '
+                 'Linux CI runs it with real ns resolution')
 class RealLoopbackCutoverTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_relay_holds_both_streams_across_both_route_changes(self):
         binds, original = [], socket.socket.bind
@@ -83,6 +90,12 @@ class RealLoopbackCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(listener.fileno() == -1 for listener in listeners))
 
 
+@unittest.skipIf(os.name == 'nt',
+                 'stream/cutover ordering needs sub-millisecond timestamps: measured '
+                 'time.monotonic_ns() quantized to 1 ms on Windows (n % 1000000 == 0) and '
+                 'asyncio.sleep(0.02) takes 31 ms, so a frame and a cutover land on the same '
+                 'tick and the strict first_ns < at_ns < last_ns invariant is a coin flip. '
+                 'Linux CI runs it with real ns resolution')
 class EvidenceValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -152,6 +165,9 @@ class EvidenceValidationTests(unittest.TestCase):
 
 
 class ProofCliTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt',
+                     'same 1 ms clock quantization as above, and it also asserts the report '
+                     'keeps POSIX mode 0600 (Windows os.chmod only toggles the read-only bit)')
     def test_cli_only_runs_temporary_synthetic_endpoints_and_writes_private_report(self):
         tool = Path(__file__).resolve().parents[2] / 'deploy' / 'verify_rolling_streams.py'
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,5 +1,5 @@
 {
-  "base_commit": "ec87de9a56e04c4cbcb9613b1cb13b8d279a9dbc",
+  "base_commit": "205d4a2dc9facbfe2d9ee71b285aee95325e9057",
   "base_release": "v1.6.27",
   "candidate_only": true,
   "database_rollback": false,
@@ -201,7 +201,7 @@
     "server/tests/test_reload_state.py": "1bfca107fffe030e0efd31f97c693c481b6f091522336b5e52699e3963412547",
     "server/tests/test_request_identity.py": "c77cdb72955079c2683b46c7d3ebd55f82b1b60c5d956c788535d413f0fd39f9",
     "server/tests/test_rolling_relay.py": "83d148a634f10f1d279a59964a07e19461563d7c97848a8fd3b4fcb9220e1c00",
-    "server/tests/test_rolling_stream_evidence.py": "b34960f1204d61ff7e5c3298d070e86858ba6dd66e7cf0bafc4d4620845bfc98",
+    "server/tests/test_rolling_stream_evidence.py": "1474d3468d7d528e4fd2fd3d1414dcc11a29f65193e51839a2107630701af861",
     "server/tests/test_rollout_rolling_contract.py": "5adc0a107756be17528fc047d2d3a28cdaeaea2f3e10d0db07676409e66d1e16",
     "server/tests/test_runtime_ownership_memory.py": "2478d96e0553d0d4868a5e981067ee56bf02bdfe938ef098d87661440b17ee84",
     "server/tests/test_security_audit_fixes.py": "71239d75c0cf7b608af31c0fbec9ce83394a2729efd00fee3e1012c8376075ce",
