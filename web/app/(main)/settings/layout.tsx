@@ -1,6 +1,6 @@
 'use client';
 
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ConfigurationEvidence} from '@/components/operations/ConfigurationEvidence';
 import {
   Settings as SettingsIcon,
@@ -933,7 +933,10 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    */
   const tab: SettingsTab =
     !isWorkbuddy && resolvedTab === 'upstream' ? 'proxy' : resolvedTab;
-  const independentTab = tab === 'steward' || tab === 'alerts';
+  const needsUpstream = tab === 'upstream';
+  const needsModelMap = tab === 'models';
+  const needsUsers = tab === 'users';
+  const needsModelCatalog = needsUpstream || needsModelMap;
 
   /**
    * 二级导航。顺序与图标取自原来的 `TabsList`（一处不差），只是每项从「一个
@@ -975,24 +978,57 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
       icon: TAB_META[name].icon,
     }));
 
-  /**
-   * 三份数据一次并发取。
-   *
-   * 主数据是 `cfg`（上游配置）——页面主体（上游配置 Tab 的整张表单）就是它的副本，
-   * 所以**它没到就不能渲染表单**：`form` 的初值是 `defaultValues(...)`，那等于把
-   * 硬编码默认值当成「你现在的配置」显示出来。原先的写法是 `allSettled` 之后
-   * `if (c.status === 'fulfilled')`，**失败分支什么都不做** —— 于是取数挂掉时页面
-   * 照常渲染那张默认值表单，而写入路径又都被 `upstreamReady` 禁用，用户看到的是
-   * 一张「能看不能改」的假配置（见下面首屏守卫）。
-   *
-   * `modelMap` / `users` 是配件（模型映射 Tab / 用户 Tab），与主数据同 hook 但
-   * 各自独立成败：其中一个失败不该把另一个也判成失败。
-   */
-  const {values, errors, isRefreshing, reload} = useAsyncAll({
-    cfg: () => settingsApi.upstream(),
-    modelMap: () => settingsApi.modelMap(),
-    users: () => settingsApi.users(),
-  }, [isAdmin, me?.username], [], {enabled: !independentTab});
+  // Each tab owns only its data. A slow/offline upstream must not block users,
+  // model mappings, backup, tokens or system tools. Paused scopes retain drafts.
+  const cfgRead = useAsyncAll({cfg: () => settingsApi.upstream()},
+    [isAdmin, me?.username, me?.role], [], {enabled: needsUpstream});
+  const mapRead = useAsyncAll({modelMap: () => settingsApi.modelMap()},
+    [isAdmin, me?.username, me?.role], [], {enabled: needsModelMap});
+  const usersRead = useAsyncAll({users: () => settingsApi.users()},
+    [isAdmin, me?.username, me?.role], [], {enabled: needsUsers});
+  const values = {cfg: cfgRead.values.cfg, modelMap: mapRead.values.modelMap, users: usersRead.values.users};
+  const errors = {...cfgRead.errors, ...mapRead.errors, ...usersRead.errors};
+  const activeRead = needsModelMap ? mapRead : needsUsers ? usersRead : cfgRead;
+  const isRefreshing = (needsUpstream || needsModelMap || needsUsers) && activeRead.isRefreshing;
+  const reload = activeRead.reload;
+  // A completed write invalidates its own resource even while that tab is
+  // paused. Its completion must never refresh or clear a different auth scope.
+  const writeScope = useMemo(() => ({isAdmin, username: me?.username, role: me?.role}),
+    [isAdmin, me?.username, me?.role]);
+  const writeOwner = useRef<typeof writeScope | null>(writeScope);
+  const pendingWrites = useRef({cfg: false, users: false});
+  const visibleWrites = useRef({cfg: needsUpstream, users: needsUsers});
+  const ownsWrite = useCallback(() => writeOwner.current === writeScope, [writeScope]);
+  const refreshCfg = cfgRead.refresh;
+  const refreshUsers = usersRead.refresh;
+  useEffect(() => {
+    writeOwner.current = writeScope;
+    pendingWrites.current = {cfg: false, users: false};
+    return () => {
+      writeOwner.current = null;
+      pendingWrites.current = {cfg: false, users: false};
+    };
+  }, [writeScope]);
+  useEffect(() => {
+    visibleWrites.current = {cfg: needsUpstream, users: needsUsers};
+    if (needsUpstream && pendingWrites.current.cfg) {
+      pendingWrites.current.cfg = false;
+      void refreshCfg();
+    }
+    if (needsUsers && pendingWrites.current.users) {
+      pendingWrites.current.users = false;
+      void refreshUsers();
+    }
+  }, [needsUpstream, needsUsers, refreshCfg, refreshUsers]);
+  async function refreshWritten(resource: 'cfg' | 'users') {
+    if (!ownsWrite()) return;
+    pendingWrites.current[resource] = !visibleWrites.current[resource];
+    if (visibleWrites.current[resource]) {
+      // If this read is interrupted by leaving the tab, useAsyncAll resumes it.
+      // Hidden writes instead leave a marker for a real read on the next visit.
+      await (resource === 'cfg' ? cfgRead.reload() : usersRead.reload());
+    }
+  }
 
   /** 配置：null = 还没取到（首屏加载中，或它自己失败了）。**不要**用假默认值兜底 */
   const cfg: UpstreamConfig | null = values.cfg ?? null;
@@ -1012,16 +1048,29 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
   const mapFlight = useRef<symbol | null>(null);
   const mapGeneration = useRef(0);
   const mapRef = useRef(values.modelMap);
+  const mapVisible = useRef(needsModelMap);
+  const mapRefreshPending = useRef(false);
+  const refreshModelMap = mapRead.refresh;
   const invalidateMap = useCallback(() => {
     mapGeneration.current++;
     mapFlight.current = null;
+    mapRefreshPending.current = false;
   }, []);
   useEffect(() => { mapRef.current = values.modelMap; }, [values.modelMap]);
   useEffect(() => {
     setOptimisticMap(null);
     setMapSaving(false);
     return invalidateMap;
-  }, [isAdmin, me?.username, independentTab, invalidateMap]);
+  }, [isAdmin, me?.username, me?.role, invalidateMap]);
+  useEffect(() => {
+    mapVisible.current = needsModelMap;
+    if (needsModelMap && mapRefreshPending.current && !mapFlight.current) {
+      mapRefreshPending.current = false;
+      // Join the hook's resume read if one exists. A saved map needs a real
+      // read on return even when the completed, paused scope would not reload.
+      void refreshModelMap();
+    }
+  }, [needsModelMap, refreshModelMap]);
   const modelMap = (optimisticMap && (mapSaving || mapBase === values.modelMap)
     ? optimisticMap : values.modelMap) ?? {};
   const modelMapReady = values.modelMap !== undefined && !('modelMap' in errors);
@@ -1031,6 +1080,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
   /** 模型列表来源：dynamic = 上游实时拉取，static = 上游内置回退表 */
   const [modelSource, setModelSource] = useState<ModelSource>('unknown');
   const [modelsLoading, setModelsLoading] = useState(false);
+  const modelsFlight = useRef<AbortController | null>(null);
 
   /**
    * 「到期积分按天模糊统计」——**界面偏好**，存在浏览器本地而不是上游配置里。
@@ -1086,11 +1136,21 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   const [mapAlias, setMapAlias] = useState('');
   const [mapTarget, setMapTarget] = useState('');
+  useEffect(() => {
+    setMapAlias('');
+    setMapTarget('');
+  }, [isAdmin, me?.username, me?.role]);
   const [newUser, setNewUser] = useState({username: '', password: '', role: 'account_admin'});
   const [busy, setBusy] = useState(false);
   /** Upstash（Redis 持久化）表单 */
   const [upstashForm, setUpstashForm] = useState({url: '', token: ''});
   const [upstashBusy, setUpstashBusy] = useState(false);
+  useEffect(() => {
+    setBusy(false);
+    setUpstashBusy(false);
+    setNewUser({username: '', password: '', role: 'account_admin'});
+    setUpstashForm({url: '', token: ''});
+  }, [writeScope]);
 
   /**
    * 配置到达（首屏取到 / 手动刷新 / 保存后重取）时，把表单重置为服务端的值。
@@ -1158,23 +1218,31 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
    * 取不到就是空列表。下面的 static 分支只为仍在跑旧版上游的部署保留。
    */
   const loadModels = useCallback(async (silent = true) => {
-    if (!silent) setModelsLoading(true);
+    modelsFlight.current?.abort();
+    const controller = new AbortController();
+    modelsFlight.current = controller;
+    const current = () => modelsFlight.current === controller && !controller.signal.aborted;
+    setModelsLoading(!silent);
     try {
-      const res = await upstreamApi.models();
+      const res = await upstreamApi.models(undefined, controller.signal);
+      if (!current()) return;
       setModels(res.models || []);
       setModelSource(res.source || 'unknown');
     } catch {
-      setModels([]);
-      setModelSource('unknown');
+      if (current()) {
+        setModels([]);
+        setModelSource('unknown');
+      }
     } finally {
-      if (!silent) setModelsLoading(false);
+      if (current()) setModelsLoading(false);
     }
   }, []);
 
   // 配置 / 映射 / 用户由 useAsyncAll 在挂载时自己取（首屏一次），这里只管模型列表。
   useEffect(() => {
-    if (!independentTab) void loadModels();
-  }, [loadModels, independentTab]);
+    if (needsModelCatalog) void loadModels();
+    return () => { modelsFlight.current?.abort(); };
+  }, [loadModels, needsModelCatalog, isAdmin, me?.username, platform]);
 
   const upstreamReady = !!cfg && cfg.available !== false;
   const upstreamError = cfg && cfg.available === false ? cfg.error : undefined;
@@ -1183,6 +1251,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   /** 保存 Upstash 配置（token 留空表示保持原值） */
   async function saveUpstash() {
+    if (!isAdmin || !upstreamReady || !ownsWrite()) return;
     if (!upstashForm.url.trim()) {
       notify.err(t('settings.upstashUrlRequired'));
       return;
@@ -1195,14 +1264,15 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
           ...(upstashForm.token.trim() ? {token: upstashForm.token.trim()} : {}),
         },
       });
+      if (!ownsWrite()) return;
       notify.ok(t('settings.upstashSaved'), t('settings.applying'));
       // （Upstash 属于上游外部依赖，改完无需重启上游容器）
       setUpstashForm((f) => ({...f, token: ''}));
-      await reload();
+      await refreshWritten('cfg');
     } catch (e) {
-      notify.err(errText(e));
+      if (ownsWrite()) notify.err(errText(e));
     } finally {
-      setUpstashBusy(false);
+      if (ownsWrite()) setUpstashBusy(false);
     }
   }
 
@@ -1219,6 +1289,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   /** 只提交改动过的字段，避免覆盖其他未展示的配置项 */
   async function saveGroup(group: Group) {
+    if (!isAdmin || !upstreamReady || !ownsWrite()) return;
     const cur = form[group];
     if (group === 'schedule') {
       const error = scheduleDelayError(cur);
@@ -1253,6 +1324,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
       // 段内有改动时才带该段：只改顶层键时不要顺手回写整段
       if (Object.keys(patch).length) body[def?.section ?? group] = patch;
       const saved = await settingsApi.saveUpstream(body);
+      if (!ownsWrite()) return;
       // 容器部署下无法自动重载上游（需 docker 命令，而容器刻意不挂 docker 套接字），
       // 后端会带回 reload_hint —— 如实转达，不让人以为改完就生效了
       if (saved?.reload_hint) {
@@ -1260,11 +1332,11 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
       } else {
         notify.ok(t('settings.saved'), t('settings.applying'));
       }
-      await reload();
+      await refreshWritten('cfg');
     } catch (e) {
-      notify.err(errText(e));
+      if (ownsWrite()) notify.err(errText(e));
     } finally {
-      setBusy(false);
+      if (ownsWrite()) setBusy(false);
     }
   }
 
@@ -1274,6 +1346,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
 
   /** 高级模式：直接保存 JSON（字段名即上游 config.json 的段名） */
   async function saveJson(field: WireSection, text: string) {
+    if (!isAdmin || !upstreamReady || !ownsWrite()) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1288,21 +1361,22 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     setBusy(true);
     try {
       await settingsApi.saveUpstream({[field]: parsed});
+      if (!ownsWrite()) return;
       notify.ok(t('settings.saved'), t('settings.applying'));
-      await reload();
+      await refreshWritten('cfg');
     } catch (e) {
-      notify.err(errText(e));
+      if (ownsWrite()) notify.err(errText(e));
     } finally {
-      setBusy(false);
+      if (ownsWrite()) setBusy(false);
     }
   }
 
   /**
    * 保存模型映射。
    *
-   * 乐观更新：先切到新值让表格立刻响应，再 `await reload()` 把服务端确认过的那份
-   * 拉回来。**刷新成功才撤乐观值**——若这一次刷新失败，撤早了表格会跳回旧值，
-   * 用户会以为没保存上（其实写操作是成功的）。与 `security` 页的 saveConfig 同一套。
+   * 乐观更新：先切到新值，再保留服务器确认的写入快照，直到新的读取值替换旧基线。
+   * 切换标签会暂停读取；hook 的 paused / obsolete 返回值不代表已经收到 GET，
+   * 不能据此撤掉确认过的映射，否则下次全量替换会从旧表开始、丢掉刚保存的别名。
    */
   async function saveModelMap(next: Record<string, string>) {
     // The API replaces the entire map. An unknown/failed read must never become
@@ -1321,8 +1395,9 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
       if (!current()) return false;
       setMapBase(mapRef.current);
       setOptimisticMap(saved);
+      mapRefreshPending.current = true;
       notify.ok(t('settings.modelMapSaved'));
-      if (await reload() && current()) setOptimisticMap(null);
+      if (mapVisible.current) await mapRead.reload();
       return current();
     } catch (e) {
       if (!current()) return false;
@@ -1342,21 +1417,22 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
       <PageHeader
         title={t('settings.title')}
         description={t('settings.description')}
-        actions={
+        actions={(needsUpstream || needsModelMap || needsUsers) ? (
           <Button
             variant="outline"
             size="sm"
             className="rounded-full"
             title={t('settings.reloadTitle')}
+            disabled={isRefreshing}
             onClick={() => {
-              reload();
-              loadModels(false);
+              void reload();
+              if (needsModelCatalog) void loadModels(false);
             }}
           >
             <RefreshCw />
             {t('settings.reload')}
           </Button>
-        }
+        ) : null}
       />
       {/* 上游重载状态（批次 5）。放进 `header` 而不是两个 return 分支里各写一遍：
           下面「取不到配置」那条分支是**早返回**，漏一处就会出现「配置读不到时
@@ -1385,11 +1461,15 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
     </div>;
   }
 
-  if (!cfg) {
+  if ((needsUpstream && !cfg) || (needsUsers && values.users === undefined)) {
+    const failed = needsUsers ? usersFailed : 'cfg' in errors;
     return (
       <div className="flex flex-col gap-4 md:gap-6">
         {header}
-        {'cfg' in errors ? <LoadError variant="page" onRetry={reload} /> : <SettingsSkeleton />}
+        <div className="min-w-0 max-w-full overflow-x-auto pb-1">
+          <SectionTabs items={tabItems} active={settingsTabHref(tab)} />
+        </div>
+        {failed ? <LoadError variant="page" onRetry={reload} /> : <SettingsSkeleton />}
         {/* children 在这个分支里也要渲染：`/settings` 的重定向挂在子路由的 page 上，
             少了它，「配置取不到」时地址就停在 `/settings` 不再规范化——于是用户
             刷新一次会再走一遍重定向，而「我现在在哪个 Tab」这件事变成**取决于
@@ -1760,14 +1840,16 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   className="rounded-full"
                   disabled={!isAdmin || upstashBusy}
                   onClick={async () => {
+                    if (!isAdmin || !ownsWrite()) return;
                     setUpstashBusy(true);
                     try {
                       const r = await settingsApi.testUpstash(upstashForm.url, upstashForm.token || undefined);
+                      if (!ownsWrite()) return;
                       (r.ok ? notify.ok : notify.err)(r.message, r.ok ? t('settings.upstashOk') : undefined);
                     } catch (e) {
-                      notify.err(errText(e));
+                      if (ownsWrite()) notify.err(errText(e));
                     } finally {
-                      setUpstashBusy(false);
+                      if (ownsWrite()) setUpstashBusy(false);
                     }
                   }}
                 >
@@ -1830,16 +1912,18 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   confirmText={t('settings.clearConfig')}
                   destructive
                   onConfirm={async () => {
+                    if (!isAdmin || !upstreamReady || !ownsWrite()) return;
                     setUpstashBusy(true);
                     try {
                       await settingsApi.saveUpstream({upstash: {clear: true}});
+                      if (!ownsWrite()) return;
                       setUpstashForm({url: '', token: ''});
                       notify.ok(t('settings.upstashCleared'), t('settings.applyingShort'));
-                      await reload();
+                      await refreshWritten('cfg');
                     } catch (e) {
-                      notify.err(errText(e));
+                      if (ownsWrite()) notify.err(errText(e));
                     } finally {
-                      setUpstashBusy(false);
+                      if (ownsWrite()) setUpstashBusy(false);
                     }
                   }}
                   trigger={
@@ -2160,6 +2244,7 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                   className="h-9 rounded-full"
                       disabled={busy || !newUser.username.trim() || !isPanelUserPassword(newUser.password)}
                   onClick={async () => {
+                    if (!isAdmin || !ownsWrite()) return;
                     if (!newUser.username.trim() || !newUser.password) {
                       notify.err(t('settings.usersRequired'));
                       return;
@@ -2171,13 +2256,14 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                     setBusy(true);
                     try {
                       await settingsApi.addUser(newUser);
+                      if (!ownsWrite()) return;
                       notify.ok(t('settings.usersCreated'));
                       setNewUser({username: '', password: '', role: 'account_admin'});
-                      reload();
+                      await refreshWritten('users');
                     } catch (e) {
-                      notify.err(errText(e));
+                      if (ownsWrite()) notify.err(errText(e));
                     } finally {
-                      setBusy(false);
+                      if (ownsWrite()) setBusy(false);
                     }
                   }}
                 >
@@ -2206,12 +2292,14 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                     <TableCell className="pl-4 text-sm font-medium">{u.username}</TableCell>
                     <TableCell>
                       {isAdmin && u.username !== 'admin' ? <Select value={u.role} onValueChange={async role => {
+                        if (!isAdmin || !ownsWrite()) return;
                         try {
                           const result = await settingsApi.updateUser(u.username, {role});
+                          if (!ownsWrite()) return;
                           if (result.relogin_required) { window.location.href = `${BASE_PATH}/login`; return; }
-                          await reload();
+                          await refreshWritten('users');
                         }
-                        catch (error) { notify.err(errText(error)); }
+                        catch (error) { if (ownsWrite()) notify.err(errText(error)); }
                       }}>
                         <SelectTrigger className="h-8 w-40 rounded-full text-xs" aria-label={t('settings.usersRole')}><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -2240,12 +2328,14 @@ export default function SettingsLayout({children}: {children: React.ReactNode}) 
                             confirmText={t('keys.delete')}
                             destructive
                             onConfirm={async () => {
+                              if (!isAdmin || !ownsWrite()) return;
                               try {
                                 await settingsApi.removeUser(u.username);
+                                if (!ownsWrite()) return;
                                 notify.ok(t('keys.deleted'));
-                                reload();
+                                await refreshWritten('users');
                               } catch (e) {
-                                notify.err(errText(e));
+                                if (ownsWrite()) notify.err(errText(e));
                               }
                             }}
                             trigger={

@@ -311,7 +311,8 @@ def _upstream_error_code(data: object) -> str | None:
 
 def _failed(message: str, status: int, err_type: str = 'api_error',
             code: str | None = None, hint: str | None = None,
-            upstream_request_id: str | None = None) -> JSONResponse:
+            upstream_request_id: str | None = None, *,
+            retry_after: int | None = None) -> JSONResponse:
     """错误回非流式 JSON（带状态码），而不是 SSE 错误帧。
 
     流一旦以 200 开始，状态码就固定了——错误只能裹在事件里，客户端会把它当作
@@ -325,7 +326,7 @@ def _failed(message: str, status: int, err_type: str = 'api_error',
     return gateway._oai_error(
         message, status, err_type, code, hint,
         request_id=state.request_id if state is not None else None,
-        upstream_request_id=upstream_request_id)
+        upstream_request_id=upstream_request_id, retry_after=retry_after)
 
 
 def _upstream_error_text(data: object, resp: object = None,
@@ -1884,10 +1885,10 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
     except StructuredOutputError as exc:
         # U13：`text.format` 映射不了 → **转发前** 400 + 稳定 code，
         # 绝不静默降级成纯文本（客户端会拿到一段它无法解析的自由文本）。
-        gateway._record(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
+        await gateway._record_async(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
         return _failed(str(exc), 400, 'invalid_request_error', exc.code)
     except Exception as exc:  # noqa: BLE001
-        gateway._record(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
+        await gateway._record_async(key, ip, model, mapped or '', 400, 0, 0, 0, ua, str(exc), False)
         return _failed(f'请求转换失败：{exc}', 400)
 
     if not payload.get('messages'):
@@ -1906,9 +1907,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
     upstream, upstream_error = gateway._upstream_for(
         key, ip=ip, model=model, mapped=mapped or '', ua=ua)
     if upstream_error is not None:
-        detail = json.loads(upstream_error.body).get('error') or {}
-        return _failed(detail.get('message', '上游不可用'), upstream_error.status_code,
-                       'api_error', detail.get('code'))
+        return upstream_error
     gateway._stamp_route(upstream, model, mapped or model)
     url = f'{upstream["base_url"]}/v1/chat/completions'
     wire = await gateway._prepare_forward_async(key,payload, request=request)
@@ -1935,8 +1934,12 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             latency = int((time.time() - started) * 1000)
             usage: dict = {}
             try:
-                data = resp.json()
+                data = await gateway._response_json_async(resp, cancelled_receipt=lambda value:
+                    gateway._record_cancelled_response(key, ip, model, mapped or '',
+                        value, started, ua))
                 usage = gateway._response_usage(data)
+            except OutputLimitExceeded:
+                raise
             except Exception:  # noqa: BLE001
                 data = None
             if resp.status_code < 400:
@@ -1947,7 +1950,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                 except Exception as exc:
                     if isinstance(exc,OutputLimitExceeded):gateway._mark_output_limit_failure()
                     else:gateway._mark_invalid_response()
-                    gateway._record(key, ip, model, mapped or '', 502,
+                    await gateway._record_async(key, ip, model, mapped or '', 502,
                                     _as_int(usage.get('prompt_tokens')),
                                     _as_int(usage.get('completion_tokens')), latency,
                                     ua, str(exc), False, usage=usage)
@@ -1959,23 +1962,24 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                     return _failed('上游返回了无法解析的响应：' + str(exc), 502, 'api_error', code)
             # 整份 usage 交过去（而不是只取 credit）：扣费与提示词缓存三段
             # 都在这一份里，分开取就会出现「某条协议缓存永远是空的」（issue #69）。
-            gateway._record(
+            await gateway._record_async(
                 key, ip, model, mapped or '', resp.status_code,
                 _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
                 latency, ua, None if resp.status_code < 400 else str(data)[:500], False,
                 usage=usage,
             )
             if resp.status_code >= 400:
-                # U13：上游业务 code + 上下游 ID 一并保留（状态码原样）。
-                return _failed(_upstream_error_text(data, resp), resp.status_code,
-                               code=_upstream_error_code(data),
-                               hint=gateway._error_hint(data),
-                               upstream_request_id=gateway._upstream_request_id(resp))
+                return gateway._upstream_error_response(data, resp, fallback=resp.text[:4096])
             return converted
+        except deadline_mod.RetainedMemoryExceeded:
+            await gateway._record_async(key, ip, model, mapped or '', 503, 0, 0,
+                            int((time.time() - started) * 1000), ua,
+                            'response memory capacity full', False)
+            return gateway._response_capacity_error()
         except OutputLimitExceeded:
             gateway._mark_output_limit_failure()
             message='Upstream output exceeds the configured byte limit'
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0,
                             int((time.time() - started) * 1000), ua, message, False)
             return _failed(message, 502, 'api_error', 'upstream_output_limit')
         except (CustomToolArgumentsError, ToolSearchArgumentsError) as exc:
@@ -1989,13 +1993,13 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             failure = deadline_mod.classify_budget_exceeded(exc)
             gateway._mark_pre_stream_failure(exc)
             latency = int((time.time() - started) * 1000)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                             failure.message, False)
             return _failed(failure.message, 502, 'api_error', 'upstream_timeout')
         except Exception as exc:  # noqa: BLE001
             latency = int((time.time() - started) * 1000)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False)
-            return _failed(f'上游不可用：{exc}', 502)
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), False)
+            return gateway._oai_error_with_blip(gateway._public_upstream_error(upstream), 502, exc)
 
     # ── 流式 ──
     client = config.http_client(_timeouts['timeout'], connect=_timeouts['connect'], identity=gateway._forwarding_identity(key,upstream), bounded_response=True)
@@ -2009,7 +2013,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
     except (asyncio.CancelledError, GeneratorExit) as exc:
         gateway._mark_pre_stream_failure(exc)
         await gateway._close_pending_response(resp, client, budgets)
-        gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+        await gateway._record_async(key, ip, model, mapped or '', 499, 0, 0,
                         int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
         raise
     except deadline_mod.BudgetExceeded as exc:
@@ -2017,14 +2021,14 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
         failure = deadline_mod.classify_budget_exceeded(exc)
         gateway._mark_pre_stream_failure(exc)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
+        await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua,
                         failure.message, True)
         return _failed(failure.message, 502, 'api_error', 'upstream_timeout')
     except Exception as exc:  # noqa: BLE001
         await gateway._close_pending_response(resp, client, budgets)
         latency = int((time.time() - started) * 1000)
-        gateway._record(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True)
-        return _failed(f'上游不可用：{exc}', 502)
+        await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0, latency, ua, str(exc), True)
+        return gateway._oai_error_with_blip(gateway._public_upstream_error(upstream), 502, exc)
 
     # 上游直接报错：**开流之前**用真实状态码回掉。
     # 若开始流式（HTTP 200 已定），状态码就没法再改了——错误只能裹进事件里，
@@ -2037,12 +2041,12 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             raw = await deadline_mod.read_error_body(resp, request_deadline, preserve_status=True)
         except (asyncio.CancelledError, GeneratorExit) as exc:
             gateway._mark_pre_stream_failure(exc)
-            gateway._record(key, ip, model, mapped or '', 499, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 499, 0, 0,
                             int((time.time() - started) * 1000), ua, 'client cancelled before stream', True)
             raise
         except (deadline_mod.BudgetExceeded, deadline_mod.ErrorBodyTooLarge) as exc:
             gateway._mark_pre_stream_failure(exc)
-            gateway._record(key, ip, model, mapped or '', 502, 0, 0,
+            await gateway._record_async(key, ip, model, mapped or '', 502, 0, 0,
                             int((time.time() - started) * 1000), ua, str(exc), True)
             code = 'upstream_timeout' if isinstance(exc, deadline_mod.BudgetExceeded) else 'upstream_invalid_body'
             return _failed(str(exc), 502, 'api_error', code)
@@ -2058,13 +2062,10 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             pass
         latency = int((time.time() - started) * 1000)
         usage = gateway._response_usage(parsed)
-        gateway._record(key, ip, model, mapped or '', resp.status_code,
+        await gateway._record_async(key, ip, model, mapped or '', resp.status_code,
                         _as_int(usage.get('prompt_tokens')), _as_int(usage.get('completion_tokens')),
                         latency, ua, text, True, usage=usage)
-        return _failed(_upstream_error_text(parsed, None, fallback=text),
-                       resp.status_code, code=_upstream_error_code(parsed),
-                       hint=gateway._error_hint(parsed),
-                       upstream_request_id=gateway._upstream_request_id(resp))
+        return gateway._upstream_error_response(parsed, resp, fallback=text)
 
     # U13：流中失败的帧要带上游请求 ID。开流之后状态码已定，ID 是客户端唯一
     # 还能拿去对上游工单的线索；取不到就是 None，不编造。
@@ -2136,6 +2137,10 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             audit.error_code = 'upstream_timeout'
             logger.warning('stream budget exceeded request_id=%s kind=%s',
                            state.request_id if state else None, failure.kind)
+        except deadline_mod.RetainedMemoryExceeded:
+            error_text='网关响应处理容量已满，本次回答已中止'
+            audit.error_stage='admission'
+            audit.error_code='gateway_capacity_exceeded'
         except OutputLimitExceeded:
             error_text='Upstream output exceeds the configured byte limit'
             audit.error_stage='protocol'
@@ -2194,7 +2199,7 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
                         resp,client,timeout=deadline_mod.close_timeout(budgets))
                 finally:
                     usage=audit.usage
-                    gateway._record(key,ip,model,mapped or '',resp.status_code,
+                    await gateway._record_async(key,ip,model,mapped or '',resp.status_code,
                         _as_int(usage.get('prompt_tokens')),_as_int(usage.get('completion_tokens')),
                         int((time.time()-started)*1000),ua,error_text,True,
                         usage=usage,first_token=first_token_ms)

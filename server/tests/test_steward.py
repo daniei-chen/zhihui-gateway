@@ -504,6 +504,7 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_diagnostic_pool_never_reads_account_credentials_or_history(self):
         from server.qtgcore.adapters.workbuddy import WorkBuddyAdapter
         from server.qtgcore.adapters.trae2 import Trae2Adapter
+        from server.qtgcore.errors import UpstreamError
         wb = object.__new__(WorkBuddyAdapter)
         wb._json = AsyncMock(return_value={'accounts': []})
         wb._auths = Mock(side_effect=AssertionError('credentials read'))
@@ -515,7 +516,7 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         trae._checkin_rows = wb._checkin_rows
         self.assertEqual((await trae.diagnostic_pool())['accounts'], [])
         trae._cmd.return_value = {'ok': False}
-        with self.assertRaises(ValueError):
+        with self.assertRaises(UpstreamError):
             await trae.diagnostic_pool()
 
 

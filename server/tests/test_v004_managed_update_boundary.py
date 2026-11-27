@@ -360,9 +360,12 @@ class ManagedWorkerBoundaryTest(unittest.TestCase):
         with mock.patch.object(config, 'ROOT', self.root), \
                 mock.patch.object(self.worker, 'INSTALL_DIR', self.root):
             self.assertTrue(updater.managed_release())
-            self.assertTrue(self.worker._managed_release())
-            with self.assertRaisesRegex(RuntimeError, 'verified deployment controller'):
-                self.worker.update_manager(mock.Mock())
+            self.assertTrue(self.worker._managed_release_marker())
+            for operation in (self.worker.update_manager, self.worker.update_upstream,
+                              self.worker._release_root):
+                with self.subTest(operation=operation.__name__), \
+                        self.assertRaisesRegex(RuntimeError, 'verified deployment controller'):
+                    operation(mock.Mock())
 
 
 class RetiredVerifierTest(unittest.TestCase):

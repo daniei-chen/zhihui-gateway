@@ -15,13 +15,13 @@ class ItRefusesToOpenTheGateEarlyTests(unittest.TestCase):
         self.assertIn('exit 2', SOURCE)
 
     def test_it_requires_phase_complete(self):
-        self.assertIn('"phase":"complete"', SOURCE)
+        self.assertIn("value.get('phase') != 'complete'", SOURCE)
 
     def test_guards_precede_any_marker_removal(self):
         first_rm = SOURCE.find('rm -f "$marker"')
         self.assertGreater(first_rm, 0)
         self.assertLess(SOURCE.find('[ -z "$TXN" ]'), first_rm)
-        self.assertLess(SOURCE.find('"phase":"complete"'), first_rm)
+        self.assertLess(SOURCE.find("value.get('phase') != 'complete'"), first_rm)
 
 
 class ItRestoresAndVerifiesEverythingTests(unittest.TestCase):

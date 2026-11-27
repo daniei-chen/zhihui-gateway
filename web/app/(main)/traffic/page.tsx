@@ -10,7 +10,7 @@
  * 关于隐私：正文属于用户内容，抓包默认关闭；开启后也只存本机、按保留期清理。
  * 页面顶部常驻这条说明 —— 开关就在旁边，不写清楚等于诱导别人打开它。
  */
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {Activity, Download, RefreshCw, X} from 'lucide-react';
 import {PageHeader} from '@/components/common/layout/PageHeader';
 import {EmptyState} from '@/components/common/layout/EmptyState';
@@ -24,9 +24,11 @@ import {
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle,
 } from '@/components/ui/drawer';
-import {trafficApi, type TrafficRecord, type TrafficRecordSummary, type TrafficStatus} from '@/lib/api';
+import {trafficApi, type TrafficRecord} from '@/lib/api';
 import {fmtDateTime, fmtLatency, fmtNumber} from '@/lib/format';
 import {useT} from '@/lib/i18n/provider';
+import {useAsyncAll} from '@/lib/use-async-data';
+import {useAuth} from '@/lib/auth-context';
 
 const STATUS_TONE = (status: number | null) => {
   if (status === null || status === undefined) return 'secondary' as const;
@@ -54,45 +56,66 @@ function JsonBlock({value}: {value: unknown}) {
 
 export default function TrafficPage() {
   const t = useT();
-  const [status, setStatus] = useState<TrafficStatus | null>(null);
-  const [records, setRecords] = useState<TrafficRecordSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {me} = useAuth();
   const [detail, setDetail] = useState<TrafficRecord | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   // 筛选只读服务端索引，切换时不必重新拉状态；`refresh` 依赖它，所以要进 useCallback 的依赖表。
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [sinceFilter, setSinceFilter] = useState<string>('');
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const filters = {
-        ...(statusFilter ? {status: statusFilter} : {}),
-        ...(sinceFilter ? {since: sinceFilter} : {}),
-      };
-      const [nextStatus, listing] = await Promise.all([
-        trafficApi.status(), trafficApi.list(100, filters),
-      ]);
-      setStatus(nextStatus);
-      setRecords(listing.records);
-      setError(null);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }, [statusFilter, sinceFilter]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
+  const toggleFlight = useRef<symbol | null>(null);
+  const detailFlight = useRef<AbortController | null>(null);
+  const statusRead = useAsyncAll({status: () => trafficApi.status()}, [me?.username, me?.role]);
+  const listingRead = useAsyncAll({listing: () => trafficApi.list(100, {
+    ...(statusFilter ? {status: statusFilter} : {}),
+    ...(sinceFilter ? {since: sinceFilter} : {}),
+  })}, [me?.username, me?.role, statusFilter, sinceFilter]);
+  const status = statusRead.values.status ?? null;
+  const records = listingRead.values.listing?.records ?? null;
+  const error = listingRead.errors.listing;
+  const statusError = mutationError ?? statusRead.errors.status;
+  const refreshStatus = statusRead.refresh;
+  const refreshListing = listingRead.refresh;
+  const reloadStatus = statusRead.reload;
+  const reloadListing = listingRead.reload;
+  const refresh = useCallback(() => Promise.all([refreshStatus(), refreshListing()]),
+    [refreshStatus, refreshListing]);
+  const retryStatus = useCallback(() => {
+    setMutationError(null);
+    return reloadStatus();
+  }, [reloadStatus]);
+  const reload = useCallback(() => Promise.all([retryStatus(), reloadListing()]),
+    [retryStatus, reloadListing]);
+  const closeDetail = useCallback(() => {
+    detailFlight.current?.abort();
+    detailFlight.current = null;
+    setSelectedId(null);
+    setDetail(null);
+    setDetailError(null);
+  }, []);
+  useEffect(() => {
+    closeDetail();
+    setBusy(false);
+    setMutationError(null);
+    return () => {
+      detailFlight.current?.abort();
+      detailFlight.current = null;
+      toggleFlight.current = null;
+    };
+  }, [me?.username, me?.role, closeDetail]);
 
   // 自动刷新：这一页的典型用法是「我刚发了一次请求，看看它怎么了」。
   // 只加载一次的话，新记录永远不会出现，第一反应是「抓包没生效」。
   // 打开详情时暂停轮询，免得正在读的内容被刷新打断。
   const [autoRefresh, setAutoRefresh] = useState(true);
   useEffect(() => {
-    if (!autoRefresh || detail) return;
+    if (!autoRefresh || selectedId !== null) return;
     // 标签页在后台时不要拉：开着流量页放一晚上，会白跑几千次请求，
     // 每次都要服务端扫一遍索引。切回前台立刻补一次，不让人盯着空屏等 10 秒。
     const tick = () => {
-      if (document.hidden) return;
+      if (document.hidden || toggleFlight.current) return;
       void refresh();
     };
     const timer = setInterval(tick, 10000);
@@ -101,37 +124,50 @@ export default function TrafficPage() {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [autoRefresh, detail, refresh]);
+  }, [autoRefresh, selectedId, refresh]);
 
   const toggle = async () => {
-    if (!status) return;
+    if (!status || toggleFlight.current) return;
+    const flight = Symbol();
+    toggleFlight.current = flight;
     setBusy(true);
+    setMutationError(null);
     try {
-      await trafficApi.setEnabled(!status.enabled);
-      // 开关有 5 秒缓存（热路径不查库），稍等再读状态，否则显示的还是旧值。
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await refresh();
+      await trafficApi.setEnabled(!(status.desired ?? status.setting ?? status.enabled));
+      if (toggleFlight.current === flight) await reloadStatus();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      if (toggleFlight.current === flight) {
+        setMutationError(exc instanceof Error ? exc.message : String(exc));
+      }
     } finally {
-      setBusy(false);
+      if (toggleFlight.current === flight) {
+        toggleFlight.current = null;
+        setBusy(false);
+      }
     }
   };
 
   const openDetail = async (id: string) => {
+    detailFlight.current?.abort();
+    const controller = new AbortController();
+    detailFlight.current = controller;
+    setSelectedId(id);
+    setDetail(null);
     setDetailError(null);
     try {
-      setDetail(await trafficApi.read(id));
+      const next = await trafficApi.read(id, controller.signal);
+      if (detailFlight.current !== controller || controller.signal.aborted) return;
+      if (next.request_id !== id) throw new Error(t('state.partialFailed'));
+      setDetail(next);
     } catch (exc) {
-      setDetailError(exc instanceof Error ? exc.message : String(exc));
+      if (detailFlight.current === controller && !controller.signal.aborted) {
+        setDetailError(exc instanceof Error ? exc.message : String(exc));
+      }
     }
   };
 
-  if (error && !records) {
-    return <LoadError message={error} onRetry={() => void refresh()} />;
-  }
-
-  const enabled = status?.enabled ?? false;
+  const enabled = status?.effective ?? status?.enabled ?? false;
+  const desired = status?.desired ?? status?.setting ?? enabled;
 
   return (
     <div className="space-y-6">
@@ -153,18 +189,21 @@ export default function TrafficPage() {
           <span className="text-destructive">{t('traffic.blockedByEnv')}</span>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={() => void refresh()}>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void reload()}>
             <RefreshCw className="mr-1 h-4 w-4" />{t('traffic.refresh')}
           </Button>
           <Button size="sm" variant={autoRefresh ? 'secondary' : 'outline'}
                   onClick={() => setAutoRefresh(!autoRefresh)}>
             {autoRefresh ? t('traffic.autoOn') : t('traffic.autoOff')}
           </Button>
-          <Button size="sm" variant={enabled ? 'outline' : 'default'} disabled={busy} onClick={() => void toggle()}>
-            {enabled ? t('traffic.disable') : t('traffic.enable')}
+          <Button size="sm" variant={desired ? 'outline' : 'default'} disabled={busy || !status} onClick={() => void toggle()}>
+            {desired ? t('traffic.disable') : t('traffic.enable')}
           </Button>
         </div>
       </div>
+
+      {statusError ? <LoadError message={String(statusError)} onRetry={() => void retryStatus()} /> : null}
+      {error ? <LoadError message={String(error)} onRetry={() => void reloadListing()} /> : null}
 
       {/*
         筛选：记录上限 5000 条 / 24 小时，不能筛的时候「刚才那次失败」只能一页页
@@ -196,7 +235,7 @@ export default function TrafficPage() {
         ) : null}
       </div>
 
-      {records === null ? (
+      {records === null ? error ? null : (
         <div className="space-y-2">
           <SkeletonBar /><SkeletonBar /><SkeletonBar />
         </div>
@@ -244,8 +283,8 @@ export default function TrafficPage() {
         </Table>
       )}
 
-      <Drawer open={detail !== null || detailError !== null}
-              onOpenChange={(open) => { if (!open) { setDetail(null); setDetailError(null); } }}>
+      <Drawer open={selectedId !== null}
+              onOpenChange={(open) => { if (!open) closeDetail(); }}>
         <DrawerContent className="max-w-3xl">
           <DrawerHeader className="flex flex-row items-start justify-between gap-4">
             <div>
@@ -264,13 +303,14 @@ export default function TrafficPage() {
                   </a>
                 </Button>
               ) : null}
-              <Button size="sm" variant="ghost" onClick={() => { setDetail(null); setDetailError(null); }}>
+              <Button size="sm" variant="ghost" aria-label={t('common.close')} onClick={closeDetail}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
           </DrawerHeader>
 
           <div className="space-y-5 overflow-y-auto px-4 pb-6">
+            {selectedId !== null && !detail && !detailError ? <SkeletonBar /> : null}
             {detailError ? <LoadError message={detailError} /> : null}
             {detail?.truncated_fields?.length ? (
               // 正文太长时网关只保留头尾，中间那段是真的没存下来。

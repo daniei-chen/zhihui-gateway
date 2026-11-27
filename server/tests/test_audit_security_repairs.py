@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from server.tests.audit_fixtures import state
+from server.tests import audit_fixtures
+
+state = audit_fixtures.state
 
 
 @pytest.fixture
@@ -25,8 +27,13 @@ def control(state,monkeypatch):
                 {'username':'limited','role':'account_admin','pwd_hash':security.make_hash('SyntheticLimited!2026'),'sv':1}]})
     credentials={name:security.issue_token(name,role) for name,role in [('admin','admin'),('limited','account_admin')]}
     credentials['readonly']=tokensvc.create_token('synthetic-readonly','readonly')['token']
-    with TestClient(app) as client:
+    # HTTP authorization does not require the production lifespan (which owns
+    # background collectors and engine credentials). All adapters below are local.
+    client=TestClient(app)
+    try:
         yield SimpleNamespace(client=client,credentials=credentials,app=app,root=state)
+    finally:
+        client.close()
 
 
 def cookie(control,role='admin'):
@@ -109,43 +116,54 @@ def test_new_auth_directory_is_private_and_existing_mode_is_preserved(tmp_path,m
 def qtg(control,monkeypatch):
     from server.qtgcore.routers import compat
     from server.qtgcore.models import Account
+    from server.qtgcore import service
     from server.qtgcore.service import Aggregate
     aggregate=Aggregate()
-    aggregate.qoder_accounts=[Account(platform='qoder',uid='synthetic',name='Synthetic',realm='cn',credits_remain=100)]
+    aggregate.trae_accounts=[Account(platform='trae',uid='synthetic',name='Synthetic',realm='cn',credits_remain=100)]
+    aggregate.qoder_accounts=[Account(platform='qoder',uid='other-provider-fixture',name='Other',realm='cn')]
     calls=[]
     async def build(_runtime,force=False):calls.append(force);return aggregate
+    async def pool(_runtime,platform):
+        assert platform=='trae'
+        calls.append(('pool',platform))
+        return aggregate
     monkeypatch.setattr(compat,'build_aggregate',build)
+    monkeypatch.setattr(service,'build_pool_snapshot',pool)
     monkeypatch.setattr(control.app.state,'rt',SimpleNamespace(),raising=False)
     return calls
 
 
 def test_qtg_export_has_a_real_manifest_contract_and_no_store(control,qtg):
-    response=control.client.get('/api/accounts/export?platform=qoder',headers=cookie(control))
+    response=control.client.get('/api/accounts/export?platform=trae',headers=cookie(control))
     assert response.status_code==200,response.text
     assert isinstance(response.json(),list) and response.json()[0]['uid']=='synthetic'
-    assert 'filename="accounts.json"' in response.headers['content-disposition']
+    assert len(response.json())==1 and response.json()[0]['platform']=='trae'
+    assert 'other-provider-fixture' not in response.text
+    assert 'filename="accounts-trae.json"' in response.headers['content-disposition']
     assert 'no-store' in response.headers['cache-control']
 
 
 def test_internal_qtg_path_also_never_caches(control,qtg):
     response=control.client.get('/__qtg/api/accounts/export',headers=cookie(control))
+    assert response.status_code==404
     assert 'no-store' in response.headers['cache-control']
+    assert qtg==[]
 
 
 def test_account_admin_cannot_force_refresh_through_post_alias(control,qtg):
-    response=control.client.post('/api/accounts/qoder:synthetic/credits?platform=qoder',headers=cookie(control,'limited'))
+    response=control.client.post('/api/accounts/trae:synthetic/credits?platform=trae',headers=cookie(control,'limited'))
     assert response.status_code==403,response.text
     assert qtg==[]
 
 
 def test_qtg_cached_get_never_performs_force_refresh(control,qtg):
     for suffix in ('','&force=false'):
-        result=control.client.get('/api/accounts/qoder:synthetic/credits?platform=qoder'+suffix,headers=cookie(control,'limited'))
+        result=control.client.get('/api/accounts/trae:synthetic/credits?platform=trae'+suffix,headers=cookie(control,'limited'))
         assert result.status_code==200,result.text
         assert result.json()['cached'] is True
         assert 'no-store' in result.headers['cache-control']
     assert qtg==[False,False]
-    denied=control.client.get('/api/accounts/qoder:synthetic/credits?platform=qoder&force=true',headers=cookie(control,'limited'))
+    denied=control.client.get('/api/accounts/trae:synthetic/credits?platform=trae&force=true',headers=cookie(control,'limited'))
     assert denied.status_code==403
     assert qtg==[False,False]
 

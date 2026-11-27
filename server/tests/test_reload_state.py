@@ -214,11 +214,11 @@ class ReloadNoticeInvariantTest(unittest.TestCase):
             f'设置页外壳里出现了 {uses} 次 <UpstreamReloadNotice />。'
             '它必须只写一处（放进 `header` 常量），否则两个 return 分支会漂移。',
         )
-        early = code.find('if (!cfg)')
-        self.assertGreater(early, 0, '找不到 `if (!cfg)` 早返回 —— 锚点过期了')
+        early = code.find('if ((needsUpstream && !cfg)')
+        self.assertGreater(early, 0, '找不到按当前设置页数据依赖判断的早返回')
         self.assertLess(
             code.find('<UpstreamReloadNotice'), early,
-            'UpstreamReloadNotice 挂在了 `if (!cfg)` 早返回之后 —— '
+            'UpstreamReloadNotice 挂在了必需数据缺失的早返回之后 —— '
             '配置读不到时它就消失了，而那正是最需要看到它的时刻。',
         )
 

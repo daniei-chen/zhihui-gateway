@@ -12,6 +12,7 @@
 """
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -47,7 +48,10 @@ def test_every_platform_has_an_upstream_id():
     from server.qtgcore.routers import compat_fixes
 
     mapped = set(compat_fixes._PLAT_TO_UPSTREAM)
-    assert mapped == set(CORE), f'映射不一致: 缺 {set(CORE) - mapped}，多 {mapped - set(CORE)}'
+    # Historical IDs remain addressable for retained account/usage evidence;
+    # they do not put retired providers back into the active grant set.
+    assert set(CORE) <= mapped, f'在营平台缺映射: {set(CORE) - mapped}'
+    assert mapped <= set(platformpolicy.PLATFORM_SPEC), f'未知平台映射: {mapped - set(platformpolicy.PLATFORM_SPEC)}'
     # id 必须唯一且是正整数
     ids = list(compat_fixes._PLAT_TO_UPSTREAM.values())
     assert len(ids) == len(set(ids)), f'upstream_id 重复: {ids}'
@@ -71,27 +75,35 @@ def test_platform_routing_whitelist_covers_qtgcore_hosted_platforms():
     判据不写死平台名，而是从 main.py 的源码里读出那个元组，再与
     `qtgcore` 里真正实现了账号接口的平台集合比对。
     """
-    source = (ROOT / 'main.py').read_text(encoding='utf-8')
-    match = re.search(r'if platform in \(([^)]*)\) and _qtg_should_route', source)
-    assert match, 'main.py 里找不到平台路由白名单，正则需要更新（实现变了？）'
-    whitelist = {s.strip().strip('"\'') for s in match.group(1).split(',') if s.strip()}
-
-    # 由 qtgcore 托管数据面的平台 = compat 层声明支持的那些（workbuddy 走 manager 原生）
+    import asyncio
+    from unittest import mock
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from server import security
+    from server.main import _qtg_platform_route
     from server.qtgcore.routers import compat_fixes
-
     hosted = set(compat_fixes._PLAT_TO_UPSTREAM) - {'workbuddy'}
-    missing = hosted - whitelist
-    assert not missing, (
-        f'main.py 平台路由白名单缺少 {sorted(missing)}：'
-        f'这些平台的 /api/* 会落到 manager 原生 handler（串台）'
-    )
+    assert hosted, 'fixture must cover at least one compatibility provider'
+    for platform in sorted(hosted):
+        for transport in ('query', 'header'):
+            request = Request({'type': 'http', 'method': 'GET', 'path': '/api/accounts',
+                'query_string': f'platform={platform}'.encode() if transport == 'query' else b'',
+                'headers': [(b'x-qtg-platform', platform.encode())] if transport == 'header' else []})
+            seen = []
+            async def handler(incoming):
+                seen.append((incoming.scope['path'], incoming.state.qtg_platform))
+                return JSONResponse({'ok': True})
+            with mock.patch.object(security, 'current_user', return_value={'role': 'admin', 'username': 'fixture'}):
+                result = asyncio.run(_qtg_platform_route(request, handler))
+            assert result.status_code == 200
+            assert seen == [('/__qtg/api/accounts', platform)], (platform, transport, seen)
 
 
-def test_default_platforms_is_a_strict_subset_of_all():
-    """授予集必须是全集的真子集：两者相等意味着「新增平台自动对所有密钥生效」。"""
-    assert set(platformpolicy.DEFAULT_PLATFORMS) < set(CORE), (
-        'DEFAULT_PLATFORMS 等于 PLATFORMS —— 新增平台会自动进入默认授予集（权限放大）'
-    )
+def test_default_platforms_only_grant_the_approved_active_provider():
+    """With one active provider, subset equality is valid; retired grants are not."""
+    assert set(platformpolicy.DEFAULT_PLATFORMS) == {'workbuddy'}
+    assert set(platformpolicy.DEFAULT_PLATFORMS) <= set(CORE)
+    assert not platformpolicy.PlatformSpec('new-fixture', enabled=True).default_grant
 
 
 def test_every_adapter_is_exported():
@@ -160,3 +172,78 @@ def test_new_platform_engine_switch_is_file_based():
     assert funcs, '找不到任何 *_engine_default 函数'
     bad = [name for name, body in funcs if '_file_switch' not in body]
     assert not bad, f'这些引擎开关没有走 _file_switch（回滚会失效）: {bad}'
+
+
+_ENGINE_SWITCHES = {
+    'qoder_engine': ('qoder2', 'off'),
+    'trae_engine': ('aiwork', 'bff'),
+    'wb_engine': ('off', 'on'),
+    'doubaowork_engine': ('on', 'off'),
+}
+_ENGINE_DIRECTORY = Path('/opt/workbuddy-manager/engine/var')
+
+
+@pytest.mark.parametrize('mode', ['override', 'safe-default', 'whitespace'])
+def test_explicit_engine_environment_never_reads_file_fallback(monkeypatch, mode):
+    """An environment override must prevent host file access, not just win later."""
+    from server.qtgcore import config as qtg_config
+
+    expected = {name: default if mode == 'safe-default' else selected
+                for name, (selected, default) in _ENGINE_SWITCHES.items()}
+    for name, selected in expected.items():
+        monkeypatch.setenv('QTG_' + name.upper(), '  ' if mode == 'whitespace' else f'  {selected.upper()}  ')
+    with mock.patch.object(qtg_config, '_file_switch', side_effect=AssertionError('unexpected host switch read')) as read:
+        settings = qtg_config.load_settings()
+    read.assert_not_called()
+    for name, selected in expected.items():
+        # Preserve the existing distinction: an empty string falls back, while
+        # nonempty whitespace is supplied explicitly and normalizes to empty.
+        assert getattr(settings, name) == ('' if mode == 'whitespace' else selected)
+
+
+@pytest.mark.parametrize('invalid_engine', list(_ENGINE_SWITCHES))
+def test_engine_environment_still_rejects_unknown_values_before_file_reads(monkeypatch, invalid_engine):
+    """The real schema accepts safe defaults, but never arbitrary engine names."""
+    from server.qtgcore import config as qtg_config
+    from server.qtgcore.configcontract import ConfigurationError
+
+    for name, (_, default) in _ENGINE_SWITCHES.items():
+        monkeypatch.setenv('QTG_' + name.upper(), default)
+    monkeypatch.setenv('QTG_' + invalid_engine.upper(), 'unknown-engine')
+    with mock.patch.object(qtg_config, '_file_switch', side_effect=AssertionError('unexpected host switch read')) as read:
+        with pytest.raises(ConfigurationError) as rejected:
+            qtg_config.load_settings()
+    read.assert_not_called()
+    assert rejected.value.errors == [{'name': 'QTG_' + invalid_engine.upper(), 'code': 'invalid_choice'}]
+
+
+@pytest.mark.parametrize('environment', [None, ''], ids=['absent', 'empty'])
+@pytest.mark.parametrize('file_state', ['valid', 'missing', 'invalid'])
+def test_unset_engine_environment_preserves_file_switch_and_defaults(monkeypatch, environment, file_state):
+    """Both unset forms retain all four file toggles and their established defaults."""
+    from server.qtgcore import config as qtg_config
+
+    for name in _ENGINE_SWITCHES:
+        key = 'QTG_' + name.upper()
+        if environment is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, environment)
+    reads = []
+    real_read_text = Path.read_text
+
+    def read_switch(path, *args, **kwargs):
+        if path.parent == _ENGINE_DIRECTORY:
+            assert path.name in _ENGINE_SWITCHES, path
+            reads.append(path.name)
+            if file_state == 'missing':
+                raise FileNotFoundError(path)
+            selected, _ = _ENGINE_SWITCHES[path.name]
+            return f'  {selected.upper()}\n' if file_state == 'valid' else 'unknown-engine\n'
+        return real_read_text(path, *args, **kwargs)
+
+    with mock.patch.object(Path, 'read_text', read_switch):
+        settings = qtg_config.load_settings()
+    assert sorted(reads) == sorted(_ENGINE_SWITCHES), 'each fallback must read exactly its own switch file'
+    for name, (selected, default) in _ENGINE_SWITCHES.items():
+        assert getattr(settings, name) == (selected if file_state == 'valid' else default)

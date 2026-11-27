@@ -159,8 +159,8 @@ const server = http.createServer((request, response) => {
 
 if (process.env.QA_SERVE_ONLY) {
   const port = Number(process.env.QA_SERVE_ONLY);
-  assert.ok(Number.isInteger(port) && port > 0 && port < 65536);
-  server.listen(port, '127.0.0.1', () => console.log(`Synthetic console: http://127.0.0.1:${port}/accounts/`));
+  assert.ok(Number.isInteger(port) && port >= 0 && port < 65536);
+  server.listen(port, '127.0.0.1', () => console.log(`Synthetic console: http://127.0.0.1:${server.address().port}/accounts/`));
 } else (async () => {
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

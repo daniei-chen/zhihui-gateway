@@ -182,10 +182,9 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
         return response, seen
 
     async def test_keys_scope_cannot_read_platform_data_by_header_or_query(self):
-        # 覆盖**所有**由 qtgcore 托管的数据面平台：新增 doubaowork 后若这里
-        # 仍是两元组，第四个平台的 /api/accounts 会绕过权限判定落到 manager
-        # 的原生 handler（读的是 WorkBuddy 数据）。
-        for platform in ('qoder', 'trae', 'doubaowork'):
+        # These retained compatibility control routes still require scopes even
+        # though inference availability is separately disabled by platformpolicy.
+        for platform in ('trae', 'doubaowork'):
             for transport in ('header', 'query'):
                 for path in ('/api/accounts', '/api/stats/summary', '/api/models'):
                     with self.subTest(platform=platform, transport=transport, path=path):
@@ -197,7 +196,7 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_scope_can_read_accounts_but_not_write(self):
         identity = {'username': 'svc', 'role': 'viewer', 'scope': 'read'}
-        for platform in ('qoder', 'doubaowork'):
+        for platform in ('trae', 'doubaowork'):
             with self.subTest(platform=platform):
                 response, seen = await self.call(request('/api/accounts', platform=platform), identity)
                 self.assertEqual(response.status_code, 200)
@@ -212,9 +211,23 @@ class PlatformScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(security, 'current_user', side_effect=HTTPException(
                 403, headers={'X-Manager-Csrf-Reason': 'csrf_origin_mismatch'})):
-            response = await self.middleware(request('/api/accounts', platform='qoder', method='POST'), handler)
+            response = await self.middleware(request('/api/accounts', platform='trae', method='POST'), handler)
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.headers['X-Manager-Csrf-Reason'], 'csrf_origin_mismatch')
+
+    async def test_retired_qoder_key_usage_read_still_enforces_scope(self):
+        for transport in ('header', 'query'):
+            with self.subTest(transport=transport):
+                req = request('/api/stats/by-key',
+                    platform='qoder' if transport == 'header' else '',
+                    query='platform=qoder' if transport == 'query' else '')
+                denied, seen = await self.call(req, {'username': 'svc', 'role': 'viewer', 'scope': 'keys'})
+                self.assertEqual(denied.status_code, 403)
+                self.assertEqual(seen, [])
+                req = request('/api/stats/by-key', platform='qoder')
+                allowed, seen = await self.call(req, {'username': 'svc', 'role': 'viewer', 'scope': 'read'})
+                self.assertEqual(allowed.status_code, 200)
+                self.assertEqual(seen, ['/__qtg/api/stats/by-key'])
 
 
 class SourceGateRegressionTest(unittest.TestCase):

@@ -4,17 +4,40 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable source commit to validate for a release
+        required: true
+        type: string
+    outputs:
+      source_sha:
+        description: Actual source commit validated by all quality jobs
+        value: ${{ jobs.frontend.outputs.source_sha }}
+      frontend_artifact:
+        description: Immutable static export consumed by HTTP tests and packaging
+        value: ${{ jobs.frontend.outputs.frontend_artifact }}
 permissions:
   contents: read
 concurrency:
-  group: quality-${{ github.ref }}
+  group: quality-${{ github.workflow }}-${{ github.ref }}-${{ inputs.source_sha }}
   cancel-in-progress: true
 jobs:
   manager:
+    needs: frontend
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.frontend.outputs.source_sha }}
+      - name: Download the exact quality static export
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.frontend.outputs.frontend_artifact }}
+          path: web/out
+      - name: Require matching static artifact before HTTP regression
+        run: python3 tools/ci_artifacts.py verify --source-sha "$(git rev-parse HEAD)"
       - name: Hash checked Python dependencies
         run: |
           python3.12 -m venv /tmp/zhihui-gateway-manager-venv
@@ -22,8 +45,21 @@ jobs:
           /tmp/zhihui-gateway-manager-venv/bin/pip install --require-hashes -r tools/requirements-ci.txt
       - name: No external network, synthetic fixtures only
         run: sudo -n unshare --net env ZH_CI_NET_ISOLATED=1 /tmp/zhihui-gateway-manager-venv/bin/python tools/ci_regression.py --require-static
+      - name: Retain manager test counts and explicit skips
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-validation-manager-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-validation-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Ensure HTTP regression retained the validated static bytes
+        run: python3 tools/ci_artifacts.py verify --source-sha "$(git rev-parse HEAD)"
   frontend:
     runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      frontend_artifact: ${{ steps.source.outputs.artifact }}
     timeout-minutes: 20
     defaults:
       run:
@@ -32,9 +68,20 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       NEXT_OUTPUT_EXPORT: '1'
       SOURCE_DATE_EPOCH: '1791169200'
-      WB_BUILD_ID: '${{ github.sha }}'
+      WB_BUILD_ID: '${{ inputs.source_sha || github.sha }}'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+      - name: Bind quality to the checked-out commit
+        id: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          SOURCE_SHA=$(git rev-parse HEAD)
+          test "$SOURCE_SHA" = "$EXPECTED_SOURCE_SHA"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "artifact=quality-web-${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
@@ -45,12 +92,47 @@ jobs:
       - run: npm exec tsc -- --noEmit
       - run: npm test
       - run: npm run build:export
+      - name: Install the lockfile-bound browser for synthetic acceptance
+        run: npm exec playwright -- install --with-deps --only-shell chromium
+      - name: Require browser acceptance for partial failures and response races
+        env:
+          QA_OUTPUT: '${{ runner.temp }}/zhihui-browser-acceptance'
+        run: npm run test:browser
+      - name: Retain browser acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}/zhihui-browser-acceptance'
+          if-no-files-found: ignore
+          retention-days: 7
       - run: npm audit --audit-level=high
+      - name: Bind exported bytes to source identity
+        working-directory: .
+        run: python3 tools/ci_artifacts.py create --source-sha "$(git rev-parse HEAD)"
+      - name: Publish the validated static export for downstream jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          path: web/out
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
   gateway:
+    needs: frontend
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.frontend.outputs.source_sha }}
+      - name: Download the exact quality static export
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.frontend.outputs.frontend_artifact }}
+          path: web/out
+      - name: Require matching static artifact before HTTP regression
+        run: python3 tools/ci_artifacts.py verify --source-sha "$(git rev-parse HEAD)"
       - name: Preserve customized algorithm contract
         run: |
           python3 - <<'PY'
@@ -65,6 +147,16 @@ jobs:
           /tmp/zhihui-gateway-gateway-venv/bin/pip install --require-hashes -r tools/requirements-ci.txt
           /tmp/zhihui-gateway-gateway-venv/bin/python -m compileall -q server
           sudo -n unshare --net env ZH_CI_NET_ISOLATED=1 /tmp/zhihui-gateway-gateway-venv/bin/python tools/ci_regression.py --require-static
+      - name: Retain gateway test counts and explicit skips
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-validation-gateway-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-validation-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Ensure the runtime image uses the validated static bytes
+        run: python3 tools/ci_artifacts.py verify --source-sha "$(git rev-parse HEAD)"
       - run: docker build -t wb-ci-runtime .
       - run: docker save -o image.tar wb-ci-runtime
       - run: chmod 644 image.tar

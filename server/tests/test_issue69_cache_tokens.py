@@ -279,10 +279,10 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[2]
         checked: list[str] = []
-        counts: dict[str, int] = {}
+        modes: dict[str, set[bool]] = {}
         offenders: list[str] = []
         for rel in self.MODULES:
-            counts[rel] = 0
+            modes[rel] = set()
             tree = ast.parse((root / rel).read_text(encoding='utf-8'))
             # 从 usage 里取出来的局部变量（如 gateway 的 pt / ct）
             derived = {
@@ -293,7 +293,7 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
                 and 'usage' in ast.unparse(n.value)
             }
             for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or len(node.args) <= 5:
+                if not isinstance(node, ast.Call) or len(node.args) <= 10:
                     continue
                 fn = node.func
                 name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, 'id', '')
@@ -303,21 +303,20 @@ class EveryUsageReadingCallSiteHandsUsageOver(unittest.TestCase):
                 # 掩盖了它其实没看见那三个的事实。
                 if name not in ('_record', '_record_async'):
                     continue
-                tokens = ast.unparse(node.args[5])
-                if 'usage' not in tokens and tokens not in derived:
+                tokens = [ast.unparse(argument) for argument in node.args[5:7]]
+                if not any('usage' in expression or expression in derived for expression in tokens):
                     continue
                 checked.append(f'{rel}:{node.lineno}')
-                counts[rel] += 1
+                stream = node.args[10]
+                if isinstance(stream, ast.Constant) and type(stream.value) is bool:
+                    modes[rel].add(stream.value)
                 if 'usage' not in {k.arg for k in node.keywords}:
                     offenders.append(f'{rel}:{node.lineno}')
-        # Eight success sites plus invalid-200 and pre-stream-error sites for
-        # each public protocol. Keep exact per-module counts to prevent vacuity.
-        self.assertEqual(counts, {
-            'server/routers/gateway.py': 4,
-            'server/routers/responses.py': 4,
-            'server/routers/anthropic.py': 4,
-            'server/routers/playground.py': 2,
-        }, f'usage-bearing call sites changed; review the guard: {checked}')
+        # Every protocol must exercise both buffered and streaming receipts.
+        # Additional rejection/cancellation paths are checked by the same rule;
+        # their growing count is not itself a change to the billing contract.
+        self.assertEqual(modes, {name: {False, True} for name in self.MODULES},
+                         f'missing buffered/streaming usage coverage: {checked}')
         self.assertEqual(offenders, [],
                          '这些调用点读了 usage 却没把 usage 交出去，'
                          '对应协议的缓存三段会永远是空的：' + ', '.join(offenders))

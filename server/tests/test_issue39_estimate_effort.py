@@ -187,26 +187,33 @@ class RequestWiringTest(unittest.TestCase):
 
 
 class CountTokensRouteSourceTest(unittest.TestCase):
+    def count(self, messages):
+        from unittest import mock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from server.routers import gateway
+        app = FastAPI()
+        app.include_router(anthropic.router)
+        with mock.patch.object(anthropic, '_authorize', return_value=({'id': 1}, '127.0.0.1', None)), \
+                mock.patch.object(gateway, '_map_model', return_value=None), \
+                mock.patch.object(gateway, 'max_body_bytes', return_value=1048576):
+            response = TestClient(app).post('/v1/messages/count_tokens', json={'messages': messages})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()['input_tokens']
+
     def test_route_uses_estimator_not_div3(self) -> None:
-        src = (ROOT / 'server/routers/anthropic.py').read_text(encoding='utf-8')
-        self.assertNotIn('(total + 2) // 3', src,
-                         'count_tokens 还在用「除 3」——中文会被低估')
-        seg = src[src.index("async def count_tokens"):]
-        seg = seg[:seg.index('return JSONResponse')]
-        self.assertIn('_estimate_tokens', seg)
+        text = '中文测试' * 50
+        self.assertGreaterEqual(self.count([{'role': 'user', 'content': text}]), len(text))
 
     def test_structure_overhead_added(self) -> None:
         """每个 block 要加一点结构开销：消息边界在真实分词里要额外占位。
 
         纯按字符数算必然偏低——这是「宁可高估」的落点之一。
         """
-        src = (ROOT / 'server/routers/anthropic.py').read_text(encoding='utf-8')
-        seg = src[src.index("async def count_tokens"):]
-        # 取到该函数的 return 行**结束**为止：结构开销项就写在那行里
-        end = seg.index('return JSONResponse')
-        seg = seg[:seg.index(chr(10), end)]
-        self.assertIn('blocks', seg)
-        self.assertIn('* 4', seg, '没有结构开销项')
+        one = self.count([{'role': 'user', 'content': '你好世界'}])
+        two = self.count([{'role': 'user', 'content': '你好'},
+                          {'role': 'assistant', 'content': '世界'}])
+        self.assertEqual(two - one, 4, 'another message boundary must add its structure overhead')
 
 
 if __name__ == '__main__':

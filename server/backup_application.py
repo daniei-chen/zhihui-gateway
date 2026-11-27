@@ -19,6 +19,80 @@ if _SERVER_DIR not in sys.path:
 BASE=Path('/root/backups/workbuddy-daily')
 MANAGER=Path('/opt/workbuddy-manager')
 GATEWAY=Path('/opt/workbuddy2api')
+MAX_METADATA_BYTES = 16 * 1024 * 1024
+MAX_RELEASE_FILE_BYTES = 64 * 1024 * 1024
+MAX_RELEASE_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 100000
+MAX_ARCHIVE_BYTES = 8 * 1024**3
+MAX_DATABASE_BYTES = 2 * 1024**3
+MIN_FREE_BYTES = 256 * 1024**2
+
+
+def bounded_bytes(path, limit=MAX_METADATA_BYTES):
+    size = path.stat().st_size
+    if size > limit:
+        raise RuntimeError('recovery metadata exceeds byte limit')
+    with path.open('rb') as stream:
+        raw = stream.read(size + 1)
+    if len(raw) > size:
+        raise RuntimeError('recovery metadata grew beyond byte limit')
+    return raw
+
+
+def stream_hash(stream, limit):
+    digest, count = hashlib.sha256(), 0
+    for block in iter(lambda: stream.read(1024 * 1024), b''):
+        count += len(block)
+        if count > limit:
+            raise RuntimeError('recovery content exceeds byte limit')
+        digest.update(block)
+    return digest.hexdigest()
+
+
+class RecoveryArchive(tarfile.TarFile):
+    """Apply write-side limits before payload bytes consume staging space."""
+    def addfile(self, member, fileobj=None):
+        names = getattr(self, '_recovery_names', set())
+        if member.name in names:
+            raise RuntimeError('duplicate recovery archive member')
+        count = getattr(self, '_recovery_count', 0) + 1
+        size = getattr(self, '_recovery_size', 0) + member.size
+        if (count > MAX_ARCHIVE_MEMBERS or member.size < 0
+                or member.size > MAX_DATABASE_BYTES or size > MAX_ARCHIVE_BYTES
+                or not (member.isfile() or member.isdir()) or len(member.name.encode()) > 1024):
+            raise RuntimeError('recovery archive exceeds write budget')
+        if self.name and shutil.disk_usage(Path(self.name).parent).free < member.size + MIN_FREE_BYTES:
+            raise RuntimeError('insufficient free space for recovery archive')
+        self._recovery_count, self._recovery_size = count, size
+        names.add(member.name)
+        self._recovery_names = names
+        if not member.isfile() or member.name == 'recovery-manifest.json':
+            return super().addfile(member, fileobj)
+        class Reader:
+            def __init__(self, stream):
+                self.stream, self.digest = stream, hashlib.sha256()
+            def read(self, size):
+                block = self.stream.read(size)
+                self.digest.update(block)
+                return block
+        reader = Reader(fileobj or io.BytesIO())
+        result = super().addfile(member, reader)
+        inventory = getattr(self, '_recovery_inventory', {})
+        inventory[member.name] = {'bytes': member.size, 'sha256': reader.digest.hexdigest()}
+        self._recovery_inventory = inventory
+        return result
+
+    def add_recovery_manifest(self):
+        records = dict(getattr(self, '_recovery_inventory', {}))
+        databases = [{'name': name} for name in sorted(records)
+                     if name.endswith(('.db', '.sqlite', '.sqlite3'))]
+        if 'manager/data/manager.db' not in records:
+            raise RuntimeError('manager database missing from recovery inventory')
+        raw = json.dumps({'format': 'zhihui-recovery-manifest-v1', 'files': records,
+                          'sqlite_snapshots': databases}, sort_keys=True).encode()
+        if len(raw) > MAX_METADATA_BYTES:
+            raise RuntimeError('recovery inventory exceeds metadata budget')
+        add_bytes(self, 'recovery-manifest.json', raw)
 
 def recovery_host_metadata():
     """Capture actual service configuration into the encrypted private archive.
@@ -43,13 +117,13 @@ def recovery_host_metadata():
         if source.is_file() and source.stat().st_size<1024*1024:
             out[f'environment-{i}.bin']=source.read_bytes()
     if (MANAGER/'.local-config').is_file():
-        out['manager-local-config.bin']=(MANAGER/'.local-config').read_bytes()
+        out['manager-local-config.bin']=bounded_bytes(MANAGER/'.local-config')
     out['environment-references.json']=json.dumps({'paths':re.findall(r'(/[A-Za-z0-9_./-]+)\s+\(ignore_errors=',props)}).encode()
     return out
 
 def stable_json(path):
     for _ in range(3):
-        before=path.stat(); raw=path.read_bytes(); after=path.stat()
+        before=path.stat(); raw=bounded_bytes(path); after=path.stat()
         if (before.st_ino,before.st_size,before.st_mtime_ns)==(after.st_ino,after.st_size,after.st_mtime_ns):
             json.loads(raw); return raw
     raise RuntimeError('concurrent snapshot mutation '+path.name)
@@ -105,6 +179,9 @@ def managed_sources(root):
     if not marker.is_file() or marker.is_symlink():raise RuntimeError('managed recovery marker missing or unsafe')
     marker_raw=stable_json(marker);manifest=json.loads(marker_raw)
     records=[]
+    total = 0
+    if not isinstance(manifest.get('files'), dict) or len(manifest['files']) > MAX_ARCHIVE_MEMBERS:
+        raise RuntimeError('managed recovery inventory exceeds member limit')
     for relative,item in manifest['files'].items():
         parts=Path(relative)
         if parts.is_absolute() or '..' in parts.parts or '\\' in relative or relative=='deploy/managed-release.json':
@@ -115,10 +192,16 @@ def managed_sources(root):
         actual=stat.S_IMODE(source.stat().st_mode);expected=item.get('mode')
         if isinstance(expected,bool) or not isinstance(expected,int) or expected&0o7022 or actual!=expected:
             raise RuntimeError('managed recovery permissions mismatch: '+relative)
-        raw=source.read_bytes()
-        if hashlib.sha256(raw).hexdigest()!=item['candidate_sha256']:
+        size = source.stat().st_size
+        total += size
+        if size > MAX_RELEASE_FILE_BYTES or total > MAX_RELEASE_BYTES:
+            raise RuntimeError('managed recovery sources exceed byte budget')
+        with source.open('rb') as stream:
+            digest = stream_hash(stream, MAX_RELEASE_FILE_BYTES)
+        if digest!=item['candidate_sha256']:
             raise RuntimeError('managed recovery source hash mismatch: '+relative)
-        records.append((relative,raw,actual))
+        # Retain paths, not a second in-memory copy of the complete release.
+        records.append((relative,source,actual))
     records.append(('deploy/managed-release.json',marker_raw,stat.S_IMODE(marker.stat().st_mode)))
     if manifest.get('signature_required'):
         # Detached signatures cannot be inside the manifest they sign. Archive
@@ -128,7 +211,7 @@ def managed_sources(root):
         for relative in ('deploy/managed-release.sig',anchor_name):
             source=root/relative
             if not source.is_file() or source.is_symlink():raise RuntimeError('signed recovery material missing: '+relative)
-            records.append((relative,source.read_bytes(),stat.S_IMODE(source.stat().st_mode)))
+            records.append((relative,bounded_bytes(source),stat.S_IMODE(source.stat().st_mode)))
         subprocess.run(signature_verify_command(
                            release_algorithm(manifest),root/anchor_name,
                            root/'deploy/managed-release.sig',marker),
@@ -136,8 +219,16 @@ def managed_sources(root):
     return records
 
 def add_release_bytes(archive,name,raw,mode):
-    info=tarfile.TarInfo(name);info.size=len(raw);info.mode=mode;info.mtime=int(time.time())
-    archive.addfile(info,io.BytesIO(raw))
+    info=tarfile.TarInfo(name);info.mode=mode;info.mtime=int(time.time())
+    if isinstance(raw, Path):
+        info.size = raw.stat().st_size
+        if info.size > MAX_RELEASE_FILE_BYTES:
+            raise RuntimeError('release source grew beyond byte limit')
+        with raw.open('rb') as stream:
+            archive.addfile(info, stream)
+    else:
+        info.size=len(raw)
+        archive.addfile(info,io.BytesIO(raw))
 
 def add_state_directory(archive,name,path):
     if path.is_symlink() or not path.is_dir():raise RuntimeError('private recovery directory missing or unsafe')
@@ -147,29 +238,61 @@ def add_state_directory(archive,name,path):
     return info.uid,info.gid,info.mode
 
 def verify_release_archive(archive):
-    names=archive.getnames()
-    if len(names)!=len(set(names)):raise RuntimeError('duplicate recovery archive members')
-    manifest=json.load(archive.extractfile('manager/deploy/managed-release.json'))
+    names, total, actual, recovery = set(), 0, {}, None
+    for member in archive:
+        if member.name in names or len(names) >= MAX_ARCHIVE_MEMBERS:
+            raise RuntimeError('duplicate recovery archive members or member limit exceeded')
+        if not (member.isfile() or member.isdir()) or member.issparse():
+            raise RuntimeError('unsupported recovery archive member type')
+        total += member.size
+        if member.size < 0 or member.size > MAX_DATABASE_BYTES or total > MAX_ARCHIVE_BYTES:
+            raise RuntimeError('recovery archive exceeds byte budget')
+        names.add(member.name)
+        if member.isfile():
+            with archive.extractfile(member) as stream:
+                if member.name == 'recovery-manifest.json':
+                    if member.size > MAX_METADATA_BYTES:
+                        raise RuntimeError('recovery manifest exceeds metadata limit')
+                    recovery = json.loads(stream.read(member.size + 1))
+                else:
+                    actual[member.name] = {'bytes': member.size,
+                        'sha256': stream_hash(stream, MAX_DATABASE_BYTES)}
+    if recovery is not None and (not isinstance(recovery, dict) or recovery.get('files') != actual):
+        raise RuntimeError('recovery inventory does not match archive payloads')
+    marker = archive.getmember('manager/deploy/managed-release.json')
+    if marker.size > MAX_METADATA_BYTES:
+        raise RuntimeError('managed recovery manifest exceeds byte limit')
+    manifest=json.load(archive.extractfile(marker))
     for relative,item in manifest['files'].items():
         name='manager/'+relative
         try:member=archive.getmember(name)
         except KeyError:raise RuntimeError('managed recovery member missing: '+relative) from None
         if not member.isfile() or member.mode!=item['mode']:
             raise RuntimeError('managed recovery archive permissions mismatch: '+relative)
-        if hashlib.sha256(archive.extractfile(member).read()).hexdigest()!=item['candidate_sha256']:
+        if member.size > MAX_RELEASE_FILE_BYTES:
+            raise RuntimeError('release member exceeds byte limit')
+        digest = actual[name]['sha256']
+        if digest!=item['candidate_sha256']:
             raise RuntimeError('managed recovery archive hash mismatch: '+relative)
     signed=False
     if manifest.get('signature_required'):
         # 恢复侧同样按清单算法校验（v9 起 Ed25519）；锚必须与本机 custodian 锚一致。
         anchor_name=trust_anchor_name(manifest)
-        anchor=archive.extractfile('manager/'+anchor_name).read()
+        with archive.extractfile('manager/'+anchor_name) as stream:
+            anchor=stream.read(MAX_METADATA_BYTES + 1)
+        if len(anchor) > MAX_METADATA_BYTES:
+            raise RuntimeError('recovery trust anchor exceeds byte limit')
         installed=MANAGER/anchor_name
-        if not installed.is_file() or installed.is_symlink() or installed.read_bytes()!=anchor:
+        if not installed.is_file() or installed.is_symlink() or bounded_bytes(installed)!=anchor:
             raise RuntimeError('recovery trust anchor does not match installed custodian key')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             for path,name in (('anchor','manager/'+anchor_name),('signature','manager/deploy/managed-release.sig'),('manifest','manager/deploy/managed-release.json')):
-                (root/path).write_bytes(archive.extractfile(name).read())
+                with archive.extractfile(name) as stream:
+                    raw = stream.read(MAX_METADATA_BYTES + 1)
+                if len(raw) > MAX_METADATA_BYTES:
+                    raise RuntimeError('recovery signing metadata exceeds byte limit')
+                (root/path).write_bytes(raw)
             subprocess.run(signature_verify_command(
                                release_algorithm(manifest),root/'anchor',
                                root/'signature',root/'manifest'),
@@ -221,9 +344,17 @@ def verify_release_archive(archive):
 
 def verify_paired_archive(archive, destination, receipt):
     from server.portalrecovery import _allowed, restore_quarantine
+    from server.portalrecovery import MAX_TOTAL, MAX_FILES
     root = Path(destination) / 'pair-verification'
+    members = [member for member in archive.getmembers()
+               if member.name.startswith('paired-ledgers/') and not member.isdir()]
+    total = sum(member.size for member in members)
+    if len(members) > MAX_FILES or total > MAX_TOTAL:
+        raise RuntimeError('paired recovery exceeds extraction budget')
+    if shutil.disk_usage(destination).free < total * 2 + MIN_FREE_BYTES:
+        raise RuntimeError('insufficient free space for isolated paired restore')
     root.mkdir(mode=0o700)
-    for member in archive.getmembers():
+    for member in members:
         if not member.name.startswith('paired-ledgers/') or member.isdir():
             continue
         name = member.name[len('paired-ledgers/'):]
@@ -273,6 +404,9 @@ def main():
     state_owners={}
     state_directories={}
     with tempfile.TemporaryDirectory(prefix='snapshot-',dir=BASE) as scratch:
+        database_size = (MANAGER/'data/manager.db').stat().st_size
+        if database_size > MAX_DATABASE_BYTES or shutil.disk_usage(scratch).free < database_size * 3 + MIN_FREE_BYTES:
+            raise RuntimeError('database snapshot exceeds recovery disk budget')
         pair = None
         if (MANAGER/'data/user-portal.sqlite3').is_file():
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -283,10 +417,23 @@ def main():
                 spool=MANAGER/'data/ledger-spool', destination=pair_root)
         database=Path(scratch)/'manager.db'
         source=sqlite3.connect('file:'+str(MANAGER/'data/manager.db')+'?mode=ro',uri=True)
-        dest=sqlite3.connect(database); source.backup(dest); source.close()
+        dest=sqlite3.connect(database)
+        page_size = source.execute('PRAGMA page_size').fetchone()[0]
+        deadline = time.monotonic() + 900
+        def progress(status, remaining, total):
+            if total * page_size > MAX_DATABASE_BYTES or time.monotonic() > deadline:
+                raise RuntimeError('database snapshot exceeds size or time budget')
+        try:
+            source.backup(dest, pages=256, progress=progress)
+        except BaseException:
+            dest.close()
+            raise
+        finally:
+            source.close()
         if dest.execute('PRAGMA quick_check').fetchone()[0]!='ok': raise RuntimeError('database snapshot invalid')
         count=dest.execute('SELECT count(*) FROM request_logs').fetchone()[0]; dest.close()
-        with tarfile.open(str(output)+'.tmp','w:gz') as archive:
+        candidate = Path(scratch)/'application.tar.gz'
+        with RecoveryArchive.open(candidate,'w:gz') as archive:
             if pair:
                 archive.add(pair_root, arcname='paired-ledgers')
             for path,name in [(GATEWAY/'auths','gateway/auths'),(GATEWAY/'data','gateway/data'),(MANAGER/'data','manager/data')]:
@@ -331,8 +478,8 @@ def main():
                     add_bytes(archive,'nginx/'+path.name,path.read_bytes())
             for name,raw in recovery_host_metadata().items():
                 add_bytes(archive,'private-host/'+name,raw)
-        os.replace(str(output)+'.tmp',output); output.chmod(0o600)
-        with tarfile.open(output) as archive:
+            archive.add_recovery_manifest()
+        with tarfile.open(candidate) as archive:
             release_check=verify_release_archive(archive)
             if pair:
                 pair.update(verify_paired_archive(archive, scratch, pair))
@@ -363,10 +510,11 @@ def main():
             con.close()
         # 同理：整包 400 MB 读进内存只为算一个哈希，也是 OOM 的一半原因。
         digest=hashlib.sha256()
-        with output.open('rb') as handle:
+        with candidate.open('rb') as handle:
             for block in iter(lambda: handle.read(1024*1024), b''):
                 digest.update(block)
-        result={'path':str(output),'sha256':digest.hexdigest(),'bytes':output.stat().st_size,'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
+        os.replace(candidate, output); output.chmod(0o600)
+        result={'path':str(output),'sha256':digest.hexdigest(),'bytes':output.stat().st_size,'verified_at':int(time.time()),'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
         # The local verified recovery remains available if publication fails.
         if Path('/root/backups/workbuddy-recovery/offsite.json').is_file():
             sys.path.insert(0,str(Path(__file__).resolve().parent))

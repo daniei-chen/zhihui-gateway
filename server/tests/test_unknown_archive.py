@@ -34,6 +34,11 @@ DAY = 86400
 class UnknownArchiveTest(unittest.TestCase):
 
     def setUp(self) -> None:
+        # Isolate archival's effect from the configurable backlog threshold;
+        # production threshold boundaries have their own budget-alert tests.
+        threshold = mock.patch.object(operational, 'BUDGET_BACKLOG_LIMIT', 1)
+        threshold.start()
+        self.addCleanup(threshold.stop)
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_db = config.DB_PATH
         self._orig_users = config.USERS_FILE

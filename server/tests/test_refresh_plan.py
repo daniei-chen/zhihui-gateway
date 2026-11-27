@@ -221,6 +221,7 @@ class RunPlanEndpointTest(unittest.TestCase):
 
     def test_run_now_marks_plan_ran(self) -> None:
         from server.routers import accounts
+        from starlette.requests import Request
 
         seen: dict = {}
 
@@ -238,8 +239,14 @@ class RunPlanEndpointTest(unittest.TestCase):
                                lambda: {'enabled': True, 'interval_days': 5,
                                         'hour': 3, 'last_run': 123}), \
              mock.patch.object(accounts.renew, 'plan_next_run',
-                               lambda plan=None, now=None: 999):
-            out = asyncio.run(accounts.run_refresh_plan_now(user={'role': 'admin'}))
+                               lambda plan=None, now=None: 999), \
+             mock.patch.object(accounts.wb2api, 'list_auth_accounts', return_value=[]), \
+             mock.patch.object(accounts.accountguard, 'guard_account_action') as guard:
+            request = Request({'type': 'http', 'method': 'POST',
+                               'path': '/api/accounts/refresh-plan/run', 'headers': []})
+            out = asyncio.run(accounts.run_refresh_plan_now(request, user={'role': 'admin'}))
+            guard.assert_called_once_with(request, count=0, what='立即执行全量续期',
+                                          batch=True, enforce_batch_max=False)
 
         self.assertTrue(seen.get('force'), '立即执行必须是全量刷新（force=True）')
         self.assertTrue(seen.get('marked'), '跑完要重置计时，免得到点又跑一次')

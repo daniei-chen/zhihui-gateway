@@ -21,18 +21,75 @@ if [ -z "$TXN" ]; then
     say "用法：post-migration-cleanup.sh <transaction-id>"
     exit 2
 fi
+case "$TXN" in
+    .*|*[!a-zA-Z0-9._-]*)
+        fail "事务 ID 无效；不得跨出事务目录"
+        exit 2
+        ;;
+esac
 
 JOURNAL="$STATE/transactions/$TXN/active.json"
 if [ ! -f "$JOURNAL" ]; then
     fail "找不到事务日志 $JOURNAL"
     exit 1
 fi
-if ! grep -q '"phase":"complete"' "$JOURNAL" 2>/dev/null; then
+if ! python3 - "$STATE" "$TXN" <<'PY'
+import json
+import os
+import stat
+import sys
+
+MAX_JOURNAL_BYTES = 1024 * 1024
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('duplicate transaction field')
+        value[key] = item
+    return value
+
+directory = None
+try:
+    # Resolve each transaction component from an already opened directory;
+    # a symlink cannot borrow another transaction's completion evidence.
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(sys.argv[1], flags)
+    for component in ('transactions', sys.argv[2]):
+        child = os.open(component, flags, dir_fd=directory)
+        os.close(directory)
+        directory = child
+    fd = os.open('active.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                 dir_fd=directory)
+    with os.fdopen(fd, 'rb') as handle:
+        before = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or not 0 < before.st_size <= MAX_JOURNAL_BYTES):
+            raise ValueError('unsafe or oversized transaction journal')
+        raw = handle.read(before.st_size + 1)
+        after = os.fstat(handle.fileno())
+        if (len(raw) != before.st_size or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns):
+            raise ValueError('transaction journal changed during read')
+    value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object)
+    if not isinstance(value, dict) or value.get('phase') != 'complete':
+        raise ValueError('transaction is not complete')
+except (OSError, ValueError, RecursionError):
+    raise SystemExit(1)
+finally:
+    if directory is not None:
+        os.close(directory)
+PY
+then
     fail "事务 $TXN 尚未 complete；门禁必须保持"
     exit 1
 fi
 
 say "事务 $TXN 已 complete，开始收尾"
+
+# 历史事务属于恢复与审计证据。这里仅解除已完成事务的启动门禁；
+# 不按版本前缀删除空目录、prepared 或 complete 记录。
 
 for unit in "${UNITS[@]}"; do
     marker="$STATE/$unit.start-blocked"

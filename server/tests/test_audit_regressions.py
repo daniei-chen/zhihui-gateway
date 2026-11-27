@@ -33,8 +33,9 @@ class BackupStatusPublicationTests(unittest.TestCase):
                       'password':'private fixture', 'offsite':{'verified_remote':True,'remote_secret':'fixture'}}
             backupstatus.publish_verified_status(result,target)
             data = json.loads(target.read_text())
-            self.assertEqual(set(data),{'schema','created_at','bytes','restore_check','offsite'})
-            self.assertIs(data['offsite'],True)
+            self.assertEqual(set(data),{'schema','created_at','bytes','restore_check','offsite',
+                                       'archive_sha256','offsite_readback','offsite_restore_verified'})
+            self.assertIs(data['offsite'],False, 'legacy push-only evidence cannot prove readback')
             if os.name == 'posix':
                 self.assertEqual(target.stat().st_mode & 0o777,0o644)
             self.assertNotIn('fixture',target.read_text())

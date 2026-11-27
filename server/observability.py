@@ -587,6 +587,10 @@ def admission_snapshot(*, probe=False) -> dict | None:
         'key_slots': len(_key_slots),
         'queue_timeouts': int(getattr(fair, 'timeouts', 0)),
         'queue_overflows': int(getattr(fair, 'overflows', 0)),
+        'lifetime_active': int(getattr(inst, 'lifetime_active', 0)),
+        'lifetime_maximum': int(getattr(inst, 'lifetime_maximum', 0)),
+        'lifetime_rejections': int(getattr(inst, 'lifetime_rejections', 0)),
+        'control_active': int(getattr(inst, 'control_active', 0)),
     }
     if getattr(inst, 'shared', None) is not None:
         try:
@@ -1142,6 +1146,10 @@ def _env_int(name, default):
 
 class RequestAuditMiddleware:
     """Pure ASGI wrapper; mutable context survives streaming tasks and is reset per request."""
+    CONTROL_PATHS = frozenset(('/healthz', '/readyz', '/api/healthz', '/api/readyz',
+                              '/api/readyz/detail', '/api/system/drain', '/metrics'))
+    PUBLIC_PROBES = frozenset(('/healthz', '/readyz', '/api/healthz', '/api/readyz'))
+
     def __init__(self, app, shared=None):
         self.app = app
         from .fairadmission import FairGate, wait_seconds
@@ -1161,19 +1169,18 @@ class RequestAuditMiddleware:
         self.capacity_rejections = 0
         self.maximum = _env_int('WB_GATEWAY_MAX_CONCURRENCY', 8)
         self.large_maximum = _env_int('WB_GATEWAY_LARGE_MAX_CONCURRENCY', 2)
-        # Retained raw input plus serialized output stay reserved through response
-        # completion. JSON objects/encoder copies still need process memory headroom.
+        # Bound whole request owners, including rejected/administrative requests
+        # waiting to persist. Limiting executor submissions alone would move an
+        # unbounded queue into awaiting coroutines. A separate small control lane
+        # keeps probes/drain reachable during a slow writer without bypassing auth.
+        self.lifetime_maximum = max(16, self.maximum * 2 + self.fair_gate.maximum)
+        self.lifetime_active = self.control_active = self.lifetime_rejections = 0
+        # Raw workspaces, decoded JSON graphs and output stay charged until the
+        # complete response and its owned persistence have finished.
         self.maximum_body_bytes = _env_int('WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES', 64 * 1024**2)
-        # 一个字节的请求体在内存里的实际倍率。
-        #:
-        #: 同一份**输入** body 至少同时存在：中间件缓存的整段（它被重放闭包引用，
-        #: 要陪跑到整条流式响应结束）、读取阶段的第二份、`json.loads` 出来的对象图。
-        #: 所以输入体按倍率记账，`WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES` 的含义是
-        #: **物理内存预算**。
-        #:
-        #: **输出不乘这个倍率。** 输出是逐步增长的字节缓冲，没有对象图开销；而且
-        #: 它的预留是「承诺上限」而不是「已分配」—— 一次 32 MiB 的承诺乘三倍就是
-        #: 96 MiB，直接把并发从二十几个压到三个（v1.2.43 的回归，17 次 503）。
+        # The input factor covers retained raw bytes and copying/encoding work.
+        # JSON graph bounds are independent. Output reserves its actual buffered
+        # bytes and parsed graph; do not multiply a token-based promise by this.
         self.body_physical_factor = max(1, _env_int('WB_GATEWAY_BODY_PHYSICAL_FACTOR', 3))
         self.minimum_body_bytes = min(self.maximum_body_bytes,
             _env_int('WB_GATEWAY_MIN_BODY_RESERVATION_BYTES', 64 * 1024))
@@ -1194,13 +1201,61 @@ class RequestAuditMiddleware:
               % (self.maximum, self.large_maximum), file=sys.stderr, flush=True)
 
     async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            return await self._call(scope, receive, send)
+        from . import config
+        path = scope.get('path', '')
+        if config.BASE_PATH and (path == config.BASE_PATH or path.startswith(config.BASE_PATH + '/')):
+            path = path[len(config.BASE_PATH):] or '/'
+        control = path.rstrip('/') in self.CONTROL_PATHS
+        available = self.control_active < 4 if control else self.lifetime_active < self.lifetime_maximum
+        if not available:
+            # No business action, provider call or usage fact exists yet. Refuse
+            # before reading any body, and do not queue another audit write for
+            # the refusal itself. Fixed counters retain overload visibility.
+            from . import protocolerrors
+            self.lifetime_rejections += 1
+            self.capacity_rejections += 1
+            request_id = new_request_id()
+            client_id = client_request_id_from_headers(dict(scope.get('headers', [])))
+            headers = {'Retry-After': '1', 'Connection': 'close',
+                       'X-Request-ID': request_id, 'X-Workbuddy-Release': RELEASE_ID}
+            if client_id:
+                headers[CLIENT_REQUEST_ID_RESPONSE_HEADER.decode('ascii')] = client_id
+            response = protocolerrors.response(
+                {'error': {'type': 'server_error', 'code': 'gateway_capacity_exceeded',
+                           'message': '网关请求收尾容量已满，请稍后重试'}},
+                503, protocol=protocolerrors.protocol_for_path(path),
+                headers=headers, request_id=request_id)
+            return await response(scope, receive, send)
+        if control:
+            self.control_active += 1
+        else:
+            self.lifetime_active += 1
+        try:
+            return await self._call(scope, receive, send)
+        finally:
+            if control:
+                self.control_active -= 1
+            else:
+                self.lifetime_active -= 1
+
+    async def _call(self, scope, receive, send):
         global _outcome_writes
         if scope["type"] != "http":
             try:
                 return await self.app(scope, receive, send)
             finally:
                 if scope['type'] == 'lifespan' and self.shared is not None:
-                    self.shared.close()
+                    from . import drain
+                    from .services import persistence
+                    if (not self.lifetime_active and not self.control_active
+                            and not drain.total_in_flight()
+                            and not persistence.snapshot()['owned_calls']):
+                        self.shared.close()
+                    else:
+                        log.error('Shared admission kept open after incomplete shutdown; '
+                                  'request owners still exist')
         path = scope.get("path", "")
         from . import config
         if config.BASE_PATH and (path == config.BASE_PATH or path.startswith(config.BASE_PATH + '/')):
@@ -1219,6 +1274,8 @@ class RequestAuditMiddleware:
         scope_state["request_id"] = state.request_id
         scope_state["client_request_id"] = state.client_request_id
         tracked = path.startswith(("/v1/", "/v2/", "/api/", "/qoder/v1/", "/trae/v1/")) or path in ("/responses", "/messages")
+        if path.rstrip('/') in self.PUBLIC_PROBES and state.method in ('GET', 'HEAD'):
+            tracked = False
         inference=state.protocol!='http' and state.method=='POST'
         state.shared_admission = self.shared if inference else None
         from . import requestperf
@@ -1226,18 +1283,15 @@ class RequestAuditMiddleware:
             state.performance = requestperf.Trace(state.started)
         # ── 在途内存记账（两个独立量，语义不同，绝不混算） ──────────────
         #
-        # `reserved` 是**逻辑预留**（协调器看到的字节数，用于跨进程公平分配），
-        # `charged` 是**本地物理记账**（本进程实际占用的预算）。
+        # `reserved` 是**线缆字节的逻辑水位**（用于计算输入/输出增量），
+        # `charged` 是**保留内存预算**（本地与共享协调器使用同一数值）。
         #
-        # 两者必须分开，因为输入与输出的性质不同：
-        #   · 输入体会被解析成对象图，物理占用是体积的若干倍；
-        #   · 输出缓冲是逐步增长的字节，没有对象图，且它的预留是「承诺上限」而非
-        #     「已分配」—— 把承诺也乘倍率，一次 32 MiB 的承诺就变成 96 MiB，
-        #     并发被从二十几个压到三个（v1.2.43 的真实回归）。
+        # 输入工作区使用原始字节倍率，JSON 对象图单独预留。
+        # 输出按实际缓冲/对象大小增长，不给 token 提示的承诺上限乘输入倍率。
         #
         # 释放时按 `charged` 归还，因此加减始终配对。
         admitted=False; large=False; received=0; reserved=0; charged=0
-        inbound_retained=0; wire_reserved=0; output_reserved=0
+        inbound_retained=0; wire_reserved=0; output_reserved=0; decoded_reserved=0
         reading_body=False
         per_request_limit=None
         if inference:
@@ -1260,7 +1314,7 @@ class RequestAuditMiddleware:
                     or declared > 1024*1024 and self.large >= self.large_maximum
                     or self.inflight_body_bytes + initial_charge > self.maximum_body_bytes):
                 return False
-            if not shared_reserve(initial_reservation, declared > 1024*1024):
+            if not shared_reserve(initial_charge, declared > 1024*1024):
                 return False
             self.active += 1
             admitted = True
@@ -1289,7 +1343,7 @@ class RequestAuditMiddleware:
             needs_large = size > 1024*1024 and not large
             if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                     or needs_large and self.large >= self.large_maximum
-                    or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
+                    or (extra > 0 or needs_large) and not shared_reserve(charged + extra_charge, large or needs_large)):
                 capacity_rejected()
                 raise CapacityError('aggregate transformed-body capacity exceeded')
             self.inflight_body_bytes += extra_charge
@@ -1304,17 +1358,29 @@ class RequestAuditMiddleware:
                 return
             needed=max(reserved,inbound_retained+wire_reserved+size)
             extra=needed-reserved
-            # **输出不乘物理倍率。** 它是逐步增长的字节缓冲，没有对象图开销；而且
-            # 这个预留是「承诺上限」而不是「已分配内存」—— 乘上去会让一个 32 MiB
-            # 的承诺占掉 96 MiB 预算，把并发压到个位数（v1.2.43 的回归）。
+            # Callers include actual decoded byte buffers and JSON graph bounds;
+            # the input copying factor is not applied to an output promise.
             if (self.inflight_body_bytes+extra>self.maximum_body_bytes
-                    or extra>0 and not shared_reserve(needed,large)):
+                    or extra>0 and not shared_reserve(charged + extra,large)):
                 capacity_rejected()
                 raise CapacityError('aggregate response-body capacity exceeded')
             self.inflight_body_bytes+=extra
             charged+=extra
             reserved,output_reserved=needed,size
         state.reserve_output_body=reserve_output_body
+        def reserve_decoded_body(size):
+            nonlocal charged, decoded_reserved
+            if not admitted or not inference or size <= decoded_reserved:
+                return
+            extra_charge = size - decoded_reserved
+            if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
+                    or not shared_reserve(charged + extra_charge, large)):
+                capacity_rejected()
+                raise CapacityError('aggregate decoded-object capacity exceeded')
+            self.inflight_body_bytes += extra_charge
+            charged += extra_charge
+            decoded_reserved = size
+        state.reserve_decoded_body = reserve_decoded_body
         def reserve_input(size):
             nonlocal received,large,reserved,charged
             received=size
@@ -1328,7 +1394,7 @@ class RequestAuditMiddleware:
                 # ASGI worker, including chunked or understated-length requests.
                 if (self.inflight_body_bytes + extra_charge > self.maximum_body_bytes
                         or needs_large and self.large >= self.large_maximum
-                        or (extra > 0 or needs_large) and not shared_reserve(needed, large or needs_large)):
+                        or (extra > 0 or needs_large) and not shared_reserve(charged + extra_charge, large or needs_large)):
                     capacity_rejected()
                     raise CapacityError('aggregate request-body capacity exceeded')
                 self.inflight_body_bytes += extra_charge
@@ -1359,8 +1425,9 @@ class RequestAuditMiddleware:
             await send(message)
         async def reject_capacity():
             capacity_rejected()
-            await reject_response(JSONResponse({'error':{'message':'网关处理容量已满，请稍后重试','type':'server_error','code':'gateway_capacity_exceeded'}},
-                                               status_code=503, headers={'Retry-After':'1'}))
+            await reject_response(gateway._oai_error(
+                '网关处理容量已满，请稍后重试', 503, 'server_error',
+                'gateway_capacity_exceeded', retry_after=1))
         async def acquire_capacity():
             with requestperf.measure('admission_wait'):
                 if self.shared is None:
@@ -1390,15 +1457,9 @@ class RequestAuditMiddleware:
                     except Exception:
                         log.warning('shared admission queue cleanup deferred')
         async def reject_response(response):
-            if protocol == 'anthropic':
-                payload=json.loads(response.body)
-                error=payload.get('error') or {}
-                if error.get('type')=='server_error':
-                    error['type']='api_error'
-                response=JSONResponse({'type':'error','error':error,'request_id':state.request_id},
-                    status_code=response.status_code,
-                    headers={key:value for key,value in response.headers.items()
-                             if key not in ('content-length','content-type')})
+            from . import protocolerrors
+            response = protocolerrors.adapt(response, protocol=protocol,
+                                            request_id=state.request_id)
             await response(scope,receive,send_audited)
         try:
             auth_error = None
@@ -1524,92 +1585,99 @@ class RequestAuditMiddleware:
                         rules=state.compatibility_rules)
                 except Exception:
                     log.warning('bounded request metrics unavailable')
-            try:
-                if tracked and _record_outcome(path, state.http_status or 500):
-                    from . import db
-                    status = state.http_status or 500
-                    terminal = state.terminal_state or ("rejected" if 400 <= status < 500 else
-                               "application_error" if status >= 500 else "completed")
-                    # U21：稳定错误码。上游业务码（stream 路径在 set_stream_state、
-                    # 非流式在 gateway 里标好）优先，其次按终态/阶段/状态码推导。
-                    error_code, error_source = classify_error(
-                        state, terminal_state=terminal, http_status=status)
-                    if ensure_outcome_schema():
-                        db.execute(
-                            "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
-                            "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id, "
-                            "error_code, error_source, key_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
-                             state.method, state.protocol, status, terminal, state.error_stage,
-                             int((time.monotonic()-state.started)*1000), RELEASE_ID,
-                             error_code, error_source,
-                             # 0.1.0 / O-1：补 key_id 以便把前置拒绝（如
-                             # portal_wallet_pending 429）归因到具体密钥/用户。
-                             # 此前只能看到「有 1,086 次拒绝」却查不出是谁被挡。
-                             getattr(state, 'key_id', None)))
-                    else:
-                        # 补列失败（只读库/并发竞态）：仍然落轨迹，只是没有稳定码。
-                        db.execute(
-                            "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
-                            "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                            (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
-                             state.method, state.protocol, status, terminal, state.error_stage,
-                             int((time.monotonic()-state.started)*1000), RELEASE_ID))
-                    if path.startswith('/api/'):
-                        # B-003 修复（2026-10-27 审计 S1）：原条件是
-                        #   method not in ('GET','HEAD','OPTIONS') or status >= 400
-                        # 于是任何匿名 GET 只要不是 2xx 就落一条 admin_events，
-                        # 而这张表有禁删触发器 —— 扫描器与未登录探针把审计链变成了
-                        # 噪声日志（24h 内 645/892 条是匿名 4xx，历史累计 19,558 行
-                        # 匿名 /api/me 401），且永久增长。
-                        # 只保留四类有追溯价值的：
-                        #   1) 有身份的写操作或失败请求
-                        #   2) 匿名 + 写方法 + **已知端点** 上被 401/403（真实越权尝试）
-                        #   3) 任何 5xx（服务端错误与身份无关）
-                        #   4) 有身份但路由未匹配（打错的路径也要能追）
-                        # 普通成功 GET/HEAD/OPTIONS 轮询不追加永久哈希链，避免
-                        # 身份恢复后把面板刷新变成同步写放大。敏感读取仍由端点
-                        # 显式 security.audit 留证；所有请求仍保留 request_outcomes。
-                        # 匿名 GET 4xx 与匿名未匹配探针不再入链。
-                        route = scope.get('route')
-                        matched = route is not None
-                        actor_obj = scope.get('state', {}).get('audit_actor') or {}
-                        actor_name = auditidentity.actor_name(actor_obj)
-                        has_identity = bool(actor_obj) and actor_name != 'anonymous'
-                        is_write = state.method not in ('GET', 'HEAD', 'OPTIONS')
-                        if ((has_identity and (is_write or status >= 400 or not matched))
-                                or (is_write and status in (401, 403) and matched)
-                                or status >= 500):
-                            from . import ledger
-                            action = state.method + ' ' + (getattr(route, 'path', '/api/unmatched') if matched else '/api/unmatched')
-                            ledger.admin(actor_name, action,
-                                         outcome='denied' if status in (401,403) else 'failed' if status >= 400 else 'completed',
-                                         status=status, request_id=state.request_id)
-                    _outcome_writes+=1
-                    if _outcome_writes>=2000:
-                        _outcome_writes=0
-                        from . import archiveworker
-                        archiveworker.notify()
-            except Exception:
-                log.exception("request outcome persistence failed request_id=%s", state.request_id)
-            finally:
-                from . import budget
+            def persist_completion():
+                global _outcome_writes
+                from . import db
                 try:
-                    with requestperf.measure('finalize'):
-                        budget.finish(state)
-                        if state.budget_reserved and not getattr(state, 'portal_cleanup_unconfirmed', False):
-                            row = db.query_one('SELECT key_id,owner FROM budget_reservations WHERE request_id=?', (state.request_id,))
-                            if row:
-                                db.execute('INSERT OR IGNORE INTO request_lifetime_ends_v2 VALUES(?,?,?,?)',
-                                           (state.request_id, row['key_id'], row['owner'], int(time.time())))
+                    if tracked and _record_outcome(path, state.http_status or 500):
+                        status = state.http_status or 500
+                        terminal = state.terminal_state or ("rejected" if 400 <= status < 500 else
+                                   "application_error" if status >= 500 else "completed")
+                        # U21：稳定错误码。上游业务码（stream 路径在 set_stream_state、
+                        # 非流式在 gateway 里标好）优先，其次按终态/阶段/状态码推导。
+                        error_code, error_source = classify_error(
+                            state, terminal_state=terminal, http_status=status)
+                        if ensure_outcome_schema():
+                            db.execute(
+                                "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
+                                "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id, "
+                                "error_code, error_source, key_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
+                                 state.method, state.protocol, status, terminal, state.error_stage,
+                                 int((time.monotonic()-state.started)*1000), RELEASE_ID,
+                                 error_code, error_source,
+                                 # 0.1.0 / O-1：补 key_id 以便把前置拒绝（如
+                                 # portal_wallet_pending 429）归因到具体密钥/用户。
+                                 # 此前只能看到「有 1,086 次拒绝」却查不出是谁被挡。
+                                 getattr(state, 'key_id', None)))
+                        else:
+                            # 补列失败（只读库/并发竞态）：仍然落轨迹，只是没有稳定码。
+                            db.execute(
+                                "INSERT OR IGNORE INTO request_outcomes(request_id, client_request_id, ts, endpoint, "
+                                "method, protocol, http_status, terminal_state, error_stage, latency_ms, release_id) "
+                                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                (state.request_id, state.client_request_id, int(time.time()), state.endpoint,
+                                 state.method, state.protocol, status, terminal, state.error_stage,
+                                 int((time.monotonic()-state.started)*1000), RELEASE_ID))
+                        if path.startswith('/api/'):
+                            # B-003 修复（2026-10-27 审计 S1）：原条件是
+                            #   method not in ('GET','HEAD','OPTIONS') or status >= 400
+                            # 于是任何匿名 GET 只要不是 2xx 就落一条 admin_events，
+                            # 而这张表有禁删触发器 —— 扫描器与未登录探针把审计链变成了
+                            # 噪声日志（24h 内 645/892 条是匿名 4xx，历史累计 19,558 行
+                            # 匿名 /api/me 401），且永久增长。
+                            # 只保留四类有追溯价值的：
+                            #   1) 有身份的写操作或失败请求
+                            #   2) 匿名 + 写方法 + **已知端点** 上被 401/403（真实越权尝试）
+                            #   3) 任何 5xx（服务端错误与身份无关）
+                            #   4) 有身份但路由未匹配（打错的路径也要能追）
+                            # 普通成功 GET/HEAD/OPTIONS 轮询不追加永久哈希链，避免
+                            # 身份恢复后把面板刷新变成同步写放大。敏感读取仍由端点
+                            # 显式 security.audit 留证；所有请求仍保留 request_outcomes。
+                            # 匿名 GET 4xx 与匿名未匹配探针不再入链。
+                            route = scope.get('route')
+                            matched = route is not None
+                            actor_obj = scope.get('state', {}).get('audit_actor') or {}
+                            actor_name = auditidentity.actor_name(actor_obj)
+                            has_identity = bool(actor_obj) and actor_name != 'anonymous'
+                            is_write = state.method not in ('GET', 'HEAD', 'OPTIONS')
+                            if ((has_identity and (is_write or status >= 400 or not matched))
+                                    or (is_write and status in (401, 403) and matched)
+                                    or status >= 500):
+                                from . import ledger
+                                action = state.method + ' ' + (getattr(route, 'path', '/api/unmatched') if matched else '/api/unmatched')
+                                ledger.admin(actor_name, action,
+                                             outcome='denied' if status in (401,403) else 'failed' if status >= 400 else 'completed',
+                                             status=status, request_id=state.request_id)
+                        _outcome_writes+=1
+                        if _outcome_writes>=2000:
+                            _outcome_writes=0
+                            from . import archiveworker
+                            archiveworker.notify()
                 except Exception:
-                    log.exception("budget finalization failed request_id=%s",state.request_id)
+                    log.exception("request outcome persistence failed request_id=%s", state.request_id)
+                finally:
+                    from . import budget
+                    try:
+                        with requestperf.measure('finalize'):
+                            budget.finish(state)
+                            if state.budget_reserved and not getattr(state, 'portal_cleanup_unconfirmed', False):
+                                row = db.query_one('SELECT key_id,owner FROM budget_reservations WHERE request_id=?', (state.request_id,))
+                                if row:
+                                    db.execute('INSERT OR IGNORE INTO request_lifetime_ends_v2 VALUES(?,?,?,?)',
+                                               (state.request_id, row['key_id'], row['owner'], int(time.time())))
+                    except Exception:
+                        log.exception("budget finalization failed request_id=%s",state.request_id)
+            try:
+                from .services import persistence
+                if tracked or state.budget_reserved or getattr(state, 'portal_owner', None):
+                    await persistence.run(persist_completion)
+            finally:
                 try:
                     # This telemetry is independent of billing and never contains bodies.
-                    from .services.asyncwork import joined_thread
+                    from .services import persistence
                     if admitted:
-                        await joined_thread(requestperf.record, state)
+                        await persistence.run(requestperf.record, state)
                 except Exception:
                     log.warning('request performance persistence unavailable')
                 finally:
@@ -1629,5 +1697,6 @@ class RequestAuditMiddleware:
                     self.fair_gate.notify()
                     state.reserve_wire_body = None
                     state.reserve_output_body = None
+                    state.reserve_decoded_body = None
                     current.reset(token)
 

@@ -305,7 +305,7 @@ class Trae2Adapter(BaseAdapter):
         r = await self._cmd("settings_get", required=False)
         return {"ok": isinstance(r, dict) and r.get("data") is not None}
 
-    async def overview(self) -> Dict[str, Any]:
+    async def _account_rows(self) -> List[Dict[str, Any]]:
         """qtg 的 `map_trae_account()` 期望 `{"accounts": [...]}`；
         aiwork 的 `accounts_list` 字段名与它**完全同源**
         （user_id / remaining_credits / total_credits / credits_expire_at /
@@ -358,16 +358,16 @@ class Trae2Adapter(BaseAdapter):
                     item["disabled"] = uid not in allowed
                 merged.append(item)
             rows = merged
-        return {"accounts": rows, "checkin": self._checkin_rows()}
+        return rows
+
+    async def overview(self) -> Dict[str, Any]:
+        return {"accounts": await self._account_rows(), "checkin": self._checkin_rows()}
 
     async def diagnostic_pool(self) -> Dict[str, Any]:
         """诊断视图。必须与 `overview()` 用**同一份** disabled 判定，
         否则账号页说「已停用」而诊断说「ready」，两处打架。
-        这里直接复用 overview 的合并逻辑。"""
-        value = await self.overview()
-        rows = value.get("accounts")
-        if not isinstance(rows, list):
-            raise ValueError("invalid_trae_pool_contract")
+        共用账号合并逻辑，诊断不读取无关签到历史。"""
+        rows = await self._account_rows()
         return {"accounts": rows, "scope": "engine_account_list"}
 
     async def usage(self, days: int = 14) -> Dict[str, Any]:

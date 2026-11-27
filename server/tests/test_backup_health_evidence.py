@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from server import operational
+from server import operational, offsitebackup
 
 
 class BackupHealthEvidenceTest(unittest.TestCase):
@@ -28,7 +28,11 @@ class BackupHealthEvidenceTest(unittest.TestCase):
         self.alerts.start();self.addCleanup(self.alerts.stop)
 
     def write(self, **updates):
-        self.path.write_text(json.dumps({'restore_check':'ok','bytes':4096,'offsite':True,**updates}))
+        self.path.write_text(json.dumps({'schema':2,'created_at':int(self.now),
+            'restore_check':'ok','bytes':4096,'offsite':True,'archive_sha256':'a'*64,
+            'offsite_readback':{'method':offsitebackup.READBACK_METHOD,'verified_at':int(self.now),
+                'commit':'b'*40,'cipher_sha256':'c'*64,'cipher_bytes':4096,
+                'source_archive_sha256':'a'*64},**updates}))
         os.utime(self.path,(self.now,self.now))
 
     def test_missing_report_is_not_healthy(self):
@@ -62,7 +66,7 @@ class BackupHealthEvidenceTest(unittest.TestCase):
         self.assertNotIn('backup_stale',operational.alerts)
 
     def test_stale_oversize_and_future_report_are_observable(self):
-        self.write(bytes=46*1024**2)
+        self.write(bytes=int(offsitebackup.MAX_CIPHER_BYTES * 0.95))
         operational.evaluate_backup_health(self.now+27*3600)
         self.assertTrue({'backup_stale','backup_size'} <= operational.alerts.keys())
         operational.evaluate_backup_health(self.now-3600)

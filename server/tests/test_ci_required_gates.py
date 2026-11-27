@@ -15,16 +15,19 @@ from tools import ci_regression
 
 
 class RequiredGateTests(unittest.TestCase):
-    def run_gate(self, flags, frontend, static):
+    def run_gate(self, flags, frontend, static, historical=None, modules=()):
         cwd = Path.cwd()
         backend = unittest.TestResult()
+        backend.testsRun = 1
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             try:
                 with (mock.patch.object(ci_regression, 'ROOT', root),
-                      mock.patch.object(ci_regression, 'MODULES', ()),
+                      mock.patch.object(ci_regression, 'MODULES', modules),
                       mock.patch.object(ci_regression, 'frontend_suite', return_value=frontend),
                       mock.patch.object(ci_regression, 'static_suite', return_value=static),
+                      mock.patch.object(ci_regression, 'pytest_suite',
+                                        return_value={'ok': True, 'required': True} if historical is None else historical),
                       mock.patch.object(unittest, 'TextTestRunner') as runner,
                       mock.patch.object(sys, 'path', list(sys.path)),
                       mock.patch.dict(os.environ, {'ZH_CI_NET_ISOLATED': '0'}),
@@ -71,6 +74,19 @@ class RequiredGateTests(unittest.TestCase):
             ['--require-frontend', '--require-static'], {'ok': True}, {'ok': True})
         self.assertEqual(status, 0)
         self.assertTrue(summary['static']['required'])
+
+    def test_historical_pytest_is_required_even_for_local_runs(self):
+        for result in ({'ok': False, 'required': True}, {'skipped': True}, {}):
+            with self.subTest(result=result):
+                status, summary = self.run_gate([], {'ok': True}, {'ok': True}, result)
+                self.assertEqual(status, 1)
+                self.assertEqual(summary['historical_pytest'], result)
+
+    def test_a_named_module_with_no_unittest_cases_fails_discovery(self):
+        name = 'server.tests.synthetic_provider'
+        status, summary = self.run_gate([], {'ok': True}, {'ok': True}, modules=(name,))
+        self.assertEqual(status, 1)
+        self.assertEqual(summary['empty_modules'], [name])
 
 
 if __name__ == '__main__':

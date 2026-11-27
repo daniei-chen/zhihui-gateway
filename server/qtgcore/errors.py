@@ -1,6 +1,6 @@
 """统一错误模型。
 
-对外错误体固定为 OpenAI 风格，便于调用方复用已有客户端代码：
+默认错误体为 OpenAI 风格；Messages 入口保留 Anthropic 原生外壳：
 
     {"error": {"code": "...", "message": "...", "type": "..."}}
 
@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from .. import protocolerrors
 
 
 class QtgError(Exception):
@@ -164,19 +165,20 @@ class RateLimited(QtgError):
 
 def install_handlers(app: FastAPI) -> None:
     @app.exception_handler(QtgError)
-    async def _qtg(_: Request, exc: QtgError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content=exc.to_body())
+    async def _qtg(request: Request, exc: QtgError) -> JSONResponse:
+        return protocolerrors.response(exc.to_body(), exc.status_code,
+            protocol=protocolerrors.protocol_for_path(request.url.path),
+            request_id=getattr(request.state, 'request_id', None))
 
     @app.exception_handler(RequestValidationError)
-    async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         # Pydantic validator contexts may contain exception objects, which are
         # not JSON serializable. Keep the public location/type/message contract
         # without echoing credentials in raw input or private validator context.
         details = [{name: item[name] for name in ('type', 'loc', 'msg') if name in item}
                    for item in exc.errors()[:8]]
-        return JSONResponse(
-            status_code=422,
-            content={
+        return protocolerrors.response(
+            {
                 # `detail` 保持 FastAPI 默认形状（校验错误列表）。控制台与既有
                 # 测试按这个字段取值，只给 `error` 会让它们读不到。
                 "detail": details,
@@ -186,23 +188,27 @@ def install_handlers(app: FastAPI) -> None:
                     "type": "invalid_request_error",
                     "details": details,
                 },
-            },
+            }, 422,
+            protocol=protocolerrors.protocol_for_path(request.url.path),
+            request_id=getattr(request.state, 'request_id', None),
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def _http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = {401: "unauthorized", 403: "forbidden", 404: "not_found"}.get(
             exc.status_code, "http_error"
         )
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
+        protocol = protocolerrors.protocol_for_path(request.url.path)
+        return protocolerrors.response(
+            {
                 # `detail` 保持 FastAPI 默认形状（就是 exc.detail 本身）。
                 # 这条是三个处理器里影响面最大的一个：它覆盖了所有
                 # `HTTPException` 的默认响应，包括鉴权失败、404、以及各处手动
                 # 抛出的带文案的拒绝。只给 `error` 会让 `{"detail": "未登录"}`
                 # 变成 `{"error": {...}}`，前端与测试按 `detail` 取值全部落空。
                 "detail": exc.detail,
-                "error": {"code": code, "message": str(exc.detail), "type": "api_error"},
-            },
+                "error": {"code": code, "message": str(exc.detail),
+                          "type": protocolerrors.error_type(exc.status_code, protocol)},
+            }, exc.status_code, protocol=protocol, headers=exc.headers,
+            request_id=getattr(request.state, 'request_id', None),
         )

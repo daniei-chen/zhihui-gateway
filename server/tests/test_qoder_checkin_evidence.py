@@ -140,7 +140,8 @@ class QoderCheckinEvidenceTests(unittest.IsolatedAsyncioTestCase):
             state = {'day': yesterday, 'targets': {'qoder': 0}, 'done': {},
                      'attempts': {}, 'last': {}, 'uncertain': {'qoder': 'old-attempt'}}
             self.assertTrue(checkin_scheduler._save(state, path))
-            self.assertEqual(checkin_scheduler._ensure_state(path)['uncertain'], {'qoder': 'old-attempt'})
+            with patch.object(checkin_scheduler, 'DISABLED', frozenset()):
+                self.assertEqual(checkin_scheduler._ensure_state(path)['uncertain'], {'qoder': 'old-attempt'})
             for raw in ('{broken', '[]', '{"day":"2026-01-01"}'):
                 path.write_text(raw, encoding='utf-8')
                 with self.assertRaisesRegex(RuntimeError, 'reconciliation'):
@@ -298,12 +299,20 @@ class QoderCheckinEvidenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_trae_submission_is_pending_and_never_retried(self):
         from server.qtgcore.adapters.trae2 import Trae2Adapter
         adapter = Trae2Adapter.__new__(Trae2Adapter)
-        adapter._json = AsyncMock(return_value={'ok': True})
+        async def response(method, path, **kwargs):
+            if path.endswith('accounts_list'):
+                return {'ok': True, 'data': [{'user_id': 'pending-account', 'checked_today': False}]}
+            return {'ok': True}
+        adapter._json = AsyncMock(side_effect=response)
         adapter._today_checkin = lambda: [{'uid': 'old', 'status': 'success'}]
         with patch('server.qtgcore.adapters.trae2.asyncio.sleep', new=AsyncMock()):
             result = await adapter.checkin()
-        adapter._json.assert_awaited_once_with('POST', '/api/cmd/checkin_start',
-            json_body={'scope': 'all'}, required=True, retry=False)
+        submissions = [call for call in adapter._json.await_args_list
+                       if call.args[1] == '/api/cmd/checkin_start']
+        self.assertEqual(len(submissions), 1, 'effectful submission must never be replayed')
+        self.assertEqual(submissions[0].kwargs,
+                         {'json_body': {'scope': 'all'}, 'required': True, 'retry': False})
+        self.assertGreater(adapter._json.await_count, 1, 'confirmation must read current state')
         self.assertEqual(classify_result(result['results'][0]), 'pending')
 
     async def test_qoder_checkin_post_is_never_transparently_replayed(self):
@@ -446,7 +455,8 @@ class QoderCheckinEvidenceTests(unittest.IsolatedAsyncioTestCase):
         state['dispatch_attempts']['trae'] = 'c' * 32
         path = directory / 'random_checkin.json'
         self.assertTrue(checkin_scheduler._save(state, path))
-        advanced = checkin_scheduler._ensure_state(path)
+        with patch.object(checkin_scheduler, 'DISABLED', frozenset()):
+            advanced = checkin_scheduler._ensure_state(path)
         self.assertEqual(advanced['dispatch_attempts'], {'qoder': 'a' * 32})
         for reference in (True, None, 'short', 'A' * 32):
             state['dispatch_attempts']['qoder'] = reference

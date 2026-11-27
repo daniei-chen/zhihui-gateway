@@ -94,6 +94,7 @@ def _recover_primary_state():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.shutdown_drain = None
     # 在第一次 `to_thread` 之前替换默认执行器。CPython 在 2 vCPU 上把它定成
     # `min(32, cpu+4) = 6` 个线程，而推理主路径一个请求要占 6 次线程跳转 ——
     # 队列一积压，排在后面的实例心跳就会超时，租约失守后进程只能重启。
@@ -325,18 +326,18 @@ async def lifespan(app: FastAPI):
                 pass
             except Exception:
                 logger.exception('qtgcore 签到调度关闭异常')
-        if _qtg_rt is not None:
-            try:
-                await _qtg_rt.shutdown()
-            except Exception:
-                logger.exception('qtgcore shutdown failed')
         # A managed launcher/pre-stop controller marks drain BEFORE uvicorn
         # starts shutdown. Lifespan shutdown is only the final cleanup stage.
         _drain = await drain.wait_until_drained(config.DRAIN_TIMEOUT_SEC)
+        app.state.shutdown_drain = _drain
         if not _drain['drained']:
+            # No stopped/handoff claim is safe while request owners still exist.
+            # Keep their shared runtime, clients and lifetime locks intact until
+            # actual completion or process death; do not wait forever here.
+            drain.begin(shutdown=True, persist=False)
             logger.error('Shutdown reached cleanup with requests outstanding: %s',
                          _drain['remaining'])
-        if instance_runtime is not None:
+        if _drain['drained'] and instance_runtime is not None:
             await instance_runtime.close()
         heartbeat_task.cancel()
         if monitor_task is not None:
@@ -351,7 +352,11 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
         from . import budgetowner
-        budgetowner.close()
+        if not budgetowner.close_after_drain(_drain['drained']):
+            from .services import persistence
+            logger.error('Shutdown drain incomplete; retaining budget owner lock until '
+                         'process exit. persistence=%s remaining=%s',
+                         persistence.snapshot(), _drain['remaining'])
         tasklog.stop_collector()
         taskrun.stop_scheduler()
         renew.stop_scheduler()
@@ -362,9 +367,15 @@ async def lifespan(app: FastAPI):
         accountlog.stop_collector()
         await asyncio.to_thread(archiveworker.stop)
         pgsync.stop_scheduler()
+        if _drain['drained'] and _qtg_rt is not None:
+            try:
+                await _qtg_rt.shutdown()
+            except Exception:
+                logger.exception('qtgcore shutdown failed')
         # 出站客户端是共享的（issue #144：Windows 上每次新建要 ~1 秒），
         # 退出时统一关掉，别把连接池与 SSL 上下文丢在原地。
-        await config.close_clients()
+        if _drain['drained']:
+            await config.close_clients()
         # 在清理末尾装一个**可用的**新执行器，让收尾阶段仍有地方提交阻塞工作。
         #
         # ## 为什么必须这么做
@@ -642,7 +653,12 @@ def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dic
     不是读缓存 —— 放在探测探针里会把健康检查变成写压力。
     """
     from . import operational
-    return operational.readiness()
+    from .services import persistence
+    result = operational.readiness()
+    result['persistence'] = persistence.snapshot()
+    result['drain_in_flight'] = drain.in_flight()
+    result['shutdown_drain'] = getattr(app.state, 'shutdown_drain', None)
+    return result
 
 
 app.include_router(gateway.router)
@@ -736,7 +752,16 @@ async def _qtg_platform_route(request, call_next):
     # manager 侧没有 `/api/platforms` 的 handler（已 grep 确认），所以放行它
     # 不会抢走任何既有实现，只是把一个原本 404 的端点接通。
     _is_platform_matrix = path.rstrip("/") == "/api/platforms"
-    if (platform in ("doubaowork", "trae") or _is_platform_matrix) and _qtg_should_route(path):
+    # A retired provider's retained key usage is still authoritative local
+    # evidence. Route only this read endpoint; do not restore its account,
+    # upstream-management or inference control plane.
+    _is_historical_key_usage = (
+        platform == "qoder"
+        and request.method in ("GET", "HEAD")
+        and path.rstrip("/") == "/api/stats/by-key"
+    )
+    if (platform in ("doubaowork", "trae") or _is_platform_matrix
+            or _is_historical_key_usage) and _qtg_should_route(path):
         try:
             # Identity resolution may wait on a file/SQLite lock. Keep that
             # blocking work off the loop that also delivers inference streams.
@@ -1441,7 +1466,8 @@ def prometheus_metrics(request: Request):
         _m('workbuddy_ttft_samples', 'gauge',
            'Requests with a first-token measurement in the last hour. Below 20 the '
            'quantiles are withheld on purpose: a p99 over that few samples is just '
-           'the largest of them, not a tail.', _ttft['samples'])
+           'the largest of them, not a tail. The series is absent when the '
+           'measurement query is unavailable.', _ttft['samples'])
         if _ttft['p50'] is not None:
             if not any(x.startswith('# HELP workbuddy_ttft_ms ') for x in lines):
                 lines.append('# HELP workbuddy_ttft_ms Time to first token in milliseconds '
@@ -1461,7 +1487,8 @@ def prometheus_metrics(request: Request):
         _m('workbuddy_context_samples', 'gauge',
            'Requests with a prompt-token measurement in the last hour. Below 20 '
            'the quantiles are withheld, for the same reason as the first-token '
-           'metric: a p99 over a handful of samples is just the largest of them.',
+           'metric: a p99 over a handful of samples is just the largest of them. '
+           'The series is absent when the measurement query is unavailable.',
            _ctx['samples'])
         if _ctx['p50'] is not None:
             if not any(x.startswith('# HELP workbuddy_context_tokens ') for x in lines):

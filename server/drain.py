@@ -199,11 +199,13 @@ class DrainMiddleware:
             await self.app(scope, receive, send)
             return
         if is_draining():
-            from starlette.responses import JSONResponse
-            response = JSONResponse(
-                {'error': {'type': 'service_unavailable', 'code': 'gateway_draining',
+            from . import protocolerrors
+            response = protocolerrors.response(
+                {'error': {'code': 'gateway_draining',
                            'message': 'Gateway is draining for maintenance; retry later.'}},
-                status_code=503, headers={'Retry-After': '1', 'Connection': 'close'})
+                503, protocol=protocolerrors.protocol_for_path(scope.get('path', '')),
+                request_id=scope.get('state', {}).get('request_id'),
+                headers={'Retry-After': '1', 'Connection': 'close'})
             await response(scope, receive, send)
             return
         headers = {k.decode('latin-1'): v.decode('latin-1') for k, v in scope.get('headers', [])}

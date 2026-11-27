@@ -107,7 +107,11 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         from server import wirebody
         wire = wirebody.encode(body, 100)
         sizes = []
-        self.state.reserve_wire_body = lambda size: sizes.append(size)
+        def exact_capacity(size):
+            if size > len(wire):
+                raise observability.CapacityError('only the complete wire body fits')
+            sizes.append(size)
+        self.state.reserve_wire_body = exact_capacity
         with self.patches():
             result = await gateway._prepare_forward_async({'id': 1}, body)
         self.assertEqual(result, wire)
