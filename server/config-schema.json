@@ -772,7 +772,7 @@
       "type": "absolute_path",
       "sensitive": false,
       "consumers": [
-        "manager/server/notify.py:57",
+        "manager/server/notify.py:94",
         "manual-reviewed-runtime-constraint:0"
       ],
       "default": "/opt/notify/config.json"

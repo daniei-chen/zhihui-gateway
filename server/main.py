@@ -288,6 +288,26 @@ async def lifespan(app: FastAPI):
             except Exception:
                 credit_watch_task = None
                 logger.exception('积分快照采集启动失败（不影响其它功能）')
+        # 告警投递通道的启动自检（DAN-41）。
+        #
+        # ## 为什么需要
+        #
+        # `notify.dispatch()` 在未配置时返回 `disabled`，旧实现在那一支直接返回，
+        # 于是**告警算出来就被丢弃**：不落盘、不发 HTTP、也不打日志。默认部署
+        # （没有 `/opt/notify/config.json`）下，`monitor` 每轮算出的每一条运行告警
+        # 都是这样消失的 —— 2026-11 的 P0-1「每日备份连续失败」是靠人工审计发现的，
+        # 不是告警发现的。那种场景里没人看日志，所以光有一条 warning 不够；
+        # 这里记日志是三层里的第一层，另外两层在 `notify.dispatch()`（本地 JSONL）
+        # 与 `/api/health/alerts` 的 `notify` 字段。
+        #
+        # 只记日志、不阻断启动：投递没配只是没人被叫醒，把它升级成启动失败会让
+        # 一次配置缺失变成一次宕机。
+        try:
+            from . import notify as _notify
+            _notify.log_startup_state()
+        except Exception:      # noqa: BLE001
+            logger.warning('alert delivery startup check failed', exc_info=True)
+
         await operational.initialize_readiness()
         monitor_task = asyncio.create_task(operational.monitor())
         yield
@@ -606,6 +626,16 @@ def health_alerts(request: Request):
 
     **不返回 detail**：`detail` 里可能带账号名、上游错误原文。巡检只需要知道
     「哪一项挂着、挂了多久」，排查时再按名字去日志里找原文。
+
+    ## `notify`：告警有没有出口（DAN-41）
+
+    这个端点原来只回答「哪一项挂着」。**告警挂着却没人被叫醒，看起来和正常一模
+    一样** —— 投递通道未配置时 `notify.dispatch()` 把每条告警丢弃，而巡检脚本读
+    到的仍是这份名单。2026-11 的 P0-1（每日备份连续失败）就是靠人工审计发现的。
+
+    所以快照里固定带上 `notify`：`configured` / `mode` 是投递通道状态，
+    `warning` 未配置时非空，`dropped` 是本进程启动以来被丢弃的告警名与次数。
+    `dropped.count > 0` 就意味着**这些告警此刻只有这一处能看见**。
     """
     # 用全站统一的来源解析，不要直接读 ASGI scope 的 client。
     #
@@ -624,7 +654,7 @@ def health_alerts(request: Request):
         loopback = False
     if not loopback:
         return JSONResponse({'error': 'loopback only'}, status_code=403)
-    from . import operational
+    from . import notify, operational
     now = int(time.time())
     active = [{'name': name, 'age_seconds': max(0, now - int(item.get('since') or now))}
               for name, item in sorted(operational.alerts.items())]
@@ -632,6 +662,7 @@ def health_alerts(request: Request):
         'service': 'zhihui-gateway',
         'count': len(active),
         'active': active,
+        'notify': notify.status(),
     }, headers={'Cache-Control': 'no-store'})
 
 

@@ -605,6 +605,10 @@ PYTEST_MODULES = (
     # 三条都先红后绿（修前 3 failed，修后 3 passed）—— 其中两条走真实 ASGI
     # 断连（上游发一帧就挂住，客户端在流中途挂断），不是手搓的假输入。
     "server.tests.test_dan23_disconnect_convergence",
+    # DAN-41：投递通道未配置时，告警不许静默消失。修前 9 failed（dispatch 直接返回，
+    # 不落盘、不打日志、健康端点也没有 notify 字段），修后 9 passed。
+    # 其中一条走真实调用点 `operational.transition()` → `notify.dispatch()`。
+    "server.tests.test_dan41_alert_delivery_visible",
 )
 
 

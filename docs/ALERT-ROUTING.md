@@ -13,6 +13,46 @@
 | **operational** | `server/operational.py` + `operational_alerts` 表 | 管理页面、`/health/alerts`（仅回环）、`healthcheck.sh` | **主动去看的人** |
 | **steward** | `server/steward_rules.py` + `steward_deliveries` 表 | **邮件**（半小时去重 + AI 研判 + 恢复通知） | **会被打扰的人** |
 
+### 1.1 operational 池子的投递出口：默认关闭，但不能静默
+
+`operational` 的告警除了页面和巡检，还有一个**可选**出口：`server/notify.py`。
+它默认是 `disabled`（不擅自外发），默认部署下**不会有人被叫醒**。
+
+`disabled` 不等于「什么都没发生」：告警已经被算出来了，只是送不出去。所以丢弃时
+必须留下痕迹，三层各一处，任一层都能看见：
+
+| 层 | 位置 |
+|---|---|
+| 本地 JSONL | `$WB_DATA_DIR/notify/undelivered.jsonl`（`.../data/notify/undelivered.jsonl`） |
+| 应用日志 | `workbuddy.notify` 的一条 WARNING，点名告警名 |
+| 健康端点 | `/api/health/alerts` 的 `notify` 字段（`configured` / `warning` / `dropped`） |
+
+`dropped.count > 0` 就意味着**这些告警此刻只有这一处能看见**。启动日志也会明确写
+「告警未配置，运行告警将被丢弃」。
+
+要真正投递，设置 `WB_NOTIFY_CONFIG`（默认 `/opt/notify/config.json`）指向一个**启用**的配置。
+最小可用形态是 `file` 模式 —— 只落本地 JSONL，不联网：
+
+```json
+{
+  "enabled": true,
+  "mode": "file",
+  "file": "/opt/notify/alerts.jsonl"
+}
+```
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/notify
+sudo tee /opt/notify/config.json >/dev/null <<'JSON'
+{"enabled": true, "mode": "file", "file": "/opt/notify/alerts.jsonl"}
+JSON
+# 不需要重启：每次 dispatch 都重新读配置
+# 验证：触发一条告警后 tail -f /opt/notify/alerts.jsonl
+```
+
+`http` 模式（POST 到 `url`）同样需要 `"enabled": true` 且 `mode` 为 `http`；
+`timeout_sec` 会被夹在 0.1–3 秒，投递失败只记 warning，不影响告警状态机。
+
 ## 二、怎么选
 
 ### 进 steward（发邮件）
