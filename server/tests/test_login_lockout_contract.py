@@ -103,6 +103,20 @@ class AccountLockContract(unittest.TestCase):
         response = self.attempt('203.0.113.50', PASSWORD)
         self.assertEqual(response.status_code, 429, response.text)
 
+    def test_snapshot_reports_locks_persisted_across_a_restart(self) -> None:
+        """重启后内存计数是空的，巡检不能因此报 0：SQLite 里的锁定仍在生效。"""
+        self.fill_account_lock()
+        # 模拟进程重启：内存清零、镜像表保留。
+        security._fail.clear()
+        security._user_fail.clear()
+        security._FAILS_LOADED = False
+        snapshot = security.login_lockout_snapshot()
+        self.assertEqual(snapshot['account_count'], 1, snapshot)
+        self.assertEqual(snapshot['accounts'][0]['account'], 'admin')
+        self.assertEqual(snapshot['accounts'][0]['fails'], security.MAX_FAILS)
+        # 撞库是轮换 IP，所以没有任何单个 IP 到阈值；锁定在账号维度上。
+        self.assertEqual(snapshot['locked_ips'], 0, snapshot)
+
     def test_lockout_is_observable(self) -> None:
         """看不见的撞库等于没防：触发锁定要留下账号与来源数。"""
         with self.assertLogs('workbuddy.security', level='WARNING') as logs:

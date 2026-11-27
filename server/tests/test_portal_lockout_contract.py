@@ -100,6 +100,17 @@ class PortalAccountLockContract(unittest.IsolatedAsyncioTestCase):
         response = await self.attempt('198.51.100.1', 'wrong-password')
         self.assertEqual(response.status_code, 429, response.text)
 
+    async def test_lock_event_counts_the_source_that_triggers_it(self) -> None:
+        """触发锁定的那一次请求也是来源之一：4 个 IP 之后再换 1 个，应报 2 个来源。"""
+        for _ in range(PORTAL_MAX_FAILS - 1):
+            await self.attempt('203.0.113.1', 'wrong-password')
+        with self.assertLogs('workbuddy.portal', level='WARNING') as logs:
+            response = await self.attempt('198.51.100.9', 'wrong-password')
+        self.assertEqual(response.status_code, 401, response.text)
+        events = [line for line in logs.output if 'portal_login_lockout' in line]
+        self.assertEqual(len(events), 1, logs.output)
+        self.assertIn('sources=2', events[0])
+
     async def test_correct_password_from_a_fresh_source_still_logs_in(self) -> None:
         """账号锁独立生效后，受害者仍能用自己的正确密码进门，并清掉锁。"""
         await self.fill_account_lock()

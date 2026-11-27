@@ -195,14 +195,16 @@ async def login(request: Request, body: dict = Body(...)):
             with store.transaction() as conn:
                 fresh = conn.execute('SELECT * FROM portal_users WHERE id=?', (user['id'],)).fetchone() if user else None
                 if not valid or not fresh or not fresh['enabled'] or fresh['sv'] != user['sv'] or fresh['pwd_hash'] != user['pwd_hash']:
+                    # 来源计数先落，再记日志：触发锁定的那一次请求也是来源之一，
+                    # 后记会让「被几个 IP 打过」少数一个。
+                    _portal_ip_record(ip)
+                    _portal_user_record(ip, username)
                     if fresh:
                         failures = fresh['failed_logins'] + 1
                         conn.execute('UPDATE portal_users SET failed_logins=?,blocked_until=? WHERE id=?',
                                      (failures, store.now() + _PORTAL_IP_WINDOW
                                       if failures >= _PORTAL_USER_MAX else 0, user['id']))
                         _portal_note_account_lockout(username, failures)
-                    _portal_ip_record(ip)
-                    _portal_user_record(ip, username)
                     rejected = True
                 else:
                     conn.execute('UPDATE portal_users SET failed_logins=0,blocked_until=0 WHERE id=?', (user['id'],))
