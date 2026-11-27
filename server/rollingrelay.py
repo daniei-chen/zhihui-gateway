@@ -66,13 +66,46 @@ async def json_response(send, status, code):
     await send({'type': 'http.response.body', 'body': body})
 
 
-def is_draining_response(response) -> bool:
+DRAIN_ERROR_CODE = 'gateway_draining'
+# 判据只读 503 的 JSON body：几百字节。超过这个长度就不是一个错误信封，不认。
+MAX_ERROR_BODY = 4096
+
+
+async def error_code(response) -> str | None:
+    """读出 503 的 JSON 错误码，并把 body 缓存下来供原样透传。
+
+    只有 503 走这里；成功应答/SSE 一个字节都不预读。读不出（非 JSON、超长、
+    传输错误）就返回 None —— 判据宁可判假，也不凭猜测重放一条 POST。
+    """
+    try:
+        await response.aread()
+    except httpx.HTTPError:
+        return None
+    if len(response.content) > MAX_ERROR_BODY:
+        return None
+    try:
+        error = json.loads(response.content).get('error')
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return None
+    return error.get('code') if isinstance(error, dict) else None
+
+
+async def is_draining_response(response) -> bool:
     """后端是不是只在「排空、没接单」。
 
-    判据要窄：503 且带 `Retry-After`。drain 中间件（`server/drain.py`）的应答固定
-    带这个头，容量拒绝和上游 503 都不带 —— 那两类重试只会放大故障。
+    判据要窄：503 + `Retry-After` + body 的 code 是 `gateway_draining`
+    （`server/drain.py` 的排空应答）。准入拒绝同样是「503 + Retry-After: 1」
+    （`server/observability.py:1222`），但 code 是 `gateway_capacity_exceeded`：
+    那条 POST 已经被明确拒绝，重放 6 次只会把过载放大 6 倍。上游 503 不带
+    Retry-After，也在判据之外。
+
+    用 body 的 code 而不是新加一个响应头：排空应答在旧版本后端里就已经是这个
+    code（基线 v0.1.22 就有），发版窗口里中继对着正在排空的旧实例也认得出；
+    新加的头只有新版本才有，恰好会漏掉换代那一次。
     """
-    return response.status_code == 503 and 'retry-after' in response.headers
+    if response.status_code != 503 or 'retry-after' not in response.headers:
+        return False
+    return await error_code(response) == DRAIN_ERROR_CODE
 
 
 class RouteError(RuntimeError):
@@ -166,8 +199,10 @@ class StreamingRelay:
         重试的两种情形都意味着「上游一个字节都没收到」：
 
         1. connect 阶段失败 —— 旧进程已停、新解释器还没开始 listen；
-        2. 503 且带 `Retry-After` —— 旧进程收到 SIGTERM 后进入排空，drain 中间件
-           对每一条新请求都回这个固定应答，它明确表示没有接单。
+        2. 503 且 `Retry-After` 且 body code 是 `gateway_draining` —— 旧进程收到
+           SIGTERM 后进入排空，drain 中间件对每一条新请求都回这个固定应答，它
+           明确表示没有接单。准入拒绝是「503 + Retry-After: 1」但不是排空，
+           见 `is_draining_response`。
 
         2026-11-26 08:59 实测：重启窗口里唯一落空的那条请求就是第 2 种。中继把它
         原样透传，客户端看到 503；而新实例在几秒后就已经能服务了。
@@ -182,7 +217,7 @@ class StreamingRelay:
             except (httpx.ConnectError, httpx.ConnectTimeout) as error:
                 last = error
             else:
-                if not is_draining_response(response):
+                if not await is_draining_response(response):
                     return response
                 # 排空应答里没有业务数据；关掉它再重试是安全的。
                 if draining is not None:
@@ -286,10 +321,24 @@ class StreamingRelay:
                         headers=headers, content=payload)
                 response = await self._send_with_startup_retry(build)
                 response_started = True
+                headers_out = end_to_end(response.headers.raw)
+                if response.is_stream_consumed:
+                    # is_draining_response 为了看 code 已经读过这条 503 的 body
+                    # （容量拒绝、以及重试用尽的排空应答都走这里）：原样补发。
+                    # 预读拿到的是解码后的字节，编码与长度声明要跟着改。
+                    headers_out = [(key, value) for key, value in headers_out
+                                   if key.lower() not in (b'content-encoding', b'content-length')]
+                    if response.content:
+                        headers_out.append((b'content-length', str(len(response.content)).encode()))
                 await send({'type': 'http.response.start', 'status': response.status_code,
-                            'headers': end_to_end(response.headers.raw)})
-                async for chunk in response.aiter_raw():
-                    await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
+                            'headers': headers_out})
+                if response.is_stream_consumed:
+                    if response.content:
+                        await send({'type': 'http.response.body', 'body': response.content,
+                                    'more_body': True})
+                else:
+                    async for chunk in response.aiter_raw():
+                        await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
                 await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
             except asyncio.CancelledError:
                 raise
