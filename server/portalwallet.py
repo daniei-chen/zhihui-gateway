@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sqlite3
+from decimal import Decimal
 
 from . import budgetowner, db, metering, observability, portalbilling, portalpolicy as policy, portalstore as store
 
@@ -24,6 +25,14 @@ RECEIPTS = '''CREATE TABLE IF NOT EXISTS portal_spend_receipts(
 )'''
 
 AUTO_CLOSE_ACTOR = 'system:client-cancel-v1'
+#: 回执里有可核实的供应商费用 → 按它扣用户。零结清会让「读到内容后主动断开」
+#: 变成免费消费：断连是调用方自己可制造的状态，而上游已经真实扣了费。
+AUTO_CHARGE_REASON = '客户端取消后按已提交回执中的供应商费用结算用户侧冻结'
+AUTO_CHARGE_EVIDENCE = (
+    '请求生命周期已结束、客户端终止状态为 client_cancelled，'
+    '且主库已提交的回执带有可核实的 supplier_units；按该费用扣减用户冻结，不做零结清'
+)
+#: 回执里没有供应商费用（上游没回 usage）→ 只能释放用户冻结，差额计入平台成本。
 AUTO_CLOSE_REASON = '客户端取消后自动释放冻结；供应商实际费用未知，平台承担差额'
 AUTO_CLOSE_EVIDENCE = (
     '请求生命周期已结束，且客户端终止状态为 client_cancelled；'
@@ -349,6 +358,14 @@ def auto_close_rejected(limit=100):
     unlike an upstream timeout it cannot have reached the provider. Only
     portal spends with a durable request end and terminal_state=rejected are
     eligible; everything else stays in the manual queue.
+
+    `terminal_state='rejected'` alone only says "the final status was 4xx", not
+    who rejected it: an upstream channel rejection (11128 etc.) is also a 400,
+    and it may already be billed. `budget.settle` distinguishes the two with
+    `error_stage != 'upstream'`; this sweep uses the same single source of truth
+    instead of re-deriving it. A committed receipt that carries a real supplier
+    cost also disqualifies the row — "did not reach the provider" is not true
+    when the provider already reported a charge.
     """
     if not _rejected_auto_close_enabled() or not (store.config.DATA_DIR / 'user-portal.sqlite3').exists():
         return 0
@@ -369,9 +386,13 @@ def auto_close_rejected(limit=100):
     logger = logging.getLogger(__name__)
     for row in rows:
         log = db.query_one(
-            'SELECT terminal_state FROM request_logs WHERE request_id=? ORDER BY ts DESC LIMIT 1',
+            'SELECT terminal_state,error_stage FROM request_logs WHERE request_id=? ORDER BY ts DESC LIMIT 1',
             (row['request_id'],))
         if not log or log['terminal_state'] != 'rejected':
+            continue
+        if (log['error_stage'] or '') == 'upstream':
+            continue
+        if _committed_supplier_units(row['request_id']) is not None:
             continue
         try:
             resolve_unknown(row['request_id'], 0, AUTO_CLOSE_ACTOR,
@@ -385,12 +406,17 @@ def auto_close_rejected(limit=100):
 
 
 def auto_close_client_cancelled(limit=100):
-    """Close only proven client-cancelled unknowns, never guess supplier cost.
+    """Close proven client-cancelled unknowns, charging any known supplier cost.
 
     The source of truth for closure is a matching ``portal_request_ends`` row,
     not an elapsed timeout. The final request log must also prove a client
-    cancellation. A pending ledger replay or disagreement with a committed
-    receipt defers the item to the existing manual reconciliation path.
+    cancellation. A committed receipt that carries ``supplier_units`` charges
+    the user that amount — the provider already billed it, and the disconnect is
+    a state the caller can produce at will, so a zero charge would let anyone
+    consume the pool for free. Without that evidence the hold is released and
+    the gap is recorded as platform cost. A pending ledger replay or a receipt
+    that disagrees with the computed charge defers the item to the existing
+    manual reconciliation path.
     """
     if not _client_cancel_auto_close_enabled() or not (store.config.DATA_DIR / 'user-portal.sqlite3').exists():
         return 0
@@ -458,6 +484,7 @@ def auto_close_client_cancelled(limit=100):
     if not rows or replay_problem():
         return 0
     closed = 0
+    absorbed = 0
     logger = logging.getLogger(__name__)
     for row in rows:
         log = db.query_one(
@@ -465,12 +492,25 @@ def auto_close_client_cancelled(limit=100):
             (row['request_id'],))
         if not log or (log['terminal_state'] != 'client_cancelled' and log['status'] != 499):
             continue
+        supplier = _committed_supplier_units(row['request_id'])
         try:
-            resolve_unknown(row['request_id'], 0, AUTO_CLOSE_ACTOR, AUTO_CLOSE_REASON, AUTO_CLOSE_EVIDENCE)
+            if supplier is None:
+                # 上游没回 usage：无法证明费用，只能释放用户冻结并记平台差額。
+                resolve_unknown(row['request_id'], 0, AUTO_CLOSE_ACTOR,
+                                AUTO_CLOSE_REASON, AUTO_CLOSE_EVIDENCE)
+                absorbed += 1
+            else:
+                # 回执里有可核实的供应商费用：按它扣用户。零结清会让「读到内容
+                # 后主动断开」变成免费消费 —— 断连是调用方自己能制造的状态。
+                resolve_unknown(row['request_id'], _credit_from_units(supplier),
+                                AUTO_CLOSE_ACTOR, AUTO_CHARGE_REASON, AUTO_CHARGE_EVIDENCE)
             closed += 1
         except Exception as exc:  # bounded per-row failure; recovery keeps running
             logger.warning('client-cancel auto-close deferred request_id=%s error=%s',
                            row['request_id'], type(exc).__name__)
+    if absorbed:
+        logger.warning('客户端取消自动结清：%d 条没有可核实的供应商费用，'
+                       '已释放用户冻结、平台承担未知差额', absorbed)
     return closed
 
 
@@ -530,6 +570,37 @@ def _committed_receipt(request_id):
     if not db.query_one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='portal_spend_receipts'"):
         return None
     return db.query_one('SELECT owner_id,payload FROM portal_spend_receipts WHERE request_id=?', (request_id,))
+
+
+def _committed_supplier_units(request_id):
+    """已提交回执里可核实的供应商费用，整数 units；没有或不可核实返回 None。
+
+    只认 `supplier_units`：那是上游实测的扣费（见 `receipt()`）。`amount_units`
+    是「用户应扣」的旧字段，只有完整完成的请求才有值，客户取消的请求恒为
+    None —— 用它判会把「有成本、没完整用量」的请求当成没有成本。
+    """
+    receipt = _committed_receipt(request_id)
+    if not receipt:
+        return None
+    try:
+        payload = json.loads(receipt['payload'])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    supplier = payload.get('supplier_units')
+    if type(supplier) is not int or supplier <= 0:
+        return None
+    return supplier
+
+
+def _credit_from_units(units):
+    """整数 units → `resolve_unknown` 需要的积分值。
+
+    走 Decimal 而不是 `/ 1e6`：`store.units()` 要求精确的百万分之一，浮点除法
+    对 0.123456 这类值会得到 0.12345599999999999，直接被它判成非法精度。
+    """
+    return Decimal(units) / Decimal(store.SCALE)
 
 
 def replay_problem():
