@@ -98,8 +98,9 @@ def archive_dataset(conn: sqlite3.Connection, name: str, *, out_dir: Path,
     if not exists:
         return {'dataset': name, 'skipped': True, 'reason': '表不存在'}
     cutoff = before_ts
-    if d.retention_days:
-        cutoff = min(before_ts, int(time.time()) - d.retention_days * 86400)
+    days = d.retention_days_value()
+    if days:
+        cutoff = min(before_ts, int(time.time()) - days * 86400)
     previous = conn.execute(
         "SELECT watermark_id, path, sha256 FROM archive_runs "
         "WHERE dataset=? AND state IN ('verified','archived','deleted') "
@@ -125,7 +126,7 @@ def archive_dataset(conn: sqlite3.Connection, name: str, *, out_dir: Path,
             tuple(args)).fetchone()
         return {'dataset': name, 'dry_run': True, 'pending_rows': int(row[0] or 0),
                 'resume_watermark': watermark,
-                'action': d.action, 'retention_days': d.retention_days,
+                'action': d.action, 'retention_days': d.retention_days_value(),
                 'unknown_budget_excluded': name == 'budget_reservations'}
 
     if out_dir.is_symlink():
@@ -171,7 +172,7 @@ def archive_dataset(conn: sqlite3.Connection, name: str, *, out_dir: Path,
     sha = digest.hexdigest()
     manifest = {
         'dataset': name, 'class': d.klass, 'action': d.action,
-        'retention_days': d.retention_days,
+        'retention_days': d.retention_days_value(),
         'cutoff_ts': cutoff, 'generated_at': int(time.time()),
         'rows_in_this_run': rows_written, 'watermark': last_watermark,
         'maximum_rows': max_rows,

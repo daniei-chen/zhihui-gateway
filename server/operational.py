@@ -979,6 +979,16 @@ def _monitor_tick(now, failures, next_reconcile, next_replay):
     if now >= next_replay and config.BACKGROUND_JOBS:
         next_replay = now + _reconcile_env_int('WB_LEDGER_REPLAY_INTERVAL_SEC', 30)
         replay_ledger_receipts(now)
+        # DAN-19：拒绝请求的不可变账本行由这里补齐（请求路径不再同步写）。
+        # 与回执重放同周期但**独立 try**：补齐失败既不能拖累重放，也不能让
+        # 整轮 tick 失败 —— 失败的行仍留在 request_logs 里，下一轮再补。
+        try:
+            from . import ledgerbackfill
+            filled = ledgerbackfill.backfill()
+            if filled:
+                log.info('ledger backfill: %d rejection rows written', filled)
+        except Exception:
+            log.exception('ledger backfill pass failed')
     status = readiness()
     # Planned drain deliberately makes readiness 503. It must not become a
     # database failure alert (or trigger a future self-heal restart).

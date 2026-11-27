@@ -991,6 +991,27 @@ def _account_is_foreign(actual_platform) -> bool:
     return is_passthrough(actual_platform)
 
 
+def _defer_ledger_row(terminal: str | None, pt: int, ct: int, credit: object,
+                      state: object | None) -> bool:
+    """DAN-19：这条请求的不可变账本行能否交给后台补齐。
+
+    只对「网关在转发之前就拒绝、且没有任何上游用量」的请求为真：IP 拦截、
+    密钥校验失败、密钥并发满、限流。它们以前在请求返回路径上同步写
+    `usage_events`（`BEGIN IMMEDIATE` + `synchronous=FULL` + 不可变表 INSERT），
+    而拒绝速率没有上限 —— 限流只对**放行**的请求占窗口额度，被拒的请求照样
+    每次都要付一次账本提交。现在只写 `request_logs`（可归档、可清理），
+    账本行由 `server.ledgerbackfill` 从已提交的请求日志补齐。
+
+    判据**保守**：只要这次请求可能已经到达上游（`config_hash` 有值）或带了
+    用量（pt/ct/credit），就仍然同步写 —— 那些是计费事实，不能延后。
+    """
+    if terminal != 'rejected':
+        return False
+    if pt or ct or credit:
+        return False
+    return not getattr(state, 'config_hash', None)
+
+
 def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt: int, ct: int, latency: int, ua: str | None, error: str | None, stream: bool, *, credit: float | None = None, first_token: int | None = None, usage: dict | None = None, effort: str | None = None, session_key: str | None = None) -> None:
     # Raw usage is the authority. Caller-side legacy integer coercion must not
     # turn invalid/absent supplier values into complete zero-valued evidence.
@@ -1125,11 +1146,16 @@ def _record(key: dict | None, ip: str, model: str, mapped: str, status: int, pt:
             from .. import budget
             budget.settle(usage,pt,ct,credit)
             from .. import ledger
-            ledger.record(state.request_id if state else None, key['id'] if key else None,
-                          model_clean, realm, pt, ct, credit,
-                          bool(key and (pt+ct or credit)), terminal, observability.RELEASE_ID)
-            if state and getattr(state,'config_hash',None):
-                ledger.forwarding(state,'terminal',terminal)
+            # DAN-19：网关在转发前就拒绝的请求不再在返回路径上同步写不可变账本
+            # （见 `_defer_ledger_row`）。`request_logs` 这一行已经在同一个事务里
+            # 提交，它就是持久事实；账本行由 `server.ledgerbackfill` 从它补齐，
+            # 请求已经返回、补齐失败也不影响响应，下一轮监控再补。
+            if not _defer_ledger_row(terminal, pt, ct, credit, state):
+                ledger.record(state.request_id if state else None, key['id'] if key else None,
+                              model_clean, realm, pt, ct, credit,
+                              bool(key and (pt+ct or credit)), terminal, observability.RELEASE_ID)
+                if state and getattr(state,'config_hash',None):
+                    ledger.forwarding(state,'terminal',terminal)
             if key and (status < 400 or pt+ct>0 or credit):
                 total=max(0,pt)+max(0,ct)
                 keysvc.touch(key,ip,total,credit,ts=facts['ts'])

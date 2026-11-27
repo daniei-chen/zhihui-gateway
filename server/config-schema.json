@@ -23,6 +23,7 @@
     "WB_ARCHIVE_ENABLED": {"type": "boolean", "sensitive": false, "default": true, "consumers": ["server/archiveworker.py"], "description": "Archive and verify eligible derived logs before exact-row pruning; disabled never permits direct deletion."},
     "WB_ARCHIVE_INTERVAL_SEC": {"type": "integer", "sensitive": false, "default": 300, "minimum": 60, "maximum": 86400, "consumers": ["server/archiveworker.py"], "unit": "seconds"},
     "WB_ARCHIVE_BATCH_ROWS": {"type": "integer", "sensitive": false, "default": 200, "minimum": 1, "maximum": 1000, "consumers": ["server/archiveworker.py"], "unit": "rows per dataset per cycle"},
+    "WB_USAGE_EVENTS_ARCHIVE_DAYS": {"type": "integer", "sensitive": false, "default": 365, "minimum": 1, "maximum": 3650, "consumers": ["server/archiveworker.py", "server/retention.py"], "unit": "days", "description": "Age at which immutable usage_events rows are exported to a verified archive snapshot. Export only: the table has no_delete triggers, so no row is ever removed."},
     "WB_GATEWAY_MAX_INFLIGHT_BODY_BYTES": {
       "type": "integer",
       "sensitive": false,
