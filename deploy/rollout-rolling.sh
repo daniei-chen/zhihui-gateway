@@ -12,16 +12,10 @@
 #   ./rollout-rolling.sh 1.5.59 --relay-changed  # 中继代码也变了，需要一并重启
 #   ./rollout-rolling.sh 1.5.59 --no-blue-green  # 没有候选实例时，退回「重启 + 中继重试」
 #
-# 退出码：0 必需检查通过；1 前置/切换失败；2 切换后检查失败或窗口有 5xx。
+# 退出码：0 必需检查通过；1 前置/切换失败；2 切换后检查失败、窗口有 5xx，
+# 或候选实例没能在上限内排空（在途流被截断）。
 # request_outcomes 只证明已进入网关且已完成的请求，不证明入口和在途长流零中断。
 set -uo pipefail
-
-# 站点配置是 0600 root，重启服务也要 root。所以整个脚本按 root 跑，
-# 不做"只读模式降级"—— 半套检查比没有检查更容易误导。
-if [ "$(id -u)" -ne 0 ]; then
-    printf '需要 root（要读 0600 的 nginx 配置、要重启服务）：请用 sudo 运行\n' >&2
-    exit 1
-fi
 
 SITE=/etc/nginx/sites-enabled/zhihui.kaogong.art
 SNIPPET=/etc/nginx/snippets/zh-relay-inference.location.conf
@@ -38,6 +32,12 @@ GATEWAY=workbuddy-web
 #: （WB_BACKGROUND_JOBS=0）。发布前先用它确认「这一版能起来」。
 HELPER=workbuddy-web-helper
 CANDIDATE_PORT=7865
+#: 停候选实例之前，等它在途请求跑完的上限（秒）。
+#:
+#: 必须小于 helper unit 的 `TimeoutStopSec=90`（deploy/workbuddy-web-helper.service）：
+#: 留出余量，才能在 systemd 动手 SIGKILL 之前自己判定「排不空」并显式失败，
+#: 而不是让正在跑的流被无声截断。
+DRAIN_TIMEOUT="${WB_ROLLOUT_DRAIN_TIMEOUT:-85}"
 #: 中继按这个文件决定把推理流量发给哪个后端实例；写它就能改流量去向。
 #: 中继在每次请求时重读，改完立即生效，不需要重启它。
 DATA_DIR=/opt/workbuddy-manager/data
@@ -81,7 +81,6 @@ on_exit() {
         record_rollout "$LOG_VERSION" "$LOG_MODE" '' '' "$code" '未走到统计环节（脚本中途退出）'
     fi
 }
-trap on_exit EXIT
 
 db_scalar() {
     sqlite3 -readonly "$DB" "$1" 2>/dev/null | head -1
@@ -364,6 +363,97 @@ route_switch() {
     printf '   中继路由 -> %s（epoch %s）\n' "$target" "$((epoch + 1))"
 }
 
+#: 停候选实例之前，等它把在途请求跑完。返回 0 = 排空了，1 = 没排空（必须当失败）。
+#:
+#: ## 判据为什么是「进程退出 + 优雅关闭日志」
+#:
+#: 2026-11-28 审计 D-04：这里以前是 `sleep 1` 之后直接 `systemctl stop`。候选实例
+#: 的 unit 是 `TimeoutStopSec=90` / `KillMode=control-group`，超过 90 秒的 SSE 必被
+#: SIGKILL；而脚本后面用 `request_outcomes` 统计窗口 5xx —— 流被截断通常落 200 或
+#: 根本没有终态，于是故障被静默，发布照样记成功。
+#:
+#: 在途请求没有别的可靠来源：
+#:   * `request_outcomes` 只有终态（上面那条）；
+#:   * 端口 7865 上的 ESTABLISHED 连接数会被中继的连接池污染 ——
+#:     server/rollingrelay.py:109-112 给 httpx 配了 max_keepalive_connections，
+#:     空闲的 keep-alive 连接和正在跑的流在 `ss` 里长得一样；
+#:   * `GET /api/system/drain` 有在途计数（server/drain.py:50-54），但只对面板读者
+#:     开放（server/routers/system.py:210-212），root 的 shell 脚本没有会话凭据。
+#:
+#: 所以用服务自己的优雅停止，它是无凭据又能事后核对的：
+#: SIGTERM 之后 uvicorn 停止接新连接、等在途响应写完（启动时带
+#: `--timeout-graceful-shutdown 75`，见 ops/writer-guard/launch_guard.py:229-231），
+#: 进程退出即说明在途已归零。超过 75 秒它会打
+#: `Cancel N running task(s), timeout graceful shutdown exceeded`（uvicorn/server.py:303）
+#: 并取消任务 —— 那一条就是「流被截断」的证据；应用侧 lifespan 还会打
+#: `Shutdown reached cleanup with requests outstanding`（server/main.py:333-336）。
+#:
+#: ## 局限
+#:
+#: 这个判据只能保证「超过 75 秒的流会被显式报成失败」，不能让它跑完 ——
+#: 75 秒是 unit 的启动参数，90 秒是 systemd 的耐心，都在这份脚本之外。
+#: 要真正等到几分钟的 SSE 结束，得让候选实例能报出在途数（例如一个只监听回环的
+#: 探针），或者把这两处上限一起放大；那是另一个改动。
+retire_candidate() {
+    local timeout="$DRAIN_TIMEOUT" stamp elapsed=0 state result journal
+    case "$timeout" in
+        ''|*[!0-9]*)
+            printf '!! WB_ROLLOUT_DRAIN_TIMEOUT 不是整数秒：%s\n' "$timeout" >&2
+            return 1;;
+    esac
+    if [ "$timeout" -lt 1 ] || [ "$timeout" -gt 89 ]; then
+        printf '!! WB_ROLLOUT_DRAIN_TIMEOUT 必须在 1..89 秒之间（候选实例的 TimeoutStopSec 是 90，超过就等于在等 SIGKILL）：%s\n' \
+            "$timeout" >&2
+        return 1
+    fi
+    # 取时间戳是为了把 journal 的检查范围钉在这一次停止上，而不是上一轮发布的日志。
+    stamp=$(date +%s)
+    systemctl stop --no-block "$HELPER" 2>/dev/null \
+        || die "停候选实例失败（$HELPER 仍在运行，端口 $CANDIDATE_PORT 被占）"
+
+    # `is-active` 在 deactivating 时也返回非 0 —— 用它会把「正在排空」当成「已退出」，
+    # 那正是要防的那种误判。只看 ActiveState 的终态。
+    while :; do
+        state=$(systemctl show "$HELPER" -p ActiveState --value 2>/dev/null)
+        case "$state" in
+            inactive|failed) break ;;
+        esac
+        if [ "$elapsed" -ge "$timeout" ]; then
+            printf '   候选实例 %s 秒后仍未退出：在途请求没排空（上限 %s 秒）。\n' \
+                "$elapsed" "$timeout" >&2
+            printf '   它会在 unit 的 TimeoutStopSec=90 处被 SIGKILL，正在跑的流会被截断。\n' >&2
+            return 1
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ $((elapsed % 5)) -eq 0 ]; then
+            printf '   等候选实例排空：已等 %s 秒（在途流还在跑）\n' "$elapsed"
+        fi
+    done
+
+    result=$(systemctl show "$HELPER" -p Result --value 2>/dev/null)
+    journal=$(journalctl -u "$HELPER" --since "@$stamp" --no-pager 2>/dev/null)
+    if printf '%s' "$journal" | grep -q 'timeout graceful shutdown exceeded'; then
+        printf '   候选实例的优雅关闭被超时截断（日志：timeout graceful shutdown exceeded）。\n' >&2
+        return 1
+    fi
+    if printf '%s' "$journal" | grep -q 'requests outstanding'; then
+        printf '   候选实例退出时仍有在途请求（日志：requests outstanding）。\n' >&2
+        return 1
+    fi
+    if [ "$result" != success ]; then
+        printf '   候选实例的停止结果是 %s（不是 success）—— 多半是被 SIGKILL 了。\n' \
+            "${result:-未知}" >&2
+        return 1
+    fi
+    if printf '%s' "$journal" | grep -q 'Waiting for connections to close'; then
+        printf '   候选实例等在途响应写完才退出（%s 秒）\n' "$elapsed"
+    else
+        printf '   候选实例无在途请求，%s 秒内退出\n' "$elapsed"
+    fi
+    return 0
+}
+
 check_pages() {
     step '页面与就绪探针'
     local url code failed=0
@@ -420,8 +510,18 @@ rollout_blue_green() {
 
     step '主实例已就绪，把流量切回来'
     route_switch old
-    sleep 1
-    systemctl stop "$HELPER" 2>/dev/null
+    # 切回来之后，候选实例上还留着切流前接下的请求（SSE 可以跑几分钟）。
+    # 以前这里是 sleep 1 然后 stop —— 判据是「等了一秒」，不是「在途跑完了」。
+    step '等候选实例的在途请求跑完再停'
+    if ! retire_candidate; then
+        # 7865 必须收回来，否则下次发布没有候选实例可用；但这次发布必须显式失败。
+        # 被截断的流不会落 5xx，所以不能让它走到下面的统计里当成功。
+        systemctl stop "$HELPER" 2>/dev/null
+        record_rollout "$version" '蓝绿' '' '' 2 '候选实例排空超时，在途流被截断'
+        printf '\n!! 候选实例没能在上限内排空：在途的流已被/将被截断。\n' >&2
+        printf '   这次发布按失败记（退出码 2）—— 截断的流不会落 5xx，不能只看那个统计。\n' >&2
+        return 2
+    fi
 
     # 最后几条终态的落库是请求结束时写的，留 2 秒再数。
     sleep 2
@@ -467,6 +567,16 @@ rollout_blue_green() {
 
 main() {
     local version='' relay_changed=0 check_only=0 blue_green=1 arg
+    # 站点配置是 0600 root，重启服务也要 root。所以整个脚本按 root 跑，
+    # 不做"只读模式降级"—— 半套检查比没有检查更容易误导。
+    #
+    # 这段放在 main 里而不是文件顶层：测试要 source 本文件来单独跑
+    # `retire_candidate` 这类函数（假的 systemctl/journalctl），source 不该要求 root。
+    if [ "$(id -u)" -ne 0 ]; then
+        printf '需要 root（要读 0600 的 nginx 配置、要重启服务）：请用 sudo 运行\n' >&2
+        exit 1
+    fi
+    trap on_exit EXIT
     STARTED_AT=$(date '+%Y-%m-%dT%H:%M:%S%z')
     for arg in "$@"; do
         case "$arg" in
@@ -537,4 +647,8 @@ main() {
     return "$status"
 }
 
-main "$@"
+# 只有直接执行才进 main：`source deploy/rollout-rolling.sh` 只取函数定义，
+# 供测试在假 systemctl/journalctl 下单独跑排空判据。
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

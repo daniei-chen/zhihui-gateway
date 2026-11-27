@@ -71,6 +71,26 @@ sudo ./deploy/rollout-rolling.sh <版本>
 所以切换指针的瞬间，**正在用的脚本也换了**。这就是为什么 `rollout-rolling.sh`
 必须用新版跑，而不是旧版。
 
+### 蓝绿：候选实例怎么退场
+
+`route_switch old` 之后，候选实例（`workbuddy-web-helper`，7865）上还留着切流前
+接下的请求。脚本不再「等一秒就停」，而是先停、再等它自己把在途请求跑完：
+
+- 等待上限 `WB_ROLLOUT_DRAIN_TIMEOUT`，默认 85 秒。它必须小于 unit 的
+  `TimeoutStopSec=90`，否则等于在等 systemd 的 SIGKILL。
+- 判据是**进程退出 + 候选实例自己的优雅关闭日志**：uvicorn 带
+  `--timeout-graceful-shutdown 75` 启动，进程退出即说明在途已归零；
+  日志里出现 `timeout graceful shutdown exceeded` 或
+  `requests outstanding` 就是「流被截断」。
+- 排不空、被截断、或停止结果不是 `success`，**发布按失败记（退出码 2）**，
+  并在 `rollout-log.jsonl` 里写 `候选实例排空超时，在途流被截断`。
+  截断的流不会落 5xx，所以不能等那个统计来说话。
+
+局限：超过 75 秒的流仍然跑不完 —— 75 秒是启动参数、90 秒是 systemd 的耐心，
+两者都不在这份脚本里。脚本能保证的是「被截断一定被报出来」，不是「一定不截断」。
+要让几分钟的 SSE 也跑完，得让候选实例能报出在途数（例如一个只监听回环的探针），
+再把这两处上限一起放大。
+
 ## 四、部署后必须验证的五件事
 
 | 项 | 查法 | 通过标准 |

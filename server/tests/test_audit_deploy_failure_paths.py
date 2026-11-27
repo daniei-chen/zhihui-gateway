@@ -266,6 +266,9 @@ seq() { printf 1; }
 systemctl() { :; }
 prestart_candidate() { :; }
 route_switch() { :; }
+# 排空判据单独在 test_rollout_candidate_drain.py 里测（假的 systemctl/journalctl）。
+# 这里只测「记录与门禁」的编排，所以把它钉成「排空了」。
+retire_candidate() { :; }
 db_scalar() {
     case "$1" in
         *'max(rowid)'*) printf 10;;
