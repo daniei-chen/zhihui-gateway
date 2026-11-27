@@ -6,7 +6,8 @@
   * 明文只在创建时返回一次，库中只存 SHA-256 哈希；
   * 按 prefix 定位 + 常量时间比较（`secrets.compare_digest`），不全表扫描；
   * scope 决定角色（readonly → viewer，admin → admin），非法值降级为最小权限；
-  * 失败时**不区分**「不存在 / 已停用 / 已过期」，不给探测者任何信号。
+  * 绑定签发人的会话版本（sv）：改密码 / 吊销会话 / 删号后立即失效（DAN-11）；
+  * 失败时**不区分**「不存在 / 已停用 / 已过期 / 版本不符」，不给探测者任何信号。
 
 历史（2026-09-14）：管理端曾接受 users.json 里 `api_keys` 数组中的 `X-API-Key`
 并直接授予 admin，那条提权后门已彻底移除。本模块的形态与它刻意不同，理由见
@@ -82,16 +83,35 @@ def list_tokens() -> list[dict]:
     return [_parse(r) for r in rows]
 
 
+def _issuer_session_version(username: str) -> int:
+    """签发人此刻的会话版本（签发人不存在时为 -1）。
+
+    在这里统一盖章，而不是让每个调用方自己传：任何一条签发路径都拿不到「没有
+    版本的令牌」，也就不会有人忘了传参而留下永久凭据。
+
+    惰性导入 `security`：它在模块层导入本模块，反向导入会成环；调用发生在两者
+    都加载完之后，安全。
+    """
+    from . import security
+    return security.issuer_session_version(security.load_users(), username)
+
+
 def create_token(name: str, scope: object = 'readonly',
                  expires_at: int | None = None, created_by: str = '') -> dict:
-    """创建一个令牌。返回体里的 `token` 是**明文，仅此一次**。"""
+    """创建一个令牌。返回体里的 `token` 是**明文，仅此一次**。
+
+    令牌绑在签发人的**当前会话版本**上：签发人改密码 / 改角色 / 吊销会话（都是
+    sv+1）或被删号之后，这枚令牌立即失效。
+    """
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     exp = int(expires_at) if expires_at else None
+    creator = str(created_by or '')[:64]
     token_id = db.execute(
         'INSERT INTO api_tokens(name, token_hash, prefix, scope, enabled, '
-        'expires_at, created_at, created_by) VALUES(?, ?, ?, ?, 1, ?, ?, ?)',
+        'expires_at, session_version, created_at, created_by) '
+        'VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?)',
         (str(name)[:64], _hash(token), token[:12], normalize_scope(scope),
-         exp, int(time.time()), str(created_by or '')[:64]),
+         exp, _issuer_session_version(creator), int(time.time()), creator),
     )
     out = _parse(db.query_one('SELECT * FROM api_tokens WHERE id = ?', (token_id,)))
     out['token'] = token  # 仅此一次
@@ -142,14 +162,38 @@ def resolve(token: object) -> dict | None:
 
 
 def usable(row: dict) -> bool:
-    """令牌是否可用：已启用，且未过期（无 expires_at = 永不过期）。
+    """令牌是否可用：已启用，且未过期（无 expires_at = 不按时间过期）。
 
-    逐次校验、不做缓存——保证吊销与过期**即时生效**。
+    这只是**令牌自身**的状态；能否通行还要求 `session_bound()` —— 两者在
+    `security._token_identity` 里合起来判定。逐次校验、不做缓存，保证吊销与
+    过期**即时生效**。
     """
     if not row.get('enabled'):
         return False
     exp = row.get('expires_at')
     return not exp or int(exp) > int(time.time())
+
+
+def session_bound(row: dict, issuer_sv: int) -> bool:
+    """令牌的会话版本是否仍与签发人一致。
+
+    为什么必须有这一条：吊销会话（`security.revoke_sessions`）、改密码、改角色
+    都只递增 users.json 里的 sv，对 SQLite 里这枚令牌本来毫无影响 —— 一次会话
+    泄露能被洗成永久 admin 凭据（DAN-11）。把令牌钉在签发时的 sv 上之后，
+    sv 一变令牌就废，吊销因此天然覆盖了令牌。
+
+    判据只有一条等式：签发时的版本 == 签发人当前的版本。因此：
+      * 改密码 / 改角色 / 吊销会话（都是 sv+1）→ 不等 → 失效；
+      * 签发人被删号 → `issuer_sv` 变成 -1 → 与任何真实版本都不等 → 失效；
+      * 升级前签发的令牌没有记录版本（NULL）→ fail-closed，必须重新签发。
+
+    -1 只可能出现在「进程内直接调用 `create_token(created_by=不存在的用户)`」，
+    HTTP 路径的 `created_by` 永远是已验证会话的用户名。
+    """
+    bound = row.get('session_version')
+    if bound is None:
+        return False
+    return int(bound) == int(issuer_sv)
 
 
 def touch(token_id: int, ip: str) -> None:
