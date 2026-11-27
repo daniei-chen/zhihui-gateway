@@ -576,6 +576,10 @@ MODULES = (
     "server.tests.test_v12156_stale_transactions",
     "server.tests.test_v12160_context_metric",
     "server.tests.test_v1279_route_authorization",
+    # DAN-19：拒绝路径不再同步写不可变账本，且 `usage_events` 有了归档出口。
+    # 两条断言都先红后绿（修前 4 failed，修后 4 passed），所以必须进门禁 ——
+    # 否则「账本写入又回到返回路径上」这种回归没有任何测试会喊。
+    "server.tests.test_dan19_rejection_ledger",
 )
 
 

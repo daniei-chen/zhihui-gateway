@@ -31,7 +31,7 @@ _state = {'sampled': False, 'running': False, 'last_at': None, 'ok': None,
 #: 但这里一直只列了两张日志表 —— 于是那条策略从未被接线执行，预算预留表
 #: 只能无限增长（生产上 193k 行 / 27 MB）。策略与执行分开写在两个文件里，
 #: 漏一处不会有任何报错，只会悄悄不生效。
-DATASETS = ('request_logs', 'request_outcomes', 'budget_reservations')
+DATASETS = ('request_logs', 'request_outcomes', 'budget_reservations', 'usage_events')
 
 
 def notify():
@@ -49,6 +49,25 @@ def status():
                   automatic_release_unknown=False, automatic_archive_deletion=False,
                   interval_seconds=config.ARCHIVE_INTERVAL_SEC, batch_rows=config.ARCHIVE_BATCH_ROWS)
     return result
+
+
+def _last_watermark(connection: sqlite3.Connection, name: str) -> int:
+    """该数据集上一次已校验归档的水位（没有就 0）。"""
+    row = connection.execute(
+        "SELECT watermark_id FROM archive_runs WHERE dataset=? AND state IN "
+        "('verified','archived','deleted') ORDER BY id DESC LIMIT 1", (name,)).fetchone()
+    return int(row['watermark_id'] or 0) if row is not None else 0
+
+
+def _pending_sql(connection: sqlite3.Connection, definition, cutoff: int, guard: str,
+                 export_only: bool) -> tuple[str, tuple]:
+    """「还有没有待处理行」的判据。
+
+    可清理型从 0 扫：到期行本来就该被删掉，删完就没了。
+    导出型从上次归档水位继续：源行不删，从 0 扫会把同一批行每轮重导一遍。
+    """
+    watermark = _last_watermark(connection, definition.name) if export_only else 0
+    return definition.select_sql(cutoff, watermark, 1, guard)
 
 
 def run_once(path: Path | None = None, out_dir: Path | None = None, *, max_rows: int | None = None):
@@ -71,26 +90,46 @@ def run_once(path: Path | None = None, out_dir: Path | None = None, *, max_rows:
         results, pending = [], {}
         for name in DATASETS:
             definition = retention.dataset(name)
-            cutoff = int(time.time()) - int(definition.retention_days) * 86400
-            sql, arguments = definition.select_sql(cutoff, 0, 1,
-                                                    retention.active_reservation_guard(connection, definition))
-            remaining = connection.execute(sql, arguments).fetchone()
-            unfinished = connection.execute(
-                "SELECT watermark_id,sha256 FROM archive_runs WHERE dataset=? AND state='verified' "
-                'AND rows_archived>0 ORDER BY id LIMIT 1', (name,)).fetchone()
+            days = definition.retention_days_value()
+            if not days:
+                # 没有保留期就按时间归档；需要它的数据集必须显式配置。
+                continue
+            cutoff = int(time.time()) - int(days) * 86400
+            guard = retention.active_reservation_guard(connection, definition)
+            # 不可变表（ACTION_NO_DELETE / ACTION_NEVER）只有导出这一个出口：
+            # 源行一行都不删。它们也不能用「从 0 扫」判待处理 —— 那样每轮都会
+            # 把同一批过期行再导一遍。改为从上次 verified 的水位继续。
+            export_only = definition.action in (retention.ACTION_NO_DELETE,
+                                                retention.ACTION_NEVER)
+            sql, arguments = _pending_sql(connection, definition, cutoff, guard, export_only)
             result = None
-            if unfinished is not None:
-                result = archival.delete_archived(connection, name, watermark=int(unfinished['watermark_id']),
-                                                   sha=unfinished['sha256'], confirm_sha=unfinished['sha256'], batch=50)
-            elif remaining is not None:
-                receipt = archival.archive_dataset(connection, name, out_dir=out_dir, before_ts=cutoff,
-                                                     batch=50, max_rows=rows, restart_scan=True)
-                if receipt['state'] != 'verified':
-                    raise ValueError('archive verification failed')
-                result = archival.delete_archived(connection, name, watermark=receipt['watermark'],
-                                                   sha=receipt['sha256'], confirm_sha=receipt['sha256'], batch=50)
+            if export_only:
+                if connection.execute(sql, arguments).fetchone() is not None:
+                    receipt = archival.archive_dataset(connection, name, out_dir=out_dir,
+                                                       before_ts=cutoff, batch=50,
+                                                       max_rows=rows, restart_scan=False)
+                    if receipt['state'] != 'verified':
+                        raise ValueError('archive verification failed')
+                    result = {'dataset': name, 'rows_archived': receipt['rows'],
+                              'deleted_rows': 0, 'archive_only': True}
+            else:
+                unfinished = connection.execute(
+                    "SELECT watermark_id,sha256 FROM archive_runs WHERE dataset=? AND state='verified' "
+                    'AND rows_archived>0 ORDER BY id LIMIT 1', (name,)).fetchone()
+                if unfinished is not None:
+                    result = archival.delete_archived(connection, name, watermark=int(unfinished['watermark_id']),
+                                                       sha=unfinished['sha256'], confirm_sha=unfinished['sha256'], batch=50)
+                elif connection.execute(sql, arguments).fetchone() is not None:
+                    receipt = archival.archive_dataset(connection, name, out_dir=out_dir, before_ts=cutoff,
+                                                         batch=50, max_rows=rows, restart_scan=True)
+                    if receipt['state'] != 'verified':
+                        raise ValueError('archive verification failed')
+                    result = archival.delete_archived(connection, name, watermark=receipt['watermark'],
+                                                       sha=receipt['sha256'], confirm_sha=receipt['sha256'], batch=50)
             if result is not None:
                 results.append(result)
+            # 导出会推进水位，所以「还有没有待处理行」要按新水位重新算。
+            sql, arguments = _pending_sql(connection, definition, cutoff, guard, export_only)
             pending[name] = connection.execute(sql, arguments).fetchone() is not None
         return {'ok': True, 'runs': results, 'pending': pending,
                 'deleted_rows': sum(result['deleted_rows'] for result in results),

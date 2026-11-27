@@ -238,6 +238,10 @@ SHARED_ADMISSION = _env_bool('WB_SHARED_ADMISSION', False)
 ARCHIVE_ENABLED = _env_bool('WB_ARCHIVE_ENABLED', True)
 ARCHIVE_INTERVAL_SEC = max(60, min(86400, _env_int('WB_ARCHIVE_INTERVAL_SEC', 300)))
 ARCHIVE_BATCH_ROWS = max(1, min(1000, _env_int('WB_ARCHIVE_BATCH_ROWS', 200)))
+# `usage_events` 是**不可变**表（`no_update` / `no_delete` 触发器），只能导出
+# 快照、不能删除。这条保留期只决定「多老的行进入归档快照」，**不删除任何行**。
+# 没有它，那张表只会按请求速率无限增长 —— 而拒绝路径的写入速率没有上限。
+USAGE_EVENTS_ARCHIVE_DAYS = max(1, min(3650, _env_int('WB_USAGE_EVENTS_ARCHIVE_DAYS', 365)))
 # 入站访问日志（安全页的「IP 访问日志」）是否记录**放行**的请求。
 #
 # 默认关闭：那张表的用途是安全审计（谁在扫我、谁被挡了），记全量会把信号淹没。

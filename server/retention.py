@@ -88,6 +88,20 @@ class Dataset:
     archive_filter: str = ''       # 归档/清理时附加的 WHERE（含 NOT NULL），空 = 全部
     delete_filter: str = ''        # 删除时附加的 WHERE（保守：通常比 archive_filter 更严）
     state_column: str | None = None
+    #: 保留期取自 `config` 的哪个属性名（None = 用 `retention_days` 的静态值）。
+    #: 只有需要运维按环境调整的保留期才走配置；其余仍是静态常量。
+    retention_config: str | None = None
+
+    def retention_days_value(self) -> int | None:
+        """解析**实际生效**的保留期：配置驱动的那几项读运行时值。
+
+        只读 `retention_days` 会让「配置改了但归档仍按旧窗口跑」这种偏差
+        静默存在 —— 两边都写着保留期，只有一个是真的。
+        """
+        if not self.retention_config:
+            return self.retention_days
+        from . import config
+        return int(getattr(config, self.retention_config))
 
     @property
     def watermark_key(self) -> str:
@@ -170,11 +184,14 @@ DATASETS: tuple[Dataset, ...] = (
     ),
     Dataset(
         name='usage_events', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
-        retention_days=None, time_column='ts', watermark='rowid',
+        retention_days=365, retention_config='USAGE_EVENTS_ARCHIVE_DAYS',
+        time_column='ts', watermark='rowid',
         reconcile='credit_units 权威值；与 usage_daily/usage_hourly 投影逐日逐 key 对账',
         evidence='ledger.py:44-63 触发器；ledger.record() 写 counted/terminal_state/provenance',
         note=('K24 明确：冻结数据不是死数据。只允许导出快照，**不得** DELETE/UPDATE。'
-              'unknown 用量（credit_units IS NULL）必须原样保留，人工核对走 adjustment_events。'),
+              'unknown 用量（credit_units IS NULL）必须原样保留，人工核对走 adjustment_events。'
+              'DAN-19：`archiveworker` 按 `config.USAGE_EVENTS_ARCHIVE_DAYS`（默认 365 天）'
+              '把过期行导出成 JSONL 快照并取回校验，源行一行不动 —— 不可变表唯一的出口。'),
     ),
     Dataset(
         name='forwarding_events', klass=CLASS_LEDGER_EVENT, action=ACTION_NO_DELETE,
@@ -356,7 +373,7 @@ def policy() -> list[dict]:
     """给文档/界面/健康检查用的分类表（只读，不含 SQL）。"""
     return [{
         'dataset': d.name, 'class': d.klass, 'action': d.action,
-        'retention_days': d.retention_days, 'time_column': d.time_column,
+        'retention_days': d.retention_days_value(), 'time_column': d.time_column,
         'watermark': d.watermark, 'reconcile': d.reconcile,
         'evidence': d.evidence, 'note': d.note,
     } for d in DATASETS]
@@ -478,14 +495,15 @@ def archive_candidates(conn: sqlite3.Connection, *, now: int | None = None,
 
 
 def _cutoff(d: Dataset, now: int) -> int:
-    if not d.retention_days:
+    days = d.retention_days_value()
+    if not days:
         return 0
-    return now - int(d.retention_days) * 86400
+    return now - int(days) * 86400
 
 
 def _retention_where(d: Dataset, cutoff: int) -> tuple[str, tuple]:
     """保留期满的 WHERE。文本日期列（usage_hourly.day）用字符串比较。"""
-    if not d.time_column or not d.retention_days:
+    if not d.time_column or not d.retention_days_value():
         return '', ()
     if d.time_column == 'day':
         # 与 `db.day_of` 同口径（固定 UTC+8），否则保留期在非 +8 机器上会错一天。
