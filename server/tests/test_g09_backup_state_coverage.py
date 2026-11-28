@@ -220,7 +220,7 @@ class MainWiringIsPresentTest(unittest.TestCase):
     现有证据全是源码文本断言（`test_v12144` / `test_v12145` / `test_v12157`
     也是同一形态）。所以下面两条只能证明「`if …: raise` 还在」，
     **不能**当端到端回归依据 —— `collect_state_entries` 的返回值对，
-    不等于备份真的会失败。真跑一次 `main()` 的 POSIX 门控用例见 SWO-84。
+    不等于备份真的会失败。真跑一次 `main()` 的 POSIX 门控用例见 SWO-88。
     """
 
     def anchor(self, start, length=400):
