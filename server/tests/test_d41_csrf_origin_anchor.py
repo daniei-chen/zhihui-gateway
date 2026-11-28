@@ -176,6 +176,16 @@ class SevenAngleMatrix(_AnchorCase):
         self.assertIn('WB_ALLOW_UNCONFIGURED_ORIGIN', text)
         self.assertIn('DNS rebinding', text)
 
+    def test_angle_6_escape_hatch_does_not_relax_cross_site(self) -> None:
+        """逃生门只放宽「点分域名无配置」的锚点 —— 不是「不比 Origin」。"""
+        self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', True)
+        response = self._call(peer=LAN, host='panel.example.com',
+                              origin='https://evil.example')
+        self.assertEqual(response.status_code, 403,
+                         '开了逃生门就放行跨站 —— 那不是旧行为，是真 CSRF')
+        self.assertEqual(response.headers.get('x-manager-csrf-reason'),
+                         'csrf_origin_mismatch')
+
     def test_angle_7_cross_site_origin_is_still_rejected(self) -> None:
         response = self._call(peer=LAN, host='testserver',
                               origin='https://evil.example')
