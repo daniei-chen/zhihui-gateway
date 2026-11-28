@@ -80,7 +80,7 @@ systemctl() {
 }
 journalctl() {
     [ "${TEST_JOURNAL_FAIL:-0}" = 1 ] && return 1
-    printf '%s\n' "${TEST_JOURNAL:-}"
+    cat "$PWD/journal.txt" 2>/dev/null
 }
 curl() {
     printf '%s\n' "$*" >> "$PWD/curl.log"
@@ -126,13 +126,13 @@ class _DriverCase(unittest.TestCase):
 
     def _run(self, tmp, *, inflight, drain_timeout, result, journal, journal_fail,
              probe_missing, env):
+        (Path(tmp) / 'journal.txt').write_text(journal, encoding='utf-8')
         environment = dict(os.environ,
                            ROLLOUT_SCRIPT=str(SCRIPT).replace('\\', '/'),
                            TEST_INFLIGHT=' '.join(str(value) for value in inflight)
                            if isinstance(inflight, (list, tuple)) else str(inflight),
                            TEST_DRAIN_TIMEOUT=str(drain_timeout),
                            TEST_RESULT=result,
-                           TEST_JOURNAL=journal,
                            TEST_JOURNAL_FAIL='1' if journal_fail else '0',
                            TEST_PROBE_MISSING='1' if probe_missing else '0',
                            **(env or {}))
