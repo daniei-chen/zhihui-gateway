@@ -80,7 +80,9 @@ class ThroughputTest(unittest.TestCase):
         db.execute(
             'INSERT INTO usage_daily(day,model,realm,key_id,requests,prompt_tokens,'
             'completion_tokens,credit) VALUES(?,?,?,?,?,?,?,?)',
-            (time.strftime('%Y-%m-%d'), 'm3', 'cn', '', 1, 10, 40, 0.5),
+            # 与生产同口径（db.day_of，固定 UTC+8）；time.strftime 跟随进程
+            # 时区，UTC 主机上 16:00Z 之后会写成前一天。
+            (db.day_of(), 'm3', 'cn', '', 1, 10, 40, 0.5),
         )
         _log('m3', 200, 40, 1000, None)
         rows = stats.by_model(days=1, realm=None, user={'role': 'admin'})
@@ -94,7 +96,7 @@ class ThroughputTest(unittest.TestCase):
         db.execute(
             'INSERT INTO usage_daily(day,model,realm,key_id,requests,prompt_tokens,'
             'completion_tokens,credit) VALUES(?,?,?,?,?,?,?,?)',
-            (time.strftime('%Y-%m-%d'), 'old-model', 'cn', '', 5, 100, 200, 1.0),
+            (db.day_of(), 'old-model', 'cn', '', 5, 100, 200, 1.0),
         )
         rows = stats.by_model(days=30, realm=None, user={'role': 'admin'})
         self.assertIsNone(rows[0]['tokens_per_sec'])

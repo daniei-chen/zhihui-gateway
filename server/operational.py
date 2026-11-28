@@ -1433,7 +1433,16 @@ def _release_id() -> str:
 
 
 def status():
+    # `alert_delivery`：告警有没有出口（DAN-41）。面板上的健康视图与回环巡检读的
+    # 是两处，未配置这件事必须两边都能看见 —— 否则「告警挂着」和「告警没人收到」
+    # 在页面上长得一模一样。
+    from . import notify
+    delivery = notify.status()
     return {'readiness':readiness(),'alerts':list(alerts.values()),
-            'notification_delivery':'local journal and authenticated API only',
+            'notification_delivery':('local journal and authenticated API only'
+                                     if not delivery['configured']
+                                     else 'local journal and authenticated API; notify mode=%s'
+                                          % delivery['mode']),
+            'alert_delivery': delivery,
             'backup_freshness_hours':26,'credit_scale':ledger.SCALE,
             'financial_events_since_release': _release_id()}

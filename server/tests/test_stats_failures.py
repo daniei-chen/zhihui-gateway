@@ -125,7 +125,10 @@ class FailuresCountedTest(unittest.TestCase):
         _insert_log(now, self.kid, 503)
         _insert_log(now, self.kid, 502)
         rows = self._daily()
-        today = time.strftime('%Y-%m-%d')
+        # 与生产同口径（db.day_of，固定 UTC+8）。原先用 time.strftime，跟着
+        # 进程时区走；CI 是 UTC，16:00Z–24:00Z 这段窗口里取到的「今天」比
+        # 账本里的 day 早一天，断言必然落空。
+        today = db.day_of()
         row = next((r for r in rows if r['day'] == today), None)
         self.assertIsNotNone(row, '今天没有出现在 daily 里')
         self.assertEqual(row['failed'], 2)
@@ -142,7 +145,7 @@ class FailuresCountedTest(unittest.TestCase):
         for i in range(31):
             _insert_log(day3 + i, self.kid, 503)
         rows = self._daily()
-        target = time.strftime('%Y-%m-%d', time.localtime(day3))
+        target = db.day_of(day3)
         hit = next((r for r in rows if r['day'] == target), None)
         self.assertIsNotNone(hit, f'{target}（纯失败日）没有出现在 daily 里')
         self.assertEqual(hit['failed'], 31)
@@ -225,7 +228,7 @@ class ClientClosedIsNotAGatewayFailureTest(unittest.TestCase):
         now = int(time.time())
         _insert_log(now, self.kid, 499)
         _insert_log(now, self.kid, 503)
-        buckets = stats._hourly_failures(time.strftime('%Y-%m-%d'))
+        buckets = stats._hourly_failures(db.day_of())
         self.assertEqual(sum(buckets.values()), 1, buckets)
 
     def test_real_failures_still_counted(self) -> None:

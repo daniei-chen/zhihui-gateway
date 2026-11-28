@@ -1820,8 +1820,24 @@ async def _authorize_usage_key(request):
 
 
 def _usage_since(days: int) -> str:
-    """近 days 天（含今天）的起始日期串——口径与 /api/stats 的 _since 一致。"""
-    return time.strftime('%Y-%m-%d', time.localtime(time.time() - (days - 1) * 86400))
+    """近 days 天（含今天）的起始日期串——口径与 /api/stats 的 _since 一致。
+
+    必须走 `db.day_of`（固定 UTC+8）：原先用 `time.localtime`，口径跟着进程
+    时区走，而 `usage_daily.day` 是 `db.day_of` 写进去的 UTC+8 日期。在 UTC
+    主机上 16:00Z–24:00Z（北京 00:00–08:00）这段窗口里两者差一天，窗口会整体
+    错位一格（last_7d 多算一天、today 把当天的行漏掉）。
+    """
+    return db.day_of(time.time() - (days - 1) * 86400)
+
+
+def _usage_today() -> str:
+    """「今天」的日期串——与 `usage_daily.day` 同口径（`db.day_of`，固定 UTC+8）。
+
+    单独抽出来是为了让「今天」这一格可被直接断言：原先写在 `usage_v1` 里用
+    `time.strftime('%Y-%m-%d')`，跟随进程时区，UTC 主机上 16:00Z 之后取到的是
+    「昨天」，`today` 段整段漏掉当天的行。
+    """
+    return db.day_of()
 
 
 def _usage_window(key_id: int, since_day: str) -> dict:
@@ -1993,7 +2009,10 @@ async def usage_v1(request: Request):
         return _oai_error('密钥已停用', 403, 'permission_error', 'key_disabled')
     if reason == 'key_expired':
         return _oai_error('密钥已过期', 403, 'permission_error', 'key_expired')
-    today = time.strftime('%Y-%m-%d')
+    # 「今天」与 usage_daily.day 同口径（db.day_of，固定 UTC+8）。原先用
+    # time.strftime 跟随进程时区，UTC 主机上 16:00Z 之后会取到「昨天」，
+    # today 段把当天的行整段漏掉。
+    today = _usage_today()
     # 实时速度窗口可调（秒）：默认 3 秒——请求完成瞬间数字尖跳，轮询越快越动感。
     # 客户端轮询间隔建议不超过窗口的一半，否则会踩空看不到跳（见 _usage_live 文档）。
     try:

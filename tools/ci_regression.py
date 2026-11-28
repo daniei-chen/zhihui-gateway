@@ -227,6 +227,12 @@ MODULES = (
     "server.tests.test_current_version_readonly",
     "server.tests.test_dashboard_credit_expiry",
     "server.tests.test_dashboard_snapshot_entry",
+    # DAN-41：投递通道未配置时告警不许静默消失。unittest 类（没有顶层 test 函数），
+    # 所以进 MODULES 而不是 PYTEST_MODULES —— 后者会被
+    # test_function_tests_are_assigned_to_the_pytest_loader 当场抓住。
+    # 修前 9 failed，修后 9 passed；其中一条走真实调用点 operational.transition()。
+    "server.tests.test_dan41_alert_delivery_visible",
+    "server.tests.test_day_boundary_consistency",
     "server.tests.test_day_filter_equivalence",
     "server.tests.test_db_connection_ownership",
     "server.tests.test_deadline_transport_boundaries",
@@ -287,6 +293,7 @@ MODULES = (
     "server.tests.test_log_query_plan",
     "server.tests.test_login_admission",
     "server.tests.test_login_counters",
+    "server.tests.test_login_lockout_contract",
     "server.tests.test_login_server_poll",
     "server.tests.test_manual_disabled",
     "server.tests.test_max_tokens_clamp",
@@ -326,6 +333,7 @@ MODULES = (
     "server.tests.test_portal_bonus",
     "server.tests.test_portal_capped_billing",
     "server.tests.test_portal_closeout",
+    "server.tests.test_portal_lockout_contract",
     "server.tests.test_portal_members_ux",
     "server.tests.test_portal_operations",
     "server.tests.test_portal_public_pool",
@@ -422,6 +430,8 @@ MODULES = (
     "server.tests.test_update_robustness",
     "server.tests.test_updater_atomic_swap",
     "server.tests.test_updater_status",
+    # DAN-24：发布源白名单 + 发布包验签（marker 防退化）
+    "server.tests.test_updater_supply_chain",
     "server.tests.test_upgrade_audit",
     "server.tests.test_upload_loop_fairness",
     "server.tests.test_upstream_id_consistency",
@@ -602,6 +612,9 @@ PYTEST_MODULES = (
     # 三条都先红后绿（修前 3 failed，修后 3 passed）—— 其中两条走真实 ASGI
     # 断连（上游发一帧就挂住，客户端在流中途挂断），不是手搓的假输入。
     "server.tests.test_dan23_disconnect_convergence",
+    # G-02：DAN-23 的 settled 契约必须在崩溃恢复后仍然成立（回执重放走同一
+    # 判据），且 charged_partial 必须有归档出口。修前 3 failed / 修后全绿。
+    "server.tests.test_g02_replay_client_cancelled",
 )
 
 

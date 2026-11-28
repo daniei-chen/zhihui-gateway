@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from datetime import date, timedelta
 from decimal import Decimal
@@ -141,6 +142,37 @@ def _env_int(name, default):
 def _owned(row, state):
     return row['owner'] == budgetowner.identity() and row['fence'] == getattr(state, 'budget_fence', None)
 
+def _revived_archived(key_id):
+    """已归档、但归档结论已经作废的 unknown 行。
+
+    归档的意思是「查过、没有证据、平台承担未知差额」，所以归档行不再阻塞准入。
+    但证据可能姗姗来迟：崩溃后落进 spool 的回执会被 `ledgerreplay.apply` 重放，
+    补写 request_log 并计入 charged。此时告警与面板已经把这行重新算进
+    `needs_human`（`archived_now` 比的是「归档时的分类」），准入如果只看
+    resolution 前缀，同一行就会「告警说要看、准入说不用看」—— 已计入但未核对
+    的积分可以超出配额（G-02 评审第二条）。
+
+    只扫这个密钥下**已归档**的 unknown 行（数量远小于全部未结行），返回
+    (row, reserved_tokens, 记账时刻)；时刻取日志 ts，缺日志时取 created_at，
+    与日额度查询同口径。
+    """
+    rows = [dict(row) for row in db.query(
+        "SELECT * FROM budget_reservations WHERE key_id=? AND state='unknown' "
+        "AND coalesce(resolution,'') LIKE ?",
+        (key_id, ARCHIVE_RESOLUTION_PREFIX + '%'))]
+    if not rows:
+        return []
+    logs = _logs_for([row['request_id'] for row in rows])
+    revived = []
+    for row in rows:
+        log = logs.get(row['request_id'])
+        if archived_now(row, _classify(row, log)):
+            continue
+        ts = int(log['ts']) if log is not None and log['ts'] is not None else int(row['created_at'])
+        revived.append((row, int(row['reserved_tokens'] or 0), ts))
+    return revived
+
+
 def prepare(key, body, *, encoded_body=None):
     _, _, requested = outputlimits.inspect(body)
     state = observability.current.get()
@@ -202,6 +234,7 @@ def prepare(key, body, *, encoded_body=None):
         qc = ledger.units(fresh['quota_credit'])
         uc = fresh['used_credit_units'] if fresh['used_credit_units'] is not None else ledger.units(fresh['used_credit'])
         total_held = 0
+        revived = _revived_archived(key['id']) if limited else []
         if q or qc:
             # Concurrency ages out; uncertain spending does not. Already charged
             # tokens are in used_tokens and must not be held a second time.
@@ -234,9 +267,16 @@ def prepare(key, body, *, encoded_body=None):
                 " AND coalesce(resolution,'') NOT LIKE ?",
                 (key['id'], ARCHIVE_RESOLUTION_PREFIX + '%'))
             total_held = int(outstanding_total['held'])
-            if q and outstanding_total['missing_estimate']:
+            missing_estimate = int(outstanding_total['missing_estimate'])
+            unknown_count = int(outstanding_total['unknown_count'])
+            # 归档后又长出新证据的行：归档结论作废，按未结行重新计入。
+            for row, reserved, _ts in revived:
+                total_held += max(0, reserved - int(row.get('charged_tokens') or 0))
+                missing_estimate += int(reserved <= 0)
+                unknown_count += 1
+            if q and missing_estimate:
                 raise BudgetRejected('存在缺少 Token 预估的待核对请求，请先核对', 'total_token_unconfirmed')
-            if qc and outstanding_total['unknown_count']:
+            if qc and unknown_count:
                 raise BudgetRejected('存在未确认积分消耗，请先核对后继续', 'credit_quota_unconfirmed')
         # Conservative byte estimate, with framing headroom; images use extra room.
         encoded = (encoded_body if isinstance(encoded_body, bytes) else
@@ -255,10 +295,16 @@ def prepare(key, body, *, encoded_body=None):
             # streams still carry over midnight until their terminal facts arrive.
             outstanding = db.query("SELECT b.state,b.reserved_tokens,b.charged_tokens FROM budget_reservations b "
                                    "WHERE b.key_id=? AND (b.state IN ('reserved','forwarded') OR "
-                                   "(b.state='unknown' AND coalesce((SELECT l.ts FROM request_logs l "
+                                   "(b.state='unknown' AND coalesce(b.resolution,'') NOT LIKE ? AND "
+                                   "coalesce((SELECT l.ts FROM request_logs l "
                                    "WHERE l.request_id=b.request_id),b.created_at)>=? AND "
                                    "coalesce((SELECT l.ts FROM request_logs l WHERE l.request_id=b.request_id),"
-                                   "b.created_at)<?))", (key['id'], start, end))
+                                   "b.created_at)<?))",
+                                   (key['id'], ARCHIVE_RESOLUTION_PREFIX + '%', start, end))
+            outstanding = list(outstanding) + [
+                {'state': 'unknown', 'reserved_tokens': reserved,
+                 'charged_tokens': int(row.get('charged_tokens') or 0)}
+                for row, reserved, ts in revived if start <= ts < end]
             held = sum(max(0, int(r['reserved_tokens']) - int(r['charged_tokens'])) for r in outstanding)
             if fresh['daily_token_quota']:
                 remaining_daily = int(fresh['daily_token_quota']) - int(daily['tokens']) - held
@@ -311,6 +357,31 @@ def forwarded():
             if changed != 1:
                 raise BudgetRejected('预算预留归属已变化，禁止转发', 'budget_fenced')
 
+#: DAN-23：能证明「这笔费用已经确定」的终态。它描述的是**客户端**怎么走的，
+#: 不是费用是否确定 —— 上游已经回完整 usage、客户端随后才断开，账单是确定的，
+#: 唯一的未知是调用方为什么走。
+KNOWN_TERMINAL_STATES = ('completed', 'client_cancelled')
+
+
+def receipt_known(terminal_state, *, usage_known: bool, credit_present: bool,
+                  limited: bool) -> bool:
+    """DAN-23 判据的唯一实现：这份回执能否把预留判成 `settled`。
+
+    实时结算（`settle`）与崩溃恢复后的回执重放（`ledgerreplay._settle`）共用
+    这一个函数。两处各写一份曾经分叉：实时认 `client_cancelled`，重放只认
+    `completed`，于是同一份「完整 usage + client_cancelled」回执实时是 settled、
+    重放却落成 unknown 并带 charged_tokens → 归为 charged_partial → 有 credit
+    配额的密钥被 `credit_quota_unconfirmed` 永久锁死
+    （G-02 / 审计 D-02，handoff 02-budget-ledger 的 D-01）。
+
+    `usage_known` 由调用方按自己能看到的证据判定：实时路径要求 usage 自洽且与
+    落库值一致，重放路径要求回执的 `usage_complete`。`limited`（有 credit 配额）
+    的密钥缺 credit 字段时不能判 settled —— 那笔积分根本没法对上账。
+    """
+    return bool(terminal_state in KNOWN_TERMINAL_STATES and usage_known
+                and (credit_present or not limited))
+
+
 def settle(usage, pt, ct, credit):
     """Runs in the same transaction as request log and key usage updates."""
     state = observability.current.get()
@@ -339,9 +410,15 @@ def settle(usage, pt, ct, credit):
     #
     # 只放宽这一种：用量证据必须完整自洽。缺任一字段、或 usage 非法、或
     # 两个 token 字段与落库值不一致，仍然留在 `unknown` 待核对。
-    known = (state.terminal_state in ('completed', 'client_cancelled') and measured.complete
-             and not measured.malformed and measured.storage_tokens() == (pt, ct))
-    if fresh and (fresh['quota_credit'] or fresh['daily_credit_quota']) and credit is None: known = False
+    #
+    # 判据本身在 `receipt_known`：崩溃恢复后的回执重放走的是同一份证据，
+    # 两处各写一份已经分叉过一次（G-02）。
+    known = receipt_known(
+        state.terminal_state,
+        usage_known=(measured.complete and not measured.malformed
+                     and measured.storage_tokens() == (pt, ct)),
+        credit_present=credit is not None,
+        limited=bool(fresh and (fresh['quota_credit'] or fresh['daily_credit_quota'])))
     # 明确的客户端拒绝：上游在参数校验阶段就打回了，没有执行任何推理。
     #
     # 此前这类请求会落成 `unknown`，因为释放条件写的是
@@ -613,7 +690,7 @@ def _logs_for(request_ids) -> dict:
     if not ids:
         return {}
     placeholders = ','.join('?' * len(ids))
-    rows = db.query('SELECT l.request_id,l.status,l.terminal_state,l.usage_source,l.credit,l.error,'
+    rows = db.query('SELECT l.request_id,l.ts,l.status,l.terminal_state,l.usage_source,l.credit,l.error,'
                     'l.key_id,l.prompt_tokens,l.completion_tokens,l.usage_complete,'
                     'count(e.event_id) usage_event_count,'
                     'sum(CASE WHEN e.key_id=l.key_id AND e.prompt_tokens=0 AND e.completion_tokens=0 '
@@ -636,11 +713,30 @@ def _logs_for(request_ids) -> dict:
 #   · 归档幂等（按 resolution 前缀判定），留痕（resolution + audit_logs），
 #     **不改用量**、不动 updated_at（避免把旧行重新算成「在途」）。
 #
-# 只归档「无上游证据」的三类：charged_partial / usage_present 有用量证据、
-# upstream_rejected 仍需核对 —— 三者都不归档。
+# 可归档的分类：无证据的三类（client_cancelled / no_request_log / unexplained），
+# 加上 G-02 补上的 `charged_partial`。
+#
+# ## 为什么 charged_partial 也要有出口（G-02）
+#
+# 崩溃恢复后的回执重放会写出「有 charged_tokens、但结论 unknown」的行
+# （上游回了 usage 然后报错、或重放证据不完整）。这类行**没有可核的事实**：
+# 钱已经按上游 usage 记进去了，剩下要核的只是一个再也不会更新的终态。
+# 但它此前不在任何出口里 —— 对 credit 配额密钥，任意一条 unknown 就是
+# `credit_quota_unconfirmed` 的永久闸，于是密钥从此 429，且队列里没有任何
+# 能改变结论的东西（审计 D-02，handoff 02-budget-ledger 的 D-01）。
+#
+# 归档它**不改钱**：charged_tokens/charged_credit 原样保留（不重复计费、
+# 不退费），只把剩余预留估算从准入与告警里释放掉，行仍留在 unknown 等人工
+# resolve。`upstream_rejected` / `usage_present` 仍不归档 —— 那两类还有
+# 「上游到底收没收钱」这个能核的问题。
 ARCHIVE_RESOLUTION_PREFIX = '已归档待核对：'
-#: 没有任何上游用量证据的分类（可归档）。有证据的一律留在 needs_human。
+#: 没有任何上游用量证据的分类。已计入金额、但结论仍未知的见 CHARGED_PARTIAL_CLASS。
 EVIDENCELESS_CLASSES = ('client_cancelled', 'no_request_log', 'unexplained')
+#: 已计入金额、但结论仍未知的分类：同样可归档，归档时不碰已计入的 charged。
+CHARGED_PARTIAL_CLASS = 'charged_partial'
+ARCHIVABLE_CLASSES = EVIDENCELESS_CLASSES + (CHARGED_PARTIAL_CLASS,)
+#: 归档留痕里的分类，用于「归档时的结论」与「现在的分类」比对。
+_ARCHIVED_CLASS_PATTERN = re.compile(r'分类 ([a-z_]+)')
 REVIEW_DEADLINE_DAYS_DEFAULT = 7
 
 
@@ -652,6 +748,30 @@ def review_deadline_days() -> int:
 def _is_archived(row) -> bool:
     """是否已标记「已归档待核对」（只看留痕字段，不看 state）。"""
     return str(row.get('resolution') or '').startswith(ARCHIVE_RESOLUTION_PREFIX)
+
+
+def archived_now(row, cls: str) -> bool:
+    """这一行**现在**是否算「已归档待核对」—— 准入、告警、面板共用这一个判定。
+
+    归档留痕里写着归档**当时**的分类（`分类 x`）。迟到证据把分类改成
+    `usage_present` / `upstream_rejected` 之后，这一行必须重新回到人工队列
+    （宁可重报），不能继续按归档放行 —— 此前告警侧按「现在的分类」判、准入侧
+    只按「有没有前缀」判，同一行会得到相反结论（审计 D-27，handoff
+    02-budget-ledger 的 D-05）。留痕里没有分类
+    的旧标记按「当下分类是否可归档」判，不让历史行凭空复活。
+
+    只应传入 `state='unknown'` 的行；是否已归档与 state 分开判断，便于调用方
+    自己组合（准入侧还要用它排除估算）。
+    """
+    if not _is_archived(row):
+        return False
+    found = _ARCHIVED_CLASS_PATTERN.search(str(row.get('resolution') or ''))
+    if found is None:
+        return cls in ARCHIVABLE_CLASSES
+    # 归档时的分类必须**也**是可归档的：历史上确实有过「把 upstream_rejected
+    # 误标成已归档」的行（见 test_v007_retention_review），带分类的误标同样不能
+    # 让它重新从 needs_human 里消失。
+    return cls in ARCHIVABLE_CLASSES and found.group(1) == cls
 
 
 def _mark_archived(request_id: str, reason: str) -> bool:
@@ -672,6 +792,8 @@ def _mark_archived(request_id: str, reason: str) -> bool:
 def archive_overdue_unknowns(now: int, deadline_days: int | None = None) -> int:
     """把超过处理期限仍无上游证据的 unknown 标记「已归档待核对」；返回条数。
 
+    可归档的分类见 `ARCHIVABLE_CLASSES`：无证据的三类，加上 G-02 补上的
+    `charged_partial`（归档不改已计入的 charged，只释放剩余估算）。
     幂等：已归档的行第二次进来直接跳过（返回 0），不会重复留痕。
     """
     now = int(now)
@@ -686,12 +808,22 @@ def archive_overdue_unknowns(now: int, deadline_days: int | None = None) -> int:
         if created > horizon:
             continue                      # 未到处理期限：继续留在待处理
         cls = _classify(row, log)
-        if cls not in EVIDENCELESS_CLASSES:
-            continue                      # 有用量证据 / 可自动结清：不归档
-        reason = ('%s超过 %d 天处理期限仍无上游证据（分类 %s，创建于 %s）；'
-                  '保留 state=unknown 供人工核对，未改用量、未删除'
-                  % (ARCHIVE_RESOLUTION_PREFIX, days, cls,
-                     time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created))))
+        if cls not in ARCHIVABLE_CLASSES:
+            continue                      # 有用量证据且仍可核 / 可自动结清：不归档
+        created_text = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created))
+        if cls == CHARGED_PARTIAL_CLASS:
+            # 钱已经按上游 usage 记进去了，可核的只剩一个不会再变的结论。
+            # 归档只认「这笔差额查不清」，绝不动已计入的 charged。
+            reason = ('%s超过 %d 天处理期限仍无法核对差额（分类 %s，已计入 %d token / %s 积分，'
+                      '创建于 %s）；保留 state=unknown 与已计入用量（不重复计费、不退费），'
+                      '剩余预留估算不再占用，仍可人工 resolve'
+                      % (ARCHIVE_RESOLUTION_PREFIX, days, cls,
+                         int(row.get('charged_tokens') or 0),
+                         row.get('charged_credit') or 0, created_text))
+        else:
+            reason = ('%s超过 %d 天处理期限仍无上游证据（分类 %s，创建于 %s）；'
+                      '保留 state=unknown 供人工核对，未改用量、未删除'
+                      % (ARCHIVE_RESOLUTION_PREFIX, days, cls, created_text))
         try:
             if not _mark_archived(row['request_id'], reason):
                 continue
@@ -747,8 +879,7 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
         total += 1
         by_state[row['state']] += 1
         age_seconds = max(0, now - int(row.get('created_at') or now))
-        archived = bool(row['state'] == 'unknown' and cls in EVIDENCELESS_CLASSES
-                        and _is_archived(row))
+        archived = bool(row['state'] == 'unknown' and archived_now(row, cls))
         if len(items) < 1000:
             items.append({
                 **row,
@@ -816,9 +947,11 @@ def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:
             'bounds_note': ('token_lower_bound 是预留估算（输入字节+max_tokens），不是实际用量；'
                             'credit_lower_bound 恒为 0 —— 本地没有定价表，不编造金额。'
                             '真实值只有上游回 usage 才知道。'),
-            'archive_note': ('archived_pending 是超过 review_deadline_days 天仍无上游证据、'
-                             '已标记「已归档待核对」的 unknown：state 未改、未删除、'
-                             '仍可人工 resolve，只是不再计入 needs_human_old 告警；'
+            'archive_note': ('archived_pending 是超过 review_deadline_days 天仍查不清、'
+                             '已标记「已归档待核对」的 unknown（无证据的三类，'
+                             '以及已计入 charged 但结论未知的 charged_partial）：'
+                             'state 未改、未删除、已计入用量未改、仍可人工 resolve，'
+                             '只是不再计入 needs_human_old 告警；'
                              'archived_pending_tokens 同样是预留估算下界，不是账单。'),
         },
     }

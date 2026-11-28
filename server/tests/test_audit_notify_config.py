@@ -74,5 +74,33 @@ class NotifyConfigurationTest(unittest.TestCase):
             self.assertEqual(read.call_count, 1)
 
 
+class AlertRoutingDocTests(unittest.TestCase):
+    """`file` 模式的最小示例必须让服务真的写得进去。
+
+    `/opt/notify` 是 root 的 0755，容器里服务以 uid 10001 运行（Dockerfile:155）。
+    只写 `config.json` 而不预建输出文件，`dispatch()` 会在 append 时
+    PermissionError，每条告警都投递失败；而 `status()` 仍报 `configured=true`，
+    静默模式也不再记本地账 —— 比未配置更安静。文档示例要预建输出文件并交给
+    服务 UID。
+    """
+
+    DOC = (Path(__file__).resolve().parents[2] / 'docs' / 'ALERT-ROUTING.md').read_text(
+        encoding='utf-8')
+
+    def test_file_mode_recipe_precreates_the_output_for_the_service_uid(self):
+        self.assertIn('alerts.jsonl', self.DOC)
+        self.assertIn('install -o 10001', self.DOC,
+                      'file 模式示例没有预建可写的输出文件：uid 10001 建不了，投递会 PermissionError')
+
+    def test_container_deployment_recipe_mentions_the_mount_and_env(self):
+        """compose 只挂 ./data 与 ../workbuddy2api，不挂 /opt/notify 也不传
+        WB_NOTIFY_CONFIG —— 不给这两样，容器里默认路径永远不存在，宿主机写的
+        配置进程看不见，只会一直报「告警未配置」。文档必须点明。"""
+        self.assertIn('WB_NOTIFY_CONFIG', self.DOC)
+        self.assertIn('/opt/notify:/opt/notify', self.DOC,
+                      '容器部署示例缺 /opt/notify 绑定挂载')
+        self.assertIn('容器部署', self.DOC)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -35,6 +35,17 @@ def _ssh_keygen_available() -> bool:
     return shutil.which('ssh-keygen') is not None
 
 
+def _openssl_available() -> bool:
+    return shutil.which('openssl') is not None
+
+
+def _openssl(*args: str) -> None:
+    proc = subprocess.run(['openssl', *args], capture_output=True, timeout=60)
+    if proc.returncode:
+        raise AssertionError(
+            f'openssl {" ".join(args)} 失败：{proc.stderr.decode("utf-8", "replace")[:300]}')
+
+
 class _Rep:
     def __init__(self) -> None:
         self.lines: list[tuple[str, str]] = []
@@ -69,13 +80,23 @@ def _digest_of(path: Path) -> str:
     return 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@unittest.skipUnless(_openssl_available(), '需要 openssl（发布包 Ed25519 签名）')
 class UpdateEndToEndTest(unittest.TestCase):
-    """真实跑 update_manager，只伪造 GitHub API 的返回。"""
+    """真实跑 update_manager，只伪造 GitHub API 的返回。
+
+    发布包按 DAN-24 的合同**必须带 Ed25519 签名**（没有签名不再安装），所以这里
+    在类级别生成一对临时密钥当信任锚 —— 签名与验签都是真跑的 openssl。
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory()
         cls.dir = Path(cls._tmp.name)
+        cls._keys = tempfile.TemporaryDirectory()
+        cls.signing_key = Path(cls._keys.name) / 'release.pem'
+        cls.trust_anchor = Path(cls._keys.name) / 'release.pub.pem'
+        _openssl('genpkey', '-algorithm', 'ed25519', '-out', str(cls.signing_key))
+        _openssl('pkey', '-in', str(cls.signing_key), '-pubout', '-out', str(cls.trust_anchor))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -83,6 +104,7 @@ class UpdateEndToEndTest(unittest.TestCase):
             cls._tmp.cleanup()
         except PermissionError:
             pass
+        cls._keys.cleanup()
 
     # ── 夹具 ──
 
@@ -136,7 +158,7 @@ class UpdateEndToEndTest(unittest.TestCase):
 
     def _load(self, install: Path, **env):
         keys = ['WB_INSTALL_DIR', 'WB_DATA_DIR', 'WB_UPDATE_STATUS',
-                'WB_SERVICE_NAME', *env.keys()]
+                'WB_SERVICE_NAME', 'WB_RELEASE_TRUST', *env.keys()]
         old = {k: os.environ.get(k) for k in keys}
         try:
             os.environ.update({
@@ -144,6 +166,7 @@ class UpdateEndToEndTest(unittest.TestCase):
                 'WB_DATA_DIR': str(install / 'data'),
                 'WB_UPDATE_STATUS': str(install / 'data' / 'update-status.json'),
                 'WB_SERVICE_NAME': 'workbuddy-web-does-not-exist',
+                'WB_RELEASE_TRUST': str(self.trust_anchor),
                 **{k: str(v) for k, v in env.items()},
             })
             spec = importlib.util.spec_from_file_location(
@@ -172,7 +195,16 @@ class UpdateEndToEndTest(unittest.TestCase):
         }
         if digest is not None:
             asset['digest'] = digest
-        rel = {'tag_name': f'v{version}', 'assets': [asset]}
+        # 签名是对**当前磁盘上的字节**签的：用例先篡改包的话，签名随之与包一致，
+        # 「篡改」就只由摘要那条挡住 —— 那正是那条用例要测的属性。
+        signature = pkg.with_name(pkg.name + '.sig')
+        _openssl('pkeyutl', '-sign', '-inkey', str(self.signing_key),
+                 '-rawin', '-in', str(pkg), '-out', str(signature))
+        rel = {'tag_name': f'v{version}', 'assets': [
+            asset,
+            {'name': signature.name, 'browser_download_url': signature.as_uri(),
+             'size': signature.stat().st_size},
+        ]}
 
         mod.http_json = lambda url, timeout=20: rel  # type: ignore[assignment]
         # systemctl restart 在测试环境不存在，替换为空操作

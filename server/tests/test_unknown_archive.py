@@ -10,8 +10,9 @@
      「已归档待核对」，**不改 state、不删除**，仍可人工 resolve；
   2. 未超期仍计入 `needs_human_old`（告警判据不变，不提前静音）；
   3. 归档幂等、留痕（`resolution` 前缀 + audit_logs），且**不改用量**；
-  4. 有用量证据的分类（charged_partial / usage_present）与可自动结清的
-     upstream_rejected 一律不归档；
+  4. 有用量证据且**还能核**的分类（usage_present）与可自动结清的
+     upstream_rejected 一律不归档；`charged_partial` 自 G-02 起有归档出口
+     （归档不改已计入的 charged），见 `test_g02_replay_client_cancelled.py`；
   5. 告警判据只看 `needs_human_old`，已归档的单独以 `archived_pending` 明示。
 """
 from __future__ import annotations
@@ -243,22 +244,19 @@ class UnknownArchiveTest(unittest.TestCase):
         self.assertEqual(summary['needs_human'], 1, '有证据的必须重新回到人工队列')
         self.assertEqual(summary['by_class']['usage_present'], 1)
 
-    # ── 5. 有证据 / 可自动结清的分类不归档 ────────────────────────────
+    # ── 5. 有证据且仍可核 / 可自动结清的分类不归档 ────────────────────
     def test_evidence_bearing_classes_are_never_archived(self) -> None:
-        self._reserve('partial', charged_tokens=7, age=30 * DAY)
-        self._cancel('partial')
         self._reserve('usage', age=30 * DAY)
         self._log('usage', usage_source='upstream', credit=0.1, status=200,
                   terminal_state='completed')
         self._reserve('rejected', age=30 * DAY)
         self._log('rejected')
         self.assertEqual(budget.archive_overdue_unknowns(self.now), 0)
-        for request_id in ('partial', 'usage', 'rejected'):
+        for request_id in ('usage', 'rejected'):
             self.assertIsNone(self._row(request_id)['resolution'], request_id)
         summary = self._summary()
         self.assertEqual(summary['archived_pending'], 0)
         self.assertEqual(summary['auto_reconcilable'], 0)
-        self.assertEqual(summary['by_class']['charged_partial'], 1)
         self.assertEqual(summary['by_class']['usage_present'], 1)
 
     def test_evidenceless_classes_all_get_archived(self) -> None:
@@ -272,6 +270,28 @@ class UnknownArchiveTest(unittest.TestCase):
         self.assertEqual(summary['archived_pending'], 3)
         self.assertEqual(summary['needs_human_old'], 0)
         self.assertEqual(summary['needs_human'], 0)
+
+    def test_historical_marker_naming_a_rejection_class_is_not_hidden(self) -> None:
+        """带分类的「历史误归档」同样不能把上游拒绝记录藏起来。
+
+        `upstream_rejected` 还需要人核「上游到底收没收钱」。历史上确有过把这类行
+        误标成已归档的标记（`test_v007_retention_review` 钉的是不带分类的那种），
+        带分类的标记如果只比对分类、不检查分类本身可不可归档，就会让这条记录
+        重新从 needs_human / 告警里消失。
+        """
+        self._reserve('rejected-marked', age=30 * DAY)
+        self._log('rejected-marked')
+        db.execute('UPDATE budget_reservations SET resolution=? WHERE request_id=?',
+                   (budget.ARCHIVE_RESOLUTION_PREFIX + 'historical（分类 upstream_rejected）',
+                    'rejected-marked'))
+        summary = self._summary()
+        self.assertEqual(summary['by_class']['upstream_rejected'], 1)
+        self.assertEqual(summary['archived_pending'], 0)
+        self.assertEqual(summary['needs_human'], 1)
+        item = next(row for row in budget.unresolved_summary(now=self.now)['items']
+                    if row['request_id'] == 'rejected-marked')
+        self.assertFalse(item['archived'])
+        self.assertEqual(item['review_state'], 'review_required')
 
     # ── 6. 只归档 unknown，不碰在途请求 ───────────────────────────────
     def test_in_flight_reservations_are_never_archived(self) -> None:

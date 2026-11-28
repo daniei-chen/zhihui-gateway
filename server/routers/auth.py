@@ -72,7 +72,9 @@ async def login(request: Request) -> JSONResponse:
 def _complete_login(request: Request, ip: str, username: str, password: str) -> JSONResponse:
     # 日志与审计只写清洗后的标签；认证、锁定键与用户查找继续用原值。
     label = security.log_text(username)
-    if security.login_blocked(ip, username):
+    # 来源 IP 维度是唯一还在真正限速的闸门，所以硬拦，且拦在 KDF 之前。
+    # 账号维度**不能**在这里拦：锁定期内还要放行正确密码（审计 D-1）。
+    if security.ip_login_blocked(ip):
         raise HTTPException(status_code=429, detail='失败次数过多，请 10 分钟后再试')
 
     cfg = security.load_users()
@@ -81,11 +83,18 @@ def _complete_login(request: Request, ip: str, username: str, password: str) -> 
         # Avoid a no-KDF fast path that reveals whether the username exists.
         security.dummy_verify(password)
     if not user or not security.verify_pwd(password, user.get('pwd_hash', '')):
+        # 判定顺序：先验密码，再看账号是否已在锁定期。
+        # 错密码在锁定期内**继续拒绝并计数**；正确密码走到下面照常登录并清零。
+        # 两次判定读的是同一次密码校验的结果，所以锁定与普通失败的耗时一致
+        # （KDF 照跑），不额外制造时序旁路。
+        locked = security.account_locked(username)
         # 同时记 IP 与用户名：前者防单机爆破，后者防换 IP 打同一账号
         fails = security.record_fail(ip, username)
         # 登录失败也要留痕：本次事故中攻击者拿到了会话，但服务端没有任何记录
         security.audit({'username': label or '(空)'}, 'login_failed', label,
                        f'来源 {ip}', ip=ip)
+        if locked:
+            raise HTTPException(status_code=429, detail='失败次数过多，请 10 分钟后再试')
         # 快到锁定时才说「还剩几次」。
         #
         # 2026-11-15：有用户输错几次后来问「密码是不是换了」—— 因为每次都是

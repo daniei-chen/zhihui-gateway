@@ -199,25 +199,30 @@ git push origin main
 git tag vX.Y.Z && git push origin vX.Y.Z
 
 # 4) 等 CI 完成后，下载**最终产物**核对
-gh release download vX.Y.Z --repo ithtelab/workbuddy-manager \
+gh release download vX.Y.Z --repo daniei-chen/zhihui-gateway \
   --pattern 'workbuddy-manager-vX.Y.Z.tar.gz' --dir /tmp/vX.Y.Z
 bash deploy/verify-release.sh /tmp/vX.Y.Z/workbuddy-manager-vX.Y.Z.tar.gz
 #    → 打印本地 sha256，与 Releases 页面「产物校验（sha256）」里的值比一眼
 tar tzf /tmp/vX.Y.Z/workbuddy-manager-vX.Y.Z.tar.gz | head -5      # 抽查包结构
 #    再解开看 .version 与 server/main.py 的版本号
 
-# 5) 给旧版更新器补过渡签名（v1.0.85 及更早仍强制验签；私钥只在维护者本机）
+# 5) 签发布包（**必做**：更新器只安装带 Ed25519 签名的包，DAN-24）
+#    私钥只在维护者本机/受保护签名流程里；公钥是各主机的信任锚
 cd /tmp/vX.Y.Z
-ssh-keygen -Y sign -f ~/.ssh/workbuddy-release -n file workbuddy-manager-vX.Y.Z.tar.gz
+deploy/sign-release-ed25519.py --sign-only \
+  --manifest workbuddy-manager-vX.Y.Z.tar.gz \
+  --sig workbuddy-manager-vX.Y.Z.tar.gz.sig \
+  --key ~/.keys/release-priv.pem \
+  --trust /path/to/release-trust-ed25519.pem      # 签完当场用锚自验一次
 gh release upload vX.Y.Z workbuddy-manager-vX.Y.Z.tar.gz.sig \
-  --repo ithtelab/workbuddy-manager
-#    验一下再继续（用仓库里记录的公钥，或 update.py 里内嵌的那把）：
-#    printf 'release %s\n' "$(cat ~/.ssh/workbuddy-release.pub)" > allowed_signers
-#    ssh-keygen -Y verify -f allowed_signers -I release -n file \
-#      -s workbuddy-manager-vX.Y.Z.tar.gz.sig < workbuddy-manager-vX.Y.Z.tar.gz
+  --repo daniei-chen/zhihui-gateway
+#    另跑一次独立验签（换台机器、只用公钥）：
+#    deploy/sign-release-ed25519.py --verify \
+#      --manifest workbuddy-manager-vX.Y.Z.tar.gz \
+#      --sig workbuddy-manager-vX.Y.Z.tar.gz.sig --trust release-trust-ed25519.pem
 
 # 6) 核对无误后**发布**（草稿对用户不可见，这一步才让版本生效）
-gh release edit vX.Y.Z --repo ithtelab/workbuddy-manager --draft=false
+gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 ```
 
 关键的一条：**草稿不发布，用户永远看不到这个版本** —— 面板与更新器的版本检查都读
@@ -225,10 +230,18 @@ gh release edit vX.Y.Z --repo ithtelab/workbuddy-manager --draft=false
 直接把 Release 公开发布，产物还在上传时点「一键更新」就会拿到半成品或 404。现在
 用户侧看到的一直是上一个**已发布且产物齐全**的版本。
 
-2026-10-14 起**新版本更新器不再要求签名**：只核对发布页给的 sha256 与文件大小
-（发布说明里就印着那个哈希，工作流自动附上）。但 `.sig` 仍要按第 5 步手工补 ——
-停在 v1.0.85 及更早的更新器强制验签，漏掉就会让这批老部署无法升级。为什么这样
-过渡、私钥如何保管，见 [release-signing.md](release-signing.md)。
+2026-11-27（DAN-24）起**更新器重新强制验签**：发布包必须带
+`<包名>.sig`（Ed25519 detached signature，raw over tar.gz 字节），更新器用受控位置的
+信任锚验过才安装。原因与 2026-10-14 那次取消不同：那时的前提是「发布源可信、只需防
+传输损坏」，而更新器的默认发布源当时指向的是别的仓库（`ithtelab/workbuddy-manager`），
+摘要又印在同一个发布页上 —— 能改包的对手顺手就能改掉摘要。现在发布源收敛到
+`daniei-chen/zhihui-gateway` 白名单，摘要仍然打印出来供人工比对，但**它不再是门禁**：
+没有签名、签名验不过、信任锚缺失或可被他人改写，更新一律中止，一个字节都不落盘。
+
+**漏了第 5 步会怎样**：草稿发布之后，所有自称能更新到这一版的部署都会在
+「该发布没有提供签名」处停下（旧版本继续服务，不会装半成品）。补上 `.sig` 资产
+即可恢复，不需要重新打包。私钥保管与信任锚的边界见
+[release-signing.md](release-signing.md)。
 
 ## 发布包字节的可复现性
 
@@ -272,12 +285,12 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 **维护者收尾（核对 + 发布）**
 
 ```bash
-gh release download vX.Y.Z --repo ithtelab/workbuddy-manager \
+gh release download vX.Y.Z --repo daniei-chen/zhihui-gateway \
   --pattern 'workbuddy-manager-vX.Y.Z.tar.gz' --dir /tmp/vX.Y.Z
 bash deploy/verify-release.sh /tmp/vX.Y.Z/workbuddy-manager-vX.Y.Z.tar.gz  # 与发布页哈希对一眼
 tar tzf /tmp/vX.Y.Z/workbuddy-manager-vX.Y.Z.tar.gz | head -5              # 抽查包结构
-# 解开看 .version / server/main.py 的版本号之后发布：
-gh release edit vX.Y.Z --repo ithtelab/workbuddy-manager --draft=false
+# 解开看 .version / server/main.py 的版本号，签好 .sig（上面的第 5 步）之后发布：
+gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 ```
 
 **协作者推完 tag、维护者还没核对之前，用户侧什么都看不到**：CI 建的是草稿，而版本
