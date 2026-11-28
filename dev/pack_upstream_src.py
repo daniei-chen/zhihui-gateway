@@ -193,9 +193,14 @@ def write_lock(path: Path, digest: str, size: int) -> None:
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
+def upload_command(repo: str, path: Path) -> list[str]:
+    """真正要执行的上传命令 —— `--dry-run` 打印的就是它，只此一处，不许平行实现。"""
+    return ['gh', 'release', 'upload', repo, RELEASE_TAG, str(path), '--clobber']
+
+
 def upload_asset(repo: str, path: Path) -> int:
     """把包传到**本仓** `upstream-src` Release 的固定附件名上（覆盖）。"""
-    cmd = ['gh', 'release', 'upload', repo, RELEASE_TAG, str(path), '--clobber']
+    cmd = upload_command(repo, path)
     try:
         done = subprocess.run(cmd, capture_output=True, text=True,
                               encoding='utf-8', errors='replace')
@@ -208,6 +213,39 @@ def upload_asset(repo: str, path: Path) -> int:
         print('    lock 未改动：远端还是旧包，两者仍然一致。修好网络/权限后重跑。',
               file=sys.stderr)
         return 3
+    return 0
+
+
+def publish(args, out_path: Path, digest: str, size: int) -> int:
+    """上传（可选）与写 lock 的**唯一**入口。
+
+    两个动作放在同一个函数体里，是为了让「上传了但 lock 没改」这种组合在结构上
+    不存在：任何一条失败都在 `write_lock()` 之前 return，lock 保持原样（远端也
+    还是旧包，两者仍然一致）。`--dry-run` 走同一段逻辑，只打印不执行、不写文件。
+    """
+    if args.dry_run:
+        if args.upload:
+            print('将执行：' + ' '.join(upload_command(args.repo, out_path)))
+            if shutil.which('gh') is None:
+                print('  注意：本机 PATH 里没有 gh，实跑会在这一步失败（--dry-run 不调用它）。')
+        print(f'将写入 {args.lock}：')
+        print(f'  sha256={digest}')
+        print(f'  bytes={size}')
+        print('--dry-run：没有上传、没有改 lock。')
+        return 0
+
+    if args.upload:
+        rc = upload_asset(args.repo, out_path)
+        if rc != 0:
+            return rc
+        print(f'已上传 {ASSET_NAME} 到 {args.repo} 的 {RELEASE_TAG} Release。')
+    else:
+        print('未上传（没有 --upload）。发布时用同一条命令加 --upload：')
+        print('  上传与改 lock 必须是同一次运行；手工上传之后要再跑一遍本脚本。')
+        print('  这个包是我们的源码快照，只发到本仓，不传到第三方仓库。')
+
+    write_lock(args.lock, digest, size)
+    print(f'已更新 {args.lock}：sha256={digest} bytes={size}')
     return 0
 
 
@@ -225,6 +263,8 @@ def main() -> int:
                     help=f'打包后传到 {DEFAULT_REPO} 的 {RELEASE_TAG} Release（覆盖同名附件）')
     ap.add_argument('--repo', default=DEFAULT_REPO,
                     help=f'--upload 的目标仓库（默认 {DEFAULT_REPO}；只接受本仓）')
+    ap.add_argument('--dry-run', action='store_true',
+                    help='只打印将要执行的上传命令与将要写入 lock 的内容；不调用 gh、不改 lock')
     args = ap.parse_args()
 
     if args.repo != DEFAULT_REPO:
@@ -303,20 +343,12 @@ LICENSE 与版权声明。
         print(f'已打出 {out_path}（{len(files)} 个文件，{size / 1024:.0f} KB，'
               f'sha256:{full_digest[:16]}…）')
 
-        if args.upload:
-            rc = upload_asset(args.repo, out_path)
-            if rc != 0:
-                return rc
-            print(f'已上传 {ASSET_NAME} 到 {args.repo} 的 {RELEASE_TAG} Release。')
-        else:
-            print('未上传（没有 --upload）。发布时用同一条命令加 --upload：')
-            print('  上传与改 lock 必须是同一次运行；手工上传之后要再跑一遍本脚本。')
-            print('  这个包是我们的源码快照，只发到本仓，不传到第三方仓库。')
-
-        write_lock(args.lock, full_digest, size)
-        print(f'已更新 {args.lock}：sha256={full_digest} bytes={size}')
-        print('下一步：把 lock 与本次改动一起提交 —— release.yml 与 '
-              'windows/launcher/build.ps1 都只认这份 lock。')
+        rc = publish(args, out_path, full_digest, size)
+        if rc != 0:
+            return rc
+        if not args.dry_run:
+            print('下一步：把 lock 与本次改动一起提交 —— release.yml 与 '
+                  'windows/launcher/build.ps1 都只认这份 lock。')
     return 0
 
 

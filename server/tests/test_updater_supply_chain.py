@@ -13,6 +13,7 @@ marker 在仓库里是被跟踪的，所以受控安装树里自助升级本来�
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import os
@@ -664,7 +665,139 @@ class UpstreamSourcePinTests(unittest.TestCase):
                  '-o', str(Path(temp) / 'out'), '--lock', str(Path(temp) / 'l.txt'),
                  '--upload', '--repo', THIRD_PARTY_REPO],
                 capture_output=True, text=True, encoding='utf-8', errors='replace')
-            self.assertNotEqual(done.returncode, 0, '第三方上传目标竟然被接受')
+            self.assertEqual(done.returncode, 2,
+                             f'第三方上传目标应被参数检查拒绝（rc=2），实际 rc={done.returncode}')
+
+    def _run_verify_block(self, payload: bytes, lock_text: str) -> subprocess.CompletedProcess:
+        """把 build.ps1 里 marker 之间的**真代码段**切出来跑。"""
+        block = self.source[self.source.index(_VERIFY_BEGIN):
+                            self.source.index(_VERIFY_END) + len(_VERIFY_END)]
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            archive = tmp / 'src.tar.gz'
+            archive.write_bytes(payload)
+            lock = tmp / 'upstream-source.lock'
+            lock.write_text(lock_text, encoding='utf-8')
+            script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "$ErrorActionPreference = 'Stop'\n"
+                "function Write-Step($m) { Write-Output ('[STEP] ' + $m) }\n"
+                f". '{_PIN_HELPER.as_posix()}'\n"
+                f"$UpstreamSrcLock = '{lock.as_posix()}'\n"
+                f"$tarPath = '{archive.as_posix()}'\n"
+                + block + "\n"
+                "Write-Output 'REACHED-EXTRACT'\n"
+            )
+            return _run_ps(script)
+
+    def test_verify_block_in_build_ps1_actually_rejects(self) -> None:
+        """判据是「把 build.ps1 的校验段注释掉就得红」，不是「源码里出现过函数名」。
+
+        `assertIn('Read-UpstreamSrcPin', source)` 一行注释就能满足 —— 那种断言守不住
+        「校验代码还在、但没人调用」。这里按 marker 切出**真代码**去跑：段里只剩注释
+        时，摘要不符的包会被放行（打印出 REACHED-EXTRACT），用例当场红。v1.6.28 就是
+        这么漂的：校验代码在、门看着绿，直到安装器红在构建阶段。
+        """
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        payload = b'pinned upstream tarball\n'
+        digest = hashlib.sha256(payload).hexdigest()
+
+        ok = self._run_verify_block(payload, self._lock_text(digest, len(payload)))
+        self.assertIn('REACHED-EXTRACT', ok.stdout, ok.stdout + ok.stderr)
+
+        bad = self._run_verify_block(payload, self._lock_text('f' * 64, len(payload)))
+        self.assertNotEqual(bad.returncode, 0, '校验段没有拒绝摘要不符的包')
+        self.assertNotIn('REACHED-EXTRACT', bad.stdout,
+                         '校验段存在但没被调用：摘要不符的包被放行了')
+        self.assertIn('摘要不匹配', bad.stderr + bad.stdout,
+                      '拒绝原因不是摘要判据（没抓住要说清被哪条抓住的）')
+
+    def test_lock_syntax_is_as_strict_as_the_release_workflow(self) -> None:
+        """PS 侧的 lock 解析不能比 release.yml 的 bash 宽松：同一份 lock 必须两边同判。
+
+        实测过的不对称：前导空格、大写 hex、`sha256 = …`、`bytes=007435373`、重复键
+        ——bash 全拒、旧版 PS 全收。两边都拿实际字节比对，所以不会放过错包；但会让
+        同一份 lock「Linux 红、Windows 绿」，而两边判断不一致正是这次发版失败的地方。
+        """
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        payload = b'pinned upstream tarball\n'
+        digest = hashlib.sha256(payload).hexdigest()
+        size = len(payload)
+        cases = {
+            '前导空格': f' sha256={digest}\nbytes={size}\n',
+            '大写 hex': f'sha256={digest.upper()}\nbytes={size}\n',
+            '等号带空格': f'sha256 = {digest}\nbytes={size}\n',
+            'bytes 前导零': f'sha256={digest}\nbytes=0{size}\n',
+            '重复键': f'sha256={digest}\nsha256={digest}\nbytes={size}\n',
+        }
+        for label, text in cases.items():
+            with self.subTest(case=label):
+                done = self._probe(payload, text)
+                self.assertNotEqual(done.returncode, 0,
+                                    f'{label} 的 lock 被接受了（release.yml 的 bash 会拒）')
+                self.assertNotIn('VERIFIED', done.stdout, f'{label} 的 lock 竟然放行')
+
+    def test_dry_run_prints_the_upload_and_lock_without_touching_it(self) -> None:
+        """`--dry-run`：打印**将要执行的那条命令**与将要写入 lock 的两行，且不执行、不写。
+
+        这条是 `--upload` 缺口的行为证据里能做的部分：本机没有 `gh`，真上传跑不了，
+        但「打印的命令」与「实跑的命令」共用 `upload_command()`，只此一处实现。
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            src = tmp / 'src'
+            src.mkdir()
+            (src / 'docker-compose.yml').write_text('services: {}\n', encoding='utf-8')
+            lock = tmp / 'upstream-source.lock'
+            done = subprocess.run(
+                [sys.executable, '-X', 'utf8', str(_PACKER), str(src),
+                 '-o', str(tmp / 'out'), '--lock', str(lock), '--stamp', 'dry',
+                 '--upload', '--dry-run'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace')
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            asset = tmp / 'out' / 'workbuddy2api-src.tar.gz'
+            raw = asset.read_bytes()
+            self.assertIn(
+                f'gh release upload {OFFICIAL_REPO} upstream-src {asset} --clobber',
+                done.stdout, 'dry-run 没有打印将要执行的上传命令（或命令与本仓对不上）')
+            self.assertIn(f'sha256={hashlib.sha256(raw).hexdigest()}', done.stdout,
+                          'dry-run 没有打印将要写入 lock 的 sha256')
+            self.assertIn(f'bytes={len(raw)}', done.stdout,
+                          'dry-run 没有打印将要写入 lock 的 bytes')
+            self.assertFalse(lock.exists(), '--dry-run 竟然写了 lock')
+
+            sentinel = '# sentinel\nsha256=' + '0' * 64 + '\nbytes=1\n'
+            lock.write_text(sentinel, encoding='utf-8')
+            again = subprocess.run(
+                [sys.executable, '-X', 'utf8', str(_PACKER), str(src),
+                 '-o', str(tmp / 'out'), '--lock', str(lock), '--stamp', 'dry',
+                 '--upload', '--dry-run'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace')
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            self.assertEqual(lock.read_text(encoding='utf-8'), sentinel,
+                             '--dry-run 改了已存在的 lock 文件')
+
+    def test_upload_and_lock_write_share_one_function_body(self) -> None:
+        """结构断言：上传与写 lock 在同一个函数体里，上传失败必须先 return。
+
+        **这证的是结构，不是实跑**：本机没有 `gh`，真上传一次都没跑过。它保证的是
+        「上传成功之后才可能写 lock，任何失败都在写之前返回」这条形状 —— 也就是
+        大队长要的那半条「上传了但 lock 没改」的不可能性，另一半（打印的命令等于
+        实跑的命令）由 `upload_command()` 只有一处实现来保证。
+        """
+        tree = ast.parse(self.packer)
+        publish = next((n for n in tree.body
+                        if isinstance(n, ast.FunctionDef) and n.name == 'publish'), None)
+        self.assertIsNotNone(publish, '找不到 publish()：上传与写 lock 不是一个函数体')
+        body = ast.get_source_segment(self.packer, publish) or ''
+        self.assertIn('upload_asset(', body, 'publish() 里没有上传调用')
+        self.assertIn('write_lock(', body, 'publish() 里没有写 lock')
+        self.assertIn('if rc != 0', body, '上传失败时没有先 return')
+        self.assertLess(body.index('if rc != 0'), body.rindex('write_lock('),
+                        '上传失败时没有先 return：有可能带着失败去写 lock')
 
 
 class InstallSurfacesPointAtThisRepositoryTests(unittest.TestCase):
