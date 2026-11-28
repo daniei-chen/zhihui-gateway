@@ -616,6 +616,9 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
+    # Messages 非流式「finish=stop 却没有正文」必须 502，不许回 200 空答案。
+    # 纯工具调用（content 为 null/[]）是合法空正文，边界由同模块的对照用例守着。
+    "server.tests.test_messages_empty_content",
 )
 
 
