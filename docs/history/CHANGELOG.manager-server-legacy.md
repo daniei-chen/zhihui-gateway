@@ -1,5 +1,9 @@
 # 更新日志
 
+> **历史归档，不要在这里追加记录。** 当前更新日志是仓库根目录的 `CHANGELOG.md`
+> （发布时复制一份到 `server/CHANGELOG.md`，界面「更新日志」页读的是后者）。
+> 本文件不被任何脚本或页面读取；`server/tests/test_duplicate_sources.py` 会守住这一点。
+
 本项目的所有重要变更都会记录在此文件。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，

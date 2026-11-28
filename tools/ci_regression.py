@@ -616,6 +616,9 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
+    # G-16 结构清理：打包副本与唯一源必须逐字节一致，历史日志不能被接回界面。
+    # 四刀变异各自杀掉一条断言（改副本 / 去掉唯一源说明 / 接回历史日志 / 去掉归档标记）。
+    "server.tests.test_duplicate_sources",
 )
 
 
