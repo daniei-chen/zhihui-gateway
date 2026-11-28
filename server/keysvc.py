@@ -376,6 +376,13 @@ def reset_usage(key_id: int, *, actor: str = 'reset_usage') -> bool:
     不清积分会留下一个看不见的残留额度，下次超额时用户会莫名其妙（「我明明
     重置过」）。若只想放开其中一项，正确做法是把对应的**额度**调大，而不是
     靠重置。
+
+    **当天的日配额计数也一起归零**（G-07）：`budget.prepare` 判日额度用的是
+    `dailyquota.snapshot(key, day)`，不看 `api_keys.used_tokens`。原来只清
+    `api_keys`，管理员点了「重置用量」、列表上已用变成 0，请求却仍然
+    `daily_token_quota_exhausted` —— 界面上写着 0/额度，却是 429。
+    今天这一行必须**显式写成 0**而不是删除：`snapshot` 在行缺失时会回退去
+    汇总 `usage_daily`，删掉等于把刚才的用量又数回来。
     """
     from . import budget, ledgerreplay
     budget.initialize()
@@ -388,6 +395,10 @@ def reset_usage(key_id: int, *, actor: str = 'reset_usage') -> bool:
         conn.execute('INSERT INTO usage_reset_events(key_id,event_units_before,previous_units,previous_tokens,ts,actor) VALUES(?,?,?,?,?,?)',
                      (key_id,baseline,int(row['used_credit_units'] or 0),int(row['used_tokens'] or 0),int(time.time()),str(actor)[:128]))
         conn.execute('UPDATE api_keys SET used_tokens=0,used_credit=0,used_credit_units=0 WHERE id=?',(key_id,))
+        day = db.day_of()
+        conn.execute('INSERT OR IGNORE INTO key_daily_usage(key_id,day,tokens,credit_units) VALUES(?,?,0,0)',
+                     (key_id, day))
+        conn.execute('UPDATE key_daily_usage SET tokens=0,credit_units=0 WHERE key_id=? AND day=?',(key_id, day))
     return True
 
 
