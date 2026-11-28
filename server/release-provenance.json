@@ -1,5 +1,5 @@
 {
-  "base_commit": "2d960ddd7d4ddcf0a6f839db9d47351d14c0cda7",
+  "base_commit": "25f86856d3b77b7895782ed396a98ffd45ed9b21",
   "base_release": "v1.6.27",
   "candidate_only": true,
   "database_rollback": false,
@@ -140,7 +140,7 @@
     "server/qtgcore/config.py": "51a6158bc3e0d2fbb734c898e339fa968d40433a49651f507b26c5d7d52affbf",
     "server/qtgcore/errors.py": "84b338c99bf4aebbdaf78f3140fecf190adf3150e5a20b1f2cc103bf9f9cfe65",
     "server/relay_app.py": "7151e0f086522389d07a02b102c7e871ff8217fd79e4939e5b71337ef812913a",
-    "server/rollingrelay.py": "30dba384cb202214045e7fdabc614ab0ce53d7ffc8a0fb6977cbd5d318b86545",
+    "server/rollingrelay.py": "df06cce876f4cdcab2ae40f2cb4894785dacb35d4746e77f4392e406febafdec",
     "server/routers/anthropic.py": "7098b202877a6a6746157288e349c2e7102276b9bd1926d5b07c68581e99f059",
     "server/routers/gateway.py": "b7983749018b3e7450d9e690d0e0cf01d90b12eed403c654f0d3424fc1fc6108",
     "server/routers/portal.py": "d63c9ef794e706fc349452f4c0374675b5c918bae05373e27b568bb68a2a1ed3",

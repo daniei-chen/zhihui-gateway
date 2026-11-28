@@ -243,22 +243,35 @@ class StreamingRelay:
         """
         last = None
         draining = None
-        for attempt in range(STARTUP_RETRIES):
-            try:
-                response = await self.client.send(build(), stream=True)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                last = error
-            else:
-                if not await is_draining_response(response):
-                    return response
-                # 排空应答里没有业务数据；关掉它再重试是安全的。
-                if draining is not None:
-                    await draining.aclose()
-                draining = response
-                last = None
-            if attempt + 1 >= STARTUP_RETRIES:
-                break
-            await asyncio.sleep(STARTUP_RETRY_DELAY * (attempt + 1))
+        response = None
+        try:
+            for attempt in range(STARTUP_RETRIES):
+                try:
+                    response = await self.client.send(build(), stream=True)
+                except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                    last = error
+                else:
+                    if not await is_draining_response(response):
+                        return response
+                    # 排空应答里没有业务数据；关掉它再重试是安全的。
+                    if draining is not None:
+                        await draining.aclose()
+                    draining, response = response, None
+                    last = None
+                if attempt + 1 >= STARTUP_RETRIES:
+                    break
+                await asyncio.sleep(STARTUP_RETRY_DELAY * (attempt + 1))
+        except BaseException:
+            # 预读失败（截断、超时）会从这里抛出去交给调用方回 502，但手里这两条
+            # 应答必须先还给连接池：池容量就是 `maximum`，每漏一条就少一个名额，
+            # 重启窗口里连续截断会把池耗干、后来的请求变成 PoolTimeout。
+            for owned in (response, draining):
+                if owned is not None:
+                    try:
+                        await owned.aclose()
+                    except Exception:  # 关连接失败不能盖掉原始失败
+                        pass
+            raise
         if draining is not None:
             # 重试用尽：把最后那条 503 原样交给客户端，不伪造成功、也不换成 502。
             return draining

@@ -285,6 +285,30 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(len(response.content), len(b'{"error": ' + b'y' * 5000 + b' ' + b'z' * 1000 + b'}'))
 
+    async def test_held_draining_response_is_closed_when_a_later_pre_read_fails(self):
+        """重启窗口里连续截断不能漏连接：池容量就是 maximum，漏一条少一个名额。"""
+        made = []
+
+        async def provider(request):
+            if not made:
+                response = httpx.Response(503, stream=BytesBody(DRAIN_BODY),
+                                          headers={'retry-after': '1',
+                                                   'content-type': 'application/json'})
+            else:
+                response = httpx.Response(503, stream=Truncated(),
+                                          headers={'retry-after': '1',
+                                                   'content-type': 'application/json'})
+            made.append(response)
+            return response
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(len(made), 2)
+        self.assertEqual(response.status_code, 502)
+        self.assertTrue(made[0].is_closed, '被扣住的排空应答没有还回连接池')
+        self.assertTrue(made[1].is_closed)
+
     async def test_truncated_503_body_is_transport_uncertain_not_a_passthrough(self):
         """预读失败既不能透传也不能重放：按传输不确定回 502，绝不伪装成功。"""
         attempts = []
