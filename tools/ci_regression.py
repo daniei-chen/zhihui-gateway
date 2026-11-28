@@ -227,6 +227,11 @@ MODULES = (
     "server.tests.test_current_version_readonly",
     "server.tests.test_dashboard_credit_expiry",
     "server.tests.test_dashboard_snapshot_entry",
+    # DAN-41：投递通道未配置时告警不许静默消失。unittest 类（没有顶层 test 函数），
+    # 所以进 MODULES 而不是 PYTEST_MODULES —— 后者会被
+    # test_function_tests_are_assigned_to_the_pytest_loader 当场抓住。
+    # 修前 9 failed，修后 9 passed；其中一条走真实调用点 operational.transition()。
+    "server.tests.test_dan41_alert_delivery_visible",
     "server.tests.test_day_boundary_consistency",
     "server.tests.test_day_filter_equivalence",
     "server.tests.test_db_connection_ownership",

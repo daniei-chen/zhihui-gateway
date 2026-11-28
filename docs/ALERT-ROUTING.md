@@ -13,6 +13,71 @@
 | **operational** | `server/operational.py` + `operational_alerts` 表 | 管理页面、`/health/alerts`（仅回环）、`healthcheck.sh` | **主动去看的人** |
 | **steward** | `server/steward_rules.py` + `steward_deliveries` 表 | **邮件**（半小时去重 + AI 研判 + 恢复通知） | **会被打扰的人** |
 
+### 1.1 operational 池子的投递出口：默认关闭，但不能静默
+
+`operational` 的告警除了页面和巡检，还有一个**可选**出口：`server/notify.py`。
+它默认是 `disabled`（不擅自外发），默认部署下**不会有人被叫醒**。
+
+`disabled` 不等于「什么都没发生」：告警已经被算出来了，只是送不出去。所以丢弃时
+必须留下痕迹，三层各一处，任一层都能看见：
+
+| 层 | 位置 |
+|---|---|
+| 本地 JSONL | `$WB_DATA_DIR/notify/undelivered.jsonl`（`.../data/notify/undelivered.jsonl`） |
+| 应用日志 | `workbuddy.notify` 的一条 WARNING，点名告警名 |
+| 健康端点 | `/api/health/alerts` 的 `notify` 字段（`configured` / `warning` / `dropped`） |
+
+`dropped.count > 0` 就意味着**这些告警此刻只有这一处能看见**。启动日志也会明确写
+「告警未配置，运行告警将被丢弃」。
+
+要真正投递，设置 `WB_NOTIFY_CONFIG`（默认 `/opt/notify/config.json`）指向一个**启用**的配置。
+最小可用形态是 `file` 模式 —— 只落本地 JSONL，不联网：
+
+```json
+{
+  "enabled": true,
+  "mode": "file",
+  "file": "/opt/notify/alerts.jsonl"
+}
+```
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/notify
+sudo tee /opt/notify/config.json >/dev/null <<'JSON'
+{"enabled": true, "mode": "file", "file": "/opt/notify/alerts.jsonl"}
+JSON
+# 输出文件先建好并交给服务 UID：容器里以 uid 10001 运行（Dockerfile:155），
+# 而 /opt/notify 是 root 的 0755 —— 服务自己建不了文件，dispatch() 会
+# PermissionError，每条告警都投递失败，而 status() 仍然报 configured=true，
+# 于是「已配置」的假象下反而比未配置更安静。配置本身保持 root 拥有即可。
+# 宿主机 systemd 部署（deploy/workbuddy-web.service，没有 User=，以 root 跑）
+# 不需要这一步，但加了也无害。
+sudo install -o 10001 -g 10001 -m 0640 /dev/null /opt/notify/alerts.jsonl
+# 不需要重启：每次 dispatch 都重新读配置
+# 验证：触发一条告警后 tail -f /opt/notify/alerts.jsonl
+```
+
+### 容器部署要额外挂载
+
+`docker-compose.yml` 只挂了 `./data` 和 `../workbuddy2api`，**没有** `/opt/notify`，
+也没有传 `WB_NOTIFY_CONFIG`；镜像里同样不建 `/opt/notify`。所以容器里
+`notify._config_path()` 的默认路径（`server/notify.py:94`）永远不存在，宿主机上
+写的 `/opt/notify/config.json` 进程根本看不见 —— 表现为「明明配了，日志还是
+『告警未配置』」。容器部署要两样都给：
+
+```yaml
+    volumes:
+      - /opt/notify:/opt/notify
+    environment:
+      WB_NOTIFY_CONFIG: /opt/notify/config.json
+```
+
+目录里那份 `alerts.jsonl` 的属主必须是 10001（上面那条 `install -o 10001`），
+否则容器里 append 会 PermissionError。
+
+`http` 模式（POST 到 `url`）同样需要 `"enabled": true` 且 `mode` 为 `http`；
+`timeout_sec` 会被夹在 0.1–3 秒，投递失败只记 warning，不影响告警状态机。
+
 ## 二、怎么选
 
 ### 进 steward（发邮件）

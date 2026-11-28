@@ -443,7 +443,13 @@ section '运行告警'
 # 不绿，反而没人再看它。
 alerts_json=$(curl -sf --max-time 5 http://127.0.0.1:7866/api/health/alerts 2>/dev/null)
 if [ -n "$alerts_json" ]; then
-    acount=$(printf '%s' "$alerts_json" | sed -n 's/.*"count":[ ]*\([0-9]\{1,\}\).*/\1/p')
+    # 取**顶层** count（当前 active 告警数），不能取「最后一个 count」。
+    # 原先用 `sed -n 's/.*"count":.../\1/p'`：`.*` 是贪婪的，会命中最后一个
+    # `"count":`；而 DAN-41 在响应里加了 `notify.dropped.count`，于是巡检
+    # 读到的是「累计丢弃数」而不是「active 数」——重启后 active 告警从
+    # operational_alerts 恢复、丢弃计数归零，巡检会报「应用内告警全部为空」
+    # 而实际有告警挂着。这里按结构取第一个 `"count":`（顶层字段）的数值。
+    acount=$(printf '%s' "$alerts_json" | awk -F'"count":' '{ if (match($2, /[0-9]+/)) print substr($2, RSTART, RLENGTH); else print "" }')
     if [ -z "${acount:-}" ]; then
         note '告警快照格式无法解析'
     elif [ "$acount" -eq 0 ]; then
