@@ -18,6 +18,7 @@ import {Skeleton} from '@/components/ui/skeleton';
 import {cn} from '@/lib/utils';
 import {ConfirmDialog} from '@/components/common/layout/ConfirmDialog';
 import {useAuth} from '@/lib/auth-context';
+import {needsOriginNotice, originStateKey} from '@/lib/origin-check';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
 import {Input} from '@/components/ui/input';
@@ -131,8 +132,13 @@ const EMPTY_LOGS: IpAccessLog[] = [];
 const EMPTY_AUDIT: AuditLog[] = [];
 
 export default function SecurityPage() {
-  const {isAdmin, role, me} = useAuth();
+  const {isAdmin, role, me, origin} = useAuth();
   const t = useT();
+  // D-41：这次访问路径下写请求有没有可信锚点（configured / proxy /
+  // loopback-only / unconfigured / relaxed）。本页的开关都靠写接口保存，
+  // 状态不明时先说清楚，免得用户改完发现存不上。
+  const originState = originStateKey(origin?.state);
+  const originBlocked = needsOriginNotice(origin);
 
   /**
    * 本页要的 4 份数据一次并发取回，成败逐项独立；加载态 / 失败态 / 是否正在刷新
@@ -299,6 +305,29 @@ export default function SecurityPage() {
   return (
     <div className="flex flex-col gap-4 md:gap-6" aria-busy={isRefreshing}>
       {header}
+
+      {/* D-41 来源校验状态：放在最上面，因为它决定这一页的开关能不能保存。 */}
+      <section className="rounded-[20px] bg-muted p-4">
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <Network className="h-4 w-4" />
+          {t('origin.securityTitle')}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          {originState ? (
+            <Badge variant={originBlocked ? 'destructive' : 'secondary'}>{t(originState)}</Badge>
+          ) : null}
+          {origin?.host ? (
+            <span className="rounded bg-background/60 px-1.5 py-0.5 font-mono">
+              {origin.host}
+            </span>
+          ) : null}
+        </div>
+        {originBlocked ? (
+          <p className="mt-2 text-[11px] leading-5 text-amber-700 dark:text-amber-300">
+            {t('origin.fixHint')}
+          </p>
+        ) : null}
+      </section>
 
       {/* 刷新时有请求失败：常驻提示，**不**顶掉已经显示出来的内容——那些数据
           仍然是对的，只是可能不是最新的。原先这套取数把失败静默丢掉了，连

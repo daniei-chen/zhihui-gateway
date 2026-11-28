@@ -285,8 +285,55 @@ SESSION_IDLE_HOURS = _env_int('WB_SESSION_IDLE_HOURS', 12)
 COOKIE_NAME = 'wb_session'
 SECURE_COOKIE = _env('WB_SECURE_COOKIE', 'auto')  # auto | true | false
 
+# 本站公网来源（D-41）：写端点同源校验的**权威锚点**，如
+# `https://zhihui.kaogong.art`（可逗号分隔多个）。留空时逐级回退：WB_CORS_ORIGINS
+# → 可信反代的 X-Forwarded-Host → 不可能被 DNS rebinding 的 Host
+# （IP 字面量 / localhost / 单标签内网名）。判定细节见 security.origin_anchors。
+PUBLIC_ORIGIN = _env('WB_PUBLIC_ORIGIN', '')
 # 允许的 CORS 来源（同源部署时留空即可）
 CORS_ORIGINS = [o for o in _env('WB_CORS_ORIGINS', '').split(',') if o]
+# 逃生门（D-41）：显式允许「用域名直连、又没声明 WB_PUBLIC_ORIGIN」的部署继续跑。
+# 打开后写端点的同源锚点退回**修前的 Host**（跨站 Origin/Referer 仍会拦），代价是
+# DNS rebinding 重新变成可利用面 —— 属于**主动放宽**，启动时必须醒目告警。
+ALLOW_UNCONFIGURED_ORIGIN = _env_bool('WB_ALLOW_UNCONFIGURED_ORIGIN', False)
+# 是否采信可信反代送来的 `X-Forwarded-Host` 作为来源锚点（D-41 第二轮收紧）。
+#
+# 默认**关**：`X-Forwarded-Host` 不在 Fetch 的 forbidden header 名单里，DNS
+# rebinding 之后的同源 fetch 可以直接带；nginx 默认又会把客户端的未知头原样
+# 转发给上游，于是「对端是可信反代」并不能说明这个头是反代写的 —— 它可能一直
+# 是浏览器自己写的。上一版把「可信反代」当成「XFH 可信」，等于把锚点从请求自己
+# 的 Host 换成了请求自己的另一个头。
+#
+# 打开它 = 部署方声明「我的反代**覆盖写** X-Forwarded-Host，客户端那份到不了
+# 应用」，并且 `deploy/release.py` 的站点检查要求每个 proxy 块显式设置该头。
+# 正路仍然是 WB_PUBLIC_ORIGIN。
+TRUST_FORWARDED_HOST = _env_bool('WB_TRUST_FORWARDED_HOST', False)
+
+
+def _warn_origin_anchoring() -> None:
+    """启动时把「写端点的来源锚点」真实状态说出来（不能静默）。
+
+    两种形态必须告警，且都在服务启动（import 本模块）时发生：
+      ① 设了逃生门：锚点退回 Host，DNS rebinding 重新可用；
+      ② 既没声明公网来源、也没跨源白名单：写请求只能靠可信反代的
+         X-Forwarded-Host 或 IP/localhost/单标签内网名，用域名直连会被拒。
+    """
+    log = logging.getLogger('workbuddy.config')
+    if ALLOW_UNCONFIGURED_ORIGIN:
+        log.warning(
+            'WB_ALLOW_UNCONFIGURED_ORIGIN=1 是**主动放宽**：写端点的同源锚点退回'
+            '「只信请求的 Host」，DNS rebinding 可再次通过；跨站 Origin/Referer '
+            '仍会拦。请尽快改设 WB_PUBLIC_ORIGIN 并关掉这个开关。')
+    elif not PUBLIC_ORIGIN and not CORS_ORIGINS:
+        log.warning(
+            '未设置 WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS：写请求的同源锚点只剩 '
+            'IP/localhost/单标签内网名直连%s；用域名直连的表单提交会被拒'
+            '（403，detail=origin_unconfigured）—— 管理页会显示提示与修复方式。',
+            '（WB_TRUST_FORWARDED_HOST=1 时额外采信可信反代的 X-Forwarded-Host）'
+            if TRUST_FORWARDED_HOST else '')
+
+
+_warn_origin_anchoring()
 
 TENCENT_BASE = 'https://copilot.tencent.com'
 TENCENT_BILLING_BASE = 'https://www.codebuddy.cn'  # 国内版 billing 基址

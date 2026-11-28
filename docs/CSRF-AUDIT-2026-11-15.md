@@ -35,7 +35,7 @@
 | 覆盖的方法 | `POST` / `PUT` / `PATCH` / `DELETE` |
 | 「浏览器发起」的判据 | `Sec-Fetch-Site` / `Sec-Fetch-Mode` / `Sec-Fetch-Dest` 任一存在 |
 | 来源归一 | 复用另一模块的解析器，处理 userinfo 混淆、`null`、缺省端口 |
-| 期望来源 | `Host` + 本机反代时的原始协议 |
+| 期望来源 | 服务端配置的锚点（`WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS`）；都没配才回退到可信反代的 `X-Forwarded-Host`，最后是不可能是攻击者的 Host（IP 字面量 / localhost / 单标签内网名）。**D-41 之前**这里取的是 `Host` + 本机反代时的原始协议，见第九节 |
 | 拒绝原因 | 五种，各自命名（多重 Origin、缺失、Host 缺失、格式非法、不匹配） |
 
 **它不是只做了「有 Origin 就比一下」**：`null`、多重 Origin、userinfo 混淆形态
@@ -127,3 +127,64 @@
 2. **WebSocket / SSE** —— 不走中间件意味着不走这套校验
 3. **Referer 回退** —— 现代浏览器都发 Origin，但老客户端可能只发 Referer
 
+---
+
+## 九、D-41 补记（2026-11-28）：锚点不再取 `Host`
+
+第八节第 1 条说的「同源判定用 Host」，在 2026-11-27 的深度审计里被实测成漏洞
+（`D-41`，见 `docs/audit/04-security.md` 的 D-4）：DNS rebinding 下浏览器访问
+`http://evil.test:8000`，`Host` 与 `Origin` 天然都是 `evil.test:8000`，两者相等，
+于是**任意域名**都能通过同源校验：
+
+```
+POST /api/login   Host: evil.test:8000   Origin: http://evil.test:8000   -> 200（修前）
+```
+
+**默认部署行为不变，只有「用域名访问且没配」这一种组合的表单提交会 403，页面会明确
+告诉怎么修。** 不是「默认更安全了」——IP / localhost / 单标签内网名直连、经反代、
+以及配了来源的部署，行为与以前一致。
+
+### 锚点从哪来（越靠前越权威）
+
+1. `WB_PUBLIC_ORIGIN`：部署方声明的公网来源（如 `https://zhihui.kaogong.art`）。
+   设了它就**只认它**，`Host` 完全不参与。
+2. `WB_CORS_ORIGINS`：已有的跨源白名单，外加「不可能被攻击者控制」的同源 Host
+   （IP 字面量 / `localhost` / 单标签内网名）。
+3. 都没配：只采信**可信反代**（peer 落在 `WB_TRUSTED_PROXY_CIDRS`，与
+   `iputil.client_ip` 同一份判据）送来的 `X-Forwarded-Host`；非可信 peer 的
+   `X-Forwarded-Host` / `X-Forwarded-Proto` 一律忽略。
+4. 最后才是「不可能被 rebinding 的 Host」：IP 字面量、`localhost`、单标签内网名。
+   带点的主机名（`evil.test`、`zhihui.kaogong.art`）不能自证身份。
+
+### 唯一被收紧的形态，以及它怎么「不静默」
+
+用域名直连、不经反代、又没配 `WB_PUBLIC_ORIGIN` 时，写请求会被拒：
+
+- 响应 `403`，body `{"detail": "origin_unconfigured"}`（客户端可以按这个值分支，
+  不用解析人话），响应头 `X-Manager-Csrf-Reason: origin_unconfigured` 同值；
+- 管理页加载时按 `GET /api/system/origin-status`（`configured` / `proxy` /
+  `loopback-only` / `unconfigured` / `relaxed`）在**填表之前**显示横幅，说明原因
+  与修复方式；提交后收到的 403 也会显示同一句话，而不是通用「权限不足」；
+- **登录页也要提示**：登录本身是写请求，没有锚点时同样 403 —— 用户如果连登录都
+  进不去，管理页的横幅就永远看不到。所以另有匿名可读的 `GET /api/origin-check`
+  （只回本次请求的锚点形态与 Host，没有凭据、没有其他用户数据），登录页在提交
+  之前就显示同一条横幅；
+- 启动日志告警一次（附该设哪个变量），第一次被拒时再告警一次；
+- 「安全」页的状态栏显示这次访问路径下的来源状态。
+
+### 逃生门
+
+`WB_ALLOW_UNCONFIGURED_ORIGIN=1`：锚点退回修前的 `Host`（跨站
+Origin/Referer 仍会拦），启动日志打醒目告警说明这是**主动放宽**、DNS rebinding
+重新可用。默认关闭。
+
+### 这次补上的测试
+
+`server/tests/test_d41_csrf_origin_anchor.py`（已登记进
+`tools/ci_regression.py` 的 `MODULES`）：七角矩阵（回环 / IP / 单标签内网名 /
+已配置 / 点分域名直连 / 逃生门 / 跨站）、管理端锚点状态字段、两处旁路闸门；
+修前红、修后绿，并做过变异验证（把锚点改回「只信 Host」、关掉可信代理判据、
+关掉 rebinding 判据，对应测试分别变红）。`GET` 等安全方法不受影响。
+
+前端判定逻辑在 `web/lib/origin-check.ts`（`web/lib/origin-check.test.mjs`
+用 `node --test` 覆盖）。

@@ -35,6 +35,11 @@ function fixture(url, request) {
     healthy: true, disabled: false, cooling: false, in_pool: true, success_count: 8, source: 'file', realm: r}));
   const version = {current: 'fixture', latest: 'fixture', has_update: false, error: '', repo: '', assets_ready: true};
   if (p === '/api/me') return authenticated ? {username: 'reconstruction-fixture', role: fixtureRole} : [401, {detail: 'No session'}];
+  // D-41：锚点状态是独立端點（`/api/me` 只回身份）。每个页面加载都会取它，
+  // 缺了这个夹具就会变成未预期的 404/401，browser acceptance 会红。
+  if (p === '/api/system/origin-status') return authenticated
+    ? {state: 'loopback-only', writes_allowed: true, host: '127.0.0.1'}
+    : [401, {detail: 'No session'}];
   if (p === '/api/logout') {
     if (logoutMode === 'failure') return [500, {detail: 'Simulated logout failure; session remains active'}];
     authenticated = false; return {ok: true};

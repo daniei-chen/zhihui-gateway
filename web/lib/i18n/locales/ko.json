@@ -896,6 +896,17 @@
     "lockoutDesc": "{action} 후 규칙이 잘못되면 추론 API 통신이 중단될 수 있습니다. 콘솔은 계속 접속할 수 있으므로 여기서 규칙을 복원할 수 있습니다.",
     "reasonPortalPolicyDenied": "사용자 정책에 따라 거부됨"
   },
+  "origin": {
+    "noticeTitle": "이 주소에서 보내는 폼 제출은 거부됩니다",
+    "noticeBody": "도메인 이름으로 패널을 열었지만 WB_PUBLIC_ORIGIN이 설정되어 있지 않습니다. 지금 폼을 제출하면 403(origin_unconfigured)이 됩니다. 서버에서 WB_PUBLIC_ORIGIN=https://사용자-도메인 을 설정하고 다시 시작하면 복구됩니다. IP 주소나 localhost 접속은 영향을 받지 않습니다.",
+    "fixHint": "WB_PUBLIC_ORIGIN=https://사용자-도메인 을 설정한 뒤 서비스를 다시 시작하세요",
+    "stateConfigured": "설정됨(WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS)",
+    "stateProxy": "신뢰된 리버스 프록시(X-Forwarded-Host)",
+    "stateLoopback": "직접 연결(IP / localhost / 내부 이름)",
+    "stateUnconfigured": "미설정: 도메인 이름 경유 폼 제출은 거부됩니다",
+    "stateRelaxed": "완화됨: WB_ALLOW_UNCONFIGURED_ORIGIN=1, DNS rebinding 위험이 다시 열립니다",
+    "securityTitle": "출처 검증(CSRF)"
+  },
   "models": {
     "title": "모델",
     "description": "{realm} 계정에서 사용할 수 있는 모델과 컨텍스트, 출력, 추론 기능 (데이터는 Tencent 모델 API에서 조회)",
@@ -1901,7 +1912,8 @@
     "仅超级管理员admin本人会话可赠送积分": "최고 관리자 admin의 본인 세션에서만 포인트를 지급할 수 있습니다",
     "用户端写操作需要同源请求": "사용자 변경 작업에는 동일 출처 요청이 필요합니다",
     "检测到自动化客户端，批量账号操作已被禁止。该限制在 2026-11-19 批量吊销事故后加入 —— 一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN 并在请求头 X-Automation-Token 中携带。": "자동화 클라이언트가 감지되어 계정 일괄 작업이 금지되었습니다. 이 제한은 2026-11-19 대량 해지 사고 이후 추가되었습니다 — 한 번의 일괄 팬아웃은 여러 업스트림 계정에 동시에 도달하며 위험 관리의 주요 감지 특징입니다. 실행하려면 UI에서 직접 조작하거나 WB_ACCOUNT_AUTOMATION_TOKEN을 설정하고 X-Automation-Token 헤더로 전송하세요.",
-    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "자동화 토큰이 없거나 일치하지 않아 계정 일괄 작업이 거부되었습니다."
+    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "자동화 토큰이 없거나 일치하지 않아 계정 일괄 작업이 거부되었습니다.",
+    "origin_unconfigured": "출처 검증이 설정되지 않아 폼 제출이 거부되었습니다. WB_PUBLIC_ORIGIN을 설정하고 다시 시작하세요."
   },
   "redPacket": {
     "title": "빨간 봉투",

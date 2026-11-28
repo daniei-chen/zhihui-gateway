@@ -43,6 +43,7 @@ PANEL_READ_ROUTES = frozenset({
     '/api/system/versions', '/api/system/check-update', '/api/system/update-status',
     '/api/system/update-package', '/api/system/changelog',
     '/api/system/config', '/api/system/configuration', '/api/system/drain', '/api/system/performance',
+    '/api/system/origin-status',
     '/api/operations/health', '/api/budgets/unresolved', '/api/playground/models',
     '/api/engine/overview',
     '/api/steward/status', '/api/steward/alerts', '/api/steward/settings',

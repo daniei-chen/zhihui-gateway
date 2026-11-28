@@ -132,8 +132,7 @@ def same_origin(request):
     if request.method in ('GET', 'HEAD'):
         return
     origins = request.headers.getlist('origin')
-    expected = security.expected_origin(request)
-    if len(origins) != 1 or expected is None or security._origin_triple(origins[0]) != expected:
+    if len(origins) != 1 or not security.origin_allowed(request, origins[0]):
         raise HTTPException(status_code=403, detail='用户端写操作需要同源请求')
 
 

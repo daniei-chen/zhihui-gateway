@@ -476,6 +476,93 @@ def cmd_seal(args) -> int:
     return 0
 
 
+def _nginx_block(text: str, uri: str) -> str | None:
+    """取 `location … <uri> { … }` 的花括号内文本；找不到返回 None。
+
+    只按花括号配平切片 —— nginx 配置里带花括号的值不存在，够用。
+    """
+    head = re.search(r'location\s[^\n{]*' + re.escape(uri) + r'\s*\{', text)
+    if not head:
+        return None
+    depth = 1
+    index = head.end()
+    while index < len(text) and depth:
+        char = text[index]
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+        index += 1
+    return text[head.end():index - 1]
+
+
+def _check_auth_request_targets(text: str) -> list[str]:
+    """`auth_request` 指向的内部 location 必须清空客户端来源头。
+
+    这个位置**不在仓库里**（运维自己写在 sites-enabled），但配错会让升级后
+    整站不可用：`/api/system/internal-session-verify` 的「仅本机」是两层判据
+    （TCP 对端 + `iputil.client_ip()`），而 `auth_request` 子请求带的是
+    **客户端原始请求头**（父 location 的 `proxy_set_header` 只作用于它自己的
+    upstream，不会写回子请求）：客户端伪造的头、或前面 CDN 加的
+    `X-Forwarded-For`（Cloudflare 就会加）都会原样进来。内部 location 不显式
+    清空时，这些请求被判成外部而 403 —— `/api/` 的会话校验随之对这些用户
+    全部失败。所以在这里判：要么清空，要么发布前拦住。
+    """
+    notes = []
+    targets = sorted(set(re.findall(r'auth_request\s+([^\s;]+)\s*;', text)))
+    for uri in targets:
+        body = _nginx_block(text, uri)
+        if body is None:
+            notes.append(f'没找到 auth_request 目标 {uri} 的 location 块，无法确认它清空了来源头')
+            continue
+        for header in ('X-Real-IP', 'X-Forwarded-For'):
+            if not re.search(r'proxy_set_header\s+' + header + r'\s+(""|\'\')',
+                             body, re.IGNORECASE):
+                raise ReleaseError(
+                    f'auth_request 目标 {uri} 的 location 转发了 {header}：'
+                    '子请求带的是客户端原始头（含 CDN 加的那份），会被判成外部来源，'
+                    '带该头的用户升级后整站 /api/ 会话校验都 403。'
+                    f'改成 proxy_set_header {header} "";（见 deploy/README.md）')
+        notes.append(f'auth_request {uri} 的内部 location 已清空来源头')
+    return notes
+
+
+def _check_forwarded_host_overwritten(text: str) -> list[str]:
+    """每个 `proxy_pass` 的 location 必须**显式设置** `X-Forwarded-Host`。
+
+    为什么这是一条发布门禁而不是文档：客户端可以自带这个头（它不在 Fetch 的
+    forbidden header 名单里），而 nginx 默认把客户端的未知头原样转给上游。于是
+    「请求经过反代」并不能说明 `X-Forwarded-Host` 是反代写的 —— 不显式覆盖时，
+    带这个头的客户端等于自己宣布「本站来源」。应用侧已经把采信它变成显式开关
+    （`WB_TRUST_FORWARDED_HOST`），这里再保证「开关打开时那个头确实来自反代」。
+
+    允许两种写法：`""`（不采信，默认）与 `$host` / `$http_host`（覆盖写）。
+    """
+    notes = []
+    for match in re.finditer(r'location\s[^\n{]*\{', text):
+        depth, index = 1, match.end()
+        while index < len(text) and depth:
+            if text[index] == '{':
+                depth += 1
+            elif text[index] == '}':
+                depth -= 1
+            index += 1
+        body = text[match.end():index - 1]
+        if 'proxy_pass' not in body:
+            continue
+        name = text[match.start():match.end()].split('{')[0].strip()
+        pattern = r'proxy_set_header\s+X-Forwarded-Host\s+(""|\'\'|\$host|\$http_host)\s*;'
+        if not re.search(pattern, body, re.IGNORECASE):
+            raise ReleaseError(
+                f'{name} 转发到上游却没有显式设置 X-Forwarded-Host：客户端自带的'
+                '同名头会被 nginx 原样转过去，等于让请求自己宣布本站来源。'
+                '加 `proxy_set_header X-Forwarded-Host "";`（不采信）或 '
+                '`$host`（覆盖写，并同时设 WB_TRUST_FORWARDED_HOST=1）。'
+                '见 deploy/README.md')
+        notes.append(f'{name} 显式设置了 X-Forwarded-Host')
+    return notes
+
+
 def check_nginx(site: Path) -> list[str]:
     """站点配置里是否还有余额协议的两段放行。
 
@@ -491,7 +578,9 @@ def check_nginx(site: Path) -> list[str]:
     if missing:
         raise ReleaseError(
             "站点配置缺少余额协议放行（恢复备份后需重新插入）：" + "; ".join(missing))
-    return ["余额协议放行已就位"]
+    return ["余额协议放行已就位",
+            *_check_auth_request_targets(text),
+            *_check_forwarded_host_overwritten(text)]
 
 
 def cmd_verify(args) -> int:
@@ -559,7 +648,12 @@ def cmd_activate(args) -> int:
         raise ReleaseError(f"目标不存在：{target}")
     target_root = target.resolve()
 
-    cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust))
+    # `--nginx` 必须传进门禁：`check_nginx` 里有一条「auth_request 的内部
+    # location 不能转发来源头」的判定 —— 配错会让**带来源头的用户**整站
+    # `/api/` 会话校验 403（CDN 回源的部署尤其容易踩）。只在 verify 里跑
+    # 等于让它在真正切指针的那一步缺席。
+    cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust,
+                                 nginx=getattr(args, "nginx", None)))
 
     print(f"== activate {version} ==")
     previous = _switch(root / "current", version)
@@ -738,6 +832,7 @@ def main(argv=None) -> int:
 
     activate = sub.add_parser("activate", help="原子切换发布指针")
     activate.add_argument("version")
+    activate.add_argument("--nginx", help="站点配置文件（可选，切换前检查站点配置）")
     activate.set_defaults(func=cmd_activate)
 
     rollback = sub.add_parser("rollback", help="切回上一版指针")

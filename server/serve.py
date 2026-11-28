@@ -93,14 +93,21 @@ def main(argv=None):
         signal.signal(signal.SIGUSR1, lambda *_: drain.begin())
         signal.signal(signal.SIGUSR2, lambda *_: drain.resume())
     listener = inherited_listener()
+    # uvicorn 的 `proxy_headers`（默认开，`forwarded_allow_ips=127.0.0.1`）会把
+    # `scope['client']` 改写成 X-Forwarded-For 里的客户端地址。那样
+    # `iputil.client_ip()`／`security` 里的「TCP 对端是否可信」就再也看不到真实的
+    # 对端（nginx），`WB_TRUSTED_PROXY_CIDRS` 与 X-Forwarded-Host 全都会误判；
+    # `routers/system.py` 的「仅本机」端点同理。信任判定只留 app 一份：
+    # 这里关掉改写，由 `iputil.client_ip()` 按配置从右往左数跳。
     if listener is not None:
         # host/port 不参与：监听 socket 已经 bind 好了，uvicorn 直接把 fd 收下。
-        cfg = uvicorn.Config('server.main:app', workers=1,
+        cfg = uvicorn.Config('server.main:app', workers=1, proxy_headers=False,
                              timeout_graceful_shutdown=args.timeout_graceful_shutdown)
         DrainServer(cfg).run(sockets=[listener])
     else:
         cfg = uvicorn.Config('server.main:app', host=args.host, port=args.port,
-                             workers=1, timeout_graceful_shutdown=args.timeout_graceful_shutdown)
+                             workers=1, proxy_headers=False,
+                             timeout_graceful_shutdown=args.timeout_graceful_shutdown)
         DrainServer(cfg).run()
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -1116,14 +1117,51 @@ def current_user(request: Request) -> dict:
 #
 # 实现上**复用 qtgcore 已有的判定**（`qtgcore.security.parse_origin` 的三元组
 # 归一 + `Auth.check_origin` 的全等比较规则），不另造一套解析器。
+#
+# ── D-41（2026-11-28）：期望来源不再由请求自己的 `Host` 决定 ────────────────
+#
+# 原来的实现用 `Host` 拼出「本站期望来源」。DNS rebinding 下这条判据是空的：
+# 浏览器访问 `http://evil.test:8000` 时 `Host` 与 `Origin` 天然都是
+# `evil.test:8000`，两者相等 —— 于是**任意域名**都能通过同源校验（审计已实测
+# `POST /api/login` 在该组合下 200 并建立会话）。
+#
+# 现在按「谁有资格宣布本站来源」分层，越靠前越权威：
+#
+#   1. `WB_PUBLIC_ORIGIN`：部署方声明的公网来源（如
+#      `https://zhihui.kaogong.art`）。设了它就只认它，`Host` 完全不参与。
+#   2. `WB_CORS_ORIGINS`：已有的跨源白名单。只认白名单，外加「不可能被攻击者
+#      控制」的同源 Host（见 `_cannot_be_rebound`），否则跨源部署下连面板自己
+#      都写不了。
+#   3. 都没配：默认**没有**锚点。只有 `WB_TRUST_FORWARDED_HOST=1` 时才额外
+#      采信 `X-Forwarded-Host`，且要求 peer 落在 `WB_TRUSTED_PROXY_CIDRS`
+#      （与 `iputil.client_ip` 同一份判据）。
+#
+#      为什么默认关：`X-Forwarded-Host` 不在 Fetch 的 forbidden header 名单里，
+#      rebinding 之后的同源 fetch 能直接带；nginx 默认还会把客户端的未知头
+#      原样转发给上游。所以「对端是可信反代」不能推出「这个头是反代写的」——
+#      上一版把锚点从请求自己的 `Host` 换成了请求自己的另一个头，等于没换。
+#      打开这个开关是部署方声明「我的反代覆盖写 XFH」，发布门禁会要求每个
+#      proxy 块显式设置该头（`deploy/release.py`）。
+#   4. 最后才是「不可能被 rebinding 的 Host」：IP 字面量、`localhost`、
+#      单标签内网名。带点的主机名（`evil.test`、`zhihui.kaogong.art`）不能自证
+#      身份，不给锚点。
+#
+# 默认部署行为不变：只有「用域名访问、又没配 WB_PUBLIC_ORIGIN / 反代 XFH」这一种
+# 组合的表单提交会 403（body `detail=origin_unconfigured`，响应头同值，进程内
+# 告警一次）。管理页按 `GET /api/system/origin-status` 在**填表之前**显示横幅说明怎么
+# 修，启动日志也会把当前锚点形态说清楚。IP / localhost / 单标签内网名直连不受影响。
+#
+# 逃生门：`WB_ALLOW_UNCONFIGURED_ORIGIN=1` 把锚点退回修前的 Host（跨站
+# Origin/Referer 仍会拦），启动日志打醒目告警 —— 那是主动放宽，不是默认行为。
+# 取舍另见 .env.example 与 docs/CSRF-AUDIT-2026-11-15.md。
 UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
 #: 「浏览器发起的请求」的判据。现代浏览器对**每个**请求都会带其中之一；
 #: 非浏览器客户端（curl / CI / 内部脚本）一个都不带。
 _BROWSER_FETCH_HEADERS = ('sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest')
 
-#: 来自本机反代的请求，采信它给出的真实 scheme（nginx 终结 TLS）。
-_LOOPBACK_PEERS = frozenset({'127.0.0.1', '::1', '::ffff:127.0.0.1'})
+_log = logging.getLogger('workbuddy.security')
+_unanchored_warned = threading.Event()
 
 
 def _origin_triple(value: object):
@@ -1138,18 +1176,166 @@ def _origin_triple(value: object):
     return parse_origin(value)
 
 
-def expected_origin(request: Request):
-    """本站期望来源：Host + （本机反代时的）X-Forwarded-Proto。"""
-    host = (request.headers.get('host') or '').strip()
+def _public_origins(raw: str) -> tuple:
+    """解析 `WB_PUBLIC_ORIGIN`（逗号分隔，通常只有一个）。
+
+    解析不了就抛 RuntimeError：这个函数在启动期就会被调用（见本节末尾），宁可
+    服务起不来，也不要「配置写错 → 同源校验静默全拒或静默失效」。
+    """
+    triples = []
+    for value in (v.strip() for v in str(raw or '').split(',')):
+        if not value:
+            continue
+        triple = _origin_triple(value)
+        if triple is None:
+            raise RuntimeError(
+                'WB_PUBLIC_ORIGIN 必须是完整的来源（例如 https://zhihui.kaogong.art），'
+                f'当前值 {value!r} 无法解析')
+        triples.append(triple)
+    return tuple(dict.fromkeys(triples))
+
+
+def _proxied(request: Request) -> bool:
+    """请求是否来自可信反代：与 `iputil.client_ip` 用同一份判据。"""
+    peer = str((request.client.host if request.client else '') or '')
+    return bool(config.TRUST_PROXY and _is_trusted_proxy(peer))
+
+
+def _trusts_forwarded_host(request: Request) -> bool:
+    """`X-Forwarded-Host` 能否当锚点：**两把锁**都要开。
+
+    对端可信（`_proxied`）只说明这条连接来自反代，不说明这个头是反代写的 ——
+    nginx 默认转发客户端的未知头。所以还要部署方显式声明
+    `WB_TRUST_FORWARDED_HOST=1`（并让反代覆盖写该头，发布门禁会查）。
+    """
+    return bool(config.TRUST_FORWARDED_HOST and _proxied(request))
+
+
+def _origin_of(request: Request, host: str, *, proxied: bool):
+    """把 `Host` / `X-Forwarded-Host` 拼成来源三元组。"""
+    host = (host or '').strip()
     if not host:
         return None
     scheme = (request.url.scheme or 'http').lower()
-    peer = str((request.client.host if request.client else '') or '')
-    if peer in _LOOPBACK_PEERS:
+    if proxied:
         forwarded = (request.headers.get('x-forwarded-proto') or '').split(',')[0].strip().lower()
         if forwarded in ('http', 'https'):
             scheme = forwarded
     return _origin_triple(f'{scheme}://{host}')
+
+
+def _cannot_be_rebound(triple) -> bool:
+    """该来源的主机名是否**不可能属于攻击者**。
+
+    DNS rebinding 的前提是攻击者能注册并控制一个 DNS 名。所以只有 IP 字面量、
+    `localhost`（含 `*.localhost`）和**单标签**主机名（`panel`、`testserver`
+    这类公网注册不到的内网名）可以由 Host 自证；带点的主机名（`evil.test`、
+    `zhihui.kaogong.art`）一律不认 —— 它们要么由配置声明，要么由可信反代的
+    `X-Forwarded-Host` 提供。
+    """
+    host = triple[1]
+    if host == 'localhost' or host.endswith('.localhost'):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return '.' not in host
+
+
+def _resolve_anchor(request: Request) -> tuple:
+    """返回 (状态, 允许的来源)。状态同时用于管理页的状态/自检字段。
+
+    configured     —— `WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS` 已声明（服务端锚点）
+    proxy          —— 没声明，但 `WB_TRUST_FORWARDED_HOST=1` 且可信反代送了
+                      `X-Forwarded-Host`（默认关，见 `_trusts_forwarded_host`）
+    loopback-only  —— 没声明，Host 本身不可能被攻击者控制（IP/localhost/单标签内网名）
+    unconfigured   —— 没声明、Host 又是点分域名：没有锚点，写请求必须被拒
+    relaxed        —— 逃生门打开（锚点退回 Host —— 修前行为，rebinding 风险自负）
+    """
+    if (config.PUBLIC_ORIGIN or '').strip():
+        return 'configured', _public_origins(config.PUBLIC_ORIGIN)
+    proxied = _proxied(request)
+    configured = [t for t in (_origin_triple(v) for v in config.CORS_ORIGINS) if t is not None]
+    own = _origin_of(request, request.headers.get('host') or '', proxied=proxied)
+    if config.ALLOW_UNCONFIGURED_ORIGIN:
+        anchors = [*configured, *([own] if own is not None else [])]
+        return 'relaxed', tuple(dict.fromkeys(anchors))
+    anchors = list(configured)
+    trusts_xfh = _trusts_forwarded_host(request)
+    if not anchors and trusts_xfh:
+        forwarded = (request.headers.get('x-forwarded-host') or '').split(',')[0]
+        xfh = _origin_of(request, forwarded, proxied=True)
+        if xfh is not None:
+            anchors.append(xfh)
+    if own is not None and _cannot_be_rebound(own):
+        anchors.append(own)
+    anchors = tuple(dict.fromkeys(anchors))
+    if configured:
+        return 'configured', anchors
+    if not anchors:
+        return 'unconfigured', ()
+    used_xfh = trusts_xfh and bool((request.headers.get('x-forwarded-host') or '').strip())
+    return ('proxy' if used_xfh else 'loopback-only'), anchors
+
+
+def origin_anchors(request: Request) -> tuple:
+    """本次请求允许的来源（服务端配置优先，请求头只能兜底）。
+
+    顺序与取舍见本节开头的 D-41 说明。返回空元组表示「没有任何可信锚点」：
+    调用方必须拒绝写请求，**不得**退回 `Host`。
+    """
+    return _resolve_anchor(request)[1]
+
+
+def origin_status(request: Request) -> dict:
+    """管理页状态/自检字段：这次访问路径下来源锚点是什么形态。
+
+    `writes_allowed` 是「同源写请求有没有锚点可比」，不是「这次请求会不会成功」
+    —— 真正是否放行仍由 Origin/Referer 与锚点全等比较决定。
+    """
+    state, anchors = _resolve_anchor(request)
+    return {
+        'state': state,
+        'writes_allowed': bool(anchors),
+        'host': (request.headers.get('host') or '').strip(),
+    }
+
+
+def origin_allowed(request: Request, source: str) -> bool:
+    """`source`（Origin 或 Referer 原文）是否落在本次请求的来源锚点里。"""
+    got = _origin_triple(source)
+    return got is not None and got in origin_anchors(request)
+
+
+def _reject_unanchored() -> None:
+    """没有服务端锚点：403，机器可读原因同时出现在 body 与响应头。
+
+    body 只能写 `detail`（FastAPI 的 403 形状只有这一个字段，写成对象或 f-string
+    会被 `test_web_i18n` 的守卫判红），所以约定 **`detail == 'origin_unconfigured'`**；
+    前端按这个值（或 `X-Manager-Csrf-Reason` 同值）渲染横幅，而不是弹通用错误。
+    """
+    raise HTTPException(status_code=403, detail='origin_unconfigured',
+                        headers={'X-Manager-Csrf-Reason': 'origin_unconfigured'})
+
+
+def _warn_unanchored_once(request: Request) -> None:
+    """无锚点拒绝一次就告警一次：告诉运维该设什么，而不是每个写请求刷一行。"""
+    if _unanchored_warned.is_set():
+        return
+    _unanchored_warned.set()
+    host = (request.headers.get('host') or '-').strip() or '-'
+    _log.warning(
+        'CSRF 同源校验没有可信锚点，写请求已拒绝（Host=%s）。'
+        '用域名访问请配置 WB_PUBLIC_ORIGIN（例如 https://zhihui.kaogong.art），'
+        '或让可信反代覆盖写 X-Forwarded-Host 并设 WB_TRUST_FORWARDED_HOST=1；'
+        'IP / localhost 直连不受影响。', host)
+
+
+# 启动期校验：`WB_PUBLIC_ORIGIN` 写错时直接起不来（与 `WB_CORS_ORIGINS=*`
+# 同一取向 —— 这类配置错误不能等到线上第一个写请求才暴露）。
+if (config.PUBLIC_ORIGIN or '').strip():
+    _public_origins(config.PUBLIC_ORIGIN)
 
 
 def _reject_csrf(reason: str) -> None:
@@ -1161,7 +1347,8 @@ def _reject_csrf(reason: str) -> None:
     f-string 拼出来的 detail（拼出来的查不了）。短语表不在本任务的改动范围内，
     所以这里：`detail` 保持 FastAPI 默认值，稳定 code 走
     `X-Manager-Csrf-Reason: csrf_origin_missing|csrf_origin_mismatch|
-    csrf_multiple_origin|csrf_host_missing|csrf_origin_malformed`。
+    csrf_multiple_origin|csrf_origin_malformed`。没有锚点的那一种走
+    `_reject_unanchored()`（原因同时进 body 的 `detail`，前端要靠它渲染横幅）。
     i18n 那边补上短语后，可以把这个 code 再挪回 detail（届时同步改
     test_settings_contract 的断言）。
     """
@@ -1177,9 +1364,10 @@ def check_same_origin(request: Request, *, require_cookie: bool = True) -> None:
       2. 只有**带浏览器会话 Cookie** 的请求才校验 —— 没有 Cookie 就没有 CSRF
          语义（Bearer token 由脚本显式携带，跨站页面拿不到）；
       3. 多个 Origin 头 → 拒绝（伪造迹象）；
-      4. 有 Origin/Referer → 拆成 (scheme, host, port) 与本站**全等**比较；
-         不做 `host in source` 子串判断（`testserver.evil.example`、拼在 query 里的
-         host、http↔https、80↔8080 都必须过不去）；
+      4. 有 Origin/Referer → 拆成 (scheme, host, port) 与**本次请求的来源锚点**
+         全等比较（锚点从哪来见 `origin_anchors`，D-41 之后 `Host` 单独不能
+         决定它）；不做 `host in source` 子串判断（`testserver.evil.example`、
+         拼在 query 里的 host、http↔https、80↔8080 都必须过不去）；
       5. 缺 Origin/Referer 时：带 `Sec-Fetch-*` 的按浏览器处理并**拒绝** ——
          浏览器对非安全方法一定会带 Origin/Referer，带了 Fetch 元数据却没有来源
          只能是"被剥离或伪造"。
@@ -1208,13 +1396,14 @@ def check_same_origin(request: Request, *, require_cookie: bool = True) -> None:
         if any(request.headers.get(name) for name in _BROWSER_FETCH_HEADERS):
             _reject_csrf('csrf_origin_missing')
         return
-    expected = expected_origin(request)
-    if expected is None:
-        _reject_csrf('csrf_host_missing')
     got = _origin_triple(source)
     if got is None:
         _reject_csrf('csrf_origin_malformed')
-    if got == expected:
+    anchors = origin_anchors(request)
+    if not anchors:
+        _warn_unanchored_once(request)
+        _reject_unanchored()
+    if got in anchors:
         return
     _reject_csrf('csrf_origin_mismatch')
 

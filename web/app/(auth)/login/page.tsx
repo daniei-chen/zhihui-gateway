@@ -4,12 +4,15 @@ import {useEffect, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {motion} from 'motion/react';
 import {Loader2, LogIn} from 'lucide-react';
-import {errText} from '@/lib/api';
+import {authApi, errText} from '@/lib/api';
 import {useAuth} from '@/lib/auth-context';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
 import {useT} from '@/lib/i18n/provider';
+import {needsOriginNotice} from '@/lib/origin-check';
+import type {OriginCheck} from '@/lib/types';
+import {AlertTriangle} from 'lucide-react';
 import {withBasePath} from '@/lib/base-path';
 import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
 
@@ -25,6 +28,9 @@ export default function LoginPage() {
   // `window.location.search` 而不是 `useSearchParams`：静态导出下后者必须包一层
   // Suspense，为一行提示不值得改整页结构。
   const [expired, setExpired] = useState(false);
+  // D-41：没有锚点时登录本身也会 403 —— 必须在**填表之前**说清楚，否则用户
+  // 只会看到「请求失败」，永远进不去面板。判据来自匿名可读的 /api/origin-check。
+  const [originCheck, setOriginCheck] = useState<OriginCheck | null>(null);
 
   useEffect(() => {
     if (!loading && me) router.replace('/dashboard');
@@ -33,6 +39,13 @@ export default function LoginPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setExpired(new URLSearchParams(window.location.search).get('expired') === '1');
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    // 取不到就不提示（旧后端没有这个端点）：凭空弹警告比晚一条提示更糟。
+    void authApi.originCheck(controller.signal).then(setOriginCheck).catch(() => {});
+    return () => controller.abort();
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -94,6 +107,19 @@ export default function LoginPage() {
             </p>
           </div>
         </div>
+
+        {needsOriginNotice(originCheck) ? (
+          <div
+            role="alert"
+            className="mb-4 flex items-start gap-2 rounded-[16px] border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-[11px] leading-5 text-amber-700 dark:text-amber-300"
+          >
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div className="space-y-0.5">
+              <div className="font-medium">{t('origin.noticeTitle')}</div>
+              <div>{t('origin.noticeBody')}</div>
+            </div>
+          </div>
+        ) : null}
 
         <form onSubmit={submit} className="rounded-[24px] bg-muted p-5">
           <div className="space-y-4">

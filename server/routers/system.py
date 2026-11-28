@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Literal
@@ -23,6 +26,11 @@ from ..iputil import client_ip
 from ..services import changelog, updater, wb2api
 
 router = APIRouter(prefix='/api/system', tags=['system'])
+
+_log = logging.getLogger('workbuddy.system')
+#: 「反代把来源头带进了 auth_request 子请求」只告警一次 —— 这是升级后整站
+#: `/api/` 会话校验 403 的唯一自解释线索，刷屏没有额外信息。
+_forwarded_refusal_warned = threading.Event()
 
 #: U16：systemd 单元文件所在目录。测试可替换（不碰真实 /etc）。
 SYSTEMD_UNIT_DIR = Path('/etc/systemd/system')
@@ -205,6 +213,24 @@ def performance_snapshot(user: dict = Depends(security.require_panel_reader)) ->
     from .. import db, requestperf, observability
     return {'performance': requestperf.snapshot(), 'database': db.transaction_stats(),
             'admission': observability.admission_snapshot()}
+
+
+@router.get('/origin-status')
+def origin_status(request: Request,
+                  user: dict = Depends(security.require_session_reader)) -> dict:
+    """D-41：本次访问路径下的来源锚点状态（管理页横幅 / 安全页状态栏用）。
+
+    字段与匿名端点 `GET /api/origin-check` 同一份 `security.origin_status()`：
+    `state`（configured / proxy / loopback-only / unconfigured / relaxed）、
+    `writes_allowed`、服务端看到的 `host`。
+
+    为什么单独一个端点、而不是塞进 `/api/me`：`/api/me` 是每次页面加载都拉的
+    身份响应，`test_authorization_generation` 用逐字相等钉住它的形状 —— 身份
+    响应里只应有身份。这里用 `require_session_reader`：锚点状态描述的是**这个
+    浏览器的请求路径**，API 令牌没有浏览器来源，也没有看运维拓扑的理由。
+    """
+    from .. import security as _security
+    return _security.origin_status(request)
 
 
 @router.get('/drain')
@@ -452,19 +478,70 @@ def get_changelog(user: dict = Depends(security.current_user)) -> dict:
     return data
 
 
+def _loopback(address: str) -> bool:
+    """`address` 是否属于回环网段（整个 127.0.0.0/8 与 ::1）；非 IP 一律 False。"""
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
 @router.get('/internal-session-verify')
 def internal_session_verify(request: Request,
                             user: dict = Depends(security.current_user)):
     """为 nginx auth_request 签发 qtg 身份断言（审计 P1-01）。
 
-    - 仅本机（nginx 127.0.0.1）可调用；nginx 的 /__zh_session 是 internal location；
+    - 仅本机可调用，判据是**两层**：TCP 对端在回环，且 `iputil.client_ip()`
+      解出的真实来源也在回环（为什么不只看对端见下方注释）。nginx 的
+      /__zh_session 是 internal location，**必须显式清空**
+      `X-Real-IP` / `X-Forwarded-For`（写法与发布门禁见 deploy/README.md）——
+      `auth_request` 子请求复制的是**客户端原始请求头**（父 location 的
+      `proxy_set_header` 只作用于它自己的 upstream，不会写回子请求），所以
+      CDN 加的 `X-Forwarded-For` 或客户端自带的伪造头会原样带进来；
     - 复用 Manager 会话校验（Cookie / wbt_ token），通过后签发 5 分钟有效的
       HMAC 断言（qtg `X-QTG-Identity` 契约），qtg 据此识别真实用户与角色，
       不再依赖静态 admin Bearer；
     - 无会话时 current_user 抛 401，nginx auth_request 直接拒绝。
     """
+    # 「仅本机」必须两层判据，少一层就不再是「仅本机」。
+    #
+    # 这里原来只比对 `request.client.host` 是不是 127.0.0.1 / ::1。D-41 关掉
+    # uvicorn 的代理头改写（`--no-proxy-headers`，理由见 deploy/README.md）
+    # 之后，凡 nginx 转发进来的请求，TCP 对端**恒为** 127.0.0.1 —— 单看对端
+    # 等于对公网敞开：持有效会话的外部客户端也能拿到自己的 qtg 身份断言，
+    # 绕过 manager 的逐端点授权直接用 qtg。
+    #
+    # 第二层用 `iputil.client_ip()`：它按 `WB_TRUSTED_PROXY_CIDRS` 决定采不采信
+    # 转发头，与 IP 白名单、登录锁定、密钥 max_ips 是同一份判据
+    # （`/api/health/alerts` 的「仅本机」也这么写）。外部请求经 `location /api/`
+    # 进来，带着 nginx 覆盖写入的 `X-Real-IP=$remote_addr`，于是这里解析出
+    # 浏览器地址 → 403；`auth_request` 子请求在 internal location 清空来源头后
+    # 解析结果仍是回环 → 放行。
+    #
+    # 注意 `auth_request` 子请求拿到的是**客户端原始请求头** —— 父 location 的
+    # `proxy_set_header X-Real-IP $remote_addr` 只作用于它自己的 upstream 请求，
+    # 不会写回子请求。所以「子请求不带来源头」不是自动成立的：客户端自己发的
+    # 伪造头、或前面 CDN 加的 `X-Forwarded-For`（Cloudflare 就会加）都会原样
+    # 进来。得靠 internal location 里显式 `proxy_set_header X-Real-IP ""`
+    # （写法见 deploy/README.md，发布门禁 `release.py verify --nginx` 会查）。
+    # 漏了这两行时，带来源头的用户会被判成外部 —— 升级后他们整站 403，
+    # 日志里那条 warn 说的就是这件事。
+    #
+    # 前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
+    # 那种部署下对端本身就是真实来源，不该有回环对端。
     peer = request.client.host if request.client else ''
-    if peer not in ('127.0.0.1', '::1'):
+    source = client_ip(request)
+    if not (_loopback(peer) and _loopback(source)):
+        # 对端在回环、真实来源却在外面的唯一成因：反代的 internal location
+        # 转发了 X-Real-IP / X-Forwarded-For。升级后这会让**整站** `/api/`
+        # 会话校验 403，而 403 本身不会说原因 —— 所以留一行日志。
+        if _loopback(peer) and not _forwarded_refusal_warned.is_set():
+            _forwarded_refusal_warned.set()
+            _log.warning(
+                'internal-session-verify 拒绝了一次经反代进来的调用：TCP 对端是 %s，'
+                '但解析出的真实来源是 %s。nginx 的 auth_request internal location '
+                '不要转发 X-Real-IP / X-Forwarded-For（写法见 deploy/README.md），'
+                '否则 /api/ 的会话校验会对所有用户 403。', peer, source)
         raise HTTPException(status_code=403, detail='仅允许本机调用')
     # 读密钥走 `edgeidentity` 的那套校验，而不是裸 `open().read()`。
     #
