@@ -623,6 +623,10 @@ MODULES = (
     # 时，`api_keys` 的清零与审计行必须整体回滚（G-07 那三条只断言终态，
     # 对「先提交后失败」全绿）。两个变异各杀掉 3 条，见 PR 证据。
     "server.tests.test_g07_reset_transaction_boundary",
+    # 守 skip 下限判据本身：整模块全 skip / 零加载必须红，单条 skip 不算连坐，
+    # 白名单要有 reason 才放行，且计数必须来自真实执行（wasSuccessful() 对 skip
+    # 返回 True，这就是此前「看起来绿」的来源）。
+    "server.tests.test_ci_skip_floor",
 )
 
 
