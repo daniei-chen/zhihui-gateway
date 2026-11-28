@@ -6,9 +6,10 @@
           锁还活着、心跳早停了的那条预留，重启时被 `recover()` 直接 continue，之后
           再也不会有结论。有配额密钥的在途上限默认 1，于是这条行 = 该密钥永久
           `budget_pending`。
-  · D-06  上游**明确拒绝**（请求根本没被受理）也被挡在归档之外，对有 `quota_credit`
+  · D-06  上游**明确拒绝**（请求根本没被受理）没有任何出口，对有 `quota_credit`
           的密钥，任意一条这样的 unknown 就是 `credit_quota_unconfirmed` 的永久闸 ——
-          一次上游拒绝把密钥锁死到永远。拍板口径：**零计费，但必须归档**。
+          一次上游拒绝把密钥锁死到永远。拍板口径：**零计费结清，但不归档** ——
+          供应商拒绝本身是运维要看见的事实，记录不许从证据桶消失。
   · D-26  `unresolved()` 是 `ORDER BY created_at LIMIT 1000` 升序，砍掉的是**最新**的
           那批；`/resolve-batch` 用它建 pending 字典，窗口外的 request_id 被判成
           「不存在」，运维据此核对永远看不到新积压。
@@ -137,6 +138,20 @@ class ForwardedLeaseReclaimTests(_BudgetCase):
 
         self.assertEqual(reclaimed, 1, '周期性回收没有收获')
         self.assertNotEqual(self._row('leak-runtime')['state'], 'forwarded')
+
+    def test_reclaimed_leak_reaches_an_exit_so_the_key_works_again(self):
+        """收回只是第一段：没有日志的泄漏行属于「无证据」类，走既有的归档出口。"""
+        self._reserve('leak-lead', 'forwarded', age=10 * 86400,
+                      owner=budgetowner.identity(), lease=self.now - 3600)
+
+        budget.reap_expired_leases(self.now)
+        self.assertNotEqual(self._row('leak-lead')['state'], 'forwarded')
+
+        self.assertGreaterEqual(budget.archive_overdue_unknowns(self.now), 1,
+                                '收回之后没有出口，密钥还是死的')
+        db.execute('UPDATE budget_reservations SET updated_at=? WHERE request_id=?',
+                   (self.now - 3600, 'leak-lead'))   # 15 分钟在途窗口由在途上限管
+        self.assertEqual(self._admission(), '', '走完出口仍然不放行')
 
     def test_reaper_is_idempotent(self):
         self._reserve('leak-once', 'forwarded', age=86400,
