@@ -39,8 +39,13 @@
 1. **改掉初始密码**，不要沿用部署脚本中的默认值
 2. **务必经 HTTPS 访问**：7863 / 7864 建议只监听 `127.0.0.1`，由反向代理对外
 3. 如需前置 CDN，请把 `WB_TRUSTED_PROXY_HOPS` 设为 CDN + 反代的层数
-4. 发现问题请走[私密渠道](https://github.com/ithtelab/workbuddy-manager/security/advisories/new)，
+4. 发现问题请走[私密渠道](https://github.com/daniei-chen/zhihui-gateway/security/advisories/new)，
    **不要**公开提交 Issue
+5. **更新源必须是你显式指定的 owner**：`deploy/update.py` 的 `ALLOWED_MANAGER_REPOS` 与
+   `windows/update.ps1` 的 `AllowedManagerRepos` 都只接受白名单内的仓库（默认
+   `daniei-chen/zhihui-gateway`），不在白名单会**直接中止**而不是回退到默认源。
+   更新器以装机权限执行包内的依赖清单，把发布源指向别处等于把「装什么」的决定权
+   交出去；要自建镜像请改白名单，并沿用同一把发布签名
 
 > ⚠️ 公网暴露**必须**启用 HTTPS，否则会话 Cookie 与密码可被中间人窃取。
 > 建议再叠加 1Panel IP 白名单或 Cloudflare Access 加固。
