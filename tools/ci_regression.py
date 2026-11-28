@@ -101,6 +101,9 @@ MODULES = (
     # CI 使用 hash 锁定的 pytest 依赖；缺少依赖、收集失败或模块零用例均失败。
     "server.tests.test_daily_key_quota",
     "server.tests.test_budget_kill_closure",
+    # G-05（2026-11-28 审计 D-05/D-06/D-26）：预算出口三件套 —— forwarded
+    # 租约回收、upstream_rejected 零计费归档、unresolved 去 1000 截断。
+    "server.tests.test_g05_budget_exits",
     "server.tests.test_daily_plan",
     "server.tests.test_daily_replay_boundaries",
     "server.tests.test_attempt_billing_facts",

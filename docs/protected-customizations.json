@@ -1,5 +1,5 @@
 {
-  "server/budget.py": "2300634c61d5c4b7397544642025ce47df6e1f10437a6f00e171046836e722d2",
+  "server/budget.py": "c75ae90d6a1a1ae48e0819f461747976fc24f1891683e9b400598d0fb88d401b",
   "server/ledger.py": "5aeb2ff0b269d44a84e28db37c44f221dfef651791a05a06a5f8ffdbfa2167ab",
   "server/observability.py": "d91ed55ad26ca1aaaedc48d0a973ee8e49ddef22318d26026b7936173c19ae10",
   "server/pooledhttp.py": "b79057de5ec19e27fa54f648e5dc02543b539754e88413180623b30a0cc21938",

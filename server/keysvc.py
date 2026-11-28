@@ -389,7 +389,7 @@ def reset_usage(key_id: int, *, actor: str = 'reset_usage') -> bool:
     with db.transaction() as conn:
         row=conn.execute('SELECT used_tokens,used_credit_units FROM api_keys WHERE id=?',(key_id,)).fetchone()
         if row is None:return False
-        if budget.unresolved(key_id) or ledgerreplay.backlog()!=0 or ledgerreplay.admission_block()['blocked']:
+        if budget.has_unresolved(key_id) or ledgerreplay.backlog()!=0 or ledgerreplay.admission_block()['blocked']:
             raise ValueError('存在未决请求或费用回执，先完成核对再重置用量')
         baseline=conn.execute('SELECT COALESCE(SUM(credit_units),0) FROM usage_events WHERE key_id=?',(key_id,)).fetchone()[0]
         conn.execute('INSERT INTO usage_reset_events(key_id,event_units_before,previous_units,previous_tokens,ts,actor) VALUES(?,?,?,?,?,?)',

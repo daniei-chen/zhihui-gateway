@@ -128,6 +128,11 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(interval_s)
 
     async def budget_heartbeat():
+        # 租约回收的节流：心跳 10 秒一次，全表扫一遍「有没有过期未结预留」没必要
+        # 那么勤。G-05：`recover()` 只在启动时跑，进程卡死/容器冻结产生的泄漏行
+        # 靠它等不到，只能周期性收。
+        reap_every = max(1, 600 // 10)
+        ticks = 0
         while True:
             await asyncio.sleep(10)
             try:
@@ -137,6 +142,20 @@ async def lifespan(app: FastAPI):
                     threadpools.heartbeat_pool(), budget.heartbeat)
             except Exception:
                 logger.exception('budget owner heartbeat failed')
+            ticks += 1
+            if ticks % reap_every == 0:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(
+                        threadpools.heartbeat_pool(), budget.reap_expired_leases)
+                except Exception:
+                    logger.exception('budget expired lease reap failed')
+                try:
+                    # G-05：上游拒绝的行按零计费结清（解锁密钥），但不归档。
+                    await asyncio.get_running_loop().run_in_executor(
+                        threadpools.heartbeat_pool(), budget.settle_zero_billed_rejections,
+                        int(time.time()))
+                except Exception:
+                    logger.exception('budget zero-billed rejection settle failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
     # Take the first readiness sample before the monitor can publish a
