@@ -116,9 +116,14 @@ class RequiredWorkflowShapeTests(unittest.TestCase):
     """必检 job 的触发形状。任何「让它不跑」的写法都等于零验合并。
 
     `manager` / `frontend` / `gateway` 是 main 规则集 28284164 的三个 required
-    context。PR 上只要它们因为路径过滤或 job 级 `if:` 而不被排队，GitHub 就报
-    "skipped"，规则集不把 skipped 当作满足，PR 卡住；而如果哪天有人把「不跑」
-    调成「通过」，那就是**零验合并** —— 这个文件守这两头。
+    context。PR 上只要它们因为路径过滤、job 级 `if:` 或 `needs:` 连坐而不被排队，
+    GitHub 就报 "skipped"，规则集不把 skipped 当作满足，PR 卡住；而如果哪天有人
+    把「不跑」调成「通过」，那就是**零验合并** —— 这个文件守这两头。
+
+    关于 `needs:`：`quality.yml:27` 与 `:122` 现在都是 `needs: frontend`。风险链是
+    「frontend 被 skip → manager/gateway 跟着 skip → 三条都读成通过」。因为 workflow
+    写入被封板（CREW 44：`.github/workflows/*` 推不上去），`if: always()` 那条更干净的
+    解法现在提不出来，只能守「允许 `needs:`，但依赖必须闭合在必检集合内」。
     """
 
     def test_pull_request_trigger_carries_no_path_filter(self):
@@ -145,8 +150,35 @@ class RequiredWorkflowShapeTests(unittest.TestCase):
                     f'{name} 不能 continue-on-error：失败被吞掉的必检等于没有必检'
                     f'（{ZERO_VERIFICATION}）')
 
+    def test_required_job_needs_stay_inside_the_required_set(self):
+        """必检 job 的 `needs:` 只许指向必检 job，否则「连坐 skip」可以绕过门禁。
+
+        现在 `manager` 与 `gateway` 都 `needs: frontend`：frontend 一旦被 skip，
+        两个 job 跟着 skip，三条必检一起读成「没失败」。依赖只要落在必检集合内，
+        整条链仍然是被 required 覆盖的；一旦指向集合外的 job（或写错名字），
+        那个上游 job 红了/skip 了都不会被规则集看见。
+        """
+        jobs = _workflow_document().get('jobs') or {}
+        for name in REQUIRED_JOBS:
+            needs = (jobs.get(name) or {}).get('needs')
+            if needs is None:
+                continue
+            dependencies = [needs] if isinstance(needs, str) else list(needs)
+            for dependency in dependencies:
+                with self.subTest(job=name, needs=dependency):
+                    self.assertIn(
+                        dependency, REQUIRED_JOBS,
+                        f'{name} 的 needs 指向 {dependency!r}，它不在必检集合 '
+                        f'{REQUIRED_JOBS} 里：上游不跑时 {name} 跟着 skip，'
+                        f'而规则集只认这三个 context（{ZERO_VERIFICATION}）')
+
     def test_required_jobs_are_the_only_required_contexts(self):
-        """规则集的 required 就是这三项；workflow 里多出来的 job 不该被当成必检。"""
+        """规则集的 required 就是这三项；workflow 里多出来的 job 不该被当成必检。
+
+        这里**故意用严格相等，不用 ⊆**：`quality.yml` 里出现非必检 job 必须是一次
+        显式决策（加进规则集，或换成必检 job），而不是靠子集关系静默通过。
+        改成 ⊆ 的人以为在修 bug，其实是在放走「红了也挡不住合并」的 job。
+        """
         jobs = set(_workflow_document().get('jobs') or {})
         self.assertTrue(set(REQUIRED_JOBS) <= jobs)
         expected_extras = jobs - set(REQUIRED_JOBS)
