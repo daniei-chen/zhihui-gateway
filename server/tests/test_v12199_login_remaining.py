@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTH = (ROOT / 'server' / 'routers' / 'auth.py').read_text(encoding='utf-8')
@@ -27,8 +28,21 @@ class RecordFailReturnsTheCountTests(unittest.TestCase):
         self.assertIn('def record_fail(ip: str, username: str | None = None) -> int:', SEC)
 
     def test_it_returns_the_larger_of_the_two_counters(self):
-        """锁定判定同时看 IP 与用户名；只报一边会让用户看到「还剩 4 次」却已被锁。"""
-        self.assertIn('counted = max(counted, ucnt + 1)', SEC)
+        """锁定判定同时看 IP 与用户名；只报一边会让用户看到「还剩 4 次」却已被锁。
+
+        原来这里断言的是源码字面量 `counted = max(counted, ucnt + 1)`。2026-11-28 的
+        D-1 修复把用户名条目改成带来源集合的三段结构，那一行变成 `counted = max(counted,
+        entry[0])`，字面量不再存在——但**行为**没变，反而更该直接验证行为：真的调一次
+        `record_fail`，让 IP 与用户名两条计数不对称，返回值必须是大的那个。
+        """
+        from server import security
+        with mock.patch.object(security, '_fail', {}),                 mock.patch.object(security, '_user_fail', {}),                 mock.patch.object(security, '_FAILS_LOADED', True):
+            for _ in range(6):
+                security.record_fail('198.51.100.1', 'fixture-user')
+            counted = 0
+            for _ in range(2):
+                counted = security.record_fail('198.51.100.2', 'fixture-user')
+        self.assertEqual(counted, 8, '按用户名 8 次 > 按 IP 2 次，应报 8')
 
     def test_it_explains_why(self):
         self.assertIn('他不知道自己快到锁定了', SEC)

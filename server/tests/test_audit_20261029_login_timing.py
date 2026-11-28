@@ -30,7 +30,7 @@ class LoginTimingRegressionTest(unittest.IsolatedAsyncioTestCase):
             'username': 'fixture-admin', 'password': 'fixture-password'})
         self.mocks = {}
         values = {
-            'login_blocked': False, 'load_users': self.cfg,
+            'ip_login_blocked': False, 'account_locked': False, 'load_users': self.cfg,
             'verify_pwd': False, 'dummy_verify': None, 'record_fail': None,
             'audit': None, 'clear_fail': None, 'insecure_cookie_warning': None,
             'issue_token': 'fixture-session', 'cookie_secure': True,
@@ -85,22 +85,36 @@ class LoginTimingRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mocks['audit'].call_args.args[1], 'login')
         self.mocks['issue_token'].assert_called_once_with('fixture-admin', 'admin', expected_sv=0)
 
-    async def test_blocked_login_stops_before_password_work(self):
-        self.mocks['login_blocked'].return_value = True
+    async def test_ip_blocked_login_stops_before_password_work(self):
+        """来源 IP 维度是限速闸门，拦在密码校验之前（唯一还能省下 KDF 的判定）。"""
+        self.mocks['ip_login_blocked'].return_value = True
         await self.failure(429)
-        for name in ('load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit', 'issue_token'):
+        for name in ('load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit',
+                     'issue_token', 'account_locked'):
             self.mocks[name].assert_not_called()
+
+    async def test_account_lock_does_not_skip_the_password_work(self):
+        """账号锁必须在 KDF 之后判定：锁定期内正确密码也要放行（审计 D-1）。
+
+        如果它像 IP 维度那样在入口短路，正确密码就进不来，匿名者只要用 5 次
+        错密码就能把管理员关在门外。这里钉住「KDF 照跑、只按错密码拒绝」。
+        """
+        self.mocks['account_locked'].return_value = True
+        await self.failure(429)
+        self.mocks['verify_pwd'].assert_called_once_with('fixture-password', 'fixture-hash')
+        self.mocks['dummy_verify'].assert_not_called()
+        self.mocks['record_fail'].assert_called_once_with('192.0.2.1', 'fixture-admin')
 
     async def test_non_object_json_still_returns_bad_request_without_password_work(self):
         self.request.json.return_value = []
         await self.failure(400)
-        for name in ('login_blocked', 'load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit'):
+        for name in ('ip_login_blocked', 'load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit'):
             self.mocks[name].assert_not_called()
 
     async def test_invalid_json_still_returns_bad_request_without_password_work(self):
         self.request.json.side_effect = ValueError('fixture invalid JSON')
         await self.failure(400)
-        for name in ('login_blocked', 'load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit'):
+        for name in ('ip_login_blocked', 'load_users', 'verify_pwd', 'dummy_verify', 'record_fail', 'audit'):
             self.mocks[name].assert_not_called()
 
 
