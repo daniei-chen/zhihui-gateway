@@ -1,7 +1,7 @@
 {
   "server/budget.py": "2300634c61d5c4b7397544642025ce47df6e1f10437a6f00e171046836e722d2",
   "server/ledger.py": "5aeb2ff0b269d44a84e28db37c44f221dfef651791a05a06a5f8ffdbfa2167ab",
-  "server/observability.py": "297bed498e13144020743dfc7b5074375c8c997b2b930380b76fc3fec9c488a2",
+  "server/observability.py": "d91ed55ad26ca1aaaedc48d0a973ee8e49ddef22318d26026b7936173c19ae10",
   "server/pooledhttp.py": "b79057de5ec19e27fa54f648e5dc02543b539754e88413180623b30a0cc21938",
   "server/routers/gateway.py": "b7983749018b3e7450d9e690d0e0cf01d90b12eed403c654f0d3424fc1fc6108",
   "server/services/wb2api.py": "487c5dc32cff5288e2209e8ee50b9414d04f40464c0daa62ef38ec2fad3522c5",
