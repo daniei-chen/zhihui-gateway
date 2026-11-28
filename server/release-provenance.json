@@ -1,5 +1,5 @@
 {
-  "base_commit": "a120c42ed8f0f6df1ab9157cdd81aebe46e847ed",
+  "base_commit": "55908d8dc06890c38e29b2c62d5facc361f7c2d8",
   "base_release": "v1.6.27",
   "candidate_only": true,
   "database_rollback": false,
@@ -169,7 +169,7 @@
     "server/tests/test_auth_bypass.py": "0c4f0122eb000c8de5beabd1087048712502930434b89c482fae9921f403e244",
     "server/tests/test_backup_health_evidence.py": "7ff850177b9c11ec12455aae53a9fa214fbc431c5fa51a5751f512e49fe87a64",
     "server/tests/test_changelog.py": "a73796dba3ac1617aaac132678a267defe4e2ebcb8bdb531027bb642e9551f90",
-    "server/tests/test_ci_required_gates.py": "35e86a171f20a440520a1a2b96e47b05329b7ba57994358dfe415fd338772bf9",
+    "server/tests/test_ci_required_gates.py": "3f473c90f23b5ac96b1fc60cb51e02ce14ec7813676b549832843067a9e8bdd5",
     "server/tests/test_command_palette.py": "e9478e0dd5d621d8824ab8fb0e1454d31af566b03b686bb5a3e2cf95324edfe0",
     "server/tests/test_daily_key_quota.py": "bf8b3f5dce43174ac9d257c12a3ef694ff57d72c05b7a15003bd91184e79648b",
     "server/tests/test_docker_deploy.py": "04cd4767fd72b9b335f748044e0df103f71021db7cc6415a3ae8841a78ce1959",
