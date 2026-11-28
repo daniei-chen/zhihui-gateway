@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -366,6 +367,81 @@ class UpdaterSupplyChainTest(unittest.TestCase):
         self.assertEqual(calls, [])
         self._assert_untouched(install, rep)
 
+
+_UPDATE_PS1 = _ROOT / 'windows' / 'update.ps1'
+_SOURCE_BEGIN = '# <manager-repo-source begin>'
+_SOURCE_END = '# <manager-repo-source end>'
+
+
+class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
+    """`windows/update.ps1` 的发布源必须和 Linux 更新器同一条边界（SWO-50）。
+
+    DAN-24 只修了 `deploy/update.py`。Windows 一键更新器仍在从第三方仓库取
+    版本号（:157/:181/:223）、`asset.digest`（:364）和安装包（:395）：那种口径下
+    摘要只能证明「与第三方的元数据一致」，证明不了装的是本仓的包；而且我们的
+    发布在 `daniei-chen/zhihui-gateway`，按第三方取版本号根本找不到本仓 release
+    —— 于是 Windows 客户端一路装的是上游构建。
+
+    Linux 侧的判据是 `ALLOWED_MANAGER_REPOS` + `_resolve_manager_repo`：环境变量
+    只能从白名单里挑，不在白名单**不静默回退**。这里钉住 Windows 的同一件事。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _UPDATE_PS1.read_text(encoding='utf-8-sig')
+
+    def test_official_repository_constant_matches_linux_updater(self) -> None:
+        self.assertIn(f"$OfficialManagerRepo = '{OFFICIAL_REPO}'", self.source,
+                      'Windows 更新器的官方发布源与 deploy/update.py 不是同一个仓库')
+        self.assertEqual(OFFICIAL_REPO, product.REPOSITORY,
+                         '更新器与服务端的仓库事实不一致（server/product.py）')
+
+    def test_no_third_party_repository_slug(self) -> None:
+        self.assertNotIn(THIRD_PARTY_REPO, self.source,
+                         'Windows 更新器仍指向第三方仓库')
+
+    def test_every_github_url_interpolates_the_resolved_repository(self) -> None:
+        urls = [line.strip() for line in self.source.splitlines()
+                if re.search(r'https://(?:api\.)?github\.com/', line)]
+        self.assertTrue(urls, 'windows/update.ps1 里找不到 GitHub 地址，解析口径变了')
+        for line in urls:
+            with self.subTest(line=line):
+                self.assertIn('$ManagerRepo', line,
+                              '发布源地址写死了仓库名；应统一用 Resolve-ManagerRepo 的结果')
+
+    # ── 行为：白名单校验与非白名单拒绝（需要本机有 PowerShell）──
+
+    def _source_block(self) -> str:
+        begin = self.source.find(_SOURCE_BEGIN)
+        end = self.source.find(_SOURCE_END)
+        self.assertNotEqual(begin, -1, f'找不到 {_SOURCE_BEGIN} 标记')
+        self.assertNotEqual(end, -1, f'找不到 {_SOURCE_END} 标记')
+        return self.source[begin:end]
+
+    def _resolve(self, requested: str) -> subprocess.CompletedProcess:
+        shell = shutil.which('pwsh') or shutil.which('powershell')
+        if not shell:
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        script = self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n'
+        return subprocess.run(
+            [shell, '-NoProfile', '-NonInteractive', '-Command', '-'],
+            input=script, capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=120,
+            env=dict(os.environ, WB_MANAGER_REPO=requested))
+
+    def test_unset_override_resolves_to_official_repository(self) -> None:
+        done = self._resolve('')
+        self.assertIn(f'RESOLVED={OFFICIAL_REPO}', done.stdout, done.stderr)
+
+    def test_allowlisted_override_is_accepted(self) -> None:
+        done = self._resolve(OFFICIAL_REPO)
+        self.assertIn(f'RESOLVED={OFFICIAL_REPO}', done.stdout, done.stderr)
+
+    def test_third_party_override_aborts_instead_of_falling_back(self) -> None:
+        """非白名单不能静默换成官方仓库：静默回退会让运维以为自己配的镜像在生效。"""
+        done = self._resolve(THIRD_PARTY_REPO)
+        self.assertNotEqual(done.returncode, 0, '第三方发布源竟然没让更新中止')
+        self.assertNotIn('RESOLVED=', done.stdout, '中止前就把仓库定下来了')
 
 
 if __name__ == '__main__':
