@@ -208,5 +208,42 @@ class MissingCoverageFieldIsNotHealthyTest(unittest.TestCase):
         self.assertNotIn('backup_stale', self.operational.alerts)
 
 
+SOURCE = (Path(__file__).resolve().parents[1] / 'backup_application.py').read_text(
+    encoding='utf-8')
+
+
+class MainWiringIsPresentTest(unittest.TestCase):
+    """`main()` 的两处接线存在性。
+
+    **这证的是接线存在，不是接线跑通。** 本仓没有任何用例真正执行过
+    `backup_application.main()`：该模块 `import fcntl`，非 POSIX 上连导入都做不到，
+    现有证据全是源码文本断言（`test_v12144` / `test_v12145` / `test_v12157`
+    也是同一形态）。所以下面两条只能证明「`if …: raise` 还在」，
+    **不能**当端到端回归依据 —— `collect_state_entries` 的返回值对，
+    不等于备份真的会失败。真跑一次 `main()` 的 POSIX 门控用例见 SWO-84。
+    """
+
+    def anchor(self, start, length=400):
+        index = SOURCE.find(start)
+        self.assertNotEqual(index, -1, f'源码里找不到接线锚点：{start}')
+        return SOURCE[index:index + length]
+
+    def test_main_raises_on_unaccounted_state_entries(self):
+        """未归类的条目必须让 `main()` 失败，不能只算进覆盖清单。"""
+        window = self.anchor('collect_state_entries(MANAGER, GATEWAY')
+        self.assertIn('if unexpected:', window,
+                      '`unexpected` 算出来了却没有判据 —— 无法归类的条目会被静默放行')
+        self.assertIn("raise RuntimeError('state root has unaccounted entries",
+                      window, '`unexpected` 非空时必须抛出，而不是继续打包')
+
+    def test_main_raises_on_empty_archive_directories(self):
+        """空壳目录条目必须让 `main()` 失败 —— 清单里有目录不等于备份了内容。"""
+        window = self.anchor('empty = empty_archive_directories(archive)')
+        self.assertIn('if empty:', window,
+                      '`empty` 算出来了却没有判据 —— 空壳目录会照样通过验证')
+        self.assertIn("raise RuntimeError('recovery archive has directory entries without files",
+                      window, '有空壳目录条目时必须抛出，而不是继续发布这份包')
+
+
 if __name__ == '__main__':
     unittest.main()
