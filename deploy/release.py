@@ -501,10 +501,12 @@ def _check_auth_request_targets(text: str) -> list[str]:
 
     这个位置**不在仓库里**（运维自己写在 sites-enabled），但配错会让升级后
     整站不可用：`/api/system/internal-session-verify` 的「仅本机」是两层判据
-    （TCP 对端 + `iputil.client_ip()`）。若内部 location 把 `location /` 那套
-    `proxy_set_header X-Real-IP $remote_addr;` 也抄进去，`auth_request` 子请求
-    就带着浏览器地址，被判定成外部请求而 403 —— 于是 `/api/` 的会话校验对
-    所有用户都失败。所以在这里判：要么显式清空，要么在发布前拦住。
+    （TCP 对端 + `iputil.client_ip()`），而 `auth_request` 子请求带的是
+    **客户端原始请求头**（父 location 的 `proxy_set_header` 只作用于它自己的
+    upstream，不会写回子请求）：客户端伪造的头、或前面 CDN 加的
+    `X-Forwarded-For`（Cloudflare 就会加）都会原样进来。内部 location 不显式
+    清空时，这些请求被判成外部而 403 —— `/api/` 的会话校验随之对这些用户
+    全部失败。所以在这里判：要么清空，要么发布前拦住。
     """
     notes = []
     targets = sorted(set(re.findall(r'auth_request\s+([^\s;]+)\s*;', text)))
@@ -518,7 +520,8 @@ def _check_auth_request_targets(text: str) -> list[str]:
                              body, re.IGNORECASE):
                 raise ReleaseError(
                     f'auth_request 目标 {uri} 的 location 转发了 {header}：'
-                    '子请求会被判成外部来源，升级后整站 /api/ 会话校验都 403。'
+                    '子请求带的是客户端原始头（含 CDN 加的那份），会被判成外部来源，'
+                    '带该头的用户升级后整站 /api/ 会话校验都 403。'
                     f'改成 proxy_set_header {header} "";（见 deploy/README.md）')
         notes.append(f'auth_request {uri} 的内部 location 已清空来源头')
     return notes
@@ -608,8 +611,9 @@ def cmd_activate(args) -> int:
     target_root = target.resolve()
 
     # `--nginx` 必须传进门禁：`check_nginx` 里有一条「auth_request 的内部
-    # location 不能转发来源头」的判定 —— 配错会让升级后**整站** `/api/`
-    # 会话校验 403。只在 verify 里跑等于让它在真正切指针的那一步缺席。
+    # location 不能转发来源头」的判定 —— 配错会让**带来源头的用户**整站
+    # `/api/` 会话校验 403（CDN 回源的部署尤其容易踩）。只在 verify 里跑
+    # 等于让它在真正切指针的那一步缺席。
     cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust,
                                  nginx=getattr(args, "nginx", None)))
 

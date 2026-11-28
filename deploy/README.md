@@ -258,8 +258,11 @@ server {
 > 关掉改写后，nginx 转发进来的请求对端**恒为** `127.0.0.1`，所以「仅本机」类
 > 端点（如 `/api/system/internal-session-verify`）改看两层：对端在回环 **且**
 > `client_ip()` 解出的真实来源在回环。据此，`auth_request` 的 internal
-> location **不要**转发 `X-Real-IP` / `X-Forwarded-For` —— 子请求没有「真实
-> 客户端」可言，带上它会被判成外部请求而 403（整站登录校验随之失败）：
+> location **必须显式清空** `X-Real-IP` / `X-Forwarded-For`：`auth_request`
+> 子请求复制的是**客户端原始请求头**（父 location 的 `proxy_set_header` 不会
+> 写回子请求），客户端伪造的头、或前面 CDN 加的 `X-Forwarded-For`
+> （Cloudflare 就会加）都会原样进来，被判成外部请求而 403 —— 这些用户的
+> 整站登录校验随之失败：
 >
 > ```nginx
 > location = /__zh_session {
@@ -276,7 +279,7 @@ server {
 > 用域名访问时请同时设置 `WB_PUBLIC_ORIGIN=https://你的域名`（写端点的同源锚点）；
 > 不设也能跑，但「域名 + 没有可信反代」的表单提交会被 403，管理页会提示怎么修。
 >
-> **切指针之前先跑一次站点配置检查**（`activate` 也会带 `--nginx` 跑一遍）：
+> **切指针之前先跑一次站点配置检查**（`activate` 只有带 `--nginx` 才会复查）：
 >
 > ```bash
 > python deploy/release.py verify <version> --nginx /etc/nginx/sites-enabled/<site>

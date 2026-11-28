@@ -477,7 +477,9 @@ def internal_session_verify(request: Request,
       解出的真实来源也在回环（为什么不只看对端见下方注释）。nginx 的
       /__zh_session 是 internal location，**必须显式清空**
       `X-Real-IP` / `X-Forwarded-For`（写法与发布门禁见 deploy/README.md）——
-      子请求会继承父请求的头，不清空就会带着浏览器地址被判成外部；
+      `auth_request` 子请求复制的是**客户端原始请求头**（父 location 的
+      `proxy_set_header` 只作用于它自己的 upstream，不会写回子请求），所以
+      CDN 加的 `X-Forwarded-For` 或客户端自带的伪造头会原样带进来；
     - 复用 Manager 会话校验（Cookie / wbt_ token），通过后签发 5 分钟有效的
       HMAC 断言（qtg `X-QTG-Identity` 契约），qtg 据此识别真实用户与角色，
       不再依赖静态 admin Bearer；
@@ -498,11 +500,14 @@ def internal_session_verify(request: Request,
     # 浏览器地址 → 403；`auth_request` 子请求在 internal location 清空来源头后
     # 解析结果仍是回环 → 放行。
     #
-    # 注意 `auth_request` 子请求**会继承父请求的头**，所以「子请求不带来源头」
-    # 不是自动成立的：得靠 internal location 里显式
-    # `proxy_set_header X-Real-IP ""`（写法见 deploy/README.md，发布门禁
-    # `release.py verify --nginx` 会查）。运维漏了这两行时，子请求会带着浏览器
-    # 地址被判成外部 —— 升级后整站 403，日志里那条 warn 说的就是这件事。
+    # 注意 `auth_request` 子请求拿到的是**客户端原始请求头** —— 父 location 的
+    # `proxy_set_header X-Real-IP $remote_addr` 只作用于它自己的 upstream 请求，
+    # 不会写回子请求。所以「子请求不带来源头」不是自动成立的：客户端自己发的
+    # 伪造头、或前面 CDN 加的 `X-Forwarded-For`（Cloudflare 就会加）都会原样
+    # 进来。得靠 internal location 里显式 `proxy_set_header X-Real-IP ""`
+    # （写法见 deploy/README.md，发布门禁 `release.py verify --nginx` 会查）。
+    # 漏了这两行时，带来源头的用户会被判成外部 —— 升级后他们整站 403，
+    # 日志里那条 warn 说的就是这件事。
     #
     # 前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
     # 那种部署下对端本身就是真实来源，不该有回环对端。
