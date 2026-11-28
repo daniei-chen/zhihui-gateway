@@ -620,6 +620,11 @@ MODULES = (
     # 时，`api_keys` 的清零与审计行必须整体回滚（G-07 那三条只断言终态，
     # 对「先提交后失败」全绿）。两个变异各杀掉 3 条，见 PR 证据。
     "server.tests.test_g07_reset_transaction_boundary",
+    # G-14（2026-11-28）：依赖审计的判定者。必检 job 跑在 `unshare --net` 里
+    # （quality.yml:47/:149），连不上 registry，所以「真实审计」靠随仓库走的快照
+    # web/audit-baseline.json（14 天刷新期限），判定器与快照校验都在这个模块里：
+    # 未豁免 high 红、有效豁免绿、豁免过期红、报告不可解析红、快照过期红。
+    "server.tests.test_npm_audit_gate",
 )
 
 
