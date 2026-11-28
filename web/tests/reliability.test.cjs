@@ -592,7 +592,10 @@ test('logout failure keeps identity/cache/location; confirmed success clears the
   const {AuthProvider} = load('lib/auth-context.tsx', {
     react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
     '@/lib/use-hydrated': {useHydrated: () => true},
-    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
+    // D-41：锚点状态是另一个端点（`/api/me` 只回身份）。桩成立即兑现的值，
+    // 这些用例只关心身份读的合并/取消语义。
+    '@/lib/api': {authApi, systemApi: {originStatus: async () => ORIGIN_STATUS_FIXTURE}},
+    '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
   });
   const render = () => harness.render(() => AuthProvider({children: null})).props.value;
   render(); harness.effects(); await flush();
@@ -1408,6 +1411,8 @@ test('approved key page states wallet cap and does not show the unpaid-activatio
   assert.match(view, /portal\.keys\.helpCap/);
 });
 
+const ORIGIN_STATUS_FIXTURE = {state: 'configured', writes_allowed: true, host: 'testserver'};
+
 function authRaceFixture() {
   const harness = hookHarness();
   const cache = new Map();
@@ -1425,7 +1430,10 @@ function authRaceFixture() {
   const {AuthProvider} = load('lib/auth-context.tsx', {
     react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
     '@/lib/use-hydrated': {useHydrated: () => true},
-    '@/lib/api': {authApi}, '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
+    // D-41：锚点状态是另一个端点（`/api/me` 只回身份）。桩成立即兑现的值，
+    // 这些用例只关心身份读的合并/取消语义。
+    '@/lib/api': {authApi, systemApi: {originStatus: async () => ORIGIN_STATUS_FIXTURE}},
+    '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
   });
   return {harness, cache, reads, window, authApi, render: () => harness.render(() => AuthProvider({children: null})).props.value};
 }
@@ -1467,6 +1475,38 @@ test('identity refresh coalesces reads and Strict Mode replay replaces an abando
   fixture.reads[0].resolve({username: 'obsolete', role: 'admin'}); await joined;
   assert.equal(fixture.render().me.username, 'current');
   fixture.harness.unmount();
+});
+
+/**
+ * D-41 的消费方证据：横幅**真的从上下文里取到了**锚点状态。
+ *
+ * 端点返回字段只证明服务端愿意说；这条证明客户端会读。判据走真实的
+ * `lib/origin-check.ts`（不是替身），所以「状态 = configured 也弹告警」这类
+ * 回归同样会被抓住。
+ */
+test('the origin banner renders from the context value and stays silent when anchored', () => {
+  const gate = load('lib/origin-check.ts', {});
+  const jsx = (type, props) => ({type, props});
+  const render = origin => {
+    let auth = {me: {username: 'fixture', role: 'admin'}, loading: false, origin};
+    const {OriginAnchorNotice} = load('components/common/layout/OriginAnchorNotice.tsx', {
+      react: hookHarness().react, 'react/jsx-runtime': {jsx, jsxs: jsx},
+      'lucide-react': {AlertTriangle: 'icon'},
+      '@/lib/auth-context': {useAuth: () => auth},
+      '@/lib/i18n/provider': {useT: () => key => `t:${key}`},
+      '@/lib/origin-check': gate,
+      '@/lib/utils': {cn: (...values) => values.filter(Boolean).join(' ')},
+    });
+    return OriginAnchorNotice({});
+  };
+  assert.equal(render({state: 'configured', writes_allowed: true, host: 'panel.example.com'}), null,
+    '有锚点时不该出现横幅');
+  assert.equal(render(null), null, '取不到状态时不凭空弹警告');
+  const blocked = render({state: 'unconfigured', writes_allowed: false, host: 'panel.example.com'});
+  assert.ok(blocked, 'unconfigured 必须出现横幅');
+  assert.match(JSON.stringify(blocked), /t:origin\.noticeTitle/);
+  assert.equal(render({state: 'relaxed', writes_allowed: true, host: 'panel.example.com'}), null,
+    '逃生门只放宽锚点、提交仍然能过：横幅说的是「会被拒」，风险状态由安全页显示');
 });
 
 function taskRunFixture() {

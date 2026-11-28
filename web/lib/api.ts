@@ -920,6 +920,11 @@ export const systemApi = {
     del<{ok: boolean; archived: number; message: string}>('/api/system/update-status'),
   /** 更新日志（解析仓库根目录 CHANGELOG.md，离线可用） */
   changelog: () => get<Changelog>('/api/system/changelog'),
+  /**
+   * D-41：本次访问路径下的同源锚点状态（管理页横幅 / 安全页状态栏）。
+   * 不在 `/api/me` 里 —— 那是身份响应，形状被逐字钉住。
+   */
+  originStatus: (signal?: AbortSignal) => get<OriginCheck>('/api/system/origin-status', undefined, signal),
 };
 
 /* ── PostgreSQL 异地备份（设置 → 数据备份）────────────── */

@@ -215,6 +215,24 @@ def performance_snapshot(user: dict = Depends(security.require_panel_reader)) ->
             'admission': observability.admission_snapshot()}
 
 
+@router.get('/origin-status')
+def origin_status(request: Request,
+                  user: dict = Depends(security.require_session_reader)) -> dict:
+    """D-41：本次访问路径下的来源锚点状态（管理页横幅 / 安全页状态栏用）。
+
+    字段与匿名端点 `GET /api/origin-check` 同一份 `security.origin_status()`：
+    `state`（configured / proxy / loopback-only / unconfigured / relaxed）、
+    `writes_allowed`、服务端看到的 `host`。
+
+    为什么单独一个端点、而不是塞进 `/api/me`：`/api/me` 是每次页面加载都拉的
+    身份响应，`test_authorization_generation` 用逐字相等钉住它的形状 —— 身份
+    响应里只应有身份。这里用 `require_session_reader`：锚点状态描述的是**这个
+    浏览器的请求路径**，API 令牌没有浏览器来源，也没有看运维拓扑的理由。
+    """
+    from .. import security as _security
+    return _security.origin_status(request)
+
+
 @router.get('/drain')
 def drain_status(user: dict = Depends(security.require_panel_reader)) -> dict:
     return drain.snapshot()

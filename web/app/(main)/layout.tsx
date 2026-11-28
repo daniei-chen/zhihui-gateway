@@ -83,7 +83,8 @@ export default function MainLayout({
                     服务端的 /api/platforms 来兜。 */}
                 <PlatformDisabledNotice />
                 {/* D-41：用域名直连又没声明 WB_PUBLIC_ORIGIN 时，**填表之前**就说清楚
-                    提交会被拒以及怎么修（判据是 /api/me 的 origin_check）。 */}
+                    提交会被拒以及怎么修（判据是 /api/system/origin-status，
+                    经 useAuth().origin 取到）。 */}
                 <OriginAnchorNotice />
                 <PlatformScope>{!loading && me ? children : null}</PlatformScope>
               </main>

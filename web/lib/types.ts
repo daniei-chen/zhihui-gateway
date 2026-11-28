@@ -19,8 +19,6 @@ export interface OriginCheck {
 export interface Me {
   username: string;
   role: Role;
-  /** 旧后端没有这个字段：缺失时前端按「不提示」处理。 */
-  origin_check?: OriginCheck;
 }
 
 export interface Account {

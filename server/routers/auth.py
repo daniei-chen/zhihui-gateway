@@ -159,13 +159,13 @@ def logout(request: Request) -> JSONResponse:
 
 @router.get('/me')
 def me(request: Request, user: dict = Depends(security.current_user)) -> dict:
-    """身份 + 本次访问路径下的来源锚点状态（D-41，管理页横幅/状态栏用）。
+    """会话身份，**只有** username 与 role。
 
-    `origin_check.state`：configured / proxy / loopback-only / unconfigured / relaxed。
-    浏览器在**填表之前**就能看到「这个地址能不能提交表单」，不用等 403。
+    D-41 的来源锚点状态不在这里：这是每次页面加载都拉的高频身份响应，往里加
+    字段等于扩 API 表面并把运维拓扑写进每个会话响应。锚点状态走管理端的
+    `GET /api/system/origin-status`（同一份 `security.origin_status()`）。
     """
-    return {'username': user.get('username'), 'role': user.get('role', 'viewer'),
-            'origin_check': security.origin_status(request)}
+    return {'username': user.get('username'), 'role': user.get('role', 'viewer')}
 
 
 @router.get('/origin-check')

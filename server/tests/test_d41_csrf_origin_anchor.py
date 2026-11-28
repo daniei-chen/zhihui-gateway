@@ -305,7 +305,13 @@ class TrustedProxyOnly(_AnchorCase):
 
 
 class OriginStatusField(_AnchorCase):
-    """管理页状态/自检字段（`/api/me` 的 `origin_check`）。"""
+    """管理端状态字段（`GET /api/system/origin-status`，管理页横幅/安全页状态栏）。
+
+    **不在 `/api/me` 里**：那是每次页面加载都拉的身份响应，
+    `test_authorization_generation.test_internal_owner_binding_is_not_exposed_by_session_identity`
+    用逐字相等钉住它的形状（`{'username','role'}`）—— 往里加字段就是在扩 API
+    表面，而 D-41 要的只是「运维看得见锚点状态」。
+    """
 
     def test_states_cover_every_anchor_shape(self) -> None:
         cases = (
@@ -352,18 +358,63 @@ class OriginStatusField(_AnchorCase):
         self.assertEqual(response.json()['state'], 'unconfigured')
         self.assertFalse(response.json()['writes_allowed'])
 
-    def test_api_me_exposes_the_field(self) -> None:
+    def _panel_app(self, user: dict | None = None) -> FastAPI:
+        """只替换会话身份，**不**替换 `require_panel_reader` —— 让真正的角色闸门跑到。"""
+        app = FastAPI()
+        app.include_router(system.router)
+        app.dependency_overrides[security.current_user] = lambda: (
+            user or {'username': 'fixture', 'role': 'admin'})
+        self.addCleanup(app.dependency_overrides.clear)
+        return app
+
+    def test_the_management_status_endpoint_carries_the_state(self) -> None:
+        """管理端状态端点：消费方（横幅/状态栏）拿到的是同一份字段。"""
+        response = self._call('/api/system/origin-status', method='get', peer=LAN,
+                              host='panel.example.com', app=self._panel_app())
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body['state'], 'unconfigured')
+        self.assertFalse(body['writes_allowed'])
+        self.assertEqual(body['host'], 'panel.example.com')
+
+    def test_a_viewer_session_reads_the_field_too(self) -> None:
+        """人类只读角色（account_admin / viewer）也要看得到横幅 —— 否则等于没写。"""
+        app = self._panel_app({'username': 'watcher', 'role': 'account_admin'})
+        response = self._call('/api/system/origin-status', method='get', peer=LAN,
+                              host='panel.example.com', app=app)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['state'], 'unconfigured')
+
+    def test_an_api_token_cannot_read_the_field(self) -> None:
+        """带 scope 的机器令牌不是「面板读者」：锚点状态里有运维拓扑（Host）。"""
+        app = self._panel_app({'username': 'token', 'role': 'admin', 'scope': 'keys'})
+        response = self._call('/api/system/origin-status', method='get', peer=LAN,
+                              host='panel.example.com', app=app)
+        self.assertEqual(response.status_code, 403, response.text)
+
+    def test_the_management_status_endpoint_requires_a_session(self) -> None:
+        """不是匿名端点：锚点形态只给已登录的面板用户（host 是运维拓扑）。"""
+        app = FastAPI()
+        app.include_router(system.router)
+        response = self._call('/api/system/origin-status', method='get', peer=LAN,
+                              host='panel.example.com', app=app)
+        self.assertEqual(response.status_code, 401, response.text)
+
+    def test_api_me_keeps_its_identity_only_shape(self) -> None:
+        """回归钉子：`/api/me` 的 body 只能是身份两个字段。
+
+        这条与 `test_authorization_generation` 的那条同向，但在这里守。把
+        `origin_check` 塞回 `/api/me`（变异 M9）→ 两个文件各红一条。
+        """
         app = FastAPI()
         app.include_router(auth.router)
         app.dependency_overrides[security.current_user] = lambda: {
             'username': 'fixture', 'role': 'admin'}
         self.addCleanup(app.dependency_overrides.clear)
         response = self._call('/api/me', method='get', peer=LAN,
-                              host='panel.example.com',
-                              extra={'origin': 'http://panel.example.com'}, app=app)
+                              host='panel.example.com', app=app)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()['origin_check']['state'], 'unconfigured')
-        self.assertFalse(response.json()['origin_check']['writes_allowed'])
+        self.assertEqual(response.json(), {'username': 'fixture', 'role': 'admin'})
 
 
 class SideGatesUseTheSameAnchors(_AnchorCase):

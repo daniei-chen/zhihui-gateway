@@ -132,13 +132,13 @@ const EMPTY_LOGS: IpAccessLog[] = [];
 const EMPTY_AUDIT: AuditLog[] = [];
 
 export default function SecurityPage() {
-  const {isAdmin, role, me} = useAuth();
+  const {isAdmin, role, me, origin} = useAuth();
   const t = useT();
   // D-41：这次访问路径下写请求有没有可信锚点（configured / proxy /
   // loopback-only / unconfigured / relaxed）。本页的开关都靠写接口保存，
   // 状态不明时先说清楚，免得用户改完发现存不上。
-  const originState = originStateKey(me?.origin_check?.state);
-  const originBlocked = needsOriginNotice(me?.origin_check);
+  const originState = originStateKey(origin?.state);
+  const originBlocked = needsOriginNotice(origin);
 
   /**
    * 本页要的 4 份数据一次并发取回，成败逐项独立；加载态 / 失败态 / 是否正在刷新
@@ -316,9 +316,9 @@ export default function SecurityPage() {
           {originState ? (
             <Badge variant={originBlocked ? 'destructive' : 'secondary'}>{t(originState)}</Badge>
           ) : null}
-          {me?.origin_check?.host ? (
+          {origin?.host ? (
             <span className="rounded bg-background/60 px-1.5 py-0.5 font-mono">
-              {me.origin_check.host}
+              {origin.host}
             </span>
           ) : null}
         </div>

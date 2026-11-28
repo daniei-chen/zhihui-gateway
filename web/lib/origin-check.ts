@@ -7,7 +7,8 @@
  * 一个通用 403 —— 那正是本次修复要「去掉静默」的地方。
  *
  * 两个判据都是服务端给的机器可读字段，不在前端猜 `location.hostname`：
- *   · `/api/me` 的 `origin_check.writes_allowed`（D-41 新增）；
+ *   · `GET /api/system/origin-status` 的 `writes_allowed`（D-41，管理端状态端点；
+ *     登录页用匿名的 `GET /api/origin-check`）；
  *   · 403 体的 `detail`（后端约定 `origin_unconfigured`，见
  *     `server/security.py:_reject_unanchored`）与同名响应头
  *     `X-Manager-Csrf-Reason`。
