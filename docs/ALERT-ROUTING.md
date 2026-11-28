@@ -46,14 +46,34 @@ sudo install -d -o root -g root -m 0755 /opt/notify
 sudo tee /opt/notify/config.json >/dev/null <<'JSON'
 {"enabled": true, "mode": "file", "file": "/opt/notify/alerts.jsonl"}
 JSON
-# 输出文件必须**先建好**并交给服务 UID：容器里以 uid 10001 运行（Dockerfile:155），
+# 输出文件先建好并交给服务 UID：容器里以 uid 10001 运行（Dockerfile:155），
 # 而 /opt/notify 是 root 的 0755 —— 服务自己建不了文件，dispatch() 会
 # PermissionError，每条告警都投递失败，而 status() 仍然报 configured=true，
 # 于是「已配置」的假象下反而比未配置更安静。配置本身保持 root 拥有即可。
+# 宿主机 systemd 部署（deploy/workbuddy-web.service，没有 User=，以 root 跑）
+# 不需要这一步，但加了也无害。
 sudo install -o 10001 -g 10001 -m 0640 /dev/null /opt/notify/alerts.jsonl
 # 不需要重启：每次 dispatch 都重新读配置
 # 验证：触发一条告警后 tail -f /opt/notify/alerts.jsonl
 ```
+
+### 容器部署要额外挂载
+
+`docker-compose.yml` 只挂了 `./data` 和 `../workbuddy2api`，**没有** `/opt/notify`，
+也没有传 `WB_NOTIFY_CONFIG`；镜像里同样不建 `/opt/notify`。所以容器里
+`notify._config_path()` 的默认路径（`server/notify.py:94`）永远不存在，宿主机上
+写的 `/opt/notify/config.json` 进程根本看不见 —— 表现为「明明配了，日志还是
+『告警未配置』」。容器部署要两样都给：
+
+```yaml
+    volumes:
+      - /opt/notify:/opt/notify
+    environment:
+      WB_NOTIFY_CONFIG: /opt/notify/config.json
+```
+
+目录里那份 `alerts.jsonl` 的属主必须是 10001（上面那条 `install -o 10001`），
+否则容器里 append 会 PermissionError。
 
 `http` 模式（POST 到 `url`）同样需要 `"enabled": true` 且 `mode` 为 `http`；
 `timeout_sec` 会被夹在 0.1–3 秒，投递失败只记 warning，不影响告警状态机。

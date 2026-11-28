@@ -92,6 +92,15 @@ class AlertRoutingDocTests(unittest.TestCase):
         self.assertIn('install -o 10001', self.DOC,
                       'file 模式示例没有预建可写的输出文件：uid 10001 建不了，投递会 PermissionError')
 
+    def test_container_deployment_recipe_mentions_the_mount_and_env(self):
+        """compose 只挂 ./data 与 ../workbuddy2api，不挂 /opt/notify 也不传
+        WB_NOTIFY_CONFIG —— 不给这两样，容器里默认路径永远不存在，宿主机写的
+        配置进程看不见，只会一直报「告警未配置」。文档必须点明。"""
+        self.assertIn('WB_NOTIFY_CONFIG', self.DOC)
+        self.assertIn('/opt/notify:/opt/notify', self.DOC,
+                      '容器部署示例缺 /opt/notify 绑定挂载')
+        self.assertIn('容器部署', self.DOC)
+
 
 if __name__ == '__main__':
     unittest.main()
