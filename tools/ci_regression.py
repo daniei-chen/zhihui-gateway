@@ -608,6 +608,10 @@ MODULES = (
     # 但此前零测试：丢更新、跨进程互斥、5 秒 deadline、symlink/nlink 拒绝
     # 全靠人读代码。五处变异各自杀掉一条用例（见 PR 证据）。
     "server.tests.test_userstore_lock",
+    # G-07（2026-11-28）：重置用量必须连当天 `key_daily_usage` 一起清，否则
+    # 管理员点完重置、界面已用变 0，请求照样 429。三条用例各自被一个变异杀掉
+    # （去掉清理 / 删行而非写 0 / 顺手清掉历史日），见 PR 证据。
+    "server.tests.test_g07_reset_daily_usage",
 )
 
 

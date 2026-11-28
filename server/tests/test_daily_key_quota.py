@@ -67,16 +67,23 @@ class DailyKeyQuotaTest(unittest.TestCase):
             self.prepare(key, 'third-request')
         self.assertEqual(error.exception.code, 'daily_token_quota_exhausted')
 
-    def test_daily_credit_uses_integer_units_and_is_independent_of_total_reset(self):
+    def test_daily_credit_uses_integer_units_and_reset_clears_them(self):
+        """日额度按整数单位记账；「重置用量」必须连当天的日计数一起清（G-07）。
+
+        这条以前叫 `..._is_independent_of_total_reset`，断言的是「日计数不受
+        重置影响」——那正是 G-07 这个 bug：界面已用变 0、请求却仍被
+        `daily_credit_quota_exhausted` 挡住，管理员重置完照样 429。
+        契约改了：重置让同一天同一把密钥重新可用；历史日不受影响
+        （`test_g07_reset_daily_usage.test_reset_leaves_other_days_untouched`）。
+        """
         key = keysvc.create_key('fixture', daily_credit_quota=0.3, quota_credit=100)
         keysvc.touch(key, '127.0.0.1', 100, 0.1)
         keysvc.touch(key, '127.0.0.1', 100, 0.2)
         self.assertEqual(dailyquota.snapshot(key['id'], db.day_of())['credit_units'], 300000)
-        keysvc.reset_usage(key['id'])
         self.assertEqual(keysvc.resolve(key['key'])['daily_used_credit'], 0.3)
-        with self.assertRaises(budget.BudgetRejected) as error:
-            self.prepare(key)
-        self.assertEqual(error.exception.code, 'daily_credit_quota_exhausted')
+        keysvc.reset_usage(key['id'])
+        self.assertEqual(dailyquota.snapshot(key['id'], db.day_of())['credit_units'], 0)
+        self.prepare(key)
 
     def test_next_day_resets_window_without_erasing_yesterday(self):
         key = keysvc.create_key('fixture', daily_token_quota=9000)
