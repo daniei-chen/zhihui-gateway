@@ -377,8 +377,12 @@ class OriginStatusField(_AnchorCase):
         self.assertFalse(body['writes_allowed'])
         self.assertEqual(body['host'], 'panel.example.com')
 
-    def test_a_viewer_session_reads_the_field_too(self) -> None:
-        """人类只读角色（account_admin / viewer）也要看得到横幅 —— 否则等于没写。"""
+    def test_a_human_read_only_role_reads_the_field_too(self) -> None:
+        """人类只读角色（`account_admin`）也要看得到横幅 —— 否则等于没写。
+
+        角色名取 `userroles.HUMAN_ROLES` 里的真值；`viewer` 不在其中（它连
+        `current_user` 的 deny-by-default 都过不去），所以这里不叫 viewer。
+        """
         app = self._panel_app({'username': 'watcher', 'role': 'account_admin'})
         response = self._call('/api/system/origin-status', method='get', peer=LAN,
                               host='panel.example.com', app=app)
