@@ -1126,6 +1126,17 @@
     "lockoutDesc": "{action}会影响推理 API 的访问；误设规则时业务会中断。控制台仍可访问，可在此恢复规则。",
     "reasonPortalPolicyDenied": "用户工作台策略限制"
   },
+  "origin": {
+    "noticeTitle": "这个地址提交表单会被拒绝",
+    "noticeBody": "你正在用域名访问面板，但没有设置 WB_PUBLIC_ORIGIN。现在填写表单提交会收到 403（origin_unconfigured）；在服务器上设置 WB_PUBLIC_ORIGIN=https://你的域名 并重启服务即可恢复。用 IP 或 localhost 访问不受影响。",
+    "fixHint": "设置 WB_PUBLIC_ORIGIN=https://你的域名 后重启服务",
+    "stateConfigured": "已配置（WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS）",
+    "stateProxy": "可信反代（X-Forwarded-Host）",
+    "stateLoopback": "直连（IP / localhost / 内网名）",
+    "stateUnconfigured": "未配置：域名直连的提交会被拒绝",
+    "stateRelaxed": "已放宽：WB_ALLOW_UNCONFIGURED_ORIGIN=1，存在 DNS rebinding 风险",
+    "securityTitle": "来源校验（CSRF）"
+  },
   "settings": {
     "title": "设置",
     "description": "上游代理配置、模型别名映射与管理端用户",

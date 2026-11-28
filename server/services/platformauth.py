@@ -77,8 +77,7 @@ def check_poll_origin(request: Request | None):
         _deny(403, '授权结果只能在智汇控制台同源页面读取')
     origins = request.headers.getlist('origin')
     source = (origins[0] if origins else '') or request.headers.get('referer', '')
-    if len(origins) > 1 or (source and security._origin_triple(source)
-                            != security.expected_origin(request)):
+    if len(origins) > 1 or (source and not security.origin_allowed(request, source)):
         _deny(403, '授权请求来源与智汇控制台不一致')
 
 

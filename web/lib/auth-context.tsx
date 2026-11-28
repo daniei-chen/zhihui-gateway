@@ -1,10 +1,10 @@
 'use client';
 
 import {createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
-import {authApi} from '@/lib/api';
+import {authApi, systemApi} from '@/lib/api';
 import {BASE_PATH} from '@/lib/base-path';
 import {useHydrated} from '@/lib/use-hydrated';
-import type {Me, Role} from '@/lib/types';
+import type {Me, OriginCheck, Role} from '@/lib/types';
 
 const ME_CACHE_KEY = 'wb-me';
 
@@ -31,6 +31,15 @@ function writeCachedMe(me: Me | null): void {
 
 interface AuthContextValue {
   me: Me | null;
+  /**
+   * D-41：本次访问路径下的同源锚点状态（横幅 / 安全页状态栏）。
+   *
+   * 与服务端身份分开取：身份响应 `/api/me` 的 body 被逐字钉死为
+   * `{username, role}`（`test_authorization_generation` 守着），锚点状态在
+   * 管理端端点 `GET /api/system/origin-status`。取不到时置空 —— 缺字段一律
+   * 「不提示」，不凭空弹警告。
+   */
+  origin: OriginCheck | null;
   loading: boolean;
   isAdmin: boolean;
   canAddAccounts: boolean;
@@ -44,6 +53,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({children}: {children: ReactNode}) {
   const [me, setMe] = useState<Me | null>(null);
+  const [origin, setOrigin] = useState<OriginCheck | null>(null);
   // Cached display identity is not proof of an authenticated server session.
   const [loading, setLoading] = useState(true);
   const hydrated = useRef(false);
@@ -64,10 +74,19 @@ export function AuthProvider({children}: {children: ReactNode}) {
     const promise = Promise.resolve().then(async () => {
       if (!current()) return;
       try {
-        const data = await authApi.me(controller.signal);
+        // 锚点状态与身份并行取；它失败不影响登录态（缺字段 = 不提示）。
+        const [identity, origin] = await Promise.allSettled([
+          authApi.me(controller.signal),
+          systemApi.originStatus(controller.signal),
+        ]);
         if (!current()) return;
-        setMe(data);
-        writeCachedMe(data);
+        if (identity.status === 'fulfilled') {
+          setMe(identity.value);
+          writeCachedMe(identity.value);
+        } else {
+          throw identity.reason;
+        }
+        setOrigin(origin.status === 'fulfilled' ? origin.value : null);
       } catch (e) {
         if (!current()) return;
         // Only an authoritative 401 clears identity. Offline/5xx retains the
@@ -75,6 +94,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
         const status = (e as {response?: {status?: number}}).response?.status;
         if (status === 401) {
           setMe(null);
+          setOrigin(null);
           writeCachedMe(null);
         }
       } finally {
@@ -93,6 +113,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
     const generation = sequence.current;
     // A cached identity must not redirect a failed new login into the console.
     setMe(null);
+    setOrigin(null);
     writeCachedMe(null);
     try {
       const res = await authApi.login(username, password);
@@ -112,6 +133,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
     if (!result.ok) throw new Error('Logout was not confirmed by the server.');
     if (generation !== sequence.current) return;
     setMe(null);
+    setOrigin(null);
     writeCachedMe(null);
     // 裸跳转不走 next/router，basePath 不会自动生效，必须显式拼上
     if (typeof window !== 'undefined') window.location.href = `${BASE_PATH}/login`;
@@ -134,7 +156,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
 
   return (
     <AuthContext.Provider
-      value={{me, loading, isAdmin: me?.role === 'admin',
+      value={{me, origin, loading, isAdmin: me?.role === 'admin',
         canAddAccounts: me?.role === 'admin' || me?.role === 'account_admin',
         role: me?.role ?? null, refresh, login, logout}}
     >
@@ -147,5 +169,6 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   const hydrated = useHydrated();
   if (!ctx) throw new Error('useAuth 必须在 AuthProvider 内使用');
-  return hydrated ? ctx : {...ctx, me: null, loading: true, isAdmin: false, canAddAccounts: false, role: null};
+  return hydrated ? ctx : {...ctx, me: null, origin: null, loading: true,
+    isAdmin: false, canAddAccounts: false, role: null};
 }

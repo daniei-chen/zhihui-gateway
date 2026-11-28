@@ -923,6 +923,17 @@
     "lockoutDesc": "After {action}, incorrect rules may interrupt inference API traffic. The console remains accessible so you can restore the rules here.",
     "reasonPortalPolicyDenied": "User workspace policy denied"
   },
+  "origin": {
+    "noticeTitle": "Form submissions from this address will be rejected",
+    "noticeBody": "You opened the panel through a domain name, but WB_PUBLIC_ORIGIN is not set. Submitting a form now returns 403 (origin_unconfigured). Set WB_PUBLIC_ORIGIN=https://your-domain on the server and restart to fix it. Access through an IP address or localhost is unaffected.",
+    "fixHint": "Set WB_PUBLIC_ORIGIN=https://your-domain and restart the service",
+    "stateConfigured": "Configured (WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS)",
+    "stateProxy": "Trusted reverse proxy (X-Forwarded-Host)",
+    "stateLoopback": "Direct (IP / localhost / internal name)",
+    "stateUnconfigured": "Not configured: form submissions over a domain name are rejected",
+    "stateRelaxed": "Relaxed: WB_ALLOW_UNCONFIGURED_ORIGIN=1, DNS rebinding is exploitable again",
+    "securityTitle": "Origin check (CSRF)"
+  },
   "models": {
     "title": "Models",
     "description": "Models available to {realm} accounts with context, output and reasoning capabilities (data from the Tencent model API)",
@@ -1928,7 +1939,8 @@
     "仅超级管理员admin本人会话可赠送积分": "Only a human session for the super administrator admin can grant credits",
     "用户端写操作需要同源请求": "User workspace changes require a same-origin request",
     "检测到自动化客户端，批量账号操作已被禁止。该限制在 2026-11-19 批量吊销事故后加入 —— 一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN 并在请求头 X-Automation-Token 中携带。": "An automated client was detected, so bulk account operations are blocked. This limit was added after the 2026-11-19 mass-revocation incident — a single bulk fan-out hits many upstream accounts at once and is the main trigger for the risk controls. To proceed, operate manually in the UI, or set WB_ACCOUNT_AUTOMATION_TOKEN and send it in the X-Automation-Token header.",
-    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "The automation token is missing or does not match, so the bulk account operation was rejected."
+    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "The automation token is missing or does not match, so the bulk account operation was rejected.",
+    "origin_unconfigured": "Origin check is not configured, so this form submission was rejected. Set WB_PUBLIC_ORIGIN and restart."
   },
   "redPacket": {
     "title": "Red packets",

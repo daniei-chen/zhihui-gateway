@@ -158,8 +158,26 @@ def logout(request: Request) -> JSONResponse:
 
 
 @router.get('/me')
-def me(user: dict = Depends(security.current_user)) -> dict:
+def me(request: Request, user: dict = Depends(security.current_user)) -> dict:
+    """会话身份，**只有** username 与 role。
+
+    D-41 的来源锚点状态不在这里：这是每次页面加载都拉的高频身份响应，往里加
+    字段等于扩 API 表面并把运维拓扑写进每个会话响应。锚点状态走管理端的
+    `GET /api/system/origin-status`（同一份 `security.origin_status()`）。
+    """
     return {'username': user.get('username'), 'role': user.get('role', 'viewer')}
+
+
+@router.get('/origin-check')
+def origin_check(request: Request) -> dict:
+    """匿名可读：登录页在**填表之前**告诉用户「这个地址提交会被拒、怎么修」。
+
+    D-41 之后，没有锚点时登录本身（POST /api/login）也会 403 —— 用户如果登录
+    都进不去，管理页的横幅就永远看不到。所以这个 GET 只回本次请求的锚点形态
+    （configured / proxy / loopback-only / unconfigured / relaxed）与服务端看到的
+    Host：都是请求方自己带来的信息，没有凭据、没有其他用户或内网拓扑。
+    """
+    return security.origin_status(request)
 
 
 @router.get('/authz/probe')

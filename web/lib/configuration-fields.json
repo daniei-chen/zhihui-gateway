@@ -35,6 +35,12 @@
   "WB_ALLOW_UNVERIFIED_PACKAGE": {
     "sensitive": false
   },
+  "WB_ALLOW_UNCONFIGURED_ORIGIN": {
+    "sensitive": false
+  },
+  "WB_TRUST_FORWARDED_HOST": {
+    "sensitive": false
+  },
   "WB_API_CONCURRENCY": {
     "sensitive": false
   },
@@ -201,6 +207,9 @@
     "sensitive": false
   },
   "WB_PROXY_PROBE_URL": {
+    "sensitive": false
+  },
+  "WB_PUBLIC_ORIGIN": {
     "sensitive": false
   },
   "WB_QTG_ADAPTER_BASE": {

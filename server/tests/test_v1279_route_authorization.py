@@ -56,6 +56,9 @@ ANONYMOUS_BY_DESIGN = {
     # —— 登录/登出/注册：本来就该匿名 ——
     'auth.py:logout',
     'auth.py:login',
+    # 登录页要在填表之前说明「这个地址能不能提交表单」（D-41）。只回本次请求的
+    # 锚点形态与 Host —— 请求方自己带来的信息，没有凭据、没有其他用户数据。
+    'auth.py:origin_check',
     'portal.py:login',
     'portal.py:logout',
     'portal.py:register',

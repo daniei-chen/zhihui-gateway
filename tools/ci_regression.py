@@ -124,6 +124,9 @@ MODULES = (
     "server.tests.test_audit_protocol_limits",
     "server.tests.test_audit_middleware_boundaries",
     "server.tests.test_audit_auth_origin",
+    # D-41（2026-11-28）：写操作的同源锚点不再由请求的 Host 头决定。
+    # 只把测试写进磁盘不写进这里 = 门禁不执行它（#65 的教训）。
+    "server.tests.test_d41_csrf_origin_anchor",
     "server.tests.test_auth_bypass",
     "server.tests.test_gateway_body_limit",
     "server.tests.test_api_tokens",
@@ -622,6 +625,10 @@ MODULES = (
     # 「数组里有 part 但没有正文」才算渲染不出的错误（502）。thinking-only 也钉在
     # 这里——这条边界被来回改过两次，不靠记忆活着。
     "server.tests.test_messages_empty_content",
+    # SWO-68（2026-11-28）：`reset_usage` 的事务边界 —— 事务里任一条写真的抛错
+    # 时，`api_keys` 的清零与审计行必须整体回滚（G-07 那三条只断言终态，
+    # 对「先提交后失败」全绿）。两个变异各杀掉 3 条，见 PR 证据。
+    "server.tests.test_g07_reset_transaction_boundary",
 )
 
 

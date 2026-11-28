@@ -231,6 +231,7 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;   # 必须：真实 IP 来源
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host "";   # 必须：别让客户端自带的那份透进来
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -242,6 +243,61 @@ server {
 > `X-Real-IP` 是管理端判定真实来源 IP 的**首选依据**（`X-Forwarded-For`
 > 首段可被客户端伪造）。若前面还叠了 CDN，请把服务端
 > `WB_TRUSTED_PROXY_HOPS` 设为 CDN + 反代的层数。
+>
+> **uvicorn 的代理头改写已关闭**（`--no-proxy-headers` / `proxy_headers=False`）。
+> 它默认会按上面的 `X-Forwarded-For` 把 `scope["client"]` 改写成浏览器地址，
+> 于是「对端是不是本机反代」永远判错：`WB_TRUSTED_PROXY_CIDRS` 形同虚设，
+> `X-Forwarded-Host` 不被采信（写请求会被拒）。**反代信任只有一份判据**：
+> `WB_TRUSTED_PROXY_CIDRS` + `iputil.client_ip()`。
+>
+> **`X-Forwarded-Host` 默认不被采信**，而且每个 `proxy_pass` 的 location 都必须
+> 显式设置它（`""` 或 `$host`）—— 客户端可以自带这个头（它不在浏览器的
+> forbidden header 名单里），nginx 默认又会把未知头原样转给上游。不显式设置时，
+> 带这个头的请求等于自己宣布「本站来源」。`release.py verify --nginx` 会逐个
+> proxy 块检查，缺了直接拒发布。依赖反代声明外部名的部署请显式设置
+> `WB_TRUST_FORWARDED_HOST=1`，并让反代**覆盖写** `X-Forwarded-Host $host`；
+> 更推荐直接设 `WB_PUBLIC_ORIGIN`。
+>
+> **每个转发给管理端的 location 都必须覆盖 `X-Real-IP`**（`location /` 已经这么
+> 写了，自己另加的 `location /api/` 之类别漏）：应用只在 TCP 对端可信时采信这
+> 个头，而一旦某个 location 漏了它，客户端自己发的 `X-Real-IP: 127.0.0.1` 就会
+> 原样到达应用 —— IP 白/黑名单、登录失败锁定、密钥 `max_ips` 与「仅本机」端点
+> 同时失效。
+>
+> 关掉改写后，nginx 转发进来的请求对端**恒为** `127.0.0.1`，所以「仅本机」类
+> 端点（如 `/api/system/internal-session-verify`）改看两层：对端在回环 **且**
+> `client_ip()` 解出的真实来源在回环。据此，`auth_request` 的 internal
+> location **必须显式清空** `X-Real-IP` / `X-Forwarded-For`：`auth_request`
+> 子请求复制的是**客户端原始请求头**（父 location 的 `proxy_set_header` 不会
+> 写回子请求），客户端伪造的头、或前面 CDN 加的 `X-Forwarded-For`
+> （Cloudflare 就会加）都会原样进来，被判成外部请求而 403 —— 这些用户的
+> 整站登录校验随之失败：
+>
+> ```nginx
+> location = /__zh_session {
+>     internal;
+>     proxy_pass              http://127.0.0.1:7864/api/system/internal-session-verify;
+>     proxy_pass_request_body off;
+>     proxy_set_header        Content-Length "";
+>     # 子请求不是"来自某个客户端"，把来源头显式清空，别让它继承浏览器的那一份
+>     proxy_set_header        X-Real-IP "";
+>     proxy_set_header        X-Forwarded-For "";
+>     proxy_set_header        X-Forwarded-Host "";
+> }
+> ```
+>
+> 用域名访问时请同时设置 `WB_PUBLIC_ORIGIN=https://你的域名`（写端点的同源锚点）；
+> 不设也能跑，但「域名 + 没有可信反代」的表单提交会被 403，管理页会提示怎么修。
+>
+> **切指针之前先跑一次站点配置检查**（`activate` 只有带 `--nginx` 才会复查）：
+>
+> ```bash
+> python deploy/release.py verify <version> --nginx /etc/nginx/sites-enabled/<site>
+> ```
+>
+> 它拦两类会导致「页面全 403」的失效：余额协议放行丢失，以及 `auth_request`
+> 的内部 location 转发了客户端来源头（子请求带的是客户端原始头 → 带该头的
+> 用户被判成外部 → 它们整站 `/api/` 会话校验失败）。
 
 #### 前面是 Cloudflare（或任何 CDN）时**必须**再配一步
 
@@ -338,6 +394,7 @@ location /workbuddy-manager/ {
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host "";   # 否则客户端自带的值会直达应用
     proxy_http_version 1.1;
     proxy_set_header Upgrade    $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -350,7 +407,9 @@ location /workbuddy-manager/ {
 ```nginx
 location /workbuddy-manager/ {
     proxy_pass http://127.0.0.1:7864;    # 没有尾斜杠：请求带着前缀进来
-    ...同样那几个 header 与超时...
+    # 与上面同样的那几个 header（Host / X-Real-IP / X-Forwarded-For /
+    # X-Forwarded-Proto）与超时，外加这一行（发布门禁会逐个 proxy 块检查）
+    proxy_set_header X-Forwarded-Host "";
 }
 ```
 
