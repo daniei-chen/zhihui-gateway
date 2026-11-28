@@ -189,7 +189,8 @@ class DrainMiddleware:
     """
 
     CONTROL_PATHS = frozenset({'/healthz', '/readyz', '/api/healthz',
-                               '/api/readyz', '/api/system/drain'})
+                               '/api/readyz', '/api/system/drain',
+                               '/api/health/inflight'})
 
     def __init__(self, app):
         self.app = app

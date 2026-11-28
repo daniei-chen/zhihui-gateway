@@ -299,9 +299,14 @@ class BlueGreenHandsTheTrafficOverTests(unittest.TestCase):
         ready = SOURCE.index("    step '主实例已就绪，把流量切回来'")
         back = SOURCE.index('    route_switch old')
         self.assertLess(ready, back)
-        # 切回之后才停候选实例；用连续代码块定位，避免命中前面那处同名调用。
-        self.assertIn('    route_switch old\n    sleep 1\n    systemctl stop "$HELPER" 2>/dev/null\n',
-                      SOURCE)
+        # 切回之后才停候选实例，而且停之前必须过排空判据（2026-11-28 审计 D-04）。
+        # 原来这里守的是「route_switch old → sleep 1 → systemctl stop」这个连续代码块，
+        # 但那个 sleep 1 正是缺陷本身：它只证明等了一秒，不证明在途请求跑完了。
+        # 现在的顺序与失败路径由 test_rollout_candidate_drain.py 逐条测。
+        self.assertIn('    route_switch old\n', SOURCE)
+        self.assertNotIn('    route_switch old\n    sleep 1\n    systemctl stop "$HELPER"',
+                         SOURCE,
+                         'sleep 1 之后直接停候选 = D-04：在途的流没跑完就被截断')
 
     def test_a_failed_restart_leaves_the_candidate_serving(self):
         self.assertIn('线上仍由候选实例服务', SOURCE,
