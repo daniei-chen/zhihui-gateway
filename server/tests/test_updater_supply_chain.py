@@ -422,12 +422,21 @@ class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
         shell = shutil.which('pwsh') or shutil.which('powershell')
         if not shell:
             self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
-        script = self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n'
-        return subprocess.run(
-            [shell, '-NoProfile', '-NonInteractive', '-Command', '-'],
-            input=script, capture_output=True, text=True, encoding='utf-8',
-            errors='replace', timeout=120,
-            env=dict(os.environ, WB_MANAGER_REPO=requested))
+        # 走临时 .ps1 文件而不是 stdin：Windows PowerShell 按控制台代码页解码 stdin，
+        # 中文注释会被拆坏成语法错误（实测 ParserError 缺字符串终止符）。
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / 'resolve.ps1'
+            script.write_text(
+                self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n',
+                encoding='utf-8-sig')
+            args = [shell, '-NoProfile', '-NonInteractive']
+            if os.name == 'nt':
+                args += ['-ExecutionPolicy', 'Bypass']
+            args += ['-File', str(script)]
+            return subprocess.run(
+                args, capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=120,
+                env=dict(os.environ, WB_MANAGER_REPO=requested))
 
     def test_unset_override_resolves_to_official_repository(self) -> None:
         done = self._resolve('')
