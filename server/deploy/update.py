@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """WorkBuddy Manager 一键更新 worker。
 
+**本文件是唯一源**：`server/deploy/update.py` 由发布流程逐字节复制
+（`.github/workflows/release.yml:156`，为的是「整体替换 server/ 时更新器也能一起换新」）。
+两份必须完全相同，改这里，不要改副本 —— `server/tests/test_duplicate_sources.py`
+会把不一致判红。
+
 由管理端后台调用（脱离父进程运行，因此重启服务不会中断更新流程），
 也可单独在命令行执行：
 
