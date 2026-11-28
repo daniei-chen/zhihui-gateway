@@ -19,6 +19,10 @@
 此前 unittest 只看 `wasSuccessful()`、pytest 要求 `passed > 0`，同一个门禁两种标准——
 那本身就是漏洞：整模块全 skip 在 unittest 赛道上会绿。
 
+> 绿了之后怎么自证？见 `docs/ci/gate-observability.md`：`ci-validation-summary.json`
+> 这个 artifact 里有逐条 skip、`empty_modules`、`fully_skipped_modules`，
+> 两个必检 job 都带 `if: always()` 上传，红了也拿得到。
+
 ## 二、全 skip 的白名单：例外可见、有人签过字
 
 有些模块的用例**本来**就只在特定平台或特定外部依赖下才有意义（例如必须在 POSIX 上跑的
