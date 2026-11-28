@@ -578,20 +578,29 @@ class InstallSurfacesPointAtThisRepositoryTests(unittest.TestCase):
                          'sha256 核对指引仍指向第三方 Releases（照它核对等于核对别人发的包）')
         self.assertIn('github.com/daniei-chen/zhihui-gateway/releases', script)
 
-    def test_enterprise_patch_scripts_use_our_image(self) -> None:
-        for relative in ('docs/enterprise-support/apply.sh',
-                         'docs/enterprise-support/README.md'):
-            with self.subTest(file=relative):
-                text = self._read(relative)
-                self.assertNotIn('ghcr.io/ithtelab/', text,
-                                 '企业补丁脚本仍从第三方 registry 拉镜像')
-                self.assertIn('ghcr.io/daniei-chen/workbuddy-manager', text)
+    def test_enterprise_support_patch_is_retired(self) -> None:
+        """企业补丁包已停用 —— 它下面的命令是**留在仓库里的历史实现**，不执行。
 
-    def test_enterprise_readme_keeps_attribution_but_names_this_line(self) -> None:
-        """归属照写，但必须同时说清「本仓是这个产品的自维护分支、发布源是本仓」。"""
+        `apply.sh` 第一行之外先 `exit 2`（被 source 时 `return 2`），README 顶部也标了
+        「历史补丁资料，已停用」。所以里面的镜像名要**保持历史原样**：那是「当时用的是
+        什么」的记录，改成今天的样子等于篡改历史。这一条是把我 SWO-39 盘点里把它
+        归成「活的安装路径」的那个判断纠正回来 —— 实测它是个死路径。
+        """
+        script = self._read('docs/enterprise-support/apply.sh')
+        head = script.split('set -euo pipefail')[0]
+        self.assertIn('RETIRED', head, 'apply.sh 的停用闸门不见了')
+        self.assertIn('exit 2', head, 'apply.sh 不再在动手之前退出')
+        self.assertLess(head.index('exit 2'), script.find('docker run -d'),
+                        '停用闸门被挪到 docker 命令之后了')
+
+    def test_enterprise_support_readme_names_the_live_release_source(self) -> None:
+        """归属照写，但必须同时说清「本仓是自维护分支、发布源与镜像取本仓」。"""
         text = self._read('docs/enterprise-support/README.md')
-        self.assertIn('https://github.com/ithtelab/workbuddy-manager', text,
+        self.assertIn('ithtelab/workbuddy-manager', text,
                       '上游归属被删了 —— 那是来源事实，不能为了干净而抹掉')
+        self.assertIn('已停用', text, '停用声明被删了，历史命令会被当成可用指令')
+        self.assertIn('ghcr.io/daniei-chen/workbuddy-manager', text,
+                      '没说清当前该用哪个镜像')
         self.assertIn('daniei-chen/zhihui-gateway', text,
                       '没说清本仓与上游的关系，读者无法判断装哪个')
 
