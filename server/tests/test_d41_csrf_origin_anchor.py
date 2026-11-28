@@ -448,10 +448,12 @@ class OriginStatusField(_AnchorCase):
     def test_a_human_read_only_role_reads_the_field_too(self) -> None:
         """人类只读角色（`account_admin`）也要看得到横幅 —— 否则等于没写。
 
-        角色放行发生在 `require_panel_reader`（`security.py`，只认
-        `userroles.HUMAN_ROLES`），经由该端点的 `require_session_reader` 到达；
-        **不是** `current_user` —— 它对合法会话不做角色判断。所以 `viewer`
-        会被这个闸门 403，见下一条用例。
+        放行是**两道**闸门叠加的结果，缺一条就不成立：
+        1. `current_user` 对 `account_admin` 走 `userroles.account_route_allowed`，
+           所以这个 GET 必须登记在 `PANEL_READ_ROUTES`（否则 account_admin 读到
+           403，横幅对他们等于不存在）；
+        2. `require_panel_reader`（经 `require_session_reader` 到达）只认
+           `userroles.HUMAN_ROLES` —— `viewer` 在这里被拒，见下一条用例。
         """
         app = self._panel_app({'username': 'watcher', 'role': 'account_admin'})
         response = self._call('/api/system/origin-status', method='get', peer=LAN,
