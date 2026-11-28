@@ -46,6 +46,42 @@ def _launcher(data_dir: Path, *extra: str, timeout: float = 60) -> subprocess.Co
         encoding='utf-8', errors='replace', timeout=timeout)
 
 
+def _free_port() -> int:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+def _inflight(port: int) -> dict | None:
+    """只回环的只读探针：200 即代表进程已经在服务，且不碰数据库写路径。"""
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health/inflight',
+                                    timeout=1.0) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode('utf-8', 'replace'))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return None
+
+
+def _wait_inflight(port: int, log_path: Path, limit: float = 240.0) -> dict:
+    began = time.monotonic()
+    while time.monotonic() - began < limit:
+        got = _inflight(port)
+        if got is not None:
+            return got
+        time.sleep(0.25)
+    tail = ''
+    try:
+        tail = log_path.read_text(encoding='utf-8', errors='replace')[-1500:]
+    except OSError:
+        pass
+    raise AssertionError(f':{port} 在 {limit:.0f}s 内没有开始服务；日志尾部：\n{tail}')
+
+
 class _TempDataDir(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix='swo65-lease-test-',
@@ -161,5 +197,81 @@ class InstanceLeaseTests(_TempDataDir):
             instancelease.acquire(self.data)
 
 
-if __name__ == '__main__':
+class _Serving:
+    """一个**真的在服务**的 `serve.py` 实例：真端口、真进程、真数据目录。"""
+
+    def __init__(self, data_dir: Path, port: int | None = None) -> None:
+        self.port = port or _free_port()
+        self.log_path = Path(data_dir).parent / f'instance-{self.port}.log'
+        self._log = self.log_path.open('w', encoding='utf-8', errors='replace')
+        env = {**os.environ, 'WB_DATA_DIR': str(data_dir),
+               'WB_STATIC_DIR': str(Path(data_dir).parent / 'web'),
+               'WB_ADMIN_PASSWORD': 'single-writer-test-9f',
+               'PYTHONIOENCODING': 'utf-8'}
+        self.proc = subprocess.Popen(
+            [sys.executable, '-B', '-m', 'server.serve',
+             '--host', '127.0.0.1', '--port', str(self.port)],
+            cwd=str(ROOT), env=env, stdout=self._log, stderr=subprocess.STDOUT)
+
+    def wait_ready(self) -> dict:
+        return _wait_inflight(self.port, self.log_path)
+
+    def log_tail(self, size: int = 1500) -> str:
+        try:
+            return self.log_path.read_text(encoding='utf-8', errors='replace')[-size:]
+        except OSError:
+            return ''
+
+    def stop(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=30)
+        self._log.close()
+
+
+class LeaseLifetimeTests(_TempDataDir):
+    """租约必须覆盖**整个进程生命周期**，不是「启动那一刻握一下」。
+
+    为什么单独一条：把 `with lease:` 写成「先 `release()` 再进 with」——一次看起来
+    完全无害的重构（比如为了「别一直占着锁」）——会让租约在启动后立刻失效，而
+    上面那些用例全都还是绿的：它们的第二个实例是被**测试进程自己**持有的租约挡住的，
+    跟服务进程有没有一直握着租约无关。这条用例盯的正是那个差别。
+    """
+
+    def test_a_serving_instance_keeps_the_lease_until_it_exits(self) -> None:
+        first = _Serving(self.data)
+        try:
+            first.wait_ready()
+            for attempt in (1, 2):
+                blocked = _launcher(self.data, timeout=90)
+                output = blocked.stdout + blocked.stderr
+                self.assertNotEqual(blocked.returncode, 0, output)
+                self.assertIn('拒绝启动', output)
+                self.assertIn(f'pid={first.proc.pid}', output,
+                              f'第 {attempt} 次被拒绝时没说清是谁占着')
+                self.assertIsNone(first.proc.poll(),
+                                  '第一个实例在自己还活着的时候就丢了租约')
+                self.assertIsNotNone(_inflight(first.port),
+                                     f'第 {attempt} 次尝试之后第一个实例已经不在服务了')
+                with self.assertRaises(instancelease.LeaseBusy):
+                    instancelease.acquire(self.data)
+                time.sleep(1.0)
+        finally:
+            first.stop()
+
+        port = _free_port()
+        successor = _Serving(self.data, port)
+        try:
+            info = successor.wait_ready()
+            self.assertEqual(info.get('total_in_flight'), 0)
+        finally:
+            successor.stop()
+
+
+
+if __name__ == "__main__":
     unittest.main()
