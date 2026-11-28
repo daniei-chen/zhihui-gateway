@@ -1,5 +1,5 @@
 {
-  "base_commit": "2dac187a523b190a6852e50a6110a88352a88906",
+  "base_commit": "701c27f3682fbf0802565682e3757fc38936e31d",
   "base_release": "v1.6.27",
   "candidate_only": true,
   "database_rollback": false,
@@ -233,7 +233,7 @@
     "server/writer-capabilities.json": "6bee3cb03abfb0ee4e9ffe08c71c5113364a27e0801a633b60a60174b4820472",
     "tools/bump_version.py": "55a1b54ce5fbfea09aa539358489fef9c5b4dc920c45780cccb76bdc4a4cfb35",
     "tools/ci_artifacts.py": "a1ab06c969835d3fd635e1591df5db3bc63c3d275d07189d07f7ec4fdb12de40",
-    "tools/ci_regression.py": "39bad1d4544e731d69fd1a681bc8d4e73b3f6211cb4ac008d70a06d4d97eba07",
+    "tools/ci_regression.py": "664752fac9bf9885b3cc2d65ace12ea033750d159423151ef2f2440910ec7c5b",
     "tools/promote_images.py": "549907e811f45b6dde3dc168777cc44bb612f14fe7e5f38050ddb444dbbf4442",
     "tools/release_policy.py": "45dc7003328744a3d1e24ab4e10c83ffd5be96a34d1228d4783b99b31f5c7ca9",
     "tools/requirements-ci.txt": "1223c02de70f5b3461879223b78c17f5138025bfcdf6c40dbb45d584791ec5cd",
