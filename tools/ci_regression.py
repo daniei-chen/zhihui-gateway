@@ -619,6 +619,12 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
+    # Messages 非流式两种「空」的分界（2026-11-28 大队长定）：`[]` / `''` / `null`
+    # 配 `finish=stop` 是**合法空回合**（200 + 空 content + end_turn，进
+    # `observability.note_empty_turn` 计数，读数在 /api/health/upstream）；
+    # 「数组里有 part 但没有正文」才算渲染不出的错误（502）。thinking-only 也钉在
+    # 这里——这条边界被来回改过两次，不靠记忆活着。
+    "server.tests.test_messages_empty_content",
     # SWO-68（2026-11-28）：`reset_usage` 的事务边界 —— 事务里任一条写真的抛错
     # 时，`api_keys` 的清零与审计行必须整体回滚（G-07 那三条只断言终态，
     # 对「先提交后失败」全绿）。两个变异各杀掉 3 条，见 PR 证据。

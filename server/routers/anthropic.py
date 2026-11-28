@@ -809,27 +809,41 @@ def _budget_exhausted(translator) -> bool:
     return not getattr(translator, 'tools', None)
 
 
-def _content_text(value) -> str:
+def _content_text(value) -> tuple[str, bool]:
     """上游 `content` 的正文提取：字符串，或 content-parts 数组。
+
+    返回 `(正文, 有 part 但一个可交付 `text` 都没有)`。第二个值是**给调用方的
+    信号**，不是错误：提纯这一层只负责说清「拿到了什么」，判不判失败归协议层
+    ——`to_anthropic_response` 现在把它当错误（D-20 口径），将来的调用方若想换
+    别的策略（例如流式里回一帧说明）不必改这里。
 
     OpenAI 兼容上游的 `content` 有两种合法形态：普通字符串，以及
     `[{'type': 'text', 'text': '...'}, ...]`（多段正文 / 富内容模型）。原来这里
     只认 `isinstance(text, str)`，数组形态被**静默丢弃**，客户端拿到 `content: []`
     + `end_turn` —— 既看不到答案，也不会重试（D-20）。
 
-    数组里没有可交付的正文（例如只有图片块）时**报错而不是回空**：Anthropic
-    的 text 块表达不了它，回空等于又一次静默丢答案。
+    两种「空」必须分开：
+      * **本来就没有内容**（`None` / `''` / `[]`）→ 返回空串，是合法的空回合：
+        模型就是没说话。`to_anthropic_response` 照常回 `content: []` +
+        `end_turn`；只有 `finish_reason=length` 那一路把空当失败（预算耗尽）。
+        仓库里这条语义由 `test_upstream_alignment_20261123.py` 的
+        `test_non_length_finish_untouched` 与
+        `test_audit_20261029_gateway_ledger.py` 的
+        `test_valid_tool_only_and_empty_text_responses_stay_supported` 守着。
+      * **有内容但渲染不出**（数组里有 part、却一个 `text` 都没有，例如只有
+        图片块）→ 返回空串并把第二个值置 True，由调用方判定为错误：Anthropic
+        的 text 块表达不了它，回空等于又一次静默丢答案（与 D-20 同症状）。
     """
     if value is None:
-        return ''
+        return '', False
     if isinstance(value, str):
-        return value
+        return value, False
     if isinstance(value, list):
         texts = [part['text'] for part in value
                  if isinstance(part, dict) and isinstance(part.get('text'), str)]
         if texts or not value:
-            return ''.join(texts)
-        raise ValueError('上游 content 数组里没有可交付的正文')
+            return ''.join(texts), False
+        return '', True
     raise ValueError(f'上游 content 类型无法交付：{type(value).__name__}')
 
 
@@ -847,7 +861,7 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
     reasoning = message.get('reasoning_content')
     if thinking and isinstance(reasoning, str) and reasoning:
         content.append(_thinking_block(reasoning))
-    text = _content_text(message.get('content'))
+    text, undeliverable_parts = _content_text(message.get('content'))
     if text:
         content.append({'type': 'text', 'text': text})
 
@@ -885,6 +899,16 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
     # （`length` + 没有正文 + 没有任何工具调用），思考块不算「交付」。
     if finish == 'length' and not calls and not text.strip():
         raise OutputBudgetExhausted(BUDGET_EXHAUSTED_MESSAGE)
+    # 数组里有 part、却一个可交付正文都没有（例如只有图片块）：这是「渲染不出」，
+    # 与「本来就没有内容」在客户端看起来一样，但前者本来有东西、是我们没交付
+    # （D-20 同症状），必须报错而不是回空。
+    if undeliverable_parts:
+        raise ValueError('上游 content 数组里没有可交付的正文')
+    # `stop` + 什么都没交付是**合法空回合**（模型就是没说话），照常回
+    # `content: []` + `end_turn`。不报错，但必须让它可见：一次静默空答案在日志和
+    # 表里都不留痕迹，运维就看不见「最近上游有多频繁地什么都没说」。
+    if finish == 'stop' and not calls and not text.strip():
+        observability.note_empty_turn('messages')
     if len(content)>MAX_STREAM_TOOLS:
         from ..outputlimits import OutputLimitExceeded
         raise OutputLimitExceeded('Too many translated content blocks')
