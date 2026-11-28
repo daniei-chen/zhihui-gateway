@@ -662,7 +662,16 @@ def _reasoning_effort(body: dict) -> str | None:
     `budget_tokens` → 档位的分界按官方文档的量级取：1024 是最小可用预算，
     4k 以下算 low、16k 以下算 medium、64k 以下算 high，再往上 max。
     精度不重要——它是「用户愿意花多少」的粗略表达，而上游还会按模型能力降级。
+
+    **`thinking.type == 'disabled'` 时不发任何档位**（D-22）：上游只要收到
+    `reasoning_effort` 就会思考，而客户端明确说了不要思考。此前这条判断不存在，
+    `disabled` 请求仍按残留的 `budget_tokens` 档位发出去——用户拿到的是没请求过
+    的思考（还按 token 计费）。`disabled` 是调用方对思考的显式表态，优先于
+    两个档位来源；两者同时出现本身就是矛盾输入，取「不要思考」这一侧。
     """
+    think = body.get('thinking')
+    if isinstance(think, dict) and str(think.get('type') or '').strip().lower() == 'disabled':
+        return None
     effort = None
     cfg = body.get('output_config')
     if isinstance(cfg, dict):
@@ -671,7 +680,6 @@ def _reasoning_effort(body: dict) -> str | None:
             effort = _EFFORT_MAP.get(raw.strip().lower())
 
     if effort is None:
-        think = body.get('thinking')
         budget = think.get('budget_tokens') if isinstance(think, dict) else None
         if isinstance(budget, bool):
             budget = None
@@ -801,6 +809,30 @@ def _budget_exhausted(translator) -> bool:
     return not getattr(translator, 'tools', None)
 
 
+def _content_text(value) -> str:
+    """上游 `content` 的正文提取：字符串，或 content-parts 数组。
+
+    OpenAI 兼容上游的 `content` 有两种合法形态：普通字符串，以及
+    `[{'type': 'text', 'text': '...'}, ...]`（多段正文 / 富内容模型）。原来这里
+    只认 `isinstance(text, str)`，数组形态被**静默丢弃**，客户端拿到 `content: []`
+    + `end_turn` —— 既看不到答案，也不会重试（D-20）。
+
+    数组里没有可交付的正文（例如只有图片块）时**报错而不是回空**：Anthropic
+    的 text 块表达不了它，回空等于又一次静默丢答案。
+    """
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        texts = [part['text'] for part in value
+                 if isinstance(part, dict) and isinstance(part.get('text'), str)]
+        if texts or not value:
+            return ''.join(texts)
+        raise ValueError('上游 content 数组里没有可交付的正文')
+    raise ValueError(f'上游 content 类型无法交付：{type(value).__name__}')
+
+
 def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> dict:
     """OpenAI 非流式响应 → Anthropic 响应体。
 
@@ -815,8 +847,8 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
     reasoning = message.get('reasoning_content')
     if thinking and isinstance(reasoning, str) and reasoning:
         content.append(_thinking_block(reasoning))
-    text = message.get('content')
-    if isinstance(text, str) and text:
+    text = _content_text(message.get('content'))
+    if text:
         content.append({'type': 'text', 'text': text})
 
     from ..outputlimits import tool_object, maximum_bytes
@@ -851,7 +883,7 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
     finish = str(choice.get('finish_reason') or '')
     # 预算耗尽且什么都没交出去：不是成功，是失败。判据与流式那条路径完全一致
     # （`length` + 没有正文 + 没有任何工具调用），思考块不算「交付」。
-    if finish == 'length' and not calls and not (isinstance(text, str) and text.strip()):
+    if finish == 'length' and not calls and not text.strip():
         raise OutputBudgetExhausted(BUDGET_EXHAUSTED_MESSAGE)
     if len(content)>MAX_STREAM_TOOLS:
         from ..outputlimits import OutputLimitExceeded
