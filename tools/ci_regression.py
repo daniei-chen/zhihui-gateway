@@ -595,6 +595,10 @@ MODULES = (
     # 两条断言都先红后绿（修前 4 failed，修后 4 passed），所以必须进门禁 ——
     # 否则「账本写入又回到返回路径上」这种回归没有任何测试会喊。
     "server.tests.test_dan19_rejection_ledger",
+    # issue #210/#187 的根因是「读—改—写」丢更新，而 filelock 一直是唯一没有
+    # 测试的保护点：8 线程 × 25 次真并发、真子进程抢内核锁、相对/绝对路径归一。
+    # 变异（RLock→Lock、去掉 credentiallease 委托）都会让它变红。
+    "server.tests.test_filelock",
     # userstore.locked() 的第一份测试。这个模块守着 users.json 的读改写，
     # 但此前零测试：丢更新、跨进程互斥、5 秒 deadline、symlink/nlink 拒绝
     # 全靠人读代码。五处变异各自杀掉一条用例（见 PR 证据）。
