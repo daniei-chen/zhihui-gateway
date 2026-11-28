@@ -34,7 +34,13 @@ class BackupStatusPublicationTests(unittest.TestCase):
             backupstatus.publish_verified_status(result,target)
             data = json.loads(target.read_text())
             self.assertEqual(set(data),{'schema','created_at','bytes','restore_check','offsite',
-                                       'archive_sha256','offsite_readback','offsite_restore_verified'})
+                                       'archive_sha256','offsite_readback','offsite_restore_verified',
+                                       # G-09 / D-12：『备份成功』之外还要能读到『覆盖了哪些数据根』。
+                                       # 两个字段都是公开结论（布尔 + 根名），不含路径或凭据。
+                                       'state_coverage_complete','uncovered_state_roots'})
+            self.assertIs(data['state_coverage_complete'],False,
+                          '没有覆盖结论的报告不能被读成覆盖完整')
+            self.assertEqual(data['uncovered_state_roots'],[])
             self.assertIs(data['offsite'],False, 'legacy push-only evidence cannot prove readback')
             if os.name == 'posix':
                 self.assertEqual(target.stat().st_mode & 0o777,0o644)
