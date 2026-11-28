@@ -599,6 +599,11 @@ MODULES = (
     # 测试的保护点：8 线程 × 25 次真并发、真子进程抢内核锁、相对/绝对路径归一。
     # 变异（RLock→Lock、去掉 credentiallease 委托）都会让它变红。
     "server.tests.test_filelock",
+    "server.tests.test_credentiallease_guards",
+    # credentiallease._open 的四道文件守卫（symlink / nlink / 0o077 / 属主）。
+    # 2026-11-28 审计：把这四道检查删掉再跑 77 条相关用例全绿 —— 守卫此前零覆盖，
+    # 而 test_portal_closeout 里看起来覆盖了 0o644 与硬链接的那两条打的是 recovery
+    # 的快照校验器，不是这里。三条能真跑的在 Windows 上也会跑（nlink 那条全平台生效）。
     # userstore.locked() 的第一份测试。这个模块守着 users.json 的读改写，
     # 但此前零测试：丢更新、跨进程互斥、5 秒 deadline、symlink/nlink 拒绝
     # 全靠人读代码。五处变异各自杀掉一条用例（见 PR 证据）。
