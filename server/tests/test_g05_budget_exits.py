@@ -163,62 +163,117 @@ class ForwardedLeaseReclaimTests(_BudgetCase):
 
 
 class UpstreamRejectedExitTests(_BudgetCase):
-    """D-06：上游拒绝 = 零计费，但必须有归档出口。"""
+    """D-06：上游拒绝 = 零计费**结清**，但记录不许从证据桶消失。
 
-    def _rejected(self, rid='rej-1', status=429, error='{"error":{"message":"quota_exceeded"}}'):
-        self._reserve(rid, 'unknown', age=30 * 86400, reserved=0)
+    拍板口径（2026-11-28）把「结清」与「归档」拆成两个动作：
+      · 结清 = 解锁密钥 + 零计费 + 可继续用；
+      · 归档 = 从证据桶移走 —— **不做**。供应商拒绝恰恰是运维要看见的事实。
+
+    所以本类钉的是**三件事同时成立**：记录还在证据桶、仍带 rejection 标记、
+    密钥能用。只证「解锁了」不够 —— 那也可能靠删记录实现。
+    """
+
+    def _rejected(self, rid='rej-1', status=429,
+                  error='{"error":{"message":"quota_exceeded"}}', age=30):
+        self._reserve(rid, 'unknown', age=age * 86400, reserved=0)
         db.execute(
             'INSERT INTO request_logs(ts,key_id,status,request_id,terminal_state,'
             'usage_source,credit,prompt_tokens,completion_tokens,usage_complete,error) '
             'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-            (self.now - 30 * 86400, self.key['id'], status, rid, 'error', 'unknown',
+            (self.now - age * 86400, self.key['id'], status, rid, 'error', 'unknown',
              None, 0, 0, 0, error))
 
-    def test_upstream_rejected_is_archivable(self):
+    def _bucket(self, name):
+        from server import budgetreview
+        return {item['request_id'] for item in budgetreview.page(bucket=name, limit=100)['items']}
+
+    # ── 结清之后：三件事同时成立 ──────────────────────────────────────
+    def test_settled_rejection_keeps_the_record_in_the_evidence_bucket(self):
         self._rejected()
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 1)
+
         row = self._row('rej-1')
-        cls = budget._classify(row, budget._logs_for(['rej-1'])['rej-1'])
-        self.assertEqual(cls, 'upstream_rejected')
-        self.assertIn(cls, budget.ARCHIVABLE_CLASSES,
-                      '上游拒绝没有归档出口：credit 密钥被一次拒绝永久锁死')
+        self.assertEqual(row['state'], 'unknown', '结清不该把记录挪出 unknown')
+        self.assertFalse(row['resolution'].startswith(budget.ARCHIVE_RESOLUTION_PREFIX),
+                         '结清被写成了归档留痕 —— 记录会从证据桶消失')
+        self.assertIn('零计费', row['resolution'],
+                      '结清留痕没写明口径：下一个人会以为这笔钱被放过了')
+        self.assertIn('不产生 charged', row['resolution'],
+                      '留痕没写清零计费是结构性的（该分类不产生 charged）')
+        self.assertIn('rej-1', self._bucket('upstream_rejected'),
+                      '结清之后 review 的 upstream_rejected 桶里看不到它了')
+        self.assertNotIn('rej-1', self._bucket('archived_pending'),
+                         '它不该出现在归档桶')
 
-    def test_archiving_records_the_zero_billing_decision(self):
+    def test_settled_rejection_still_shows_as_needing_human_review(self):
         self._rejected()
-        self.assertEqual(budget.archive_overdue_unknowns(self.now), 1)
+        budget.settle_zero_billed_rejections(self.now)
+        summary = budget.unresolved_summary(key_id=self.key['id'], now=self.now)['summary']
+        self.assertEqual(summary['archived_pending'], 0)
+        self.assertEqual(summary['needs_human'], 1, '结清不等于不用看：它还得留在人工队列')
+        self.assertEqual(summary['by_class']['upstream_rejected'], 1)
 
-        resolution = self._row('rej-1')['resolution'] or ''
-        self.assertTrue(resolution.startswith(budget.ARCHIVE_RESOLUTION_PREFIX))
-        self.assertIn('零计费', resolution,
-                      '留痕没写明口径，下一个人会以为这笔钱被放过了')
+    def test_settled_rejection_still_carries_the_rejection_marker(self):
+        self._rejected()
+        budget.settle_zero_billed_rejections(self.now)
+        row = dict(self._row('rej-1'))
+        log = budget._logs_for(['rej-1'])['rej-1']
+        self.assertEqual(budget._classify(row, log), 'upstream_rejected',
+                         '分类被结清改掉了 —— 记录还在，但说的已经不是那件事')
 
-    def test_archiving_never_touches_charged_amounts(self):
-        self._rejected('rej-charged')
-        before = self._row('rej-charged')
-        budget.archive_overdue_unknowns(self.now)
-        after = self._row('rej-charged')
-        self.assertEqual(before['charged_tokens'], after['charged_tokens'])
-        self.assertEqual(before['charged_credit'], after['charged_credit'])
+    def test_key_can_be_used_again_after_the_rejection_is_settled(self):
+        self._rejected()
+        self.assertTrue(self._admission(), '前提不成立：未结清时本来就该被拒')
 
-    def test_a_charged_row_is_never_classified_as_rejected(self):
-        """「零计费」是结构上成立的，不是又声明了一遍。
+        budget.settle_zero_billed_rejections(self.now)
 
-        有 charged 的行先落 `charged_partial`，走的是另一条留痕 —— 所以
-        `upstream_rejected` 这个分类里不可能出现已计费的行。
-        """
+        self.assertEqual(self._admission(), '',
+                         '结清之后仍然拒绝，出口等于没有')
+
+    # ── 不许偷偷变成「归档」 ──────────────────────────────────────────
+    def test_rejections_are_never_archivable(self):
+        """归档会把记录移出证据桶 —— 那是三条既有不变量在守的东西。"""
+        self.assertNotIn('upstream_rejected', budget.ARCHIVABLE_CLASSES,
+                         'upstream_rejected 被放进了归档分类：记录会从证据桶消失')
+        self._rejected()
+        self.assertEqual(budget.archive_overdue_unknowns(self.now), 0,
+                         '归档函数把供应商拒绝收走了')
+        self.assertIsNone(self._row('rej-1')['resolution'])
+
+    def test_zero_billing_holds_importantly_no_charged_row_is_ever_rejected(self):
+        """「零计费」成立的结构性前提：有 charged 的行先落 charged_partial。"""
         self._rejected('rej-charged2')
         db.execute('UPDATE budget_reservations SET charged_tokens=?, charged_credit=? '
                    'WHERE request_id=?', (128, 0.5, 'rej-charged2'))
         row = self._row('rej-charged2')
         cls = budget._classify(row, budget._logs_for(['rej-charged2'])['rej-charged2'])
         self.assertEqual(cls, 'charged_partial')
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 0,
+                         '已计费的行被按零计费结清了')
 
-    def test_key_works_again_after_the_rejection_is_archived(self):
-        self._rejected()
-        self.assertTrue(self._admission(),
-                        '前提不成立：未归档时本来就该被拒')
-        budget.archive_overdue_unknowns(self.now)
-        self.assertEqual(self._admission(), '',
-                         '归档之后仍然拒绝，出口等于没有')
+    # ── 迟到证据撤销结清 ─────────────────────────────────────────────
+    def test_late_usage_evidence_revokes_the_settlement(self):
+        self._rejected('rej-late')
+        budget.settle_zero_billed_rejections(self.now)
+        self.assertEqual(self._admission(), '', '前提：结清后本来可用')
+
+        db.execute("UPDATE request_logs SET usage_source='upstream',usage_complete=1,"
+                   "credit=0.25,status=200,terminal_state='completed' WHERE request_id=?",
+                   ('rej-late',))
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 1,
+                         '迟到证据到了却没有撤销结清')
+        self.assertIsNone(self._row('rej-late')['resolution'])
+        self.assertTrue(self._admission(), '撤销结清后应当重新计入额度闸')
+
+    def test_settlement_waits_for_the_review_deadline(self):
+        self._rejected('rej-fresh', age=0)
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 0,
+                         '刚发生的拒绝立刻结清：没给重试与迟到回执留窗口')
+
+    def test_settlement_is_idempotent(self):
+        self._rejected('rej-once')
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 1)
+        self.assertEqual(budget.settle_zero_billed_rejections(self.now), 0)
 
 
 class UnresolvedCapTests(_BudgetCase):

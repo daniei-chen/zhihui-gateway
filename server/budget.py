@@ -328,8 +328,8 @@ def prepare(key, body, *, encoded_body=None):
                 'THEN 1 ELSE 0 END),0) AS missing_estimate,'
                 "COALESCE(SUM(CASE WHEN state='unknown' THEN 1 ELSE 0 END),0) AS unknown_count "
                 "FROM budget_reservations WHERE key_id=? AND state IN ('reserved','forwarded','unknown')"
-                " AND coalesce(resolution,'') NOT LIKE ?",
-                (key['id'], ARCHIVE_RESOLUTION_PREFIX + '%'))
+                " AND " + _settled_exclusion_sql(),
+                (key['id'], *settled_prefix_args()))
             total_held = int(outstanding_total['held'])
             missing_estimate = int(outstanding_total['missing_estimate'])
             unknown_count = int(outstanding_total['unknown_count'])
@@ -359,12 +359,12 @@ def prepare(key, body, *, encoded_body=None):
             # streams still carry over midnight until their terminal facts arrive.
             outstanding = db.query("SELECT b.state,b.reserved_tokens,b.charged_tokens FROM budget_reservations b "
                                    "WHERE b.key_id=? AND (b.state IN ('reserved','forwarded') OR "
-                                   "(b.state='unknown' AND coalesce(b.resolution,'') NOT LIKE ? AND "
+                                   "(b.state='unknown' AND " + _settled_exclusion_sql('b') + " AND "
                                    "coalesce((SELECT l.ts FROM request_logs l "
                                    "WHERE l.request_id=b.request_id),b.created_at)>=? AND "
                                    "coalesce((SELECT l.ts FROM request_logs l WHERE l.request_id=b.request_id),"
                                    "b.created_at)<?))",
-                                   (key['id'], ARCHIVE_RESOLUTION_PREFIX + '%', start, end))
+                                   (key['id'], *settled_prefix_args(), start, end))
             outstanding = list(outstanding) + [
                 {'state': 'unknown', 'reserved_tokens': reserved,
                  'charged_tokens': int(row.get('charged_tokens') or 0)}
@@ -814,27 +814,44 @@ def _logs_for(request_ids) -> dict:
 # resolve。`usage_present` 仍不归档 —— 那一类还有「上游到底收没收钱」这个能核
 # 的问题。
 #
-# ## `upstream_rejected` 也要有出口（G-05 / D-06，2026-11-28 拍板）
+# ## `upstream_rejected` 的出口不在这里（G-05 / D-06）
 #
-# 上游**明确拒绝**（429/`code:112`/`quota_exceeded`/`model_not_found` …）时，
-# 请求根本没被受理，也就不存在「上游收没收钱」这个能核的问题 —— 它和
-# `usage_present` 不是一回事。此前的口径把它一起挡在归档之外，代价是：对有
-# `quota_credit` 的密钥，任意一条这样的 unknown 就是 `credit_quota_unconfirmed`
-# 的永久闸，一次上游拒绝把密钥锁死到永远。
-#
-# 拍板口径：**零计费，但必须归档** —— 不向用户收钱，同时给出明确出口，让密钥
-# 能继续用。归档沿用它本来的语义（不动 charged，释放剩余预留估算），且
-# `upstream_rejected` 的行按分类定义就没有 charged（有 charged 的先落
-# `charged_partial`），所以「零计费」在这里是**结构上成立**的，不是又写了一遍。
+# 上游**明确拒绝**时，对 credit 密钥确实是一道永久闸（见下方
+# `ZERO_BILLED_REJECTION_PREFIX`）。但它**不进归档桶**：归档的意思是「这条记录
+# 查过了、平台承担未知差额」，而供应商拒绝恰恰是「发生过一次拒绝」的证据，
+# 藏进归档桶运维就查不到了。仓库里三条既有不变量钉的正是这一点
+# （`test_evidence_bearing_classes_are_never_archived`、
+# `test_historical_marker_naming_a_rejection_class_is_not_hidden`、
+# `test_review_archive_bucket_does_not_hide_supplier_rejection`）。
+# 所以出口做成「额度闸放行、记录仍在证据桶」两条腿 —— 见 settle_zero_billed_rejections。
 ARCHIVE_RESOLUTION_PREFIX = '已归档待核对：'
 #: 没有任何上游用量证据的分类。已计入金额、但结论仍未知的见 CHARGED_PARTIAL_CLASS。
 EVIDENCELESS_CLASSES = ('client_cancelled', 'no_request_log', 'unexplained')
-#: 上游明确拒绝、请求未被受理：零计费，但同样要有出口（见上方说明）。
+#: 上游明确拒绝、请求未被受理：零计费，出口走 `settle_zero_billed_rejections`，
+#: **不归档**（理由见 `ARCHIVE_RESOLUTION_PREFIX` 上方那段）。
 UPSTREAM_REJECTED_CLASS = 'upstream_rejected'
 #: 已计入金额、但结论仍未知的分类：同样可归档，归档时不碰已计入的 charged。
 CHARGED_PARTIAL_CLASS = 'charged_partial'
-ARCHIVABLE_CLASSES = (EVIDENCELESS_CLASSES
-                      + (UPSTREAM_REJECTED_CLASS, CHARGED_PARTIAL_CLASS))
+ARCHIVABLE_CLASSES = EVIDENCELESS_CLASSES + (CHARGED_PARTIAL_CLASS,)
+
+#: 「钱的问题已经有结论」的第二类留痕：上游拒绝，按零计费结清。
+#: 与归档的区别只有一条，但很关键：**它不表示「查过了」，只表示「这次不该收钱」**，
+#: 所以记录继续留在证据桶（review 的 `upstream_rejected` 桶、`needs_human`、
+#: `archived_pending=0`），只是不再占用额度闸的估算。
+ZERO_BILLED_REJECTION_PREFIX = '已按零计费结清：'
+#: 这两类留痕都让行**不再占用额度闸**：金额已有结论（0 或已归档的差额）。
+SETTLED_RESOLUTION_PREFIXES = (ARCHIVE_RESOLUTION_PREFIX, ZERO_BILLED_REJECTION_PREFIX)
+def settled_prefix_args():
+    """`_settled_exclusion_sql()` 那些占位符的参数。"""
+    return tuple(prefix + '%' for prefix in SETTLED_RESOLUTION_PREFIXES)
+
+
+def _settled_exclusion_sql(alias: str = '') -> str:
+    """额度闸 SQL：排除「金额已有结论」的行。占位符按前缀数重复。"""
+    column = (alias + '.') if alias else ''
+    return ' AND '.join(
+        ["coalesce(" + column + "resolution,'') NOT LIKE ?"]
+        * len(SETTLED_RESOLUTION_PREFIXES))
 #: 归档留痕里的分类，用于「归档时的结论」与「现在的分类」比对。
 _ARCHIVED_CLASS_PATTERN = re.compile(r'分类 ([a-z_]+)')
 REVIEW_DEADLINE_DAYS_DEFAULT = 7
@@ -924,13 +941,6 @@ def archive_overdue_unknowns(now: int, deadline_days: int | None = None) -> int:
             reason = ('%s超过 %d 天处理期限仍无上游证据（分类 %s，创建于 %s）；'
                       '保留 state=unknown 供人工核对，未改用量、未删除'
                       % (ARCHIVE_RESOLUTION_PREFIX, days, cls, created_text))
-        if cls == UPSTREAM_REJECTED_CLASS:
-            # 口径明确写进留痕：拒绝 = 零计费。否则下一个人看到「归档」会以为
-            # 这笔钱被放过了，而实际上它从来没被计过。
-            reason = ('%s超过 %d 天处理期限，上游明确拒绝、请求未被受理（分类 %s，'
-                      '创建于 %s）；按零计费归档（该分类不产生 charged），'
-                      '保留 state=unknown 供人工核对'
-                      % (ARCHIVE_RESOLUTION_PREFIX, days, cls, created_text))
         try:
             if not _mark_archived(row['request_id'], reason):
                 continue
@@ -947,6 +957,96 @@ def archive_overdue_unknowns(now: int, deadline_days: int | None = None) -> int:
         _log.warning('archived %d overdue unknowns as pending-review (deadline %d days)',
                      archived, days)
     return archived
+
+
+def settle_zero_billed_rejections(now: int, deadline_days: int | None = None) -> int:
+    """上游明确拒绝的行：**结清**（零计费、解锁密钥），但**不归档**。
+
+    ## 为什么是「结清」而不是「归档」
+
+    上游拒绝（429 / `code:112` / `quota_exceeded` / `model_not_found` …）意味着
+    请求根本没被受理，不存在「上游到底收没收钱」这个能核的问题 —— 金额按零计，
+    于是它不该继续占着额度闸：有 `quota_credit` 的密钥，任意一条未结的 unknown
+    就是 `credit_quota_unconfirmed` 的永久闸，一次拒绝把密钥锁死到永远。
+
+    但它**不是**「查过了、平台承担差额」，而是「发生过一次供应商拒绝」的证据。
+    把这种行挪进归档桶，运维在面板上就再也看不到它 —— 那正是仓库里三条既有
+    不变量（`test_evidence_bearing_classes_are_never_archived`、`test_historical_
+    marker_naming_a_rejection_class_is_not_hidden`、
+    `test_review_archive_bucket_does_not_hide_supplier_rejection`）在守的东西。
+
+    所以拆成两条腿，**不许合并成一个开关**：
+
+      · 结清 = 写 `ZERO_BILLED_REJECTION_PREFIX` 留痕 → 额度闸按「金额已有结论」
+        排除它（`_settled_exclusion_sql`），密钥立刻能继续用；
+      · 记录仍在证据桶：`state` 保持 `unknown`、不带归档前缀，
+        `archived_pending=0`、`needs_human=1`、review 的 `upstream_rejected` 桶照旧命中。
+
+    ## 迟到证据
+
+    与归档同一条纪律：留痕只是「当时的结论」。同一 request_id 后来补上上游用量
+    （分类变成 `usage_present` / `charged_partial`）时，这里会**撤掉**留痕，让这
+    一行重新计入额度闸与告警（宁可重报）。因此本函数既结清也撤销。
+    """
+    now = int(now)
+    days = max(1, int(deadline_days) if deadline_days is not None else review_deadline_days())
+    horizon = now - days * 86400
+    changed = 0
+    for row, log in _unresolved_with_logs():
+        if row.get('state') != 'unknown':
+            continue
+        cls = _classify(row, log)
+        request_id = row['request_id']
+        settled = str(row.get('resolution') or '').startswith(ZERO_BILLED_REJECTION_PREFIX)
+        if cls == UPSTREAM_REJECTED_CLASS:
+            if settled or _is_archived(row):
+                continue
+            created = int(row.get('created_at') or now)
+            if created > horizon:
+                continue          # 未到处理期限：先给重试与迟到回执留出窗口
+            reason = ('%s上游明确拒绝、请求未被受理（分类 %s，创建于 %s）；'
+                      '按零计费结清——不产生 charged，也不占用额度估算；'
+                      '记录仍留在证据桶等待人工核对，未归档、未删除'
+                      % (ZERO_BILLED_REJECTION_PREFIX, cls,
+                         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created))))
+            try:
+                # 不动 `updated_at`：结清不是「这条请求又活动了」。准入的在途窗口
+                # 按 `updated_at>=now-900` 计最近 unknown，刷时间戳会让一条 30 天前
+                # 的拒绝重新落进「最近在途」而继续 `budget_pending` —— 那样结清
+                # 就白做了（本轮实测踩到）。
+                wrote = db.execute_count(
+                    "UPDATE budget_reservations SET resolution=? "
+                    "WHERE request_id=? AND state='unknown' "
+                    "AND coalesce(resolution,'') NOT LIKE ?",
+                    (reason, request_id, ZERO_BILLED_REJECTION_PREFIX + '%'))
+            except Exception:  # noqa: BLE001 - 单条失败不中断本轮
+                _log.exception('settle zero-billed rejection failed request_id=%s', request_id)
+                continue
+            if not wrote:
+                continue
+            changed += 1
+            try:
+                db.add_audit_log('auto-settle', 'budget.zero_billing', request_id, reason)
+            except Exception:  # noqa: BLE001 - 留痕失败不能撤销结清事实
+                _log.exception('settle audit log failed request_id=%s', request_id)
+        elif settled:
+            # 分类已经不再是「上游拒绝」：迟到证据到了，撤销结清，重新计入闸与告警。
+            try:
+                cleared = db.execute_count(
+                    "UPDATE budget_reservations SET resolution=NULL "
+                    "WHERE request_id=? AND coalesce(resolution,'') LIKE ?",
+                    (request_id, ZERO_BILLED_REJECTION_PREFIX + '%'))
+            except Exception:  # noqa: BLE001
+                _log.exception('revoke zero-billed settlement failed request_id=%s', request_id)
+                continue
+            if cleared:
+                changed += 1
+                _log.warning('revoked zero-billed settlement request_id=%s now class=%s',
+                             request_id, cls)
+    if changed:
+        _log.warning('settled/revoked %d zero-billed upstream rejections (deadline %d days)',
+                     changed, days)
+    return changed
 
 
 def unresolved_summary(key_id=None, now=None, stale_after=3600) -> dict:

@@ -149,6 +149,13 @@ async def lifespan(app: FastAPI):
                         threadpools.heartbeat_pool(), budget.reap_expired_leases)
                 except Exception:
                     logger.exception('budget expired lease reap failed')
+                try:
+                    # G-05：上游拒绝的行按零计费结清（解锁密钥），但不归档。
+                    await asyncio.get_running_loop().run_in_executor(
+                        threadpools.heartbeat_pool(), budget.settle_zero_billed_rejections,
+                        int(time.time()))
+                except Exception:
+                    logger.exception('budget zero-billed rejection settle failed')
     heartbeat_task = asyncio.create_task(budget_heartbeat())
     from . import operational
     # Take the first readiness sample before the monitor can publish a
