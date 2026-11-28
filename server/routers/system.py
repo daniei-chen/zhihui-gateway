@@ -475,8 +475,9 @@ def internal_session_verify(request: Request,
 
     - 仅本机可调用，判据是**两层**：TCP 对端在回环，且 `iputil.client_ip()`
       解出的真实来源也在回环（为什么不只看对端见下方注释）。nginx 的
-      /__zh_session 是 internal location，且**不得**转发
-      `X-Real-IP` / `X-Forwarded-For`（deploy/README.md 有写法）；
+      /__zh_session 是 internal location，**必须显式清空**
+      `X-Real-IP` / `X-Forwarded-For`（写法与发布门禁见 deploy/README.md）——
+      子请求会继承父请求的头，不清空就会带着浏览器地址被判成外部；
     - 复用 Manager 会话校验（Cookie / wbt_ token），通过后签发 5 分钟有效的
       HMAC 断言（qtg `X-QTG-Identity` 契约），qtg 据此识别真实用户与角色，
       不再依赖静态 admin Bearer；
@@ -493,9 +494,17 @@ def internal_session_verify(request: Request,
     # 第二层用 `iputil.client_ip()`：它按 `WB_TRUSTED_PROXY_CIDRS` 决定采不采信
     # 转发头，与 IP 白名单、登录锁定、密钥 max_ips 是同一份判据
     # （`/api/health/alerts` 的「仅本机」也这么写）。外部请求经 `location /api/`
-    # 进来，一定带着 nginx 覆盖写入的 `X-Real-IP=$remote_addr`，于是这里解析出
-    # 浏览器地址 → 403；nginx 的 `auth_request` 子请求不带来源头，解析结果仍是
-    # 回环 → 放行。前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
+    # 进来，带着 nginx 覆盖写入的 `X-Real-IP=$remote_addr`，于是这里解析出
+    # 浏览器地址 → 403；`auth_request` 子请求在 internal location 清空来源头后
+    # 解析结果仍是回环 → 放行。
+    #
+    # 注意 `auth_request` 子请求**会继承父请求的头**，所以「子请求不带来源头」
+    # 不是自动成立的：得靠 internal location 里显式
+    # `proxy_set_header X-Real-IP ""`（写法见 deploy/README.md，发布门禁
+    # `release.py verify --nginx` 会查）。运维漏了这两行时，子请求会带着浏览器
+    # 地址被判成外部 —— 升级后整站 403，日志里那条 warn 说的就是这件事。
+    #
+    # 前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
     # 那种部署下对端本身就是真实来源，不该有回环对端。
     peer = request.client.host if request.client else ''
     source = client_ip(request)

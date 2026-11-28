@@ -607,7 +607,11 @@ def cmd_activate(args) -> int:
         raise ReleaseError(f"目标不存在：{target}")
     target_root = target.resolve()
 
-    cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust))
+    # `--nginx` 必须传进门禁：`check_nginx` 里有一条「auth_request 的内部
+    # location 不能转发来源头」的判定 —— 配错会让升级后**整站** `/api/`
+    # 会话校验 403。只在 verify 里跑等于让它在真正切指针的那一步缺席。
+    cmd_verify(argparse.Namespace(root=args.root, version=version, trust=args.trust,
+                                 nginx=getattr(args, "nginx", None)))
 
     print(f"== activate {version} ==")
     previous = _switch(root / "current", version)
@@ -786,6 +790,7 @@ def main(argv=None) -> int:
 
     activate = sub.add_parser("activate", help="原子切换发布指针")
     activate.add_argument("version")
+    activate.add_argument("--nginx", help="站点配置文件（可选，切换前检查站点配置）")
     activate.set_defaults(func=cmd_activate)
 
     rollback = sub.add_parser("rollback", help="切回上一版指针")

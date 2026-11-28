@@ -249,6 +249,12 @@ server {
 > `X-Forwarded-Host` 不被采信（写请求会被拒）。**反代信任只有一份判据**：
 > `WB_TRUSTED_PROXY_CIDRS` + `iputil.client_ip()`。
 >
+> **每个转发给管理端的 location 都必须覆盖 `X-Real-IP`**（`location /` 已经这么
+> 写了，自己另加的 `location /api/` 之类别漏）：应用只在 TCP 对端可信时采信这
+> 个头，而一旦某个 location 漏了它，客户端自己发的 `X-Real-IP: 127.0.0.1` 就会
+> 原样到达应用 —— IP 白/黑名单、登录失败锁定、密钥 `max_ips` 与「仅本机」端点
+> 同时失效。
+>
 > 关掉改写后，nginx 转发进来的请求对端**恒为** `127.0.0.1`，所以「仅本机」类
 > 端点（如 `/api/system/internal-session-verify`）改看两层：对端在回环 **且**
 > `client_ip()` 解出的真实来源在回环。据此，`auth_request` 的 internal
