@@ -8,12 +8,23 @@
 - 会话使用 HttpOnly + SameSite=Lax 签名 Cookie，生产环境自动启用 `Secure`
 - **写端点的同源校验锚点在服务端**（`WB_PUBLIC_ORIGIN`，其次 `WB_CORS_ORIGINS`）：
   2026-11-28 起不再用请求的 `Host` 拼「本站期望来源」—— DNS rebinding 下
-  `Host == Origin == 任意域名`，那样判等于没有锚点。默认部署行为不变：IP / localhost
-  / 单标签内网名直连、经可信反代（`WB_TRUSTED_PROXY_CIDRS` 透传
-  `X-Forwarded-Host`）、以及配了来源的部署照旧。只有「用域名访问且没配
-  `WB_PUBLIC_ORIGIN`」这一种组合的表单提交会 403（body
-  `{"detail": "origin_unconfigured"}`）：管理页会在填表之前显示横幅说明怎么修，
-  启动日志也告警一次。「安全」页的状态栏显示这次访问路径的来源状态。逃生门
+  `Host == Origin == 任意域名`，那样判等于没有锚点。
+- **可信反代透传的 `X-Forwarded-Host` 默认不被采信**（`server/config.py` 的
+  `TRUST_FORWARDED_HOST`，环境变量 `WB_TRUST_FORWARDED_HOST`，默认**关**）。
+  采信它要两把锁同时开：TCP 对端属于 `WB_TRUSTED_PROXY_CIDRS`，**且**部署方显式
+  `WB_TRUST_FORWARDED_HOST=1`。原因：`X-Forwarded-Host` 不在 Fetch 的 forbidden
+  header 名单里，DNS rebinding 之后的同源 fetch 能直接带，而 nginx 默认会把客户端的
+  未知头原样转发给上游 —— 所以「对端是可信反代」只说明连接来自反代，不说明这个头是
+  反代写的。打开它等于声明「我的反代**覆盖写**该头，客户端那份到不了应用」，
+  发布门禁（`deploy/release.py` 的 `check_nginx`，在 `activate` / `verify` 带
+  `--nginx` 时执行）会要求每个 proxy 块显式设置该头。
+- **默认部署行为不变**：IP / localhost / 单标签内网名直连、以及配了来源的部署照旧。
+  受影响的是「用**点分域名**访问、又没设 `WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS`、
+  且没开 `WB_TRUST_FORWARDED_HOST`」这一种组合 —— 它的写请求（**登录也是写请求**）
+  一律 403（body `{"detail": "origin_unconfigured"}`）。当前这种组合下管理端与登录页
+  会在填表之前显示横幅说明怎么修，启动日志也告警一次，「安全」页状态栏显示这次访问
+  路径的来源状态。修法二选一：设 `WB_PUBLIC_ORIGIN`，或确认反代覆盖写
+  `X-Forwarded-Host` 后显式打开 `WB_TRUST_FORWARDED_HOST=1`。逃生门
   `WB_ALLOW_UNCONFIGURED_ORIGIN=1` 可退回修前行为，但会重新暴露 DNS rebinding，
   启动日志会醒目告警
 - 同 IP 登录失败 5 次锁定 10 分钟
