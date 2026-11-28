@@ -6,6 +6,11 @@
 # 用法：
 #   fork-upgrade.sh status
 #   fork-upgrade.sh preflight <version>     # 备份 + 拉取上游源码/发布包到 /tmp
+#
+# 注意：preflight 从**上游仓库**拉源码归档与发布包（见 `两个 curl`），这是本工具的
+# 设计目的 —— 它做的事情就是「把上游的东西取过来对照」。因此这里**故意**没有
+# 白名单校验，也**不要**照着它去改 windows/update.ps1 / deploy/update.py：
+# 那两个是给终端用户装包的，发布源必须是本仓；这个只给维护者手工跑。
 #   fork-upgrade.sh merge     <version>     # git 试合并 + 解已知冲突（未知则停）
 #   fork-upgrade.sh go        <version>     # 同步 9 个 Go 文件 + 编译
 #   fork-upgrade.sh test                    # Python 全量 + Go 全量

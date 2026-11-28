@@ -43,6 +43,12 @@ $UpstreamBuildRecipeVersion = '2'
 $RuntimeBuildRecipeVersion = '3'
 
 $UpstreamSrcUrl = 'https://github.com/ithtelab/workbuddy-manager/releases/download/upstream-src/workbuddy2api-src.tar.gz'
+# 上游源码载体的固定摘要。随包发布的 wb2api.exe 由这份源码编译而来，而
+# 「编译产物的 hash」只证明我们编译出了什么，证明不了源码来自哪里 —— 所以
+# 下载后、解包前必须先核对 tarball 本身的 sha256，不匹配就拒绝构建。
+# <upstream-src-pin begin>
+$UpstreamSrcSha256 = 'f306bfdca734244c6e7a0e11e759d9f01d798191ba3fe24a9f37d94edc0f5885'
+# <upstream-src-pin end>
 $UvUrl = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip'
 $GoToolchainUrl = 'https://go.dev/dl/go1.27.0.windows-amd64.zip'
 # 显式用 Windows 自带 bsdtar：PATH 里的 GNU tar 会把 C:\ 路径当作「远程主机:路径」
@@ -366,6 +372,14 @@ if (-not $SkipUpstream) {
         Write-Step '下载上游源码包…'
         $tarPath = Join-Path $env:TEMP 'wb-upstream-src.tar.gz'
         Invoke-Curl $UpstreamSrcUrl $tarPath
+        # <upstream-src-verify begin>
+        $srcDigest = (Get-FileHash -LiteralPath $tarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($srcDigest -ne $UpstreamSrcSha256) {
+            throw ("上游源码摘要不匹配，已拒绝构建：期望 $UpstreamSrcSha256，实际 $srcDigest。`n" +
+                   '  发布源上的源码包被替换过，或上游改了包而 $UpstreamSrcSha256 没跟着更新。' +
+                   '  在解包与编译之前停下，避免把来源不明的源码打进安装包。')
+        }
+        # <upstream-src-verify end>
         $extractTmp = Join-Path $env:TEMP ('wb-upstream-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory $extractTmp -Force | Out-Null
         & $TarExe -xzf $tarPath -C $extractTmp
