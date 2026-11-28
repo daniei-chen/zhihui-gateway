@@ -17,7 +17,7 @@
 **空回合必须可观测**：合法空回合照常 200，但它同时意味着一次静默降级。所以
 `to_anthropic_response` 每次把「`stop` + 无正文 + 无工具调用」判成空回合时都会
 调 `observability.note_empty_turn('messages')`，读数在
-`GET /api/health/upstream`（只回环，与 `/api/health/alert`、`/api/health/inflight`
+`GET /api/health/upstream`（只回环，与 `/api/health/alerts`、`/api/health/inflight`
 同一套守卫）。这段**不改行为**，只让它可见。
 
 这两类各在仓库里各有既有的守护者，本模块只补**缺的那一侧**并把手口钉死：
