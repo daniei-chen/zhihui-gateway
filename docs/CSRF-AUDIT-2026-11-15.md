@@ -162,7 +162,7 @@ POST /api/login   Host: evil.test:8000   Origin: http://evil.test:8000   -> 200�
 
 - 响应 `403`，body `{"detail": "origin_unconfigured"}`（客户端可以按这个值分支，
   不用解析人话），响应头 `X-Manager-Csrf-Reason: origin_unconfigured` 同值；
-- 管理页加载时按 `/api/me` 的 `origin_check`（`configured` / `proxy` /
+- 管理页加载时按 `GET /api/system/origin-status`（`configured` / `proxy` /
   `loopback-only` / `unconfigured` / `relaxed`）在**填表之前**显示横幅，说明原因
   与修复方式；提交后收到的 403 也会显示同一句话，而不是通用「权限不足」；
 - **登录页也要提示**：登录本身是写请求，没有锚点时同样 403 —— 用户如果连登录都
@@ -182,7 +182,7 @@ Origin/Referer 仍会拦），启动日志打醒目告警说明这是**主动放
 
 `server/tests/test_d41_csrf_origin_anchor.py`（已登记进
 `tools/ci_regression.py` 的 `MODULES`）：七角矩阵（回环 / IP / 单标签内网名 /
-已配置 / 点分域名直连 / 逃生门 / 跨站）、`origin_check` 状态字段、两处旁路闸门；
+已配置 / 点分域名直连 / 逃生门 / 跨站）、管理端锚点状态字段、两处旁路闸门；
 修前红、修后绿，并做过变异验证（把锚点改回「只信 Host」、关掉可信代理判据、
 关掉 rebinding 判据，对应测试分别变红）。`GET` 等安全方法不受影响。
 

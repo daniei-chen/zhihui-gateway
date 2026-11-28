@@ -1141,7 +1141,7 @@ def current_user(request: Request) -> dict:
 #
 # 默认部署行为不变：只有「用域名访问、又没配 WB_PUBLIC_ORIGIN / 反代 XFH」这一种
 # 组合的表单提交会 403（body `detail=origin_unconfigured`，响应头同值，进程内
-# 告警一次）。管理页按 `/api/me` 的 `origin_check` 在**填表之前**显示横幅说明怎么
+# 告警一次）。管理页按 `GET /api/system/origin-status` 在**填表之前**显示横幅说明怎么
 # 修，启动日志也会把当前锚点形态说清楚。IP / localhost / 单标签内网名直连不受影响。
 #
 # 逃生门：`WB_ALLOW_UNCONFIGURED_ORIGIN=1` 把锚点退回修前的 Host（跨站

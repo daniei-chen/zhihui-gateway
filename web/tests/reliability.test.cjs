@@ -1427,15 +1427,22 @@ function authRaceFixture() {
     login: async username => ({ok: true, username, role: 'viewer'}),
     logout: async () => ({ok: true}),
   };
+  // 锚点状态可以单独设成「成功」或「失败」：用来证明 provider 真的把它交给了消费方。
+  let originStatusImpl = async () => ORIGIN_STATUS_FIXTURE;
   const {AuthProvider} = load('lib/auth-context.tsx', {
     react: harness.react, 'react/jsx-runtime': {jsx: (type, props) => ({type, props})},
     '@/lib/use-hydrated': {useHydrated: () => true},
     // D-41：锚点状态是另一个端点（`/api/me` 只回身份）。桩成立即兑现的值，
     // 这些用例只关心身份读的合并/取消语义。
-    '@/lib/api': {authApi, systemApi: {originStatus: async () => ORIGIN_STATUS_FIXTURE}},
+    '@/lib/api': {authApi, systemApi: {originStatus: signal => {
+      const read = originStatusImpl();
+      return read && typeof read.then === 'function' ? read : Promise.resolve(read);
+    }}},
     '@/lib/base-path': {BASE_PATH: ''}, globals: {window, AbortController},
   });
-  return {harness, cache, reads, window, authApi, render: () => harness.render(() => AuthProvider({children: null})).props.value};
+  return {harness, cache, reads, window, authApi,
+    failOriginStatus: () => { originStatusImpl = async () => { throw new Error('origin read failed'); }; },
+    render: () => harness.render(() => AuthProvider({children: null})).props.value};
 }
 
 for (const response of ['old identity', 'old unauthorized']) {
@@ -1475,6 +1482,21 @@ test('identity refresh coalesces reads and Strict Mode replay replaces an abando
   fixture.reads[0].resolve({username: 'obsolete', role: 'admin'}); await joined;
   assert.equal(fixture.render().me.username, 'current');
   fixture.harness.unmount();
+});
+
+test('the auth provider publishes the anchor state to its consumers', async () => {
+  const fixture = authRaceFixture();
+  fixture.render(); fixture.harness.effects(); await flush();
+  fixture.reads[0].resolve({username: 'alice', role: 'admin'}); await flush();
+  assert.deepEqual(fixture.render().origin, ORIGIN_STATUS_FIXTURE,
+    '取到了锚点状态却没交给上下文 → 横幅和安全页状态栏永远是空的');
+
+  const failing = authRaceFixture();
+  failing.failOriginStatus();
+  failing.render(); failing.harness.effects(); await flush();
+  failing.reads[0].resolve({username: 'alice', role: 'admin'}); await flush();
+  assert.equal(failing.render().me.username, 'alice', '锚点读失败不能拖垮登录态');
+  assert.equal(failing.render().origin, null, '读不到就置空（不提示），不要留旧值');
 });
 
 /**
