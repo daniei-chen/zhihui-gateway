@@ -223,6 +223,10 @@ class UserStoreLockTests(unittest.TestCase):
             os.symlink(victim, lock_path)
         except (OSError, NotImplementedError) as exc:
             reason = getattr(exc, 'winerror', None)
+            if os.name != 'nt':
+                # POSIX 上普通用户建 symlink 不会失败。真失败了说明这条安全断言
+                # 在 Linux CI 上会变成空门（skip 不算跑过），必须红。
+                self.fail(f'POSIX 上无法创建 symlink，安全断言未被验证：{exc!r}')
             self.skipTest(
                 f'当前平台不允许普通用户创建 symlink（{type(exc).__name__}'
                 f'{f", WinError {reason}" if reason else ""}）；该用例由 Linux CI 执行')
@@ -238,6 +242,8 @@ class UserStoreLockTests(unittest.TestCase):
         try:
             os.link(lock_path, self.dir / 'lock-copy')
         except OSError as exc:
+            if os.name != 'nt':
+                self.fail(f'POSIX 上无法创建硬链接，nlink 断言未被验证：{exc!r}')
             self.skipTest(f'当前平台不允许创建硬链接（{type(exc).__name__}: {exc}）')
         with self.assertRaises(RuntimeError) as caught:
             with userstore.locked(self.target):
