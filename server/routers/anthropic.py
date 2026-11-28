@@ -817,9 +817,17 @@ def _content_text(value) -> str:
     只认 `isinstance(text, str)`，数组形态被**静默丢弃**，客户端拿到 `content: []`
     + `end_turn` —— 既看不到答案，也不会重试（D-20）。
 
-    数组里没有可交付的正文（例如只有图片块）时返回空串，**由调用方结合
-    `finish_reason` 与 `tool_calls` 判定**：只带 `tool_calls` 的消息 `content`
-    本来就是 null 或 `[]`，那种空是合法的，不能在这一层报错。
+    两种「空」必须分开：
+      * **本来就没有内容**（`None` / `''` / `[]`）→ 返回空串，是合法的空回合：
+        模型就是没说话。`to_anthropic_response` 照常回 `content: []` +
+        `end_turn`；只有 `finish_reason=length` 那一路把空当失败（预算耗尽）。
+        仓库里这条语义由 `test_upstream_alignment_20261123.py` 的
+        `test_non_length_finish_untouched` 与
+        `test_audit_20261029_gateway_ledger.py` 的
+        `test_valid_tool_only_and_empty_text_responses_stay_supported` 守着。
+      * **有内容但渲染不出**（数组里有 part、却一个 `text` 都没有，例如只有
+        图片块）→ **报错**：Anthropic 的 text 块表达不了它，回空等于又一次
+        静默丢答案（与 D-20 同症状）。
     """
     if value is None:
         return ''
@@ -886,12 +894,11 @@ def to_anthropic_response(data: dict, model: str, *, thinking: bool = False) -> 
     # （`length` + 没有正文 + 没有任何工具调用），思考块不算「交付」。
     if finish == 'length' and not calls and not text.strip():
         raise OutputBudgetExhausted(BUDGET_EXHAUSTED_MESSAGE)
-    # 上游说「正常结束」（`stop`），却既没有正文也没有工具调用：这是**空答案**，不是
-    # 成功。静默回 `content: []` + `end_turn` 与 D-20 是同一个症状——客户端拿到一个
-    # 看起来正常的空回复，既不重试也没有任何线索可查。纯工具调用的消息由上面的
-    # `not calls` 排除；只有思考块不算交付（与预算耗尽同口径）。
+    # `stop` + 什么都没交付是**合法空回合**（模型就是没说话），照常回
+    # `content: []` + `end_turn`。不报错，但必须让它可见：一次静默空答案在日志和
+    # 表里都不留痕迹，运维就看不见「最近上游有多频繁地什么都没说」。
     if finish == 'stop' and not calls and not text.strip():
-        raise ValueError('上游返回了空正文（finish_reason=stop，既无文本也无工具调用）')
+        observability.note_empty_turn('messages')
     if len(content)>MAX_STREAM_TOOLS:
         from ..outputlimits import OutputLimitExceeded
         raise OutputLimitExceeded('Too many translated content blocks')

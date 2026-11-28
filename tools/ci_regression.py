@@ -616,8 +616,11 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
-    # Messages 非流式「finish=stop 却没有正文」必须 502，不许回 200 空答案。
-    # 纯工具调用（content 为 null/[]）是合法空正文，边界由同模块的对照用例守着。
+    # Messages 非流式两种「空」的分界（2026-11-28 大队长定）：`[]` / `''` / `null`
+    # 配 `finish=stop` 是**合法空回合**（200 + 空 content + end_turn，进
+    # `observability.note_empty_turn` 计数，读数在 /api/health/upstream）；
+    # 「数组里有 part 但没有正文」才算渲染不出的错误（502）。thinking-only 也钉在
+    # 这里——这条边界被来回改过两次，不靠记忆活着。
     "server.tests.test_messages_empty_content",
 )
 

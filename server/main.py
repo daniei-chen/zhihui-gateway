@@ -700,6 +700,39 @@ def health_inflight(request: Request):
     }, headers={'Cache-Control': 'no-store'})
 
 
+@app.get('/api/health/upstream', include_in_schema=False)
+def health_upstream(request: Request):
+    """上游「正常结束但什么都没交付」的计数（只读、只回环）。
+
+    ## 为什么需要它
+
+    `finish=stop` + 既无正文也无工具调用是**合法空回合**，网关照常回 200 空答案
+    （模型就是没说话，报错只是把静默降级换成响亮失败）。代价是这类降级**在日志
+    和 `request_outcomes` 里都不留痕迹**：运维看到的是一个 200，看不出上游最近有
+    多频繁地什么都没说——那正是 D-20 那类问题（客户端拿到空答案、既不重试也没有
+    线索）的另一个入口。
+
+    所以这里只暴露计数，不改行为。计数由 `observability.note_empty_turn()` 在
+    协议层累加（当前只有 Messages 非流式），进程级、重启清零。
+
+    ## 为什么只回环
+
+    与 `/api/health/alerts`、`/api/health/inflight` 同一套守卫：运维脚本在宿主机
+    `curl 127.0.0.1`，不需要新的鉴权面，也不该把内部计数对外开放。
+    """
+    try:
+        loopback = ipaddress.ip_address(client_ip(request)).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        return JSONResponse({'error': 'loopback only'}, status_code=403)
+    from . import observability
+    return JSONResponse({
+        'service': 'zhihui-gateway',
+        'empty_turns': observability.empty_turn_snapshot(),
+    }, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/api/readyz/detail', include_in_schema=False)
 def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
     """完整就绪诊断（需面板读者身份）。

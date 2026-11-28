@@ -480,6 +480,51 @@ def classify_error(state=None, *, terminal_state=None, error_stage=None,
 #: U21：探针端点（每分钟都在打，不能算进真实流量的失败率）。
 PROBE_ENDPOINTS = ('/healthz', '/api/healthz', '/readyz', '/api/readyz', '/metrics')
 
+# ── 上游「正常结束但什么都没说」的计数（D-20 边界，2026-11-28）───────────────
+#
+# `to_anthropic_response` 把「上游 finish=stop 且既无正文也无工具调用」当**合法
+# 空回合**（200 + `content: []` + `end_turn`）——模型就是没说话，不能报错，否则
+# 只回思考块的 thinking 响应也会被误伤。但这样一来，一次静默降级**在日志和表里
+# 都不留痕迹**：运维看不见「最近上游有多频繁地什么都没说」，而这正是 D-20 那类
+# 问题（客户端拿到空答案既不重试也没线索）的另一个入口。
+#
+# 这里只加计数，不改行为。读点是 `GET /api/health/upstream`（只回环，与
+# `/api/health/alerts`、`/api/health/inflight` 同一套守卫）。计数是进程级的，
+# 重启清零——要跨进程留存得进表，那是另一条改动。
+_EMPTY_TURN_LOCK = threading.Lock()
+_EMPTY_TURN_BY_PROTOCOL: dict[str, int] = {}
+_EMPTY_TURN_LAST_TS: dict[str, int] = {}
+
+
+def note_empty_turn(protocol: str) -> None:
+    """记一次「上游正常结束但什么都没交付」。
+
+    调用点在协议层（`server/routers/anthropic.py` 的 `to_anthropic_response`），
+    因为它才知道 `finish_reason` 与 `tool_calls`；提取层 `_content_text` 分不清
+    「没有内容」和「纯工具调用」。
+    """
+    key = str(protocol or 'unknown')[:32]
+    with _EMPTY_TURN_LOCK:
+        _EMPTY_TURN_BY_PROTOCOL[key] = _EMPTY_TURN_BY_PROTOCOL.get(key, 0) + 1
+        _EMPTY_TURN_LAST_TS[key] = int(time.time())
+
+
+def empty_turn_snapshot() -> dict:
+    """只读快照：总数、按协议的明细、每个协议最后一次的时间戳。"""
+    with _EMPTY_TURN_LOCK:
+        by_protocol = dict(_EMPTY_TURN_BY_PROTOCOL)
+        last_ts = dict(_EMPTY_TURN_LAST_TS)
+    return {'total': sum(by_protocol.values()),
+            'by_protocol': by_protocol,
+            'last_ts': last_ts}
+
+
+def reset_empty_turn_counts() -> None:
+    """仅测试用：清空空回合计数。"""
+    with _EMPTY_TURN_LOCK:
+        _EMPTY_TURN_BY_PROTOCOL.clear()
+        _EMPTY_TURN_LAST_TS.clear()
+
 #: U21：与 `traffic_class()` **同一口径**的 SQL 表达式（列名必须是 `endpoint`）。
 #: 两份实现必然漂移，所以统计与检索都用这一条；Python 侧只在单行展示时用
 #: `traffic_class()`，两者由测试锁定一致。
