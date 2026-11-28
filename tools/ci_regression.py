@@ -227,6 +227,7 @@ MODULES = (
     "server.tests.test_current_version_readonly",
     "server.tests.test_dashboard_credit_expiry",
     "server.tests.test_dashboard_snapshot_entry",
+    "server.tests.test_day_boundary_consistency",
     "server.tests.test_day_filter_equivalence",
     "server.tests.test_db_connection_ownership",
     "server.tests.test_deadline_transport_boundaries",

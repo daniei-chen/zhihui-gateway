@@ -351,7 +351,10 @@ def quota_alerts() -> list:
 
     数据缺失不告警 —— 和本文件其它告警一致：宁可不说，也不制造假信号。
     """
-    today = time.strftime('%Y-%m-%d')
+    # 与 usage_daily.day 同口径（db.day_of，固定 UTC+8）。原先用 time.strftime
+    # 跟随进程时区：UTC 主机上 16:00Z 之后会取到「昨天」，日配额告警要么读到
+    # 前一天的数据、要么完全读不到当天用量。
+    today = db.day_of()
     try:
         rows = db.query(
             'SELECT k.id AS id, k.name AS name,'

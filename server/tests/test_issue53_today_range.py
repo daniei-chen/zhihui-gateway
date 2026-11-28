@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from server import db  # noqa: E402
 from server.routers import stats  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -99,13 +100,15 @@ class SinceSemanticsTest(unittest.TestCase):
     """后端：「近 N 天且含今天」——「今日」= days=1 的依据。"""
 
     def test_today_is_the_start_day(self) -> None:
-        today = time.strftime('%Y-%m-%d', time.localtime())
+        # 与生产同口径（db.day_of，固定 UTC+8）；原先用 time.localtime，
+        # 在 UTC 主机上 16:00Z 之后「今天」会算成前一天。
+        today = db.day_of()
         self.assertEqual(stats._since(1), today,
                          'days=1 不再是「今天一天」——界面的「今日」会多算一天')
 
     def test_seven_days_includes_today(self) -> None:
         start = stats._since(7)
-        want = time.strftime('%Y-%m-%d', time.localtime(time.time() - 6 * 86400))
+        want = db.day_of(time.time() - 6 * 86400)
         self.assertEqual(start, want)
 
     def test_out_of_range_is_clamped(self) -> None:
