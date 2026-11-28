@@ -221,28 +221,50 @@ class ReentrancyTests(_TempDirTest):
         self.assertEqual(seen, ['inner'])
 
     def test_reentrant_holder_still_excludes_other_threads(self) -> None:
+        # 重入侧跑在守护线程里：RLock 一旦被换成 Lock，这里必须是「超时判失败」，
+        # 而不是把整个测试进程挂死。
+        nested = threading.Event()
+        release = threading.Event()
         entered = threading.Event()
+
+        def reentrant() -> None:
+            with filelock.file_lock(self.path):
+                with filelock.file_lock(self.path):
+                    nested.set()
+                    release.wait(30)
 
         def other() -> None:
             with filelock.file_lock(self.path):
                 entered.set()
 
-        thread = threading.Thread(target=other, daemon=True)
-        with filelock.file_lock(self.path):
-            with filelock.file_lock(self.path):
-                thread.start()
-                thread.join(0.3)
-                self.assertFalse(entered.is_set(), '重入把锁变成了空操作')
-            thread.join(0.3)
-            self.assertFalse(entered.is_set(), '退出内层就把外层也放掉了')
-        self.assertTrue(entered.wait(15), '外层退出后另一个线程仍然进不来')
-        thread.join(15)
+        reentrant_thread = threading.Thread(target=reentrant, daemon=True)
+        reentrant_thread.start()
+        self.assertTrue(nested.wait(20), '同线程重入没进到内层：RLock 被换成了 Lock')
+        other_thread = threading.Thread(target=other, daemon=True)
+        other_thread.start()
+        other_thread.join(0.4)
+        self.assertFalse(entered.is_set(), '重入把锁变成了空操作')
+        release.set()
+        reentrant_thread.join(20)
+        self.assertFalse(reentrant_thread.is_alive())
+        self.assertTrue(entered.wait(20), '外层退出后另一个线程仍然进不来')
+        other_thread.join(20)
 
     def test_nested_writing_lock_is_not_refused_as_busy(self) -> None:
-        with filelock.file_lock(self.path, writing=True):
+        sidecar = self.path.with_name(self.path.name + '.refresh.lock')
+        seen: list[bool] = []
+
+        def worker() -> None:
             with filelock.file_lock(self.path, writing=True):
-                self.assertTrue(
-                    self.path.with_name(self.path.name + '.refresh.lock').exists())
+                with filelock.file_lock(self.path, writing=True):
+                    seen.append(sidecar.exists())
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(20)
+        self.assertFalse(thread.is_alive(),
+                         '嵌套 writing=True 卡住了：重入被判成竞争')
+        self.assertEqual(seen, [True], '写路径没有落到 credentiallease 的内核锁上')
 
 
 class IndependentPathTests(_TempDirTest):
