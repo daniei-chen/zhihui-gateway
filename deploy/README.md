@@ -387,6 +387,34 @@ sudo /opt/workbuddy-manager/venv/bin/python deploy/update.py --target both
 
 `--target` 取值为 `manager` / `upstream` / `both`。
 
+### 更新器只安装签过名的发布包（DAN-24）
+
+更新包会以装机权限运行（包内的 `server/requirements.txt` 由 pip 执行），所以
+「装什么」不能只靠发布页上的摘要 —— 摘要和包来自同一处，能改包的对手顺手就能改掉它。
+更新器因此有三条硬约束：
+
+1. **发布源**只能取白名单里的本项目仓库（`deploy/update.py` 的
+   `ALLOWED_MANAGER_REPOS`）。`WB_MANAGER_REPO` 指到别处会**直接拒绝更新**，不会
+   静默改源；自建镜像请改那份白名单，并沿用同一把发布签名。
+2. **发布包必须带 `<包名>.sig`**（Ed25519 detached signature）。没有签名、签名
+   验不过（哪怕发布页摘要也一起被改过）、信任锚缺失，更新都在解压之前中止，
+   安装目录一个字节不动，旧版本继续服务。
+3. **信任锚**默认是 `/opt/workbuddy-manager/release-trust-ed25519.pem`（与受控发布
+   `deploy/source_preflight.py` 用的是同一把公钥），可用 `WB_RELEASE_TRUST` 指向别的
+   受控路径。锚必须是普通文件、不可被组/其他用户写；以 root 运行时还要求归 root。
+
+```bash
+# 手动核一个下载下来的包（换成你的锚路径）
+deploy/sign-release-ed25519.py --verify \
+  --manifest workbuddy-manager-vX.Y.Z.tar.gz \
+  --sig workbuddy-manager-vX.Y.Z.tar.gz.sig \
+  --trust /opt/workbuddy-manager/release-trust-ed25519.pem
+```
+
+离线升级包（`WB_UPDATE_PACKAGE`，面板「上传更新包」）是运维**显式指定**的本机文件，
+这条路上没有远端发布源，因此仍按「包结构与可选摘要」核对 —— 信任由「谁把包放到
+本机」承担。
+
 ### 国内网络：用镜像加速更新
 
 直连 GitHub 超时、发布包下载卡在 0% 时，可以填一个 GitHub 加速服务的基址

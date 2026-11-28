@@ -16,6 +16,9 @@
 3. **幂等与安全**：上游更新会保留账号文件与配置；并**强制把端口绑定收敛为
    仅本机/容器网桥**，避免 upstream 仓库里的 `7863:7863` 覆盖我们的安全加固。
    容器经 `host.docker.internal` 连上游时绑宿主网桥地址（issue #243）。
+4. **不装未验签的包**：发布源只能是白名单里的本项目仓库，包必须带 Ed25519
+   detached 签名、且能被受控位置的信任锚验过。缺签名、验不过、锚不合格一律中止
+   （DAN-24；为什么摘要不够，见「发布包完整性校验」那一段）。
 """
 from __future__ import annotations
 
@@ -72,7 +75,38 @@ INSTALL_DIR = Path(os.environ.get('WB_INSTALL_DIR') or _default_install_dir())
 UPSTREAM_DIR = Path(os.environ.get('WB_UPSTREAM_DIR') or '/opt/workbuddy2api')
 UPSTREAM_PORT = int(os.environ.get('WB_UPSTREAM_PORT') or 7863)
 MANAGER_PORT = int(os.environ.get('WB_MANAGER_PORT') or 7864)
-MANAGER_REPO = os.environ.get('WB_MANAGER_REPO') or 'ithtelab/workbuddy-manager'
+#: 官方发布仓库。与 `server/product.py` 的 `REPOSITORY` 是同一处事实 —— 更新器
+#: 不 import 服务端代码（它得能独立运行），所以这里各自写一份，
+#: `server/tests/test_updater_supply_chain.py` 钉住两边一致。
+OFFICIAL_MANAGER_REPO = 'daniei-chen/zhihui-gateway'
+#: 允许作为发布源的仓库。更新器会以装机权限执行包内的依赖清单，发布源本身就是
+#: 信任边界的一部分：默认值曾是 `ithtelab/workbuddy-manager`（别人的仓库），
+#: 那样「装什么」的决定权不在我们手上。`WB_MANAGER_REPO` 只能从这份白名单里挑；
+#: 自建镜像请改这里，并沿用同一把发布签名。
+ALLOWED_MANAGER_REPOS = frozenset({OFFICIAL_MANAGER_REPO})
+
+
+def _resolve_manager_repo(requested: str | None) -> tuple[str, str]:
+    """把 `WB_MANAGER_REPO` 收敛到白名单，返回 `(仓库, 拒绝原因)`。
+
+    不在白名单时**不静默回退**：返回官方仓库仅为了让常量保持可用，同时带回原因，
+    `main()` 与 `_fetch_release_info()` 都会据此中止 —— 静默换成官方仓库会让运维
+    以为自己配的镜像在生效，实际却一直连的是另一个源。
+    """
+    value = (requested or '').strip().strip('/')
+    if not value:
+        return OFFICIAL_MANAGER_REPO, ''
+    if value in ALLOWED_MANAGER_REPOS:
+        return value, ''
+    return OFFICIAL_MANAGER_REPO, (
+        f'WB_MANAGER_REPO={requested} 不是允许的发布源，更新已中止。\n'
+        f'  更新器会以装机权限安装包内的依赖清单，所以发布源只允许：'
+        f'{", ".join(sorted(ALLOWED_MANAGER_REPOS))}。\n'
+        '  自建镜像请修改 deploy/update.py 的 ALLOWED_MANAGER_REPOS，并沿用同一把发布签名。'
+    )
+
+
+MANAGER_REPO, MANAGER_REPO_REJECTION = _resolve_manager_repo(os.environ.get('WB_MANAGER_REPO'))
 
 
 def _managed_release_marker() -> bool:
@@ -293,6 +327,15 @@ STEP_TIMEOUT = int(os.environ.get('WB_UPDATE_STEP_TIMEOUT') or 900)
 OFFLINE_PACKAGE = (os.environ.get('WB_UPDATE_PACKAGE') or '').strip()
 OFFLINE_PACKAGE_SHA256 = (os.environ.get('WB_UPDATE_PACKAGE_SHA256') or '').strip().lower()
 
+# 发布包 detached 签名（Ed25519，raw over tar.gz 字节）的信任锚。与受控部署
+# （`deploy/source_preflight.py`）用的是同一把公钥，由装机时的 root-owned bootstrap
+# 放下。**更新器不内建密钥**：仓库里没有生产公钥，凭空塞一把只会让「验签」看起来
+# 存在、实际谁也没签过。
+DEFAULT_RELEASE_TRUST = '/opt/workbuddy-manager/release-trust-ed25519.pem'
+RELEASE_TRUST = Path(os.environ.get('WB_RELEASE_TRUST') or DEFAULT_RELEASE_TRUST)
+#: Ed25519 detached signature 只有 64 字节；留足余量即可，不要让它变成下整包的口子。
+MAX_SIGNATURE_BYTES = 8 * 1024
+
 # ── 发布包完整性校验 ─────────────────────────────────────
 # 更新器从项目的 GitHub Release 拉包（HTTPS），并核对**发布页给的 sha256 摘要**
 # 与文件大小 —— 也就是绝大多数开源项目让用户做的那个手工校验，这里自动做了。
@@ -302,7 +345,13 @@ OFFLINE_PACKAGE_SHA256 = (os.environ.get('WB_UPDATE_PACKAGE_SHA256') or '').stri
 # 历史上这里还有一层「维护者离线私钥签名」（OpenSSH 签名 + 代码内嵌公钥），
 # 2026-10-14 起取消：它换来的是「GitHub 账号被拿下也拦得住」，代价是每次发版
 # 维护者都得在带私钥的机器上手工签一遍 —— 权衡后按主流做法只保留摘要校验。
-# 取舍与边界见 docs/release-signing.md。
+#
+# **2026-11-27（DAN-24）起恢复签名校验，原因与当时不同**：那次取消的前提是
+# 「发布源可信、只需防传输损坏」，而这里的默认发布源当时其实是第三方仓库
+# （`ithtelab/workbuddy-manager`），摘要又印在**同一个**发布页上 —— 能改包的对手
+# 顺手就能把摘要一起改掉，于是「校验通过」并不表示「这是我们发的包」。现在发布源
+# 收敛到白名单，并由 `verify_release_signature()` 用装机时放下的 Ed25519 公钥验签：
+# 信任锚不在下载内容里，才把「发布源被接管」和「安装内容」分开。
 
 
 # ── 状态写入 ─────────────────────────────────────────────
@@ -588,6 +637,114 @@ def verify_download(archive: Path, info: dict, rep: Reporter) -> None:
     rep.log(f'发布包 sha256：{digest}')
     rep.log('本次未比对发布页摘要（当前走的是回退路径），只校验了下载是否完整', 'warn')
     rep.set_integrity('none', digest)
+
+
+def _trust_anchor() -> Path:
+    """定位并检查发布签名信任锚；不合格一律拒绝（不回退到「只比摘要」）。"""
+    anchor = RELEASE_TRUST
+    try:
+        info = anchor.lstat()
+    except FileNotFoundError:
+        raise RuntimeError(
+            f'❌ 缺少发布签名信任锚（{anchor}），已拒绝安装。\n'
+            '  更新器只安装带 Ed25519 签名的发布包；没有公钥就无从判断包是不是'
+            '本项目发布的。\n'
+            '  把发布公钥放到该路径（普通文件、归 root、不可被组/其他用户写），'
+            '或用 WB_RELEASE_TRUST 指向受控位置后重试。'
+        ) from None
+    except OSError as exc:
+        raise RuntimeError(f'❌ 读不到发布签名信任锚（{anchor}）：{exc}，已拒绝安装') from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(
+            f'❌ 发布签名信任锚必须是普通文件（当前是软链或特殊文件）：{anchor}，已拒绝安装')
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError(
+            f'❌ 发布签名信任锚可被组/其他用户写（mode {mode:04o}）：{anchor}，已拒绝安装。\n'
+            f'  能改锚的人能换掉整条信任链（chmod 644 {anchor}）。'
+        )
+    if hasattr(os, 'geteuid') and os.geteuid() == 0 and info.st_uid != 0:
+        raise RuntimeError(
+            f'❌ 以 root 运行时信任锚必须归 root 所有（当前 uid {info.st_uid}）：{anchor}，'
+            '已拒绝安装')
+    return anchor
+
+
+def _openssl_verify(anchor: Path, target: Path, signature: Path) -> None:
+    """Ed25519 detached signature 校验（与 `deploy/sign-release-ed25519.py` 同一句）。"""
+    try:
+        proc = subprocess.run(
+            ['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(anchor), '-rawin',
+             '-in', str(target), '-sigfile', str(signature)],
+            capture_output=True, timeout=30)
+    except FileNotFoundError:
+        raise RuntimeError(
+            '❌ 缺少 openssl，无法校验发布包签名，已拒绝安装（不装未验签的包）') from None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f'❌ 发布包签名校验无法执行（{exc}），已拒绝安装') from exc
+    if proc.returncode:
+        detail = proc.stderr.decode('utf-8', 'replace').strip()[:300]
+        raise RuntimeError(
+            '❌ 发布包签名校验失败，已拒绝安装。\n'
+            f'  信任锚：{anchor}\n'
+            '  这个签名不是用该锚对应私钥签的：包可能被替换（镜像/代理/发布页被接管）。\n'
+            f'  openssl：{detail}'
+        )
+
+
+_MISSING_SIGNATURE = (
+    '❌ 该发布没有提供签名（需要 <发布包>.tar.gz.sig 资产），已拒绝安装。\n'
+    '  更新器只安装带 Ed25519 签名的发布包：摘要印在同一个发布页上，和包来自同一处，'
+    '挡不住发布源被接管。\n'
+    '  发布流程见 docs/release-process.md 的「发布包签名」。'
+)
+
+
+def _download_signature(url: str, dest: Path) -> None:
+    """取 detached 签名。**不套用发布包的 100KB 下限**：签名只有 64 字节左右。"""
+    last: BaseException | None = None
+    for candidate in _url_candidates(url):
+        for attempt in (1, 2):
+            try:
+                req = urllib.request.Request(
+                    candidate, headers={'User-Agent': 'workbuddy-manager-updater'})
+                with _opener().open(req, timeout=60) as resp:
+                    data = resp.read(MAX_SIGNATURE_BYTES + 1)
+                dest.write_bytes(data)
+                last = None
+                break
+            except urllib.error.HTTPError as exc:
+                last = exc
+                if exc.code < 500:
+                    break
+            except (OSError, http.client.HTTPException) as exc:
+                last = exc
+        if last is None:
+            break
+    if last is not None:
+        if isinstance(last, urllib.error.HTTPError) and last.code in (403, 404):
+            raise RuntimeError(_MISSING_SIGNATURE)
+        raise RuntimeError(f'❌ 下载发布包签名失败：{last}，已拒绝安装') from last
+    if dest.stat().st_size > MAX_SIGNATURE_BYTES:
+        raise RuntimeError('❌ 发布包签名文件异常偏大，已拒绝安装')
+
+
+def verify_release_signature(archive: Path, sig_url: str, rep: Reporter) -> None:
+    """发布包必须带 Ed25519 签名，且能被信任锚验过；否则不装（DAN-24）。
+
+    为什么不是只比摘要：摘要来自发布页，和包同一个来源 —— 能控制发布源的对手
+    顺手就能把摘要一起改掉，「摘要一致」于是只证明「和发布页上写的一样」。
+    验签的信任锚来自装机时放下的公钥（不在下载内容里），这才把「谁发的包」
+    和「包从哪台服务器下的」分开。
+    """
+    if not sig_url:
+        raise RuntimeError(_MISSING_SIGNATURE)
+    anchor = _trust_anchor()
+    signature = archive.with_name(archive.name + '.sig')
+    rep.log('核对发布包签名（Ed25519）…')
+    _download_signature(sig_url, signature)
+    _openssl_verify(anchor, archive, signature)
+    rep.log(f'✓ 发布包签名校验通过（Ed25519，信任锚 {anchor}）')
 
 
 # ── 上游更新 ─────────────────────────────────────────────
@@ -1255,10 +1412,15 @@ def fetch_release_via_api() -> dict:
     pkg = next((a for a in assets if str(a.get('name', '')).endswith('.tar.gz')), None)
     if not pkg:
         raise RuntimeError('该 Release 未提供 .tar.gz 产物')
+    # 签名是可以单独补的资产：没传就是没有（交给 verify_release_signature 拒绝）。
+    pkg_name = Path(str(pkg.get('name') or 'pkg.tar.gz')).name
+    sig = next((a for a in assets
+                if str(a.get('name', '')) == pkg_name + '.sig'), None)
     return {
         'tag': rel.get('tag_name') or '',
         'pkg_url': pkg['browser_download_url'],
-        'pkg_name': Path(str(pkg.get('name') or 'pkg.tar.gz')).name,
+        'pkg_name': pkg_name,
+        'sig_url': str((sig or {}).get('browser_download_url') or ''),
         # 下载后据此核对（见 verify_download）：GitHub 给每个资产带 size 与
         # sha256 摘要（形如 `sha256:…`，老响应里可能没有 → 那时只能比对大小）。
         'pkg_size': pkg.get('size'),
@@ -1310,6 +1472,8 @@ def fetch_release_via_redirect(latest_url: str | None = None,
         'tag': tag,
         'pkg_url': f'{base}/{pkg_name}',
         'pkg_name': pkg_name,
+        # 这条路径不列资产，签名按同一惯例取；没有就 404 → verify_release_signature 拒绝
+        'sig_url': f'{base}/{pkg_name}.sig',
         'pkg_size': None,
         'pkg_digest': '',
     }
@@ -1337,8 +1501,14 @@ def _system_site_writable() -> bool:
 _PERMISSION_HINTS = ('permission denied', 'read-only', 'eacces')
 
 
-def install_requirements(req: Path, rep: Reporter) -> None:
-    """安装 Python 依赖，失败则抛错。
+def install_requirements(req: Path, rep: Reporter, *, verified_root: Path) -> None:
+    """安装 Python 依赖，失败则抛错。**只接受已验签发布树里的清单。**
+
+    这是 root 安装那一半的口子（DAN-24）：pip 会执行包里的构建钩子，等于把
+    「包内容」当成「要以装机权限运行的代码」。所以清单必须来自
+    `verify_release_signature()` 验过的解压目录，不能让别的路径混进来。
+    残留风险（写在 PR 里）：pip 仍从 PyPI 解析依赖、仍可能跑构建后端 ——
+    这部分不在发布签名覆盖范围内。
 
     - 与 install.sh 一致：先带 `--break-system-packages`（PEP 668 的系统 Python
       不带它会拒装），不认这个参数的旧 pip 会失败，再不带它重试一次。
@@ -1350,6 +1520,15 @@ def install_requirements(req: Path, rep: Reporter) -> None:
     为什么必须支持"装到别处"：容器形态下唯一能装依赖的就是这条路径，装不上就等于
     这个部署**永远升不上去**（issue #157 的另一半——#160 只做到"失败要响"）。
     """
+    root = Path(verified_root).resolve()
+    try:
+        trusted = Path(req).resolve().is_relative_to(root)
+    except OSError:
+        trusted = False
+    if not trusted:
+        raise RuntimeError(
+            f'依赖清单不在已验签的发布包里（{req}，发布树 {root}），已拒绝安装')
+
     py = sys.executable
     use_user = not _system_site_writable()
     target = ['--user'] if use_user else []
@@ -1445,6 +1624,8 @@ def _fetch_release_info(rep: Reporter) -> dict:
     global _release_info_cache
     if _release_info_cache is not None:
         return _release_info_cache
+    if MANAGER_REPO_REJECTION:
+        raise RuntimeError(MANAGER_REPO_REJECTION)
 
     if OFFLINE_PACKAGE:
         _release_info_cache = offline_package_info(rep)
@@ -1504,6 +1685,11 @@ def _release_root(rep: Reporter, info: dict | None = None) -> tuple[Path, dict]:
     else:
         download(info['pkg_url'], archive, rep)
     verify_download(archive, info, rep)
+    # 摘要先比（能把「下载被截断」说得清楚），再验签（决定「这是不是我们发的包」）。
+    # 只对网络路径验签：离线包是运维显式指定的本机文件（issue #153），这条路上
+    # 没有远端发布源，信任由「谁把包放到本机」承担。
+    if not local:
+        verify_release_signature(archive, str(info.get('sig_url') or ''), rep)
 
     rep.log('解压…')
     with tarfile.open(archive, 'r:gz') as tf:
@@ -1629,7 +1815,7 @@ def update_manager(rep: Reporter) -> None:
     # 标记成功并重启，新代码缺依赖起不来（issue #157）。
     new_req = new_server / 'requirements.txt'
     if new_req.is_file():
-        install_requirements(new_req, rep)
+        install_requirements(new_req, rep, verified_root=new_root)
 
     # 3) 备份当前代码后替换
     ts = time.strftime('%Y%m%d-%H%M%S')
@@ -1890,6 +2076,10 @@ def main() -> int:
     # 直接拒绝启动。升级请走签名发布流程（tools/sign_release.py + 切换 releases/current）。
     if _managed_release_marker():
         print('Managed release: use the verified deployment controller.')
+        return 1
+    if MANAGER_REPO_REJECTION:
+        # 发布源是信任边界的一部分：宁可什么都不做，也不去第三方仓库取包
+        print(f'拒绝更新：{MANAGER_REPO_REJECTION}')
         return 1
     parser = argparse.ArgumentParser(description='WorkBuddy Manager 更新')
     parser.add_argument('--target', choices=['manager', 'upstream', 'both'], default='both')

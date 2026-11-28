@@ -422,6 +422,8 @@ MODULES = (
     "server.tests.test_update_robustness",
     "server.tests.test_updater_atomic_swap",
     "server.tests.test_updater_status",
+    # DAN-24：发布源白名单 + 发布包验签（marker 防退化）
+    "server.tests.test_updater_supply_chain",
     "server.tests.test_upgrade_audit",
     "server.tests.test_upload_loop_fairness",
     "server.tests.test_upstream_id_consistency",
