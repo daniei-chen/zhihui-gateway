@@ -677,7 +677,11 @@ def _skip_floor(per_module: dict, modules, *, track: str) -> list:
     if violations:
         print(f'{track} 有 {len(violations)} 个模块一条用例都没跑：', file=sys.stderr)
         for item in violations:
-            print(f'  ✗ {item["module"]}：{item["tests"]} 条，全部 skip', file=sys.stderr)
+            if item['tests'] == 0:
+                print(f'  ✗ {item["module"]}：没有加载出任何用例'
+                      '（import 失败，或清单里的模块名写错）', file=sys.stderr)
+            else:
+                print(f'  ✗ {item["module"]}：{item["tests"]} 条全部 skip', file=sys.stderr)
         print('  要么让它真跑；要么在 tools/skip_allowlist.json 写 reason 与兜底平台。',
               file=sys.stderr)
     return violations
