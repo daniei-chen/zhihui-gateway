@@ -616,6 +616,10 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
+    # SWO-68（2026-11-28）：`reset_usage` 的事务边界 —— 事务里任一条写真的抛错
+    # 时，`api_keys` 的清零与审计行必须整体回滚（G-07 那三条只断言终态，
+    # 对「先提交后失败」全绿）。两个变异各杀掉 3 条，见 PR 证据。
+    "server.tests.test_g07_reset_transaction_boundary",
 )
 
 
