@@ -9,13 +9,15 @@
 #    自带模型列表与示例账号，便于查看完整界面
 python dev/mock_upstream.py         # 监听 127.0.0.1:7863
 
-# 1) 后端（终端 A）
+# 1) 后端（终端 A）—— 用发行版同一个启动器，别再直连 uvicorn：
+#    只有 serve.py 会抢实例租约（同一 data/ 只允许一个进程）并在停机时进入 drain。
+#    改完代码要重启一次（serve.py 不带热重载）。
 python -m pip install -r server/requirements.txt
 WB_ADMIN_PASSWORD=admin123 \
 WB_DATA_DIR=./data \
 WB_AUTH_DIR=/opt/workbuddy2api/auths \
 WB2API_BASE=http://127.0.0.1:7863 \
-python -m uvicorn server.main:app --reload --port 7864
+python -m server.serve --host 127.0.0.1 --port 7864
 
 # 2) 前端（终端 B）—— next dev 会把 /api、/v1 反代到 :7864
 cd web
