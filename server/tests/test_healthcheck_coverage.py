@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import ast
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -345,6 +347,75 @@ class RuntimeAlertDetailTests(unittest.TestCase):
         # 端点仍然只给名字 —— 扩大它反而把内部术语暴露给回环上的其他进程。
         self.assertIn('/api/health/alerts', SOURCE)
         self.assertNotIn('"detail"', SOURCE.split('/api/health/alerts')[1][:400])
+
+
+class AlertCountParserTests(unittest.TestCase):
+    """巡检必须取**顶层** `count`（active 告警数），不能取 `notify.dropped.count`。
+
+    DAN-41 在 `/api/health/alerts` 的响应里加了 `notify` 字段（`dropped.count`
+    是进程内累计丢弃数）。原先的解析是
+    `sed -n 's/.*"count":.../\\1/p'`，`.*` 贪婪，会命中**最后一个** `"count":`，
+    于是巡检读到的成了丢弃数：
+
+    - 重启后 `operational._load_alerts()` 把 ongoing 告警从库里恢复，丢弃计数
+      归零 —— 有告警挂着，巡检却报「应用内告警全部为空」；
+    - 反过来，历史丢弃数不为零时，告警已经恢复也会一直报预警。
+
+    这里直接跑脚本里那一段 `acount=$(...)`，用真实响应形状验证取值。
+    """
+
+    ACOUNT = re.compile(r"^\s*(acount=\$\(.*\))\s*$", re.M)
+
+    # 端点真实形状（server/main.py:health_alerts）+ 几种边界。
+    SHAPES = {
+        'active 3，丢弃 0（重启后计数归零）': (
+            '{"service":"zhihui-gateway","count":3,'
+            '"active":[{"name":"backup_evidence","age_seconds":10}],'
+            '"notify":{"configured":false,"mode":"disabled",'
+            '"dropped":{"count":0,"names":{},"last_at":0}}}', '3'),
+        'active 0，历史丢弃 7（已恢复）': (
+            '{"service":"zhihui-gateway","count":0,"active":[],'
+            '"notify":{"configured":true,"mode":"file",'
+            '"dropped":{"count":7,"names":{"backup_evidence":7},"last_at":1}}}', '0'),
+        'active 12，丢弃 12（同值，靠结构而非数值区分）': (
+            '{"service":"zhihui-gateway","count":12,"active":[],'
+            '"notify":{"configured":false,"dropped":{"count":12}}}', '12'),
+        'count 与下一个键之间有空格': (
+            '{"count": 5 , "active":[],"notify":{"dropped":{"count":9}}}', '5'),
+        '非告警响应（loopback 拒绝）': ('{"error":"loopback only"}', ''),
+    }
+
+    def _snippet(self) -> str:
+        m = self.ACOUNT.search(SOURCE)
+        self.assertIsNotNone(m, '脚本里找不到 acount= 的解析行')
+        return m.group(1)
+
+    def _run(self, payload: str) -> str:
+        bash = shutil.which('bash')
+        if not bash:
+            self.skipTest('bash 不可用，无法执行巡检脚本里的解析片段')
+        script = 'alerts_json=$(cat)\n' + self._snippet() + '\nprintf %s "$acount"\n'
+        p = subprocess.run([bash, '-c', script], input=payload,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_does_not_use_the_greedy_sed_parser(self):
+        """贪婪 sed 会取到最后一个 count —— 这正是 DAN-41 复评指出的回归。
+
+        只看 `acount=` 那一行本身：上面的注释里为了讲清楚问题会引用旧写法，
+        不能因为注释提到 sed 就判红。
+        """
+        line = self._snippet()
+        self.assertNotIn('sed', line,
+                         'acount 仍用 sed 解析：`.*` 贪婪会命中 notify.dropped.count')
+        self.assertIn('awk', line)
+
+    def test_reads_the_top_level_count_for_every_shape(self):
+        for label, (payload, want) in self.SHAPES.items():
+            with self.subTest(shape=label):
+                self.assertEqual(self._run(payload), want,
+                                 f'{label}: 巡检取错了 count 字段')
 
 
 if __name__ == '__main__':

@@ -46,6 +46,11 @@ sudo install -d -o root -g root -m 0755 /opt/notify
 sudo tee /opt/notify/config.json >/dev/null <<'JSON'
 {"enabled": true, "mode": "file", "file": "/opt/notify/alerts.jsonl"}
 JSON
+# 输出文件必须**先建好**并交给服务 UID：容器里以 uid 10001 运行（Dockerfile:155），
+# 而 /opt/notify 是 root 的 0755 —— 服务自己建不了文件，dispatch() 会
+# PermissionError，每条告警都投递失败，而 status() 仍然报 configured=true，
+# 于是「已配置」的假象下反而比未配置更安静。配置本身保持 root 拥有即可。
+sudo install -o 10001 -g 10001 -m 0640 /dev/null /opt/notify/alerts.jsonl
 # 不需要重启：每次 dispatch 都重新读配置
 # 验证：触发一条告警后 tail -f /opt/notify/alerts.jsonl
 ```
