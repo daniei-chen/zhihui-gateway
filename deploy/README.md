@@ -246,9 +246,26 @@ server {
 > **uvicorn 的代理头改写已关闭**（`--no-proxy-headers` / `proxy_headers=False`）。
 > 它默认会按上面的 `X-Forwarded-For` 把 `scope["client"]` 改写成浏览器地址，
 > 于是「对端是不是本机反代」永远判错：`WB_TRUSTED_PROXY_CIDRS` 形同虚设，
-> `X-Forwarded-Host` 不被采信（写请求会被拒），`/api/system/internal-session-verify`
-> 的「仅本机」也会拒掉真正的 nginx。**反代信任只有一份判据**：
+> `X-Forwarded-Host` 不被采信（写请求会被拒）。**反代信任只有一份判据**：
 > `WB_TRUSTED_PROXY_CIDRS` + `iputil.client_ip()`。
+>
+> 关掉改写后，nginx 转发进来的请求对端**恒为** `127.0.0.1`，所以「仅本机」类
+> 端点（如 `/api/system/internal-session-verify`）改看两层：对端在回环 **且**
+> `client_ip()` 解出的真实来源在回环。据此，`auth_request` 的 internal
+> location **不要**转发 `X-Real-IP` / `X-Forwarded-For` —— 子请求没有「真实
+> 客户端」可言，带上它会被判成外部请求而 403（整站登录校验随之失败）：
+>
+> ```nginx
+> location = /__zh_session {
+>     internal;
+>     proxy_pass              http://127.0.0.1:7864/api/system/internal-session-verify;
+>     proxy_pass_request_body off;
+>     proxy_set_header        Content-Length "";
+>     # 子请求不是"来自某个客户端"，把来源头显式清空，别让它继承浏览器的那一份
+>     proxy_set_header        X-Real-IP "";
+>     proxy_set_header        X-Forwarded-For "";
+> }
+> ```
 >
 > 用域名访问时请同时设置 `WB_PUBLIC_ORIGIN=https://你的域名`（写端点的同源锚点）；
 > 不设也能跑，但「域名 + 没有可信反代」的表单提交会被 403，管理页会提示怎么修。

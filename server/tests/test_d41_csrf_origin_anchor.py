@@ -51,7 +51,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from server import config, security
-from server.routers import auth, portal
+from server.routers import auth, portal, system
 from server.services import platformauth
 
 LOOPBACK = ('127.0.0.1', 5000)
@@ -398,6 +398,10 @@ class DeploymentTrustModel(unittest.TestCase):
     配置（deploy/README.md）**会**传 XFF，于是「对端是不是本机反代」永远判错：
     来源锚点拿不到 X-Forwarded-Host（写请求 403），`/api/system/internal-session-verify`
     的「仅本机」也会拒掉真正的 nginx。启动器必须显式关掉这个改写。
+
+    关掉之后的连带责任：任何按 `request.client.host` 判「仅本机」的端点都会退化成
+    「凡经 nginx 的请求都算本机」，所以 `internal-session-verify` 改成两层判据
+    （对端 + `client_ip()`），见 `InternalVerifyStaysLoopbackOnly`。
     """
 
     ROOT = Path(__file__).resolve().parents[2]
@@ -422,6 +426,16 @@ class DeploymentTrustModel(unittest.TestCase):
                 self.assertIn(key, env, f'compose 没把 {key} 透传进来 —— 写进 .env 也没用')
                 self.assertIn('${' + key, str(env[key]), f'{key} 没从 .env 取值')
 
+    def test_nginx_internal_location_clears_client_ip_headers(self) -> None:
+        """`auth_request` 子请求要清空来源头：否则「仅本机」会把真正的 nginx 判成外部。"""
+        text = (self.ROOT / 'deploy' / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('location = /__zh_session', text, 'README 没给出 internal location 的写法')
+        block = text.split('location = /__zh_session', 1)[1][:600]
+        for header in ('X-Real-IP', 'X-Forwarded-For'):
+            with self.subTest(header=header):
+                self.assertIn(header, block,
+                              f'internal location 示例没有清空 {header}')
+
     def test_escape_hatch_schema_matches_the_runtime_parser(self) -> None:
         """`_env_bool` 只认 1/true/yes/on；`t` / `y` 必须在启动期被拒，而不是静默 false。"""
         from server import configcontract
@@ -435,6 +449,75 @@ class DeploymentTrustModel(unittest.TestCase):
                         {'WB_ALLOW_UNCONFIGURED_ORIGIN': bad})
         parsed = configcontract.validate_environment({'WB_ALLOW_UNCONFIGURED_ORIGIN': 'on'})
         self.assertEqual(parsed['settings']['WB_ALLOW_UNCONFIGURED_ORIGIN']['value'], True)
+
+
+class InternalVerifyStaysLoopbackOnly(unittest.TestCase):
+    """关掉 uvicorn 的改写之后，`/api/system/internal-session-verify` 仍是「仅本机」。
+
+    `--no-proxy-headers`（见 `DeploymentTrustModel`）让 nginx 转发进来的每个请求
+    TCP 对端都是 127.0.0.1，于是只比对 `request.client.host` 的守卫对公网也成立：
+    持有效会话的外部客户端能拿到自己的 qtg 身份断言。判据必须加上
+    `iputil.client_ip()` 解出的真实来源（与 `WB_TRUSTED_PROXY_CIDRS` 同一份）。
+    """
+
+    PATH = '/api/system/internal-session-verify'
+
+    def setUp(self) -> None:
+        self.app = FastAPI()
+        self.app.include_router(system.router)
+        self.app.dependency_overrides[security.current_user] = lambda: {
+            'id': 1, 'username': 'alice', 'role': 'viewer'}
+        self.addCleanup(self.app.dependency_overrides.clear)
+        for name, value in (('TRUST_PROXY', '1'),
+                            ('TRUSTED_PROXY_CIDRS', ['127.0.0.0/8', '::1/128']),
+                            ('TRUSTED_PROXY_HOPS', 1)):
+            patcher = mock.patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        secret = mock.patch.object(system.edgeidentity, '_secret', lambda: 'k' * 48)
+        secret.start()
+        self.addCleanup(secret.stop)
+
+    def _call(self, peer=LOOPBACK, extra: dict | None = None):
+        app = self.app
+
+        async def send():
+            transport = httpx.ASGITransport(app=app, client=peer)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url='http://testserver') as client:
+                return await client.get(self.PATH, headers=dict(extra or {}))
+
+        return asyncio.run(send())
+
+    def test_direct_remote_caller_is_refused(self) -> None:
+        response = self._call(peer=LAN)
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertIn('本机', response.text)
+
+    def test_nginx_proxied_external_request_is_refused(self) -> None:
+        """回归核心：对端是 127.0.0.1（nginx），但真实来源是公网地址。"""
+        response = self._call(extra={'x-real-ip': '203.0.113.9'})
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertNotIn('x-qtg-identity', {k.lower() for k in response.headers})
+
+    def test_forwarded_for_from_a_trusted_proxy_is_checked_too(self) -> None:
+        response = self._call(extra={'x-forwarded-for': '203.0.113.9'})
+        self.assertEqual(response.status_code, 403, response.text)
+
+    def test_forged_header_from_an_untrusted_peer_does_not_help(self) -> None:
+        response = self._call(peer=LAN, extra={'x-real-ip': '127.0.0.1'})
+        self.assertEqual(response.status_code, 403, response.text)
+
+    def test_auth_request_subrequest_still_gets_the_assertion(self) -> None:
+        """nginx 的 internal 子请求没有来源头：放行，且照旧签发断言。"""
+        response = self._call()
+        self.assertEqual(response.status_code, 204, response.text)
+        self.assertTrue(response.headers.get('x-qtg-identity', '').startswith('v1.'))
+
+    def test_whole_loopback_range_counts_as_local(self) -> None:
+        """127.0.0.2 是回环（以前只认 127.0.0.1 / ::1）。"""
+        response = self._call(peer=('127.0.0.2', 5000))
+        self.assertEqual(response.status_code, 204, response.text)
 
 
 if __name__ == '__main__':

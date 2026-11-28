@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import re
 import tempfile
@@ -452,19 +453,45 @@ def get_changelog(user: dict = Depends(security.current_user)) -> dict:
     return data
 
 
+def _loopback(address: str) -> bool:
+    """`address` 是否属于回环网段（整个 127.0.0.0/8 与 ::1）；非 IP 一律 False。"""
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
 @router.get('/internal-session-verify')
 def internal_session_verify(request: Request,
                             user: dict = Depends(security.current_user)):
     """为 nginx auth_request 签发 qtg 身份断言（审计 P1-01）。
 
-    - 仅本机（nginx 127.0.0.1）可调用；nginx 的 /__zh_session 是 internal location；
+    - 仅本机可调用，判据是**两层**：TCP 对端在回环，且 `iputil.client_ip()`
+      解出的真实来源也在回环（为什么不只看对端见下方注释）。nginx 的
+      /__zh_session 是 internal location，且**不得**转发
+      `X-Real-IP` / `X-Forwarded-For`（deploy/README.md 有写法）；
     - 复用 Manager 会话校验（Cookie / wbt_ token），通过后签发 5 分钟有效的
       HMAC 断言（qtg `X-QTG-Identity` 契约），qtg 据此识别真实用户与角色，
       不再依赖静态 admin Bearer；
     - 无会话时 current_user 抛 401，nginx auth_request 直接拒绝。
     """
+    # 「仅本机」必须两层判据，少一层就不再是「仅本机」。
+    #
+    # 这里原来只比对 `request.client.host` 是不是 127.0.0.1 / ::1。D-41 关掉
+    # uvicorn 的代理头改写（`--no-proxy-headers`，理由见 deploy/README.md）
+    # 之后，凡 nginx 转发进来的请求，TCP 对端**恒为** 127.0.0.1 —— 单看对端
+    # 等于对公网敞开：持有效会话的外部客户端也能拿到自己的 qtg 身份断言，
+    # 绕过 manager 的逐端点授权直接用 qtg。
+    #
+    # 第二层用 `iputil.client_ip()`：它按 `WB_TRUSTED_PROXY_CIDRS` 决定采不采信
+    # 转发头，与 IP 白名单、登录锁定、密钥 max_ips 是同一份判据
+    # （`/api/health/alerts` 的「仅本机」也这么写）。外部请求经 `location /api/`
+    # 进来，一定带着 nginx 覆盖写入的 `X-Real-IP=$remote_addr`，于是这里解析出
+    # 浏览器地址 → 403；nginx 的 `auth_request` 子请求不带来源头，解析结果仍是
+    # 回环 → 放行。前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
+    # 那种部署下对端本身就是真实来源，不该有回环对端。
     peer = request.client.host if request.client else ''
-    if peer not in ('127.0.0.1', '::1'):
+    if not (_loopback(peer) and _loopback(client_ip(request))):
         raise HTTPException(status_code=403, detail='仅允许本机调用')
     # 读密钥走 `edgeidentity` 的那套校验，而不是裸 `open().read()`。
     #
