@@ -230,7 +230,7 @@ set -uo pipefail
 . "$ROLLOUT_SCRIPT"
 HELPER=fake-helper
 CANDIDATE_PORT=7865
-DRAIN_TIMEOUT=60
+DRAIN_TIMEOUT=$((TEST_STREAM_SECONDS + 30))
 ( sleep "$TEST_STREAM_SECONDS"; : > "$PWD/stream.done" ) &
 systemctl() {
     case "$*" in
