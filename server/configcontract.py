@@ -114,6 +114,7 @@ DEPLOY_ONLY_VARIABLES = frozenset({
     'WB_UPSTREAM_BIND',         # 更新器：docker 部署时上游绑定地址
     'WB_UPSTREAM_HEALTH_URL',   # 更新器：上游健康检查整条 URL
     'WB_RELEASE_TRUST',         # 更新器：发布包验签用的 Ed25519 信任锚
+    'WB_ALLOW_DOWNGRADE',       # 更新器：显式放行降级（会写审计记录）
 })
 
 

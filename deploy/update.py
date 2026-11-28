@@ -311,6 +311,9 @@ def is_mirrored(url: str) -> bool:
 SERVICE_NAME = os.environ.get('WB_SERVICE_NAME') or 'workbuddy-web'
 DATA_DIR = Path(os.environ.get('WB_DATA_DIR') or INSTALL_DIR / 'data')
 STATUS_FILE = Path(os.environ.get('WB_UPDATE_STATUS') or DATA_DIR / 'update-status.json')
+#: 降级放行的审计文件（JSON Lines，只追加）。见 `_record_downgrade_audit`。
+#: 与状态文件分开：状态文件每次更新被覆盖，而「谁放行了降级」要能事后翻。
+AUDIT_FILE = DATA_DIR / 'update-audit.jsonl'
 # 运行形态：systemd（宿主机安装）或 docker（容器内运行）。
 #
 # 为什么必须区分「重启方式」：容器里没有 systemd，`systemctl restart` 只会失败。
@@ -335,6 +338,17 @@ DEFAULT_RELEASE_TRUST = '/opt/workbuddy-manager/release-trust-ed25519.pem'
 RELEASE_TRUST = Path(os.environ.get('WB_RELEASE_TRUST') or DEFAULT_RELEASE_TRUST)
 #: Ed25519 detached signature 只有 64 字节；留足余量即可，不要让它变成下整包的口子。
 MAX_SIGNATURE_BYTES = 8 * 1024
+
+# 显式降级开关（DAN-52）。默认**不允许**降级：一个签过名的旧包被挂到新 tag 下时，
+# 验签与摘要都会通过（签名对的是包字节，不是版本），装上去等于把主机退回旧版本，
+# 旧版本里的已知漏洞随之复活。确实要回退时由运维显式打开这个开关，并留下审计记录
+# （见 `_record_downgrade_audit`）。两条设置方式等价：
+#   · 命令行 `--allow-downgrade`（临时一次）
+#   · 环境变量 `WB_ALLOW_DOWNGRADE=1`（面板触发更新时用，面板只传 --target）
+ALLOW_DOWNGRADE_VIA = (
+    'WB_ALLOW_DOWNGRADE'
+    if (os.environ.get('WB_ALLOW_DOWNGRADE') or '').strip().lower()
+    in ('1', 'true', 'yes', 'on') else '')
 
 # ── 发布包完整性校验 ─────────────────────────────────────
 # 更新器从项目的 GitHub Release 拉包（HTTPS），并核对**发布页给的 sha256 摘要**
@@ -1583,6 +1597,163 @@ def read_package_version(archive: Path) -> str:
     return ''
 
 
+# ── 版本与发布标签绑定、单向前进（DAN-52）───────────────
+#
+# DAN-24 的验签回答的是「这是不是我们发的包」。它回答不了「这是我们发的**哪一个**
+# 包」：签名对的是包字节，所以一个签过名的旧版本包原样挂到新 tag 下面，验签与摘要
+# 都会通过，装上去就是把主机降到旧版本 —— 不需要私钥，能改 Release 资产就够了。
+# 两条互补的规则补上这一段：
+#
+#   1. 发布 tag 必须等于包内 `.version`。`.version` 在签过的字节里，所以「包里的
+#      版本」是签名绑定过的；tag 来自发布页，是能改的那一侧。两者必须一致。
+#   2. 目标版本不能低于当前已装版本（无法比较时也拒绝）。这条挡的是「发布页被指回
+#      一个更旧的发布」——那颗旧发布的 tag 与它的包本来就是一对，第 1 条放行。
+
+def parse_version(value: str) -> tuple[int, ...] | None:
+    """把 `v1.2.3` / `1.2` 解析成可比较的数字元组；含非数字段则返回 None。
+
+    与面板侧 `server/services/updater.py::_parse_version` 同一口径（`-rc1` 之类后缀
+    忽略）。那边只决定「提不提示更新」，这里决定「装不装」—— 同一串版本号在两边
+    必须得出同一个结论，否则会出现「界面说没有更新、更新器却动手」。
+    """
+    s = re.split(r'[-+]', str(value or '').strip().lstrip('vV'), 1)[0]
+    parts = [p for p in s.split('.') if p != '']
+    if not parts:
+        return None
+    out: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        out.append(int(part))
+    return tuple(out)
+
+
+def compare_versions(left: str, right: str) -> int | None:
+    """`left` 相对 `right` 的新旧：1 更新、0 相同、-1 更旧；无法比较返回 None。
+
+    数字段按数值比（`1.0.10 > 1.0.9`），缺的段补 0（`1.0 == 1.0.0`）。
+    """
+    a, b = parse_version(left), parse_version(right)
+    if a is None or b is None:
+        return None
+    width = max(len(a), len(b))
+    a += (0,) * (width - len(a))
+    b += (0,) * (width - len(b))
+    return (a > b) - (a < b)
+
+
+def _version_text(value: str) -> str:
+    """版本号比较的文本口径：去掉首尾空白与 `v` 前缀，大小写不敏感。"""
+    return str(value or '').strip().lstrip('vV').lower()
+
+
+def verify_release_tag_binding(archive: Path, info: dict, rep: Reporter) -> str:
+    """发布 tag 必须与包内 `.version` 一致；返回包内版本（DAN-52）。
+
+    为什么这样能挡住「旧签名包挂到新 tag 上」：签名对的是**包字节**，`.version` 就
+    在包内，所以「包里的版本」是签名绑定过的数据；而 tag 来自发布页（API 的
+    `tag_name` 或 `releases/latest` 的重定向），能改发布页的人也能改它。要求两者
+    相等，就把它变成一次明确的拒绝，而不是「验签通过 = 可以装」。
+
+    取舍（写在 PR 里）：没有引入新的签名对象（例如「签一份含 tag 的清单」）。那样
+    要改签名工具 `deploy/sign-release-ed25519.py`（受发布溯源账本约束），并要求所有
+    存量发布补一份资产；而用签过字节里的 `.version` 已经能做到同样的绑定。代价是
+    **tag 本身仍未被签名** —— 但攻击者只能让某个版本挂回它自己的 tag，那一步由
+    `_gate_release_version` 的单向前进规则挡住。
+
+    离线升级包不走这条：那条路没有远端 tag，版本号本来就取自包里。
+    """
+    if info.get('local_package'):
+        return read_package_version(archive)
+    tag = str(info.get('tag') or '').strip()
+    packaged = read_package_version(archive)
+    if not tag:
+        raise RuntimeError(
+            '❌ 发布页没有给出 tag，无法核对包内版本，已拒绝安装。'
+            '（签名对的是包字节而不是版本，没有 tag 就无从判断这是哪一次发布）')
+    if not packaged:
+        raise RuntimeError(
+            '❌ 发布包里没有 `.version`，无法核对发布标签，已拒绝安装')
+    if _version_text(tag) != _version_text(packaged):
+        raise RuntimeError(
+            '❌ 发布标签与包内版本不一致，已拒绝安装。\n'
+            f'  发布标签：{tag}\n'
+            f'  包内版本：{packaged}\n'
+            '  这通常意味着「一个旧版本的签名包被挂到了新的 tag 下面」：签名对的是'
+            '包字节而不是版本，所以验签本身会通过 —— 装上去就是把主机退回旧版本，'
+            '旧版本里的已知漏洞随之复活。\n'
+            '  若这确实是你们发布的包，请让发布标签与包内 .version 一致后重发。'
+        )
+    rep.log(f'✓ 发布标签与包内版本一致（{tag.lstrip("vV")}）')
+    return packaged
+
+
+def _record_downgrade_audit(rep: Reporter, *, current: str, target: str, tag: str) -> None:
+    """把「放行降级」写进审计文件（JSON Lines，只追加）。
+
+    为什么必须落成文件而不是只写日志：日志随状态文件被下一次更新覆盖，而这行记录
+    要回答的是「三个月前是谁把生产降回了 1.0.x」。写不进去就**拒绝安装** ——
+    一次没有痕迹的降级和一次偷偷降级没法区分。
+    """
+    record = {
+        'event': 'downgrade-allowed',
+        'at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        'ts': int(time.time()),
+        'from': _version_text(current),
+        'to': _version_text(target),
+        'tag': tag,
+        'via': ALLOW_DOWNGRADE_VIA or '--allow-downgrade',
+        'pid': os.getpid(),
+        'uid': os.geteuid() if hasattr(os, 'geteuid') else None,
+    }
+    rep.state['downgrade'] = {k: record[k] for k in ('event', 'from', 'to', 'tag', 'via', 'at')}
+    try:
+        AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT_FILE.open('a', encoding='utf-8') as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        raise RuntimeError(
+            f'❌ 降级放行必须留下审计记录，但写不进 {AUDIT_FILE}（{exc}）—— 已拒绝安装。\n'
+            '  修好数据目录权限后重试，或在发布侧恢复一个更高的版本号。') from exc
+    rep.log(f'审计记录已写入 {AUDIT_FILE}')
+
+
+def _gate_release_version(rep: Reporter, current: str, target: str, tag: str) -> None:
+    """目标版本必须**严格新于**当前已装版本；否则拒绝，除非运维显式放行（DAN-52）。
+
+    `target` 是包内版本（已由签名与 tag 绑定过），不是发布页自称的版本 —— 拿可以
+    被改写的那一侧做比较，等于把门禁建在沙子上。
+
+    「无法比较」也拒绝：证明不了在前进，就不装（`--allow-downgrade` 是唯一的出口）。
+    """
+    if not current or not target:
+        # 当前版本未知（全新的安装目录）时没有可比的对象；这不构成降级。
+        return
+    relation = compare_versions(target, current)
+    if relation == 1:
+        return
+    if relation == 0:
+        # 相等到此为止：update_manager 在下载之前就按 tag 短路掉了。走到这一步
+        # 说明 tag 与包内版本已经被绑定校验过、而两者都等于当前版本，重装一次
+        # 没有意义，也不该越过「不重复安装」的约定。
+        rep.log(f'当前已是最新版本（{target}）')
+        return
+    reason = (f'本次发布低于当前已装版本（当前 {current}，目标 {target}）'
+              if relation == -1 else
+              f'无法比较版本（当前 {current}，目标 {target}），证明不了在前进')
+    if ALLOW_DOWNGRADE_VIA:
+        rep.log(f'⚠️ {reason}；已按显式放行开关 {ALLOW_DOWNGRADE_VIA} 继续安装', 'warn')
+        _record_downgrade_audit(rep, current=current, target=target, tag=tag)
+        return
+    raise RuntimeError(
+        f'❌ 拒绝降级：{reason}。\n'
+        '  更新器只向前进：签过名的旧包被挂到新 tag 下时，验签与摘要都会通过，'
+        '装上去等于把主机退回旧版本（旧版本里的已知漏洞随之复活）。\n'
+        '  确实需要回退时，用 `--allow-downgrade`（或 `WB_ALLOW_DOWNGRADE=1`）显式放行；'
+        f'放行会记进 {AUDIT_FILE}。'
+    )
+
+
 def offline_package_info(rep: Reporter) -> dict:
     """离线升级包的元信息（不联网）。
 
@@ -1690,6 +1861,10 @@ def _release_root(rep: Reporter, info: dict | None = None) -> tuple[Path, dict]:
     # 没有远端发布源，信任由「谁把包放到本机」承担。
     if not local:
         verify_release_signature(archive, str(info.get('sig_url') or ''), rep)
+        # 验签只证明「是我们发的包」；下面两步才回答「是我们发的哪一个包」（DAN-52）。
+        packaged = verify_release_tag_binding(archive, info, rep)
+        _gate_release_version(rep, read_local_version(), packaged,
+                              str(info.get('tag') or ''))
 
     rep.log('解压…')
     with tarfile.open(archive, 'r:gz') as tf:
@@ -1766,7 +1941,11 @@ def update_manager(rep: Reporter) -> None:
     rep.set_target_version(tag)
 
     current = read_local_version()
-    if not info.get('local_package') and current and tag and current == tag.lstrip('v'):
+    if (not info.get('local_package') and current and tag
+            and compare_versions(tag, current) == 0):
+        # 同一版本的不同写法（`v1.0` 与 `1.0.0`）也算相同：不能因此重装一遍。
+        # 这是「不重复安装」的入口截流；真正的降级判断在 _release_root 里、用
+        # 包内（签过名的）版本做，见 _gate_release_version。
         rep.log(f'当前已是最新版本（{tag}）')
         return
     if info.get('local_package'):
@@ -2071,6 +2250,7 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
 
 # ── 入口 ─────────────────────────────────────────────────
 def main() -> int:
+    global ALLOW_DOWNGRADE_VIA
     # 本地定制：受控维护版本（签名清单托管）不允许用本更新器自助升级 ——
     # 包内 server/web 与 deploy/managed-release.json 清单对不上会让 ExecStartPre
     # 直接拒绝启动。升级请走签名发布流程（tools/sign_release.py + 切换 releases/current）。
@@ -2083,7 +2263,11 @@ def main() -> int:
         return 1
     parser = argparse.ArgumentParser(description='WorkBuddy Manager 更新')
     parser.add_argument('--target', choices=['manager', 'upstream', 'both'], default='both')
+    parser.add_argument('--allow-downgrade', action='store_true',
+                        help='显式放行降到更低版本（会写入审计文件；默认拒绝降级）')
     args = parser.parse_args()
+    if args.allow_downgrade and not ALLOW_DOWNGRADE_VIA:
+        ALLOW_DOWNGRADE_VIA = '--allow-downgrade'
 
     rep = Reporter(args.target)
     rep.log(f'开始更新（target={args.target}，安装目录={INSTALL_DIR}）')

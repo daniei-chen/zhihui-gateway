@@ -108,18 +108,19 @@ class UpdateEndToEndTest(unittest.TestCase):
 
     # ── 夹具 ──
 
-    def _make_install(self, name: str) -> Path:
+    def _make_install(self, name: str, *, version: str = '1.0.0') -> Path:
         """造一个"已部署"的安装目录（旧版本）。"""
         inst = Path(tempfile.mkdtemp(dir=self.dir)) / name
         (inst / 'server').mkdir(parents=True)
-        (inst / 'server' / 'main.py').write_text("version='1.0.0'\n# OLD\n", encoding='utf-8')
+        (inst / 'server' / 'main.py').write_text(
+            f"version='{version}'\n# OLD\n", encoding='utf-8')
         (inst / 'server' / 'requirements.txt').write_text('', encoding='utf-8')
         (inst / 'web' / 'out').mkdir(parents=True)
         (inst / 'web' / 'out' / 'index.html').write_text('<html>OLD</html>', encoding='utf-8')
         (inst / 'deploy').mkdir()
         # 安装目录里放一份"正在使用的" update.py（就是 repo 里这份）
         shutil.copyfile(_ROOT / 'deploy' / 'update.py', inst / 'deploy' / 'update.py')
-        (inst / '.version').write_text('v1.0.0\n', encoding='utf-8')
+        (inst / '.version').write_text(f'v{version}\n', encoding='utf-8')
         return inst
 
     def _make_release(self, name: str, *, version: str = '9.9.9',
@@ -343,6 +344,106 @@ class UpdateEndToEndTest(unittest.TestCase):
         self.assertIn('OLD', (inst / 'web' / 'out' / 'index.html').read_text(encoding='utf-8'))
         self.assertEqual((inst / '.version').read_text(encoding='utf-8').strip(), 'v1.0.0')
         self.assertFalse((inst / 'CHANGELOG.md').exists())
+
+    # ── 降级：旧签名包被挂到新 tag 上（DAN-52）──
+    #
+    # DAN-24 之后验签挡的是「这不是我们发的包」。但签名对的是**包字节**，不是
+    # 版本：一个**签过名的旧版本包**原样挂到新 tag 下面，验签照样通过。能改
+    # Release 资产的人因此不需要私钥，就能把主机降到任意历史版本，让旧版本里的
+    # 已知漏洞重新暴露。这里两条防线各自守一半：
+    #
+    #   * tag 必须等于包内 `.version`（`.version` 在签过的字节里）——挡「包与 tag
+    #     不是一对」；
+    #   * 目标版本不能低于当前已装版本（除非运维显式放行）——挡「发布页回滚到
+    #     一个更旧的、本体一致的发布」。
+
+    def test_old_signed_package_under_new_tag_is_refused(self) -> None:
+        """签过名的旧包挂到新 tag 上：必须拒绝，且安装目录一个字节都不动。
+
+        这里的包**签名是真的、摘要是对的** —— 它只是旧版本。旧代码会把它当成
+        「最新版」装上：验签通过、摘要通过、安装成功，主机实际停在旧代码上。
+        """
+        inst = self._make_install('oldtag')          # 主机在 1.0.0
+        pkg, digest = self._make_release('oldtag', version='1.0.0')   # 旧包，真签名
+        mod = self._load(inst)
+        ok, rep = self._run_update(mod, pkg, digest, version='9.9.9')  # 新 tag
+
+        self.assertFalse(ok, '旧包挂着新 tag 竟然装上了')
+        self.assertIn('标签', rep.text())
+        self.assertIn('不一致', rep.text())
+        self.assertIn('# OLD', (inst / 'server' / 'main.py').read_text(encoding='utf-8'))
+        self.assertIn('OLD', (inst / 'web' / 'out' / 'index.html').read_text(encoding='utf-8'))
+        self.assertEqual((inst / '.version').read_text(encoding='utf-8').strip(), 'v1.0.0')
+        self.assertFalse((inst / 'CHANGELOG.md').exists())
+
+    def test_release_rollback_to_older_version_is_refused(self) -> None:
+        """`releases/latest` 被指回一个更旧的发布（tag 与包一致）→ 拒绝降级。
+
+        这条是 tag 绑定挡不住的：旧发布的 tag 与它的包本来就是一对。挡住它的是
+        「单向前进」。
+        """
+        inst = self._make_install('rollback', version='2.0.0')   # 主机在 2.0.0
+        pkg, digest = self._make_release('rollback', version='1.0.0')
+        mod = self._load(inst)
+        ok, rep = self._run_update(mod, pkg, digest, version='1.0.0')
+
+        self.assertFalse(ok, '降级到更旧版本竟然装上了')
+        self.assertIn('降级', rep.text())
+        self.assertIn('# OLD', (inst / 'server' / 'main.py').read_text(encoding='utf-8'))
+        self.assertEqual((inst / '.version').read_text(encoding='utf-8').strip(), 'v2.0.0')
+        self.assertEqual(mod.read_local_version(), '2.0.0')
+
+    def test_uncomparable_release_tag_is_refused(self) -> None:
+        """tag 与包内版本都解析不出数字时**拒绝**：证明不了是前进，就不装。"""
+        inst = self._make_install('weirdtag')
+        pkg, digest = self._make_release('weirdtag', version='nightly')
+        mod = self._load(inst)
+        ok, rep = self._run_update(mod, pkg, digest, version='nightly')
+
+        self.assertFalse(ok, '无法比较版本竟然直接装了')
+        self.assertIn('无法比较', rep.text())
+        self.assertIn('# OLD', (inst / 'server' / 'main.py').read_text(encoding='utf-8'))
+
+    def test_downgrade_needs_explicit_switch_and_is_audited(self) -> None:
+        """显式放行（`WB_ALLOW_DOWNGRADE=1` / `--allow-downgrade`）才降级，且留痕。
+
+        运维确实要回退到某个已知正常的旧版本时，这条路必须走得通；但它是**写进
+        审计文件**的动作（谁、从哪个版本、到哪个版本、用哪个开关），不是静默行为。
+        """
+        inst = self._make_install('forced', version='2.0.0')
+        pkg, digest = self._make_release('forced', version='1.0.0')
+        mod = self._load(inst, WB_ALLOW_DOWNGRADE='1')
+        ok, rep = self._run_update(mod, pkg, digest, version='1.0.0')
+
+        self.assertTrue(ok, rep.text())
+        self.assertIn('# NEW', (inst / 'server' / 'main.py').read_text(encoding='utf-8'))
+        self.assertEqual((inst / '.version').read_text(encoding='utf-8').strip(), 'v1.0.0')
+        self.assertIn('显式放行', rep.text())
+
+        audit = inst / 'data' / 'update-audit.jsonl'
+        self.assertTrue(audit.is_file(), '降级放行没有留下审计记录')
+        record = json.loads(audit.read_text(encoding='utf-8').strip().splitlines()[-1])
+        self.assertEqual(record['event'], 'downgrade-allowed')
+        self.assertEqual(record['from'], '2.0.0')
+        self.assertEqual(record['to'], '1.0.0')
+        self.assertEqual(record['via'], 'WB_ALLOW_DOWNGRADE')
+        self.assertTrue(record.get('at'), '审计记录缺时间戳')
+
+    def test_same_version_written_differently_is_not_reinstalled(self) -> None:
+        """`v1.0` 与 `1.0.0` 是同一个版本：不能因为写法不同就当作升级重装。"""
+        inst = self._make_install('samepad', version='1.0')
+        pkg, digest = self._make_release('samepad', version='1.0.0')
+        mod = self._load(inst)
+        self._wire_release(mod, pkg, digest, '1.0.0')
+
+        def boom(*a, **kw):
+            raise AssertionError('同一版本只是写法不同，不该下载发布包')
+
+        mod.download = boom  # type: ignore[assignment]
+        rep = _Rep()
+        mod.update_manager(rep)
+        self.assertIn('当前已是最新版本', rep.text())
+        self.assertIn('# OLD', (inst / 'server' / 'main.py').read_text(encoding='utf-8'))
 
     # ── 依赖装到哪：容器里以非 root 跑，系统 site-packages 归 root ──
     #
