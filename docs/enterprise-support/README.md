@@ -4,6 +4,11 @@
 
 让 `ithtelab/workbuddy-manager` + `workbuddy2api` 支持**腾讯 CodeBuddy/WorkBuddy 企业版账号**的额度显示与选号。
 
+> 来源说明：本仓（`daniei-chen/zhihui-gateway`）是这条产品线的自维护分支，
+> **发布源与镜像都取本仓**（`github.com/daniei-chen/zhihui-gateway`、
+> `ghcr.io/daniei-chen/workbuddy-manager`）。下文出现 `ithtelab/workbuddy-manager`
+> 的地方是在**指认上游出处**，不是让人去那里装东西。
+
 > 上游（原版）不支持企业账号额度：企业额度不在个人「资源包」体系内，
 > 个人接口 `get-user-resource` 对企业账号恒返回空 `Accounts`，导致面板显示 0，
 > 且因 `credits=0` 该账号在加权随机选号中权重极低、几乎不被选中。
