@@ -896,6 +896,17 @@
     "lockoutDesc": "{action}會影響推理 API 的存取；規則設定錯誤時服務會中斷。控制台仍可存取，可在此恢復規則。",
     "reasonPortalPolicyDenied": "使用者工作台策略限制"
   },
+  "origin": {
+    "noticeTitle": "這個位址提交表單會被拒絕",
+    "noticeBody": "你正在用網域存取面板，但沒有設定 WB_PUBLIC_ORIGIN。現在填寫表單送出會收到 403（origin_unconfigured）；在伺服器上設定 WB_PUBLIC_ORIGIN=https://你的網域 並重新啟動服務即可恢復。用 IP 或 localhost 存取不受影響。",
+    "fixHint": "設定 WB_PUBLIC_ORIGIN=https://你的網域 後重新啟動服務",
+    "stateConfigured": "已設定（WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS）",
+    "stateProxy": "可信任反向代理（X-Forwarded-Host）",
+    "stateLoopback": "直連（IP / localhost / 內網名稱）",
+    "stateUnconfigured": "未設定：網域直連的送出會被拒絕",
+    "stateRelaxed": "已放寬：WB_ALLOW_UNCONFIGURED_ORIGIN=1，存在 DNS rebinding 風險",
+    "securityTitle": "來源校驗（CSRF）"
+  },
   "models": {
     "title": "模型中心",
     "description": "{realm}帳號可用的模型及上下文、輸出與推理能力（資料取自騰訊模型介面）",
@@ -1901,7 +1912,8 @@
     "仅超级管理员admin本人会话可赠送积分": "僅超級管理員admin本人工作階段可贈送積分",
     "用户端写操作需要同源请求": "使用者端寫入操作需要同源請求",
     "检测到自动化客户端，批量账号操作已被禁止。该限制在 2026-11-19 批量吊销事故后加入 —— 一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN 并在请求头 X-Automation-Token 中携带。": "偵測到自動化用戶端，批量帳號操作已被禁止。此限制在 2026-11-19 批量吊銷事故後加入 —— 一次批量扇出會同時打到多個上游帳號，是風控的主要觸發特徵。如需執行，請人工在介面操作，或設定 WB_ACCOUNT_AUTOMATION_TOKEN 並在請求標頭 X-Automation-Token 中攜帶。",
-    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "自動化權杖缺失或不相符，批量帳號操作被拒絕。"
+    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "自動化權杖缺失或不相符，批量帳號操作被拒絕。",
+    "origin_unconfigured": "來源校驗未設定，表單提交已被拒絕：請設定 WB_PUBLIC_ORIGIN 後重試。"
   },
   "redPacket": {
     "title": "紅包",

@@ -8,11 +8,14 @@
 - 会话使用 HttpOnly + SameSite=Lax 签名 Cookie，生产环境自动启用 `Secure`
 - **写端点的同源校验锚点在服务端**（`WB_PUBLIC_ORIGIN`，其次 `WB_CORS_ORIGINS`）：
   2026-11-28 起不再用请求的 `Host` 拼「本站期望来源」—— DNS rebinding 下
-  `Host == Origin == 任意域名`，那样判等于没有锚点。都没配时只认「不可能被攻击者
-  控制」的 Host（IP 字面量 / `localhost` / 单标签内网名）与**可信反代**
-  （`WB_TRUSTED_PROXY_CIDRS`）透传的 `X-Forwarded-Host`；用域名直连、不经反代、
-  又没配 `WB_PUBLIC_ORIGIN` 时，写请求会被拒（403 +
-  `X-Manager-Csrf-Reason: csrf_origin_unconfigured`）
+  `Host == Origin == 任意域名`，那样判等于没有锚点。默认部署行为不变：IP / localhost
+  / 单标签内网名直连、经可信反代（`WB_TRUSTED_PROXY_CIDRS` 透传
+  `X-Forwarded-Host`）、以及配了来源的部署照旧。只有「用域名访问且没配
+  `WB_PUBLIC_ORIGIN`」这一种组合的表单提交会 403（body
+  `{"detail": "origin_unconfigured"}`）：管理页会在填表之前显示横幅说明怎么修，
+  启动日志也告警一次。「安全」页的状态栏显示这次访问路径的来源状态。逃生门
+  `WB_ALLOW_UNCONFIGURED_ORIGIN=1` 可退回修前行为，但会重新暴露 DNS rebinding，
+  启动日志会醒目告警
 - 同 IP 登录失败 5 次锁定 10 分钟
 - 所有文件操作做路径穿越校验
 - **真实 IP 取自反代覆盖写入的 `X-Real-IP`**（`X-Forwarded-For` 首段可伪造），

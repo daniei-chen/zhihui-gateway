@@ -7,6 +7,7 @@ import {CommandPalette} from '@/components/common/layout/CommandPalette';
 import {RealmToggle} from '@/components/common/layout/RealmToggle';
 import {PlatformToggle} from '@/components/common/layout/PlatformToggle';
 import {PlatformDisabledNotice} from '@/components/common/layout/PlatformDisabledNotice';
+import {OriginAnchorNotice} from '@/components/common/layout/OriginAnchorNotice';
 import {LanguageToggle} from '@/components/common/layout/LanguageToggle';
 import {BrandHome} from '@/components/common/layout/BrandHome';
 import {ConsoleAtmosphere} from '@/components/common/layout/ConsoleAtmosphere';
@@ -81,6 +82,9 @@ export default function MainLayout({
                     平台 pill 本身无条件显示（纯客户端状态），所以这句必须由
                     服务端的 /api/platforms 来兜。 */}
                 <PlatformDisabledNotice />
+                {/* D-41：用域名直连又没声明 WB_PUBLIC_ORIGIN 时，**填表之前**就说清楚
+                    提交会被拒以及怎么修（判据是 /api/me 的 origin_check）。 */}
+                <OriginAnchorNotice />
                 <PlatformScope>{!loading && me ? children : null}</PlatformScope>
               </main>
             </div>

@@ -292,6 +292,35 @@ SECURE_COOKIE = _env('WB_SECURE_COOKIE', 'auto')  # auto | true | false
 PUBLIC_ORIGIN = _env('WB_PUBLIC_ORIGIN', '')
 # 允许的 CORS 来源（同源部署时留空即可）
 CORS_ORIGINS = [o for o in _env('WB_CORS_ORIGINS', '').split(',') if o]
+# 逃生门（D-41）：显式允许「用域名直连、又没声明 WB_PUBLIC_ORIGIN」的部署继续跑。
+# 打开后写端点的同源锚点退回**修前的 Host**（跨站 Origin/Referer 仍会拦），代价是
+# DNS rebinding 重新变成可利用面 —— 属于**主动放宽**，启动时必须醒目告警。
+ALLOW_UNCONFIGURED_ORIGIN = _env_bool('WB_ALLOW_UNCONFIGURED_ORIGIN', False)
+
+
+def _warn_origin_anchoring() -> None:
+    """启动时把「写端点的来源锚点」真实状态说出来（不能静默）。
+
+    两种形态必须告警，且都在服务启动（import 本模块）时发生：
+      ① 设了逃生门：锚点退回 Host，DNS rebinding 重新可用；
+      ② 既没声明公网来源、也没跨源白名单：写请求只能靠可信反代的
+         X-Forwarded-Host 或 IP/localhost/单标签内网名，用域名直连会被拒。
+    """
+    log = logging.getLogger('workbuddy.config')
+    if ALLOW_UNCONFIGURED_ORIGIN:
+        log.warning(
+            'WB_ALLOW_UNCONFIGURED_ORIGIN=1 是**主动放宽**：写端点的同源锚点退回'
+            '「只信请求的 Host」，DNS rebinding 可再次通过；跨站 Origin/Referer '
+            '仍会拦。请尽快改设 WB_PUBLIC_ORIGIN 并关掉这个开关。')
+    elif not PUBLIC_ORIGIN and not CORS_ORIGINS:
+        log.warning(
+            '未设置 WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS：写请求的同源锚点只能靠'
+            '可信反代（WB_TRUSTED_PROXY_CIDRS）透传的 X-Forwarded-Host，或 '
+            'IP/localhost/单标签内网名直连；用域名直连的表单提交会被拒'
+            '（403，detail=origin_unconfigured）—— 管理页会显示提示与修复方式。')
+
+
+_warn_origin_anchoring()
 
 TENCENT_BASE = 'https://copilot.tencent.com'
 TENCENT_BILLING_BASE = 'https://www.codebuddy.cn'  # 国内版 billing 基址

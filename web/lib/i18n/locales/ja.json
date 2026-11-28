@@ -896,6 +896,17 @@
     "lockoutDesc": "{action}後、ルールが不適切な場合は推論 API の通信が中断されます。コンソールには引き続きアクセスでき、ここでルールを復元できます。",
     "reasonPortalPolicyDenied": "ユーザー用ポリシーにより拒否"
   },
+  "origin": {
+    "noticeTitle": "このアドレスからのフォーム送信は拒否されます",
+    "noticeBody": "ドメイン名でパネルを開いていますが、WB_PUBLIC_ORIGIN が設定されていません。このままフォームを送信すると 403（origin_unconfigured）になります。サーバーで WB_PUBLIC_ORIGIN=https://あなたのドメイン を設定して再起動すると復旧します。IP アドレスや localhost でのアクセスは影響を受けません。",
+    "fixHint": "WB_PUBLIC_ORIGIN=https://あなたのドメイン を設定してサービスを再起動してください",
+    "stateConfigured": "設定済み（WB_PUBLIC_ORIGIN / WB_CORS_ORIGINS）",
+    "stateProxy": "信頼されたリバースプロキシ（X-Forwarded-Host）",
+    "stateLoopback": "直接接続（IP / localhost / 内部名）",
+    "stateUnconfigured": "未設定：ドメイン名経由のフォーム送信は拒否されます",
+    "stateRelaxed": "緩和中：WB_ALLOW_UNCONFIGURED_ORIGIN=1、DNS rebinding が再び可能です",
+    "securityTitle": "オリジン検証（CSRF）"
+  },
   "models": {
     "title": "モデル",
     "description": "{realm}のアカウントで利用可能なモデルと、コンテキスト・出力・推論能力（データは Tencent モデル API より取得）",
@@ -1901,7 +1912,8 @@
     "仅超级管理员admin本人会话可赠送积分": "クレジットの付与はスーパー管理者admin本人のセッションのみ可能です",
     "用户端写操作需要同源请求": "ユーザー操作には同一オリジンのリクエストが必要です",
     "检测到自动化客户端，批量账号操作已被禁止。该限制在 2026-11-19 批量吊销事故后加入 —— 一次批量扇出会同时打到多个上游账号，是风控的主要触发特征。如需执行，请人工在界面操作，或配置 WB_ACCOUNT_AUTOMATION_TOKEN 并在请求头 X-Automation-Token 中携带。": "自動化クライアントを検出したため、アカウントの一括操作は禁止されています。この制限は 2026-11-19 の一括失効事故後に追加されました — 一度の一括ファンアウトは複数の上流アカウントに同時に届き、リスク管理の主要な検知要因となります。実行する場合は UI で手動操作するか、WB_ACCOUNT_AUTOMATION_TOKEN を設定して X-Automation-Token ヘッダーで送信してください。",
-    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "自動化トークンが未設定または一致しないため、アカウントの一括操作は拒否されました。"
+    "自动化令牌缺失或不匹配，批量账号操作被拒绝。": "自動化トークンが未設定または一致しないため、アカウントの一括操作は拒否されました。",
+    "origin_unconfigured": "オリジン検証が未設定のため、フォーム送信を拒否しました。WB_PUBLIC_ORIGIN を設定して再起動してください。"
   },
   "redPacket": {
     "title": "紅包（レッドパケット）",

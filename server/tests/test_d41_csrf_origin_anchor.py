@@ -1,6 +1,6 @@
 """D-41：写操作的同源锚点不能由请求自己的 `Host` 头决定（DNS rebinding）。
 
-## 修前实测（本文件第 1、2 条就是它的反面）
+## 修前实测（本文件第 5 角就是它的反面）
 
 `expected_origin()` 以前用 `Host` 拼「本站期望来源」：
 
@@ -16,18 +16,28 @@ DNS rebinding 下浏览器访问 `http://evil.test:8000`，`Host` 与 `Origin` �
 3. 都没配：只采信**可信反代**（peer 落在 `WB_TRUSTED_PROXY_CIDRS`）送来的
    `X-Forwarded-Host`；非可信 peer 的 XFH 是普通请求头，忽略。
 4. 最后才是 IP 字面量 / `localhost` / 单标签内网名这类「不可能被 rebinding」的 Host。
+5. 逃生门 `WB_ALLOW_UNCONFIGURED_ORIGIN=1`：退回修前的 Host 锚点（跨站仍拦），
+   启动日志醒目告警。默认关。
+
+没有锚点时拒绝的机器可读原因：body `detail == 'origin_unconfigured'`，响应头
+`X-Manager-Csrf-Reason` 同值 —— 前端靠它把「通用 403」换成页面横幅。
+
+## 七角矩阵（大队长口径，逐条可证）
+
+| # | 形态 | 期望 |
+| --- | --- | --- |
+| 1 | 回环 peer、无配置、Host=Origin=127.0.0.1 | 200 |
+| 2 | IP 字面量、无配置 | 200 |
+| 3 | 单标签内网名（`http://nas/`）、无配置 | 200 |
+| 4 | 已配 `WB_PUBLIC_ORIGIN` 且匹配 | 200 |
+| 5 | 点分域名直连、无配置、POST | 403 + `origin_unconfigured` |
+| 6 | 第 5 角 + 逃生门 | 200，启动日志有醒目 warn |
+| 7 | Origin 与 Host 真不一致（跨站） | 403（回归不能松） |
 
 ## 为什么用 `httpx.ASGITransport` 而不是 `TestClient`
 
 「是不是可信反代」由 `request.client.host`（TCP 对端）决定。`TestClient` 的对端
 固定是 `testclient`，说不出这件事；`ASGITransport(client=...)` 可以逐条指定。
-
-## 覆盖的另一件事
-
-`routers/portal.py` 的 `same_origin` 与 `services/platformauth.py` 的
-`check_poll_origin` 也曾经各自复制了一份「等于 `expected_origin`」的判定。
-D-41 把三处统一到 `security.origin_allowed()`，这里同时钉住那两个入口 ——
-否则只堵住主入口，旁路仍然认攻击者的域名。
 """
 from __future__ import annotations
 
@@ -47,24 +57,28 @@ LOOPBACK = ('127.0.0.1', 5000)
 LAN = ('10.0.0.9', 5000)
 
 
-def _app() -> FastAPI:
+def _app(with_probe: bool = True) -> FastAPI:
     app = FastAPI()
     app.include_router(auth.router)
 
-    @app.api_route('/api/probe/write', methods=['POST', 'GET'])
-    def probe(request: Request):
-        security.check_same_origin(request)
-        return {'ok': True}
+    if with_probe:
+        @app.api_route('/api/probe/write', methods=['POST', 'GET'])
+        def probe(request: Request):
+            security.check_same_origin(request)
+            return {'ok': True}
 
     return app
 
 
-def _request(host: str, origin: str, *, peer=LAN, method: str = 'POST') -> Request:
+def _request(host: str, origin: str, *, peer=LAN, method: str = 'POST',
+             extra: dict | None = None) -> Request:
+    headers = [(b'host', host.encode()), (b'origin', origin.encode())]
+    headers += [(k.encode(), v.encode()) for k, v in (extra or {}).items()]
     scope = {
         'type': 'http', 'method': method, 'http_version': '1.1',
         'scheme': 'http', 'path': '/api/portal/x', 'raw_path': b'/api/portal/x',
         'query_string': b'', 'root_path': '',
-        'headers': [(b'host', host.encode()), (b'origin', origin.encode())],
+        'headers': headers,
         'client': peer, 'server': ('testserver', 80),
     }
     return Request(scope)
@@ -78,6 +92,7 @@ class _AnchorCase(unittest.TestCase):
         self._patch(config, 'CORS_ORIGINS', [])
         self._patch(config, 'TRUST_PROXY', '1')
         self._patch(config, 'TRUSTED_PROXY_CIDRS', ['127.0.0.0/8', '::1/128'])
+        self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', False)
         security._unanchored_warned.clear()
         patcher = mock.patch.object(auth, '_complete_login',
                                     return_value=JSONResponse({'ok': True}))
@@ -92,17 +107,17 @@ class _AnchorCase(unittest.TestCase):
 
     def _call(self, path: str = '/api/login', *, peer=LAN, host: str = 'testserver',
               origin: str | None = None, extra: dict | None = None,
-              cookie: bool = False, method: str = 'post'):
+              cookie: bool = False, method: str = 'post', app: FastAPI | None = None):
         headers = {'host': host}
         if origin is not None:
             headers['origin'] = origin
         if cookie:
             headers['cookie'] = f'{config.COOKIE_NAME}=synthetic'
         headers.update(extra or {})
-        return asyncio.run(self._send(method, path, peer, headers))
+        return asyncio.run(self._send(app or self.app, method, path, peer, headers))
 
-    async def _send(self, method: str, path: str, peer, headers):
-        transport = httpx.ASGITransport(app=self.app, client=peer)
+    async def _send(self, app: FastAPI, method: str, path: str, peer, headers):
+        transport = httpx.ASGITransport(app=app, client=peer)
         async with httpx.AsyncClient(transport=transport,
                                      base_url='http://testserver') as client:
             call = getattr(client, method)
@@ -112,16 +127,65 @@ class _AnchorCase(unittest.TestCase):
                               headers=headers)
 
 
-class ReboundHostIsRejected(_AnchorCase):
-    """`Host == Origin == 攻击者域名` 必须失败 —— 这是修前被实测通过的那条。"""
+class SevenAngleMatrix(_AnchorCase):
+    """大队长口径的七角矩阵：每条都要能独立证明。"""
 
-    def test_attacker_domain_as_host_and_origin_is_rejected(self) -> None:
-        response = self._call(host='evil.test:8000', origin='http://evil.test:8000')
+    def test_angle_1_loopback_peer_without_config_passes(self) -> None:
+        response = self._call(peer=LOOPBACK, host='127.0.0.1:7864',
+                              origin='http://127.0.0.1:7864')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.login.assert_called_once()
+
+    def test_angle_2_ip_literal_without_config_passes(self) -> None:
+        response = self._call(peer=LAN, host='192.168.1.5:7864',
+                              origin='http://192.168.1.5:7864')
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_angle_3_single_label_host_without_config_passes(self) -> None:
+        response = self._call(peer=LAN, host='nas', origin='http://nas')
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_angle_4_configured_public_origin_passes(self) -> None:
+        self._patch(config, 'PUBLIC_ORIGIN', 'https://panel.example.com')
+        response = self._call(peer=LAN, host='panel.example.com',
+                              origin='https://panel.example.com')
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_angle_5_dotted_domain_direct_is_403_with_machine_reason(self) -> None:
+        response = self._call(peer=LAN, host='evil.test:8000',
+                              origin='http://evil.test:8000')
         self.assertEqual(response.status_code, 403,
                          'Host 与 Origin 相同就放行 —— 同源锚点又回到了请求头手里')
         self.assertEqual(response.headers.get('x-manager-csrf-reason'),
-                         'csrf_origin_unconfigured')
+                         'origin_unconfigured')
+        self.assertEqual(response.json().get('detail'), 'origin_unconfigured',
+                         '403 body 没带机器可读原因，前端只能弹通用错误')
         self.login.assert_not_called()
+
+    def test_angle_6_escape_hatch_restores_the_old_anchor(self) -> None:
+        self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', True)
+        response = self._call(peer=LAN, host='panel.example.com',
+                              origin='http://panel.example.com')
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_angle_6_escape_hatch_warns_loudly_at_startup(self) -> None:
+        self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', True)
+        with self.assertLogs('workbuddy.config', level='WARNING') as captured:
+            config._warn_origin_anchoring()
+        text = '\n'.join(captured.output)
+        self.assertIn('WB_ALLOW_UNCONFIGURED_ORIGIN', text)
+        self.assertIn('DNS rebinding', text)
+
+    def test_angle_7_cross_site_origin_is_still_rejected(self) -> None:
+        response = self._call(peer=LAN, host='testserver',
+                              origin='https://evil.example')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.headers.get('x-manager-csrf-reason'),
+                         'csrf_origin_mismatch')
+
+
+class ReboundHostIsRejected(_AnchorCase):
+    """`Host == Origin == 攻击者域名` 必须失败 —— 这是修前被实测通过的那条。"""
 
     def test_loopback_proxy_does_not_launder_an_attacker_domain(self) -> None:
         """本机反代 + X-Forwarded-Proto 也不能把 evil.test 变成「本站」。"""
@@ -137,8 +201,7 @@ class ReboundHostIsRejected(_AnchorCase):
                               host='evil.test:8000',
                               origin='http://evil.test:8000')
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.headers.get('x-manager-csrf-reason'),
-                         'csrf_origin_unconfigured')
+        self.assertEqual(response.json().get('detail'), 'origin_unconfigured')
 
     def test_the_refusal_is_explained_once_in_the_log(self) -> None:
         """没有锚点不是「配错了」而是「没配」，要能在日志里看到该设什么。"""
@@ -230,30 +293,66 @@ class TrustedProxyOnly(_AnchorCase):
         self.assertEqual(response.status_code, 403)
 
 
-class DefaultDeploymentStillWorks(_AnchorCase):
-    """没有配置时的正常形态：IP / localhost / 内网名单标签，`Origin == Host` 就放行。"""
+class OriginStatusField(_AnchorCase):
+    """管理页状态/自检字段（`/api/me` 的 `origin_check`）。"""
 
-    def test_ip_localhost_and_single_label_hosts_pass(self) -> None:
+    def test_states_cover_every_anchor_shape(self) -> None:
         cases = (
-            ('192.168.1.5:7864', 'http://192.168.1.5:7864'),
-            ('localhost:7864', 'http://localhost:7864'),
-            ('testserver', 'http://testserver'),
-            ('[::1]:7864', 'http://[::1]:7864'),
+            ('loopback-only', True,
+             _request('192.168.1.5:7864', 'http://192.168.1.5:7864', peer=LAN)),
+            ('unconfigured', False,
+             _request('panel.example.com', 'http://panel.example.com', peer=LAN)),
+            ('proxy', True,
+             _request('127.0.0.1:7864', 'https://panel.example.com', peer=LOOPBACK,
+                      extra={'x-forwarded-host': 'panel.example.com',
+                             'x-forwarded-proto': 'https'})),
         )
-        for host, origin in cases:
-            with self.subTest(host=host):
-                response = self._call(host=host, origin=origin)
-                self.assertEqual(response.status_code, 200,
-                                 f'{host} 的同源表单提交被误伤：{response.text}')
-        self.assertEqual(self.login.call_count, len(cases))
+        for expected_state, expected_allowed, request in cases:
+            with self.subTest(expected=expected_state):
+                status = security.origin_status(request)
+                self.assertEqual(status['state'], expected_state)
+                self.assertEqual(status['writes_allowed'], expected_allowed)
 
-    def test_domain_direct_without_config_is_rejected_with_a_reason(self) -> None:
-        """唯一被收紧的形态：域名直连且没有任何服务端声明。"""
-        response = self._call(host='panel.example.com',
-                              origin='http://panel.example.com')
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.headers.get('x-manager-csrf-reason'),
-                         'csrf_origin_unconfigured')
+    def test_configured_and_relaxed_states(self) -> None:
+        self._patch(config, 'PUBLIC_ORIGIN', 'https://panel.example.com')
+        self.assertEqual(
+            security.origin_status(_request('panel.example.com',
+                                            'https://panel.example.com'))['state'],
+            'configured')
+        self._patch(config, 'PUBLIC_ORIGIN', '')
+        self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', True)
+        status = security.origin_status(_request('panel.example.com',
+                                                 'http://panel.example.com'))
+        self.assertEqual(status['state'], 'relaxed')
+        self.assertTrue(status['writes_allowed'])
+
+    def test_unconfigured_reports_writes_blocked(self) -> None:
+        status = security.origin_status(_request('panel.example.com',
+                                                 'http://panel.example.com'))
+        self.assertEqual(status['state'], 'unconfigured')
+        self.assertFalse(status['writes_allowed'])
+        self.assertEqual(status['host'], 'panel.example.com')
+
+    def test_public_origin_check_endpoint_is_anonymous(self) -> None:
+        """登录页要能在**填表之前**读到状态：这个 GET 不做鉴权。"""
+        response = self._call('/api/origin-check', method='get', peer=LAN,
+                              host='panel.example.com')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['state'], 'unconfigured')
+        self.assertFalse(response.json()['writes_allowed'])
+
+    def test_api_me_exposes_the_field(self) -> None:
+        app = FastAPI()
+        app.include_router(auth.router)
+        app.dependency_overrides[security.current_user] = lambda: {
+            'username': 'fixture', 'role': 'admin'}
+        self.addCleanup(app.dependency_overrides.clear)
+        response = self._call('/api/me', method='get', peer=LAN,
+                              host='panel.example.com',
+                              extra={'origin': 'http://panel.example.com'}, app=app)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['origin_check']['state'], 'unconfigured')
+        self.assertFalse(response.json()['origin_check']['writes_allowed'])
 
 
 class SideGatesUseTheSameAnchors(_AnchorCase):

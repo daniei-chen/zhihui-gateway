@@ -1,8 +1,26 @@
 export type Role = 'admin' | 'account_admin' | 'viewer';
 
+/** D-41：写端点同源锚点的形态（服务端 `security.origin_status()` 给出）。 */
+export type OriginCheckState =
+  | 'configured'
+  | 'proxy'
+  | 'loopback-only'
+  | 'unconfigured'
+  | 'relaxed';
+
+export interface OriginCheck {
+  state: OriginCheckState;
+  /** 这次访问路径下，同源写请求有没有锚点可比（false = 一定会 403）。 */
+  writes_allowed: boolean;
+  /** 服务端看到的 Host（排障用）。 */
+  host?: string;
+}
+
 export interface Me {
   username: string;
   role: Role;
+  /** 旧后端没有这个字段：缺失时前端按「不提示」处理。 */
+  origin_check?: OriginCheck;
 }
 
 export interface Account {

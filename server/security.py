@@ -1139,12 +1139,14 @@ def current_user(request: Request) -> dict:
 #      单标签内网名。带点的主机名（`evil.test`、`zhihui.kaogong.art`）不能自证
 #      身份，不给锚点。
 #
-# 代价说清楚：没有配置、又用域名直连（不经反代）时，写请求会被拒 —— 403 +
-# `X-Manager-Csrf-Reason: csrf_origin_unconfigured`，并在进程内告警一次。这个
-# 场景与攻击形态**无法区分**，只能靠 `WB_PUBLIC_ORIGIN` 或反代的
-# `X-Forwarded-Host` 解除。反过来，IP / localhost / 单标签内网名直连，以及
-# 任何 `Origin == Host` 的普通表单提交都不受影响（取舍见 .env.example 与
-# docs/CSRF-AUDIT-2026-11-15.md）。
+# 默认部署行为不变：只有「用域名访问、又没配 WB_PUBLIC_ORIGIN / 反代 XFH」这一种
+# 组合的表单提交会 403（body `detail=origin_unconfigured`，响应头同值，进程内
+# 告警一次）。管理页按 `/api/me` 的 `origin_check` 在**填表之前**显示横幅说明怎么
+# 修，启动日志也会把当前锚点形态说清楚。IP / localhost / 单标签内网名直连不受影响。
+#
+# 逃生门：`WB_ALLOW_UNCONFIGURED_ORIGIN=1` 把锚点退回修前的 Host（跨站
+# Origin/Referer 仍会拦），启动日志打醒目告警 —— 那是主动放宽，不是默认行为。
+# 取舍另见 .env.example 与 docs/CSRF-AUDIT-2026-11-15.md。
 UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
 #: 「浏览器发起的请求」的判据。现代浏览器对**每个**请求都会带其中之一；
@@ -1224,31 +1226,78 @@ def _cannot_be_rebound(triple) -> bool:
         return '.' not in host
 
 
+def _resolve_anchor(request: Request) -> tuple:
+    """返回 (状态, 允许的来源)。状态同时用于管理页的状态/自检字段。
+
+    configured     —— `WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS` 已声明（服务端锚点）
+    proxy          —— 没声明，但请求来自可信反代且带了 `X-Forwarded-Host`
+    loopback-only  —— 没声明，Host 本身不可能被攻击者控制（IP/localhost/单标签内网名）
+    unconfigured   —— 没声明、Host 又是点分域名：没有锚点，写请求必须被拒
+    relaxed        —— 逃生门打开（锚点退回 Host —— 修前行为，rebinding 风险自负）
+    """
+    if (config.PUBLIC_ORIGIN or '').strip():
+        return 'configured', _public_origins(config.PUBLIC_ORIGIN)
+    proxied = _proxied(request)
+    configured = [t for t in (_origin_triple(v) for v in config.CORS_ORIGINS) if t is not None]
+    own = _origin_of(request, request.headers.get('host') or '', proxied=proxied)
+    if config.ALLOW_UNCONFIGURED_ORIGIN:
+        anchors = [*configured, *([own] if own is not None else [])]
+        return 'relaxed', tuple(dict.fromkeys(anchors))
+    anchors = list(configured)
+    if not anchors and proxied:
+        forwarded = (request.headers.get('x-forwarded-host') or '').split(',')[0]
+        xfh = _origin_of(request, forwarded, proxied=True)
+        if xfh is not None:
+            anchors.append(xfh)
+    if own is not None and _cannot_be_rebound(own):
+        anchors.append(own)
+    anchors = tuple(dict.fromkeys(anchors))
+    if configured:
+        return 'configured', anchors
+    if not anchors:
+        return 'unconfigured', ()
+    return ('proxy' if (request.headers.get('x-forwarded-host') or '').strip() else
+            'loopback-only'), anchors
+
+
 def origin_anchors(request: Request) -> tuple:
     """本次请求允许的来源（服务端配置优先，请求头只能兜底）。
 
     顺序与取舍见本节开头的 D-41 说明。返回空元组表示「没有任何可信锚点」：
     调用方必须拒绝写请求，**不得**退回 `Host`。
     """
-    if (config.PUBLIC_ORIGIN or '').strip():
-        return _public_origins(config.PUBLIC_ORIGIN)
-    proxied = _proxied(request)
-    anchors = [t for t in (_origin_triple(v) for v in config.CORS_ORIGINS) if t is not None]
-    if not anchors and proxied:
-        forwarded = (request.headers.get('x-forwarded-host') or '').split(',')[0]
-        xfh = _origin_of(request, forwarded, proxied=True)
-        if xfh is not None:
-            anchors.append(xfh)
-    own = _origin_of(request, request.headers.get('host') or '', proxied=proxied)
-    if own is not None and _cannot_be_rebound(own):
-        anchors.append(own)
-    return tuple(dict.fromkeys(anchors))
+    return _resolve_anchor(request)[1]
+
+
+def origin_status(request: Request) -> dict:
+    """管理页状态/自检字段：这次访问路径下来源锚点是什么形态。
+
+    `writes_allowed` 是「同源写请求有没有锚点可比」，不是「这次请求会不会成功」
+    —— 真正是否放行仍由 Origin/Referer 与锚点全等比较决定。
+    """
+    state, anchors = _resolve_anchor(request)
+    return {
+        'state': state,
+        'writes_allowed': bool(anchors),
+        'host': (request.headers.get('host') or '').strip(),
+    }
 
 
 def origin_allowed(request: Request, source: str) -> bool:
     """`source`（Origin 或 Referer 原文）是否落在本次请求的来源锚点里。"""
     got = _origin_triple(source)
     return got is not None and got in origin_anchors(request)
+
+
+def _reject_unanchored() -> None:
+    """没有服务端锚点：403，机器可读原因同时出现在 body 与响应头。
+
+    body 只能写 `detail`（FastAPI 的 403 形状只有这一个字段，写成对象或 f-string
+    会被 `test_web_i18n` 的守卫判红），所以约定 **`detail == 'origin_unconfigured'`**；
+    前端按这个值（或 `X-Manager-Csrf-Reason` 同值）渲染横幅，而不是弹通用错误。
+    """
+    raise HTTPException(status_code=403, detail='origin_unconfigured',
+                        headers={'X-Manager-Csrf-Reason': 'origin_unconfigured'})
 
 
 def _warn_unanchored_once(request: Request) -> None:
@@ -1278,7 +1327,8 @@ def _reject_csrf(reason: str) -> None:
     f-string 拼出来的 detail（拼出来的查不了）。短语表不在本任务的改动范围内，
     所以这里：`detail` 保持 FastAPI 默认值，稳定 code 走
     `X-Manager-Csrf-Reason: csrf_origin_missing|csrf_origin_mismatch|
-    csrf_multiple_origin|csrf_origin_unconfigured|csrf_origin_malformed`。
+    csrf_multiple_origin|csrf_origin_malformed`。没有锚点的那一种走
+    `_reject_unanchored()`（原因同时进 body 的 `detail`，前端要靠它渲染横幅）。
     i18n 那边补上短语后，可以把这个 code 再挪回 detail（届时同步改
     test_settings_contract 的断言）。
     """
@@ -1332,7 +1382,7 @@ def check_same_origin(request: Request, *, require_cookie: bool = True) -> None:
     anchors = origin_anchors(request)
     if not anchors:
         _warn_unanchored_once(request)
-        _reject_csrf('csrf_origin_unconfigured')
+        _reject_unanchored()
     if got in anchors:
         return
     _reject_csrf('csrf_origin_mismatch')

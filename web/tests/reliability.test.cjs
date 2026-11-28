@@ -546,7 +546,7 @@ test('API platform query defaults preserve explicit values and storage failure d
     response: {use: (_success, failure) => { responseError = failure; }},
   }})};
   const window = {sessionStorage: {getItem() { throw new Error('denied'); }}, location: {pathname: '/dashboard', href: '/dashboard'}};
-  load('lib/api.ts', {axios: {default: axios}, './base-path': {BASE_PATH: ''}, './err-envelope': {}, './i18n': {},
+  load('lib/api.ts', {axios: {default: axios}, './base-path': {BASE_PATH: ''}, './err-envelope': {}, './i18n': {}, './origin-check': {},
     './public-demo': {}, './platform-store': {platformStore: {explicit: () => explicit}},
     globals: {window, URLSearchParams, process: {env: {}}}});
   for (const params of [undefined, {}, {platform: undefined}]) {
@@ -635,6 +635,8 @@ test('backend error details remain authoritative and server diagnostics get loca
     }})}},
     './base-path': {BASE_PATH: ''},
     './err-envelope': {backendErrorText: body => typeof body?.detail === 'string' ? body.detail : '', channelCheckDetails: () => null},
+    // D-41：真实的判定在 lib/origin-check.test.mjs 里测；这里只需要它不抛错。
+    './origin-check': {originBlockedReason: () => ''},
     './i18n': {t: (key, params) => params ? `${key}: ${params.detail}` : key, tp: text => text},
     './platform-store': {},
     './public-demo': {}, globals: {process: {env: {}}},

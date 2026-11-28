@@ -158,8 +158,26 @@ def logout(request: Request) -> JSONResponse:
 
 
 @router.get('/me')
-def me(user: dict = Depends(security.current_user)) -> dict:
-    return {'username': user.get('username'), 'role': user.get('role', 'viewer')}
+def me(request: Request, user: dict = Depends(security.current_user)) -> dict:
+    """身份 + 本次访问路径下的来源锚点状态（D-41，管理页横幅/状态栏用）。
+
+    `origin_check.state`：configured / proxy / loopback-only / unconfigured / relaxed。
+    浏览器在**填表之前**就能看到「这个地址能不能提交表单」，不用等 403。
+    """
+    return {'username': user.get('username'), 'role': user.get('role', 'viewer'),
+            'origin_check': security.origin_status(request)}
+
+
+@router.get('/origin-check')
+def origin_check(request: Request) -> dict:
+    """匿名可读：登录页在**填表之前**告诉用户「这个地址提交会被拒、怎么修」。
+
+    D-41 之后，没有锚点时登录本身（POST /api/login）也会 403 —— 用户如果登录
+    都进不去，管理页的横幅就永远看不到。所以这个 GET 只回本次请求的锚点形态
+    （configured / proxy / loopback-only / unconfigured / relaxed）与服务端看到的
+    Host：都是请求方自己带来的信息，没有凭据、没有其他用户或内网拓扑。
+    """
+    return security.origin_status(request)
 
 
 @router.get('/authz/probe')

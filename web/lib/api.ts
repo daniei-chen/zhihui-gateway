@@ -3,6 +3,7 @@ import type {AxiosRequestConfig, InternalAxiosRequestConfig} from 'axios';
 import {BASE_PATH} from './base-path';
 import {validateAccountExport} from './account-export.mjs';
 import {backendErrorText, channelCheckDetails, type ChannelRejection} from './err-envelope';
+import {originBlockedReason} from './origin-check';
 import {t, tp} from './i18n';
 import {platformStore, type Platform} from './platform-store';
 import type {Realm} from './realm-context';
@@ -39,6 +40,7 @@ import type {
   KeyImportStatus,
   Me,
   ModelCatalog,
+  OriginCheck,
   ModelListResponse,
   Page,
   PgSyncConfig,
@@ -104,6 +106,15 @@ export function errText(e: unknown): string {
   const ax = e as AxiosError;
   const channel = channelCheckDetails(ax?.response?.data);
   if (channel) return channelRejectionText(channel);
+  // D-41：这个 403 不是「权限不足」，而是「这个地址没被声明为本站来源」。
+  // 把同一句话（= 页面顶部横幅的正文）给出去，用户才知道去设 WB_PUBLIC_ORIGIN，
+  // 而不是去翻权限；通用 403 在这里等于什么都没说。
+  const headers = (ax?.response?.headers || {}) as Record<string, unknown>;
+  const reasonHeader = headers['x-manager-csrf-reason'];
+  if (originBlockedReason(ax?.response?.data,
+                          typeof reasonHeader === 'string' ? reasonHeader : '')) {
+    return t('origin.noticeBody');
+  }
   const raw = backendErrorText(ax?.response?.data);
   if (raw) {
     if ((ax?.response?.status ?? 0) >= 500) return t('error.serverDetail', {detail: tp(raw)});
@@ -205,6 +216,9 @@ const del = async <T>(url: string): Promise<T> => (await http.delete<T>(url)).da
 /* ── 鉴权 ───────────────────────────────────────────── */
 export const authApi = {
   me: (signal?: AbortSignal) => http.get<Me>('/api/me', {signal}).then(response => response.data),
+  /** D-41：匿名可读，登录页在填表之前判断「这个地址能不能提交表单」。 */
+  originCheck: (signal?: AbortSignal) =>
+    http.get<OriginCheck>('/api/origin-check', {signal}).then(response => response.data),
   login: (username: string, password: string) =>
     post<{ok: boolean; username: string; role: string}>('/api/login', {username, password}),
   logout: () => post<{ok: boolean}>('/api/logout'),

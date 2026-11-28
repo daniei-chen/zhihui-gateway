@@ -339,6 +339,7 @@
       "exclusive_minimum": 0
     },
     "WB_PUBLIC_ORIGIN": {"type":"string","sensitive":false,"default":"","consumers":["server/config.py","server/security.py"],"description":"Declared public origin(s) of this deployment, e.g. https://zhihui.kaogong.art. Authoritative anchor for the CSRF same-origin check on write endpoints: when set, only these origins pass and the request Host is never trusted. Empty by default (no guessed domain). When empty the check falls back to WB_CORS_ORIGINS, then a trusted reverse proxy's X-Forwarded-Host, then a Host that cannot be DNS-rebound (IP literal, localhost, single-label name)."},
+    "WB_ALLOW_UNCONFIGURED_ORIGIN": {"type":"boolean","sensitive":false,"default":false,"consumers":["server/config.py","server/security.py"],"description":"Escape hatch for D-41: when true, deployments reached by a dotted domain without WB_PUBLIC_ORIGIN keep working by anchoring writes on the request Host again (the pre-fix behavior). Cross-site Origin/Referer checks still apply, but DNS rebinding becomes exploitable again; startup logs a prominent warning. Off by default."},
     "WB_CORS_ORIGINS": {
       "type": "string",
       "sensitive": false,

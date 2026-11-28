@@ -569,6 +569,8 @@ function securityFixture() {
   const state = {values: {config: {enabled: false, mode: 'blacklist'}, rules: [], logs: [], audit: {items: []}},
     errors: {}, reload: async () => false};
   const {default: Security} = load('app/(main)/security/page.tsx', common(h, {
+    // D-41 的来源状态只影响提示行，不影响本文件断言的开关/保存行为。
+    '@/lib/origin-check': {needsOriginNotice: () => false, originStateKey: () => ''},
     '@/lib/use-heartbeat': {useHeartbeat() {}}, '@/lib/use-async-data': {useAsyncAll: () => state},
     '@/lib/auth-context': {useAuth: () => ({isAdmin: admin, role: admin ? 'admin' : 'viewer', me: {username: 'admin'}})},
     '@/lib/toast': {notify: {ok: value => notices.push(value), err: value => notices.push(value)}},
