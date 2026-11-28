@@ -1491,10 +1491,15 @@ test('the auth provider publishes the anchor state to its consumers', async () =
   assert.deepEqual(fixture.render().origin, ORIGIN_STATUS_FIXTURE,
     '取到了锚点状态却没交给上下文 → 横幅和安全页状态栏永远是空的');
 
+  // 先成功一次（上下文里真的有一个旧值），再让第二次读失败：
+  // 只有这样才证明「失败时置空」，而不是「一开始就是 null」。
   const failing = authRaceFixture();
-  failing.failOriginStatus();
   failing.render(); failing.harness.effects(); await flush();
   failing.reads[0].resolve({username: 'alice', role: 'admin'}); await flush();
+  assert.deepEqual(failing.render().origin, ORIGIN_STATUS_FIXTURE);
+  failing.failOriginStatus();
+  const again = failing.render().refresh(); await flush();
+  failing.reads[1].resolve({username: 'alice', role: 'admin'}); await again; await flush();
   assert.equal(failing.render().me.username, 'alice', '锚点读失败不能拖垮登录态');
   assert.equal(failing.render().origin, null, '读不到就置空（不提示），不要留旧值');
 });

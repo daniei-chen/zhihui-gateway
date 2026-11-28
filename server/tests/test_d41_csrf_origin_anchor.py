@@ -380,14 +380,27 @@ class OriginStatusField(_AnchorCase):
     def test_a_human_read_only_role_reads_the_field_too(self) -> None:
         """人类只读角色（`account_admin`）也要看得到横幅 —— 否则等于没写。
 
-        角色名取 `userroles.HUMAN_ROLES` 里的真值；`viewer` 不在其中（它连
-        `current_user` 的 deny-by-default 都过不去），所以这里不叫 viewer。
+        角色放行发生在 `require_panel_reader`（`security.py`，只认
+        `userroles.HUMAN_ROLES`），经由该端点的 `require_session_reader` 到达；
+        **不是** `current_user` —— 它对合法会话不做角色判断。所以 `viewer`
+        会被这个闸门 403，见下一条用例。
         """
         app = self._panel_app({'username': 'watcher', 'role': 'account_admin'})
         response = self._call('/api/system/origin-status', method='get', peer=LAN,
                               host='panel.example.com', app=app)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['state'], 'unconfigured')
+
+    def test_a_viewer_role_is_refused_by_the_gate(self) -> None:
+        """`viewer` 不在 `userroles.HUMAN_ROLES` 里：这个端点对它 403。
+
+        钉子针对的是「把闸门降级成 `Depends(current_user)`」——那样 `viewer`
+        会话会读到 `host`（运维拓扑），而本轮其它用例不会发现。
+        """
+        app = self._panel_app({'username': 'viewer', 'role': 'viewer'})
+        response = self._call('/api/system/origin-status', method='get', peer=LAN,
+                              host='panel.example.com', app=app)
+        self.assertEqual(response.status_code, 403, response.text)
 
     def test_an_api_token_cannot_read_the_field(self) -> None:
         """带 scope 的机器令牌不是「面板读者」：锚点状态里有运维拓扑（Host）。"""
