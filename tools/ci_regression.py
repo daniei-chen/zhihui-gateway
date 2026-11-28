@@ -610,6 +610,9 @@ PYTEST_MODULES = (
     # 三条都先红后绿（修前 3 failed，修后 3 passed）—— 其中两条走真实 ASGI
     # 断连（上游发一帧就挂住，客户端在流中途挂断），不是手搓的假输入。
     "server.tests.test_dan23_disconnect_convergence",
+    # G-02：DAN-23 的 settled 契约必须在崩溃恢复后仍然成立（回执重放走同一
+    # 判据），且 charged_partial 必须有归档出口。修前 3 failed / 修后全绿。
+    "server.tests.test_g02_replay_client_cancelled",
 )
 
 

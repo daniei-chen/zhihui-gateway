@@ -338,9 +338,15 @@ def _settle(entry: dict) -> dict:
     if final:
         return plan
     quota = db.query_one('SELECT quota_credit,daily_credit_quota FROM api_keys WHERE id=?', (key_id,)) if key_id else None
-    known = facts.get('terminal_state') == 'completed' and complete
-    if quota and (quota['quota_credit'] or quota['daily_credit_quota']) and facts.get('credit') is None:
-        known = False
+    # DAN-23 判据与实时路径共用 `budget.receipt_known`：同一份「完整 usage +
+    # client_cancelled」回执，实时结算与崩溃恢复后的重放必须得出同一个结论
+    # （G-02 / 审计 D-02，handoff 02-budget-ledger 的 D-01：曾经重放只认
+    # completed，落成带 charged_tokens 的 unknown → charged_partial →
+    # credit 配额密钥永久 429）。
+    known = budget.receipt_known(
+        facts.get('terminal_state'), usage_known=complete,
+        credit_present=facts.get('credit') is not None,
+        limited=bool(quota and (quota['quota_credit'] or quota['daily_credit_quota'])))
     next_state = ('settled' if known else 'released'
                   if row['state'] == 'reserved' and facts.get('usage_source') != 'upstream' else 'unknown')
     db.execute(
