@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _TRUE = {"1", "true", "yes", "on", "y", "t"}
 _FALSE = {"0", "false", "no", "off", "n", "f"}
@@ -65,9 +65,14 @@ def _env_float(name: str, default: float, lo: float, hi: float) -> float:
 def _abs(name: str, default: str) -> str:
     v = os.environ.get("QTG_" + name.upper()) or default
     p = Path(v)
-    if not p.is_absolute():
-        raise ValueError(f"QTG_{name.upper()} 必须是绝对路径: {v!r}")
-    return str(p)
+    if p.is_absolute():
+        return str(p)
+    # 这些配置写的是部署机上的 Linux 路径。Windows 上 Path('/opt/x').is_absolute()
+    # 为假，按宿主语义判定会把正确配置判成错误；POSIX 绝对路径一律按原样接受，
+    # 保持正斜杠，不被宿主路径语义改写。
+    if PurePosixPath(v).is_absolute():
+        return str(PurePosixPath(v))
+    raise ValueError(f"QTG_{name.upper()} 必须是绝对路径: {v!r}")
 
 
 def _file_switch(path: str, allowed: tuple, default: str) -> str:

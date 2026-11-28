@@ -281,7 +281,7 @@ class PromotionTransitionTests(unittest.TestCase):
 
 class WorkflowClosureTests(unittest.TestCase):
     def test_release_requires_reusable_quality_and_same_immutable_checkout(self):
-        release = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        release = yaml.load((ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
         jobs = release['jobs']
         self.assertEqual(jobs['quality']['uses'], './.github/workflows/quality.yml')
         self.assertEqual(jobs['quality']['with']['source_sha'], '${{ needs.resolve.outputs.source_sha }}')
@@ -295,7 +295,7 @@ class WorkflowClosureTests(unittest.TestCase):
             self.assertIn("draft_writable == 'true'", step['if'])
 
     def test_backend_http_gates_require_frontend_artifact_and_verify_its_source(self):
-        quality = yaml.load((ROOT / '.github/workflows/quality.yml').read_text(), Loader=yaml.BaseLoader)
+        quality = yaml.load((ROOT / '.github/workflows/quality.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
         self.assertIn('workflow_call', quality['on'])
         for name in ('manager', 'gateway'):
             job = quality['jobs'][name]
@@ -306,7 +306,7 @@ class WorkflowClosureTests(unittest.TestCase):
             test = next(i for i, step in enumerate(steps) if 'ci_regression.py' in step.get('run', ''))
             self.assertLess(download, verify)
             self.assertLess(verify, test)
-        promotion = yaml.load((ROOT / '.github/workflows/promote-images.yml').read_text(), Loader=yaml.BaseLoader)
+        promotion = yaml.load((ROOT / '.github/workflows/promote-images.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
         self.assertEqual(promotion['on']['release']['types'], ['published'])
         self.assertNotIn('push', promotion['on'])
         self.assertEqual(promotion['concurrency']['cancel-in-progress'], 'false')

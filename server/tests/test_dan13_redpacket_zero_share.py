@@ -33,7 +33,7 @@ from server.redpacket import (  # noqa: E402
 @pytest.fixture()
 def dataset(monkeypatch):
     """隔离数据目录 + 重新打开的连接（conftest 的说明：共用目录会互相污染）。"""
-    from server import config, db
+    from server import budgetowner, config, db
     tmp = tempfile.TemporaryDirectory()
     monkeypatch.setattr(config, 'DB_PATH', Path(tmp.name) / 'dan13.db')
     if db._conn is not None:
@@ -46,6 +46,9 @@ def dataset(monkeypatch):
         if db._conn is not None:
             db._conn.close()
         db._conn = None
+        # 预算归属锁的句柄是模块级全局的：不关掉，Windows 上临时目录删不掉
+        # （WinError 32，文件仍被本进程持有），POSIX 允许删打开中的文件所以看不出来。
+        budgetowner.close()
         tmp.cleanup()
 
 

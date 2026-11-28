@@ -314,6 +314,10 @@ class UpdaterSupplyChainTest(unittest.TestCase):
         self.assertEqual((install / '.version').read_text(encoding='utf-8').strip(), 'v9.9.9')
         self.assertTrue(any('pip' in call for call in calls), '依赖安装根本没跑')
 
+    @unittest.skipIf(os.name != 'posix',
+                     'the contract is a POSIX mode bit: Windows reports 0o666 for every '
+                     'regular file regardless of its ACL, so chmod(0o666) is a no-op and the '
+                     'anchor can never be "group/world writable" as this test defines it')
     def test_update_refuses_untrusted_anchor(self) -> None:
         """信任锚本身不合格（可被组/其他用户写）时拒绝 —— 否则换把公钥就绕过了签名。"""
         install = self._make_install('anchor')

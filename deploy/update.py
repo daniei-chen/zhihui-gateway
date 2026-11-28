@@ -657,8 +657,12 @@ def _trust_anchor() -> Path:
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(
             f'❌ 发布签名信任锚必须是普通文件（当前是软链或特殊文件）：{anchor}，已拒绝安装')
+    # 这条只在 POSIX 上有意义：Windows 的 st_mode 对普通文件一律是 0o666，
+    # 真正的权限在 ACL 里，mode 位是合成的。照 mode 判会把每一次安装都拒掉
+    # （实测「mode 0666，已拒绝安装」），而不是拦住谁。Windows 的等价检查是
+    # 读 ACL，属于另一件事；在此之前这里对 Windows 不做 mode 判定。
     mode = stat.S_IMODE(info.st_mode)
-    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+    if os.name == 'posix' and mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise RuntimeError(
             f'❌ 发布签名信任锚可被组/其他用户写（mode {mode:04o}）：{anchor}，已拒绝安装。\n'
             f'  能改锚的人能换掉整条信任链（chmod 644 {anchor}）。'

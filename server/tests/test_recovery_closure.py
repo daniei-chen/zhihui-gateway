@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+from contextlib import closing
 import subprocess
 import tarfile
 import tempfile
@@ -44,7 +45,9 @@ def archive_bytes(payloads, *, manifest=None, extra=()):
 
 def real_database(root):
     path = root / 'original.db'
-    with sqlite3.connect(path) as connection:
+    # sqlite3 的 with 只提交事务、不关连接：连接留着等于文件句柄留着，Windows 上
+    # 这个临时目录随后就删不掉（WinError 32），POSIX 只是把 fd 拖到 GC。
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute('CREATE TABLE evidence (id INTEGER PRIMARY KEY, value TEXT)')
         connection.execute('INSERT INTO evidence VALUES (1, ?)', ('synthetic only',))
     return path.read_bytes()
@@ -198,6 +201,10 @@ class OfflineRecoveryBoundsTest(unittest.TestCase):
         report = json.loads((self.work / 'drill-report.json').read_text())
         self.assertFalse(report['complete_restore_verified'])
 
+    @unittest.skipIf(os.name == 'nt',
+                     "deploy/recovery-drill.sh is a bash wrapper that hands its POSIX "
+                     "$SCRIPT_DIR (/d/AI/...) to the native interpreter; Git Bash paths "
+                     "do not resolve for Windows python. Linux CI runs the wrapper")
     def test_shell_wrapper_runs_only_explicit_offline_archive(self):
         raw = archive_bytes({'manager/data/manager.db': real_database(self.root)})
         path = self.root / 'archive.tar.gz'
@@ -261,6 +268,11 @@ class BackupProofTest(unittest.TestCase):
         self.assertEqual(self.path.read_text(), 'previous status')
 
 
+@unittest.skipIf(os.name != 'posix',
+                 'bounded offline application probe is POSIX-only '
+                 '(deploy/restore_drill.py:415 refuses to start it without POSIX '
+                 'resource limits); 17 of the 18 cases assert probe evidence, and the '
+                 'release-marker cases need real symlinks')
 class TrustedApplicationRestoreTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -577,6 +589,9 @@ class IndependentReadbackTest(unittest.TestCase):
 
 
 class BackupProducerBoundsTest(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt',
+                     'asserts the staged payload keeps POSIX mode 0600; Windows os.chmod '
+                     'only toggles the read-only bit, so the mode check cannot hold')
     def test_large_release_inventory_does_not_retain_file_payloads(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

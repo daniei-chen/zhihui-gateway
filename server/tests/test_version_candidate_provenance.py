@@ -86,8 +86,11 @@ class CandidateProvenanceTests(unittest.TestCase):
             self.assertFalse(value['signed'])
             self.assertIsNone(value['source_commit'])
             self.assertEqual(value['source_kind'], 'source-candidate')
+            # 哈希按 LF 归一化（tools/bump_version.py:55）。Windows 文本写入产出
+            # CRLF，直接对原始字节取哈希会把归一化当成差异。
             self.assertEqual(value['reviewed_patch_files']['source.py'],
-                             hashlib.sha256(source.read_bytes()).hexdigest())
+                             hashlib.sha256(source.read_bytes().replace(
+                                 b'\r\n', b'\n')).hexdigest())
 
     def test_unavailable_git_cannot_leave_mismatched_version_metadata(self):
         for failure in (subprocess.CalledProcessError(128, ['git', 'rev-parse', 'HEAD']),
