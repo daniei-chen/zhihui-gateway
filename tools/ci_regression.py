@@ -616,6 +616,9 @@ MODULES = (
     # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
     # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
     "server.tests.test_g13_protocol_semantics",
+    # G-11 单写者：serve.py 必须拒绝 --workers>1，同一数据目录只许一个实例。
+    # 三条变异各自杀掉用例（去掉 --workers 拒绝 / serve.py 不抢租约 / 吞掉锁失败）。
+    "server.tests.test_single_writer_launcher",
 )
 
 
