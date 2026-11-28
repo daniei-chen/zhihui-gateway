@@ -615,6 +615,10 @@ MODULES = (
     # 管理员点完重置、界面已用变 0，请求照样 429。三条用例各自被一个变异杀掉
     # （去掉清理 / 删行而非写 0 / 顺手清掉历史日），见 PR 证据。
     "server.tests.test_g07_reset_daily_usage",
+    # G-13（2026-11-28）：三协议 P1 —— Messages 非流式丢 content 数组（D-20）、
+    # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
+    # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
+    "server.tests.test_g13_protocol_semantics",
 )
 
 
