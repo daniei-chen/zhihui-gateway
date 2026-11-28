@@ -476,6 +476,54 @@ def cmd_seal(args) -> int:
     return 0
 
 
+def _nginx_block(text: str, uri: str) -> str | None:
+    """取 `location … <uri> { … }` 的花括号内文本；找不到返回 None。
+
+    只按花括号配平切片 —— nginx 配置里带花括号的值不存在，够用。
+    """
+    head = re.search(r'location\s[^\n{]*' + re.escape(uri) + r'\s*\{', text)
+    if not head:
+        return None
+    depth = 1
+    index = head.end()
+    while index < len(text) and depth:
+        char = text[index]
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+        index += 1
+    return text[head.end():index - 1]
+
+
+def _check_auth_request_targets(text: str) -> list[str]:
+    """`auth_request` 指向的内部 location 必须清空客户端来源头。
+
+    这个位置**不在仓库里**（运维自己写在 sites-enabled），但配错会让升级后
+    整站不可用：`/api/system/internal-session-verify` 的「仅本机」是两层判据
+    （TCP 对端 + `iputil.client_ip()`）。若内部 location 把 `location /` 那套
+    `proxy_set_header X-Real-IP $remote_addr;` 也抄进去，`auth_request` 子请求
+    就带着浏览器地址，被判定成外部请求而 403 —— 于是 `/api/` 的会话校验对
+    所有用户都失败。所以在这里判：要么显式清空，要么在发布前拦住。
+    """
+    notes = []
+    targets = sorted(set(re.findall(r'auth_request\s+([^\s;]+)\s*;', text)))
+    for uri in targets:
+        body = _nginx_block(text, uri)
+        if body is None:
+            notes.append(f'没找到 auth_request 目标 {uri} 的 location 块，无法确认它清空了来源头')
+            continue
+        for header in ('X-Real-IP', 'X-Forwarded-For'):
+            if not re.search(r'proxy_set_header\s+' + header + r'\s+(""|\'\')',
+                             body, re.IGNORECASE):
+                raise ReleaseError(
+                    f'auth_request 目标 {uri} 的 location 转发了 {header}：'
+                    '子请求会被判成外部来源，升级后整站 /api/ 会话校验都 403。'
+                    f'改成 proxy_set_header {header} "";（见 deploy/README.md）')
+        notes.append(f'auth_request {uri} 的内部 location 已清空来源头')
+    return notes
+
+
 def check_nginx(site: Path) -> list[str]:
     """站点配置里是否还有余额协议的两段放行。
 
@@ -491,7 +539,7 @@ def check_nginx(site: Path) -> list[str]:
     if missing:
         raise ReleaseError(
             "站点配置缺少余额协议放行（恢复备份后需重新插入）：" + "; ".join(missing))
-    return ["余额协议放行已就位"]
+    return ["余额协议放行已就位", *_check_auth_request_targets(text)]
 
 
 def cmd_verify(args) -> int:

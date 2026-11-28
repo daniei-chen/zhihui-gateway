@@ -546,6 +546,79 @@ class NginxCheckTest(unittest.TestCase):
         with self.assertRaises(release_tool.ReleaseError):
             release_tool.check_nginx(self.root / 'nope')
 
+    # ── auth_request 内部 location：升级后整站 403 的那个坑 ──────────────
+    #
+    # `/api/system/internal-session-verify` 的「仅本机」是两层判据（TCP 对端 +
+    # `iputil.client_ip()`）。内部 location 若转发客户端来源头，子请求就带着
+    # 浏览器地址 → 被判定成外部 → `/api/` 的会话校验对所有用户 403。这个位置
+    # 不在仓库里，只能在发布校验里判。
+
+    USAGE_TOKEN_BLOCKS = ('    location = /api/usage/token {
+'
+                          '        include /etc/nginx/snippets/zh-usage-token.location.conf;
+'
+                          '    }
+'
+                          '    location = /api/usage/token/ {
+'
+                          '        include /etc/nginx/snippets/zh-usage-token.location.conf;
+'
+                          '    }
+')
+    AUTH_REQUEST = '    location /api/ {
+        auth_request /__zh_session;
+    }
+'
+
+    def _site_with_internal(self, internal: str) -> Path:
+        return self._site(self.USAGE_TOKEN_BLOCKS + self.AUTH_REQUEST + internal)
+
+    def test_internal_location_forwarding_client_ip_is_refused(self) -> None:
+        site = self._site_with_internal(
+            '    location = /__zh_session {
+'
+            '        internal;
+'
+            '        proxy_pass http://127.0.0.1:7864/api/system/internal-session-verify;
+'
+            '        proxy_set_header X-Real-IP $remote_addr;
+'
+            '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+'
+            '    }
+')
+        with self.assertRaises(release_tool.ReleaseError) as ctx:
+            release_tool.check_nginx(site)
+        message = str(ctx.exception)
+        self.assertIn('/__zh_session', message)
+        self.assertIn('X-Real-IP', message)
+
+    def test_internal_location_clearing_client_ip_is_accepted(self) -> None:
+        site = self._site_with_internal(
+            '    location = /__zh_session {
+'
+            '        internal;
+'
+            '        proxy_pass http://127.0.0.1:7864/api/system/internal-session-verify;
+'
+            '        proxy_set_header X-Real-IP "";
+'
+            '        proxy_set_header X-Forwarded-For "";
+'
+            '    }
+')
+        notes = release_tool.check_nginx(site)
+        self.assertTrue(any('/__zh_session' in note for note in notes), notes)
+
+    def test_auth_request_target_outside_the_file_is_reported_not_blocked(self) -> None:
+        """内部 location 可能被 include 进别的文件：报告出来，但别拦住发布。"""
+        notes = release_tool.check_nginx(self._site(self.USAGE_TOKEN_BLOCKS + self.AUTH_REQUEST))
+        self.assertTrue(any('无法确认' in note for note in notes), notes)
+
+    def test_site_without_auth_request_is_untouched(self) -> None:
+        self.assertEqual(release_tool.check_nginx(self._site(self.USAGE_TOKEN_BLOCKS)),
+                         ['余额协议放行已就位'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -433,8 +433,11 @@ class DeploymentTrustModel(unittest.TestCase):
         block = text.split('location = /__zh_session', 1)[1][:600]
         for header in ('X-Real-IP', 'X-Forwarded-For'):
             with self.subTest(header=header):
-                self.assertIn(header, block,
-                              f'internal location 示例没有清空 {header}')
+                self.assertIn(f'{header} "";', block,
+                              f'internal location 示例没把 {header} 清空 —— '
+                              '转发它等于把子请求判成外部来源')
+                self.assertNotIn(f'{header} $remote_addr', block,
+                                 f'internal location 把 {header} 转发成了浏览器地址')
 
     def test_escape_hatch_schema_matches_the_runtime_parser(self) -> None:
         """`_env_bool` 只认 1/true/yes/on；`t` / `y` 必须在启动期被拒，而不是静默 false。"""
@@ -477,6 +480,8 @@ class InternalVerifyStaysLoopbackOnly(unittest.TestCase):
         secret = mock.patch.object(system.edgeidentity, '_secret', lambda: 'k' * 48)
         secret.start()
         self.addCleanup(secret.stop)
+        system._forwarded_refusal_warned.clear()
+        self.addCleanup(system._forwarded_refusal_warned.clear)
 
     def _call(self, peer=LOOPBACK, extra: dict | None = None):
         app = self.app
@@ -513,6 +518,16 @@ class InternalVerifyStaysLoopbackOnly(unittest.TestCase):
         response = self._call()
         self.assertEqual(response.status_code, 204, response.text)
         self.assertTrue(response.headers.get('x-qtg-identity', '').startswith('v1.'))
+
+    def test_the_upgrade_trap_is_logged_once(self) -> None:
+        """反代把来源头带进子请求时，日志要说明原因 —— 否则整站 403 无从查起。"""
+        with self.assertLogs('workbuddy.system', level='WARNING') as logs:
+            self._call(extra={'x-real-ip': '203.0.113.9'})
+            self._call(extra={'x-real-ip': '203.0.113.9'})
+        self.assertEqual(len(logs.records), 1, '同一次故障只告警一次，不要刷屏')
+        message = logs.records[0].getMessage()
+        self.assertIn('auth_request', message)
+        self.assertIn('X-Real-IP', message)
 
     def test_whole_loopback_range_counts_as_local(self) -> None:
         """127.0.0.2 是回环（以前只认 127.0.0.1 / ::1）。"""

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Literal
@@ -24,6 +26,11 @@ from ..iputil import client_ip
 from ..services import changelog, updater, wb2api
 
 router = APIRouter(prefix='/api/system', tags=['system'])
+
+_log = logging.getLogger('workbuddy.system')
+#: 「反代把来源头带进了 auth_request 子请求」只告警一次 —— 这是升级后整站
+#: `/api/` 会话校验 403 的唯一自解释线索，刷屏没有额外信息。
+_forwarded_refusal_warned = threading.Event()
 
 #: U16：systemd 单元文件所在目录。测试可替换（不碰真实 /etc）。
 SYSTEMD_UNIT_DIR = Path('/etc/systemd/system')
@@ -491,7 +498,18 @@ def internal_session_verify(request: Request,
     # 回环 → 放行。前提是 `WB_TRUST_PROXY=1`（默认）：置 0 表示前面没有反代，
     # 那种部署下对端本身就是真实来源，不该有回环对端。
     peer = request.client.host if request.client else ''
-    if not (_loopback(peer) and _loopback(client_ip(request))):
+    source = client_ip(request)
+    if not (_loopback(peer) and _loopback(source)):
+        # 对端在回环、真实来源却在外面的唯一成因：反代的 internal location
+        # 转发了 X-Real-IP / X-Forwarded-For。升级后这会让**整站** `/api/`
+        # 会话校验 403，而 403 本身不会说原因 —— 所以留一行日志。
+        if _loopback(peer) and not _forwarded_refusal_warned.is_set():
+            _forwarded_refusal_warned.set()
+            _log.warning(
+                'internal-session-verify 拒绝了一次经反代进来的调用：TCP 对端是 %s，'
+                '但解析出的真实来源是 %s。nginx 的 auth_request internal location '
+                '不要转发 X-Real-IP / X-Forwarded-For（写法见 deploy/README.md），'
+                '否则 /api/ 的会话校验会对所有用户 403。', peer, source)
         raise HTTPException(status_code=403, detail='仅允许本机调用')
     # 读密钥走 `edgeidentity` 的那套校验，而不是裸 `open().read()`。
     #
