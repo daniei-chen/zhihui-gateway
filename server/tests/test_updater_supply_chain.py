@@ -409,6 +409,19 @@ class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
                 self.assertIn('$ManagerRepo', line,
                               '发布源地址写死了仓库名；应统一用 Resolve-ManagerRepo 的结果')
 
+    def test_override_is_resolved_before_any_network_call(self) -> None:
+        """白名单校验必须排在取版本号之前。
+
+        顺序反了的话，非白名单的源会**先被用来发请求**，等拒绝时已经连出去了
+        —— 「没落盘、没执行」就只剩安装阶段那一半。
+        """
+        resolve = self.source.find('$ManagerRepo = Resolve-ManagerRepo')
+        fetch = self.source.find('$tagInfo = Get-LatestGitHubTag')
+        self.assertNotEqual(resolve, -1, '找不到 Resolve-ManagerRepo 的调用点')
+        self.assertNotEqual(fetch, -1, '找不到 Get-LatestGitHubTag 的调用点')
+        self.assertLess(resolve, fetch,
+                        '白名单校验排在取版本号之后：拒绝之前已经按非白名单的源发过请求')
+
     # ── 行为：白名单校验与非白名单拒绝（需要本机有 PowerShell）──
 
     def _source_block(self) -> str:
