@@ -66,8 +66,29 @@ def _message(content, finish='stop', **extra):
     return {'choices': [{'message': message, 'finish_reason': finish}]}
 
 
+class ContentTextSignalTests(unittest.TestCase):
+    """`_content_text` 必须把「有没有 parts」告诉调用方，而不是自己决定报不报错。"""
+
+    def test_no_content_carries_no_parts_flag(self):
+        for content in NO_CONTENT_FORMS:
+            with self.subTest(content=content):
+                self.assertEqual(anthropic._content_text(content), ('', False))
+
+    def test_deliverable_parts_carry_text_and_no_flag(self):
+        self.assertEqual(
+            anthropic._content_text([{'type': 'text', 'text': '答案'}]),
+            ('答案', False))
+
+    def test_undeliverable_parts_carry_the_flag(self):
+        """只有图片块的数组：正文为空，但第二个值必须为 True。"""
+        self.assertEqual(
+            anthropic._content_text([{'type': 'image_url',
+                                      'image_url': {'url': 'http://x/y.png'}}]),
+            ('', True))
+
+
 class EmptyTurnUnitTests(unittest.TestCase):
-    """单测层：没有内容 → 空回合；有 part 没正文 → 报错。"""
+    """单测层：没有内容 → 空回合；有 part 没正文 → 报错（两条路径分别断言）。"""
 
     def test_no_content_forms_render_as_empty_turn(self):
         for content in NO_CONTENT_FORMS:
@@ -211,7 +232,9 @@ class EmptyTurnEndpointTests(unittest.TestCase):
             'api_keys': [],
         })
         from server.main import app
-        self.client = TestClient(app)
+        # 回环客户端：`/api/health/upstream` 只认回环（与 alerts/inflight 同一套守卫），
+        # 这条用例要同时打 Messages 端点和这个探针。
+        self.client = TestClient(app, client=('127.0.0.1', 40000))
         self.token = keysvc.create_key('empty-turn')['key']
 
     def _restore(self):
@@ -254,6 +277,20 @@ class EmptyTurnEndpointTests(unittest.TestCase):
         response = self._post(_message('答案'))
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['content'], [{'type': 'text', 'text': '答案'}])
+
+    def test_empty_turn_is_visible_in_health_probe(self):
+        """一次真实空回合之后，`/api/health/upstream` 的计数必须看得见地加了 1。"""
+        observability.reset_empty_turn_counts()
+        self.addCleanup(observability.reset_empty_turn_counts)
+        self.assertEqual(observability.empty_turn_snapshot()['total'], 0)
+        self.assertEqual(self._post(_message('')).status_code, 200)
+        probe = self.client.get('/api/health/upstream')
+        self.assertEqual(probe.status_code, 200, probe.text)
+        self.assertEqual(probe.json()['empty_turns']['total'], 1)
+        self.assertEqual(probe.json()['empty_turns']['by_protocol'], {'messages': 1})
+        self.assertEqual(self._post(_message('答案')).status_code, 200)
+        self.assertEqual(self.client.get('/api/health/upstream').json()['empty_turns']['total'], 1,
+                         '正常答案不许被算成空回合')
 
 
 class EmptyTurnProbeTests(unittest.TestCase):
