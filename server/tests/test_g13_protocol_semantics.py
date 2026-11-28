@@ -56,6 +56,23 @@ class MessagesContentShapeTests(unittest.TestCase):
         }, 'claude-x')
         self.assertEqual(out['content'], [{'type': 'text', 'text': '普通答案'}])
 
+    def test_mixed_parts_deliver_text_only(self):
+        """混合数组里只交付文本块：图片 URL 绝不能混进答案正文。
+
+        实现现在只取 `part['text']`，但「更宽松」的改法（凡是 part 就 `str()` 拼进去）
+        会让图片 URL 直接进正文，而所有其它用例仍全绿——这条守着它（K2）。
+        """
+        out = anthropic.to_anthropic_response({
+            'choices': [{'message': {'role': 'assistant', 'content': [
+                {'type': 'text', 'text': '答案'},
+                {'type': 'image_url', 'image_url': {'url': 'https://example.invalid/p.png'}},
+                {'type': 'text', 'text': '结尾'},
+            ]}, 'finish_reason': 'stop'}],
+        }, 'claude-x')
+        self.assertEqual(out['content'], [{'type': 'text', 'text': '答案结尾'}])
+        self.assertNotIn('example.invalid', json.dumps(out, ensure_ascii=False),
+                         '非文本块被拼进了正文')
+
     def test_parts_without_any_text_fail_loudly(self):
         """只有图片块之类的数组：Anthropic 的 text 块表达不了，不能回空。"""
         with self.assertRaises(ValueError):
