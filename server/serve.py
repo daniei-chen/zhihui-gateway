@@ -74,7 +74,18 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=None)
     parser.add_argument('--timeout-graceful-shutdown', type=float,
                         default=float(os.environ.get('WB_GRACEFUL_SHUTDOWN_S', '650')))
+    parser.add_argument('--workers', type=int, default=1,
+                        help='必须为 1：本服务是单进程设计（详见下方拒绝启动的原因）')
     args = parser.parse_args(argv)
+    if args.workers != 1:
+        # 不是"暂时没支持"，而是"不能支持"：限额/准入/密钥槽位都在进程内存里
+        # （observability.py、gateway.py），N 个 worker 各自算一份 = 额度放大 N 倍；
+        # 账号文件的进程内 RLock（services/filelock.py）也不再跨进程互斥，
+        # 读—改—写会退回 issue #210/#187 的丢更新。要加容量请换实现，不要加 worker。
+        parser.error(
+            f'--workers {args.workers} 被拒绝：本服务必须单进程。'
+            '限额、准入、密钥槽位都在进程内存里，多 worker 会把额度放大 N 倍；'
+            '账号文件的进程内锁也不再跨进程互斥，读—改—写会丢更新（issue #210/#187）。')
     if not math.isfinite(args.timeout_graceful_shutdown) or args.timeout_graceful_shutdown <= 0:
         parser.error('graceful shutdown must have a positive bounded duration')
     from . import config
@@ -93,15 +104,23 @@ def main(argv=None):
         signal.signal(signal.SIGUSR1, lambda *_: drain.begin())
         signal.signal(signal.SIGUSR2, lambda *_: drain.resume())
     listener = inherited_listener()
-    if listener is not None:
-        # host/port 不参与：监听 socket 已经 bind 好了，uvicorn 直接把 fd 收下。
-        cfg = uvicorn.Config('server.main:app', workers=1,
-                             timeout_graceful_shutdown=args.timeout_graceful_shutdown)
-        DrainServer(cfg).run(sockets=[listener])
-    else:
-        cfg = uvicorn.Config('server.main:app', host=args.host, port=args.port,
-                             workers=1, timeout_graceful_shutdown=args.timeout_graceful_shutdown)
-        DrainServer(cfg).run()
+    from .services import instancelease
+    try:
+        lease = instancelease.acquire(config.DATA_DIR)
+    except instancelease.LeaseBusy as exc:
+        # 单进程契约是运行约束，不是文档约定：同一份 data/ 上第二个实例会让
+        # 进程内的限额/准入各算一份、让 filelock 的 RLock 失效，直接拒绝服务。
+        raise SystemExit(f'拒绝启动：{exc}') from None
+    with lease:
+        if listener is not None:
+            # host/port 不参与：监听 socket 已经 bind 好了，uvicorn 直接把 fd 收下。
+            cfg = uvicorn.Config('server.main:app', workers=1,
+                                 timeout_graceful_shutdown=args.timeout_graceful_shutdown)
+            DrainServer(cfg).run(sockets=[listener])
+        else:
+            cfg = uvicorn.Config('server.main:app', host=args.host, port=args.port,
+                                 workers=1, timeout_graceful_shutdown=args.timeout_graceful_shutdown)
+            DrainServer(cfg).run()
 
 
 if __name__ == '__main__':
