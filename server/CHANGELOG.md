@@ -15,7 +15,7 @@
 
 从 0.0.2 开始，只记录智汇自己的发版。继承组件与早期整理稿移入历史归档，不作为当前产品版本列表，也不影响调用记录、额度或计费账本。
 
-## [1.6.28] - 2026-11-27
+## [1.6.28] - 2026-11-28
 
 上一版为 v1.6.26；v1.6.27 未单独发布，其改动已包含在本版中。
 
@@ -35,8 +35,8 @@
 
 ### 升级前必做
 
-- **用域名访问的部署要先声明来源。** 设 `WB_PUBLIC_ORIGIN=https://你的域名`（多个来源用 `WB_CORS_ORIGINS`，逗号分隔）。没有声明、又没开反代来源头的部署，升级后写请求（**登录也是写请求**）会被拒，页面报 `{"detail": "origin_unconfigured"}`。用 IP、`localhost`、单标签内网名直连的部署不受影响。两种修法选一种：设 `WB_PUBLIC_ORIGIN`，或确认反代**覆盖写** `X-Forwarded-Host $host` 之后显式打开 `WB_TRUST_FORWARDED_HOST=1`。
-- **nginx 每个 `proxy_pass` 的 location 显式设置来源头。** 加一行 `proxy_set_header X-Forwarded-Host "";`（表示不采信，推荐）或 `proxy_set_header X-Forwarded-Host $host;`（覆盖写）。不设置时，客户端自带的值会直接到达应用，上面那道保护就白做了。**切换时带上站点配置**：`release.py activate v1.6.28 --nginx <站点配置路径>`（想在切指针前单独核对，也可以先跑 `release.py verify v1.6.28 --nginx <路径>`）。**不带 `--nginx` 时站点配置这一项完全不检查** —— 默认行为就是不查。它查两件事：转发到上游的 location 有没有显式设置 `X-Forwarded-Host`，以及内部的 `auth_request` 目标有没有把来源头再转发一次（配错会让带来源头的用户整站 `/api/` 会话校验 403，CDN 回源的部署尤其容易踩）。缺了会拒绝切换并指出是哪个 location —— **这是新加的保护，不是故障**，补上再切。
+- **用域名访问的部署要先声明来源。** 设 `WB_PUBLIC_ORIGIN=https://你的域名`（多个来源用 `WB_CORS_ORIGINS`，逗号分隔）。没有声明、又没开反代来源头的部署，升级后写请求（**登录也是写请求**）会被拒，页面报 `{"detail": "origin_unconfigured"}`。用 IP、`localhost`、单标签内网名直连的部署不受影响。两种修法选一种：设 `WB_PUBLIC_ORIGIN`；或确认反代**覆盖写** `X-Forwarded-Host $host` 之后显式打开 `WB_TRUST_FORWARDED_HOST=1` —— **反代不在同机、或应用跑在容器里（对端不是回环）时，还要把反代那台机器的网段加进 `WB_TRUSTED_PROXY_CIDRS`**（默认只信 `127.0.0.0/8,::1/128`），否则开了开关仍然 403。
+- **升级命令必须带 `--nginx`。** `release.py activate <版本> --nginx <站点配置>`：它会在切换指针之前检查站点配置，缺 `proxy_set_header X-Forwarded-Host "";`（不采信，推荐）或 `proxy_set_header X-Forwarded-Host $host;`（覆盖写）就拒绝放行并指出是哪个 location；内部的 `auth_request` 目标把来源头再转发一次同样会被拒（配错会让带来源头的用户整站 `/api/` 会话校验 403，CDN 回源的部署尤其容易踩）。不设置时客户端自带的值会直达应用，上面那道保护就白做了。**不带 `--nginx` 就不检查站点配置** —— 默认行为就是不查。这是新加的保护，不是故障。
 
 ### 改进
 
