@@ -275,6 +275,16 @@ server {
 >
 > 用域名访问时请同时设置 `WB_PUBLIC_ORIGIN=https://你的域名`（写端点的同源锚点）；
 > 不设也能跑，但「域名 + 没有可信反代」的表单提交会被 403，管理页会提示怎么修。
+>
+> **切指针之前先跑一次站点配置检查**（`activate` 也会带 `--nginx` 跑一遍）：
+>
+> ```bash
+> python deploy/release.py verify <version> --nginx /etc/nginx/sites-enabled/<site>
+> ```
+>
+> 它拦两类会导致「页面全 403」的失效：余额协议放行丢失，以及 `auth_request`
+> 的内部 location 转发了客户端来源头（子请求会继承父请求的头 → 被判定成外部
+> 请求 → 整站 `/api/` 会话校验失败）。
 
 #### 前面是 Cloudflare（或任何 CDN）时**必须**再配一步
 
