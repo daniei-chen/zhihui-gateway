@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from pathlib import Path
-import fcntl,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
+import fcntl,fnmatch,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subprocess
 
 # Recovery invokes this file directly with Python's isolated mode (-I), which
 # intentionally omits the script directory from import search.  Keep the
@@ -15,6 +15,15 @@ import fcntl,hashlib,io,json,os,shutil,sqlite3,stat,tarfile,tempfile,time,subpro
 _SERVER_DIR = str(Path(__file__).resolve().parent)
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
+
+# 数据根不变量（G-09 / D-12）放在 `recoverystate.py`：本模块 import fcntl，
+# 在非 POSIX 上根本加载不了，而那套判据与平台无关，得能单独验证。
+if __package__:
+    from .recoverystate import (add_state_file, collect_state_entries,
+                                empty_archive_directories, uncovered_roots)
+else:  # Standalone backup_application.py runs with isolated Python (-I).
+    from recoverystate import (add_state_file, collect_state_entries,
+                               empty_archive_directories, uncovered_roots)
 
 BASE=Path('/root/backups/workbuddy-daily')
 MANAGER=Path('/opt/workbuddy-manager')
@@ -237,6 +246,7 @@ def add_state_directory(archive,name,path):
     archive.addfile(info)
     return info.uid,info.gid,info.mode
 
+
 def verify_release_archive(archive):
     names, total, actual, recovery = set(), 0, {}, None
     for member in archive:
@@ -435,18 +445,29 @@ def main():
         with RecoveryArchive.open(candidate,'w:gz') as archive:
             if pair:
                 archive.add(pair_root, arcname='paired-ledgers')
+            entries, excluded, unexpected = collect_state_entries(MANAGER, GATEWAY, paired=pair is not None)
+            if unexpected:
+                raise RuntimeError('state root has unaccounted entries: '
+                                   + json.dumps(unexpected, ensure_ascii=False)[:800])
             for path,name in [(GATEWAY/'auths','gateway/auths'),(GATEWAY/'data','gateway/data'),(MANAGER/'data','manager/data')]:
-                state_directories[name]=add_state_directory(archive,name,path)
+                if path.is_dir() and not path.is_symlink() and any(item.is_file() for item in path.rglob('*')):
+                    state_directories[name]=add_state_directory(archive,name,path)
             archive.add(database,arcname='manager/data/manager.db')
-            state=[GATEWAY/'config.json',GATEWAY/'data/state.json',GATEWAY/'data/session-binds.json',MANAGER/'data/users.json',MANAGER/'data/zh-gateway.json']
-            state.extend((GATEWAY/'auths').glob('*.json'))
-            state.extend((GATEWAY/'auths').glob('*.json.disabled'))
-            for path in state:
-                if path.is_file() and not path.is_symlink():
-                    root=GATEWAY if path.is_relative_to(GATEWAY) else MANAGER
-                    name=('gateway' if root==GATEWAY else 'manager')+'/'+path.relative_to(root).as_posix()
-                    metadata=path.stat();state_owners[name]=(metadata.st_uid,metadata.st_gid)
+            gateway_config=GATEWAY/'config.json'
+            if gateway_config.is_file() and not gateway_config.is_symlink():
+                metadata=gateway_config.stat();state_owners['gateway/config.json']=(metadata.st_uid,metadata.st_gid)
+                add_bytes(archive,'gateway/config.json',stable_json(gateway_config),uid=metadata.st_uid,gid=metadata.st_gid)
+            covered={}
+            for name,path in entries:
+                metadata=path.stat();state_owners[name]=(metadata.st_uid,metadata.st_gid)
+                if path.suffix=='.json':
                     add_bytes(archive,name,stable_json(path),uid=metadata.st_uid,gid=metadata.st_gid)
+                else:
+                    add_state_file(archive,name,path)
+                root='/'.join(name.split('/')[:2]);covered[root]=covered.get(root,0)+1
+            uncovered=uncovered_roots()
+            coverage={'roots':covered,'excluded':excluded,'uncovered':uncovered,
+                      'complete':not uncovered}
             for root,family in ((GATEWAY,'gateway'),(MANAGER,'manager')):
                 for path in root.rglob('*'):
                     relative=path.relative_to(root)
@@ -471,7 +492,7 @@ def main():
             if release_version.is_file() and not release_version.is_symlink():
                 add_bytes(archive,'manager/release-version.txt',
                           release_version.read_bytes(),uid=0,gid=0)
-            add_bytes(archive,'snapshot.json',json.dumps({'ts':int(time.time()),'request_rows':count,'database_quick_check':'ok','auth_consistency':'per-file stable reads'}).encode())
+            add_bytes(archive,'snapshot.json',json.dumps({'ts':int(time.time()),'request_rows':count,'database_quick_check':'ok','auth_consistency':'per-file stable reads','state_coverage':coverage}).encode())
             for path in (Path('/etc/nginx/sites-available/zhihui.kaogong.art'),Path('/etc/nginx/conf.d/workbuddy-audit.conf')):
                 if path.is_file() and not path.is_symlink():
                     add_bytes(archive,'nginx/'+path.name,path.read_bytes())
@@ -480,6 +501,13 @@ def main():
             archive.add_recovery_manifest()
         with tarfile.open(candidate) as archive:
             release_check=verify_release_archive(archive)
+            # 目录条目本身不是「覆盖」的证据（D-12 的反面教训）：上一版的
+            # `manager/data` 只是一行空目录，`tar -tzf` 看起来有它、内容 0 字节。
+            # 所以「每个目录条目下至少有一个文件」这条要跟着清单一起验。
+            empty = empty_archive_directories(archive)
+            if empty:
+                raise RuntimeError('recovery archive has directory entries without files: '
+                                   + ', '.join(empty[:5]))
             if pair:
                 pair.update(verify_paired_archive(archive, scratch, pair))
             for name,owners in state_owners.items():
@@ -513,7 +541,7 @@ def main():
             for block in iter(lambda: handle.read(1024*1024), b''):
                 digest.update(block)
         os.replace(candidate, output); output.chmod(0o600)
-        result={'path':str(output),'sha256':digest.hexdigest(),'bytes':output.stat().st_size,'verified_at':int(time.time()),'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'offsite':False,'retention':'retained pending offsite policy'}
+        result={'path':str(output),'sha256':digest.hexdigest(),'bytes':output.stat().st_size,'verified_at':int(time.time()),'request_rows':count,'restore_check':'ok','paired_ledger_check':pair,'release_check':release_check,'state_owner_files_verified':len(state_owners),'state_owner_dirs_verified':len(state_directories),'state_coverage':coverage,'state_coverage_complete':coverage['complete'],'offsite':False,'retention':'retained pending offsite policy'}
         # The local verified recovery remains available if publication fails.
         if Path('/root/backups/workbuddy-recovery/offsite.json').is_file():
             sys.path.insert(0,str(Path(__file__).resolve().parent))

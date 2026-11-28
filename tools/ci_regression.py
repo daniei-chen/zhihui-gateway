@@ -627,6 +627,7 @@ MODULES = (
     # 白名单要有 reason 才放行，且计数必须来自真实执行（wasSuccessful() 对 skip
     # 返回 True，这就是此前「看起来绿」的来源）。
     "server.tests.test_ci_skip_floor",
+    "server.tests.test_g09_backup_state_coverage",
 )
 
 

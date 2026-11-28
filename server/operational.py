@@ -654,6 +654,16 @@ def evaluate_backup_health(now):
         return
     transition('backup_status_unavailable', False, '')
     transition('backup_stale', age > 26*3600, 'verified backup report older than 26 hours')
+    # 「备份成功」不等于「备份覆盖了全部数据根」（G-09 / D-12）：上一版把 5 个
+    # 硬编码文件之外的运行时状态留在包外，而面板照样健康。报告里现在带
+    # `state_coverage_complete` / `uncovered_state_roots`，不完整就单独报一条，
+    # 这样在 PR2 落地前面板说的是真话。
+    uncovered_roots = data.get('uncovered_state_roots')
+    uncovered_roots = ([item for item in uncovered_roots if isinstance(item, str)]
+                       if isinstance(uncovered_roots, list) else [])
+    transition('backup_state_coverage', data.get('state_coverage_complete') is not True,
+               'backup archive does not cover every data root'
+               + (': ' + ', '.join(uncovered_roots) if uncovered_roots else ''))
     from .backupstatus import verified_public_readback
     from .offsitebackup import MAX_CIPHER_BYTES
     transition('backup_publish', offsite and not verified_public_readback(data, now),
