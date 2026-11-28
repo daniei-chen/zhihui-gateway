@@ -40,6 +40,22 @@ class AuditReportError(Exception):
     """报告本身不成立 —— 不能当作「没有漏洞」。"""
 
 
+def validate_report(data, where: str = '审计报告') -> dict:
+    """一份东西要能当审计报告用，最低要求是 `metadata.vulnerabilities` 在。
+
+    一次网络失败、一次被截断的重定向、或者误把别的 JSON 传进来，都不该被读成
+    「没有漏洞」。所有入口（命令行报告、基线快照）都走这一个校验。
+    """
+    if not isinstance(data, dict):
+        raise AuditReportError(f'{where}的顶层不是对象')
+    metadata = data.get('metadata')
+    if not isinstance(metadata, dict) or 'vulnerabilities' not in metadata:
+        raise AuditReportError(
+            f'{where}缺少 metadata.vulnerabilities —— 这不是 `npm audit --json` 的输出，'
+            '不能据此认为没有漏洞')
+    return data
+
+
 def load_report(path: Path) -> dict:
     try:
         raw = path.read_text(encoding='utf-8')
@@ -49,14 +65,51 @@ def load_report(path: Path) -> dict:
         data = json.loads(raw)
     except ValueError as exc:
         raise AuditReportError(f'审计报告不是合法 JSON（{path}）：{exc}') from exc
+    return validate_report(data)
+
+
+def load_baseline(path: Path) -> tuple:
+    """读 `web/audit-baseline.json`：一份真实 `npm audit --json` 快照 + 生成日期。
+
+    为什么要快照：`manager` / `gateway` 两个必检 job 都在 `unshare --net` 里跑
+    （`quality.yml:47`、`:149`），**那里没有网络，`npm audit` 根本连不上 registry**。
+    所以「必检里能看到真实依赖审计」只能靠一份随仓库走的快照；而快照会腐烂，
+    于是用 `generated_on` 定一个刷新期限，过期即红 —— 宁可吵醒人，也不让它悄悄变旧。
+    """
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except OSError as exc:
+        raise AuditReportError(f'读不到审计基线（{path}）：{exc}') from exc
+    except ValueError as exc:
+        raise AuditReportError(f'审计基线不是合法 JSON（{path}）：{exc}') from exc
     if not isinstance(data, dict):
-        raise AuditReportError('审计报告的顶层不是对象')
-    metadata = data.get('metadata')
-    if not isinstance(metadata, dict) or 'vulnerabilities' not in metadata:
+        raise AuditReportError(f'审计基线（{path}）的顶层不是对象')
+    report = validate_report(data.get('report'), f'审计基线（{path}）的 report ')
+    raw = str(data.get('generated_on') or '').strip()
+    if not raw:
+        raise AuditReportError(f'审计基线（{path}）缺少 generated_on')
+    try:
+        generated = datetime.date.fromisoformat(raw)
+    except ValueError as exc:
         raise AuditReportError(
-            '审计报告缺少 metadata.vulnerabilities —— 这不是 `npm audit --json` 的输出，'
-            '不能据此认为没有漏洞')
-    return data
+            f'审计基线的 generated_on 不是 YYYY-MM-DD：{raw!r}') from exc
+    return report, generated
+
+
+MAX_BASELINE_AGE_DAYS = 14
+
+
+def baseline_staleness(generated: datetime.date, today: datetime.date,
+                       max_age_days: int = MAX_BASELINE_AGE_DAYS) -> str:
+    """基线过期的说明；空字符串表示还新鲜。"""
+    age = (today - generated).days
+    if age < 0:
+        return f'基线 generated_on={generated} 在未来（今天是 {today}）'
+    if age > max_age_days:
+        return (f'依赖审计基线 {age} 天没刷新（上限 {max_age_days} 天，'
+                f'generated_on={generated}）：跑 `cd web && npm audit --json > audit.json`，'
+                '把结果写进 web/audit-baseline.json 的 report 与 generated_on')
+    return ''
 
 
 def high_findings(report: dict) -> list:
@@ -132,14 +185,21 @@ def evaluate(report: dict, exemptions: dict, today: datetime.date) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='npm audit 豁免闸门')
-    parser.add_argument('--report', required=True, help='npm audit --json 的输出文件')
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--report', help='npm audit --json 的输出文件')
+    source.add_argument('--baseline', help='随仓库走的审计快照 web/audit-baseline.json')
     parser.add_argument('--exemptions', required=True, help='豁免清单 JSON')
     parser.add_argument('--today', help='覆盖当天日期（测试用，YYYY-MM-DD）')
     args = parser.parse_args(argv)
 
     today = datetime.date.fromisoformat(args.today) if args.today else datetime.date.today()
+    stale = ''
     try:
-        report = load_report(Path(args.report))
+        if args.baseline:
+            report, generated = load_baseline(Path(args.baseline))
+            stale = baseline_staleness(generated, today)
+        else:
+            report = load_report(Path(args.report))
         exemptions = json.loads(Path(args.exemptions).read_text(encoding='utf-8'))
     except AuditReportError as exc:
         print(f'✗ {exc}', file=sys.stderr)
@@ -147,6 +207,10 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as exc:
         print(f'✗ 豁免清单不可解析（{args.exemptions}）：{exc}', file=sys.stderr)
         return 2
+
+    if stale:
+        print(f'✗ {stale}', file=sys.stderr)
+        return 1
 
     result = evaluate(report, exemptions, today)
     for line in result['covered']:

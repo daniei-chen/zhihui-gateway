@@ -116,5 +116,68 @@ class ReportMustBeParseableTests(unittest.TestCase):
             self.assertIn('已签豁免', passing.stdout)
 
 
+def gate_fresh_exemptions() -> dict:
+    """读仓库里真实的豁免清单，跟判定者看到的一样。"""
+    return json.loads((ROOT / 'tools' / 'npm-audit-exemptions.json').read_text(encoding='utf-8'))
+
+
+BASELINE = ROOT / 'web' / 'audit-baseline.json'
+
+
+class CommittedBaselineTests(unittest.TestCase):
+    """必检 job 里能看到的真实依赖审计，只能是这份随仓库走的快照。
+
+    `manager` 与 `gateway` 都跑在 `unshare --net` 里（`quality.yml:47`、`:149`），
+    没有 registry 可连，`npm audit` 在必检 job 里跑不起来。于是取「快照 + 刷新
+    期限」：快照过期就红，逼人刷新，而不是让它悄悄变旧、看起来一直在守。
+    """
+
+    def test_baseline_is_readable_and_clean(self):
+        report, generated = gate.load_baseline(BASELINE)
+        self.assertIsInstance(generated, datetime.date)
+        result = gate.evaluate(report, gate_fresh_exemptions(), datetime.date.today())
+        self.assertEqual(result['failures'], [], '快照里出现了没有有效豁免的 high/critical')
+
+    def test_baseline_must_be_refreshed_within_the_deadline(self):
+        _, generated = gate.load_baseline(BASELINE)
+        problem = gate.baseline_staleness(generated, datetime.date.today())
+        self.assertEqual(problem, '', problem or '基线新鲜')
+
+    def test_stale_baseline_is_red(self):
+        today = datetime.date(2026, 11, 28)
+        self.assertTrue(gate.baseline_staleness(datetime.date(2026, 10, 1), today))
+        self.assertEqual(gate.baseline_staleness(datetime.date(2026, 11, 20), today), '')
+
+    def test_future_baseline_date_is_red(self):
+        today = datetime.date(2026, 11, 28)
+        self.assertTrue(gate.baseline_staleness(datetime.date(2026, 12, 1), today))
+
+    def test_baseline_without_report_is_not_an_empty_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'baseline.json'
+            path.write_text(json.dumps({'schema': 1, 'generated_on': '2026-11-28'}),
+                            encoding='utf-8')
+            with self.assertRaises(gate.AuditReportError):
+                gate.load_baseline(path)
+
+    def test_cli_rejects_a_stale_baseline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = root / 'baseline.json'
+            document = json.loads(BASELINE.read_text(encoding='utf-8'))
+            document['generated_on'] = '2026-01-01'
+            baseline.write_text(json.dumps(document), encoding='utf-8')
+            exemptions = root / 'exemptions.json'
+            exemptions.write_text(json.dumps({'schema': 1, 'exemptions': []}), encoding='utf-8')
+            script = str(ROOT / 'tools' / 'npm_audit_gate.py')
+            proc = subprocess.run(
+                [sys.executable, script, '--baseline', str(baseline),
+                 '--exemptions', str(exemptions), '--today', '2026-11-28'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                env={'PYTHONIOENCODING': 'utf-8', 'PATH': ''})
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn('没刷新', proc.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()
