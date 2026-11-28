@@ -407,7 +407,9 @@ location /workbuddy-manager/ {
 ```nginx
 location /workbuddy-manager/ {
     proxy_pass http://127.0.0.1:7864;    # 没有尾斜杠：请求带着前缀进来
-    # 与上面同样的那几个 header（含 X-Forwarded-Host ""）与超时
+    # 与上面同样的那几个 header（Host / X-Real-IP / X-Forwarded-For /
+    # X-Forwarded-Proto）与超时，外加这一行（发布门禁会逐个 proxy 块检查）
+    proxy_set_header X-Forwarded-Host "";
 }
 ```
 

@@ -1328,7 +1328,8 @@ def _warn_unanchored_once(request: Request) -> None:
     _log.warning(
         'CSRF 同源校验没有可信锚点，写请求已拒绝（Host=%s）。'
         '用域名访问请配置 WB_PUBLIC_ORIGIN（例如 https://zhihui.kaogong.art），'
-        '或让可信反代透传 X-Forwarded-Host；IP / localhost 直连不受影响。', host)
+        '或让可信反代覆盖写 X-Forwarded-Host 并设 WB_TRUST_FORWARDED_HOST=1；'
+        'IP / localhost 直连不受影响。', host)
 
 
 # 启动期校验：`WB_PUBLIC_ORIGIN` 写错时直接起不来（与 `WB_CORS_ORIGINS=*`

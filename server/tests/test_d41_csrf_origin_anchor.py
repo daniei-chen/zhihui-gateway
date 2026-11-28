@@ -42,7 +42,13 @@ DNS rebinding 下浏览器访问 `http://evil.test:8000`，`Host` 与 `Origin` �
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -57,6 +63,28 @@ from server.services import platformauth
 
 LOOPBACK = ('127.0.0.1', 5000)
 LAN = ('10.0.0.9', 5000)
+
+
+def _release_tool(tag: str):
+    """按文件路径加载 `deploy/release.py`（它不是包，测试里只能这样拿）。"""
+    spec = importlib.util.spec_from_file_location(
+        'release_tool_' + tag, Path(__file__).resolve().parents[2] / 'deploy' / 'release.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _readme_site(block: str) -> Path:
+    """把 README 的一个 nginx 样例包成门禁能吃的站点文件。
+
+    余额放行那两段是 `check_nginx` 的另一个前置条件，这里补成最小形态。
+    """
+    site = Path(tempfile.mkdtemp(prefix='d41-readme-')) / 'site'
+    site.write_text(
+        'location = /api/usage/token {  include /dev/null; }\n'
+        'location = /api/usage/token/ {  include /dev/null; }\n' + block,
+        encoding='utf-8')
+    return site
 
 
 def _app(with_probe: bool = True) -> FastAPI:
@@ -307,6 +335,49 @@ class TrustedProxyOnly(_AnchorCase):
                               extra={'x-forwarded-host': 'panel.example.com',
                                      'x-forwarded-proto': 'https'})
         self.assertEqual(response.status_code, 403)
+
+
+class TrustedForwardedHostDefaultsOff(unittest.TestCase):
+    """**默认值本身就是这个修复的安全性所在**，所以要有一条观测它的用例。
+
+    `ForwardedHostIsOptIn` 那些用例都在 setUp 里 patch 了开关，等于从来没看过
+    真实默认值：把 `config.py` 的 `False` 改成 `True`，它们全都还是绿的。
+    """
+
+    def test_default_is_off_in_a_clean_environment(self):
+        """不 patch、不设环境变量：真实读一次 `config.TRUST_FORWARDED_HOST`。
+
+        用子进程读，避免本进程里别的用例的 monkeypatch 残留污染这条断言。
+        """
+        script = (
+            'import json, os\n'
+            'os.environ.pop("WB_TRUST_FORWARDED_HOST", None)\n'
+            'from server import config\n'
+            'print(json.dumps(config.TRUST_FORWARDED_HOST))\n'
+        )
+        env = {key: value for key, value in os.environ.items()
+               if key != 'WB_TRUST_FORWARDED_HOST'}
+        env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
+        result = subprocess.run([sys.executable, '-c', script], capture_output=True,
+                                text=True, encoding='utf-8', env=env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr[-800:])
+        self.assertIs(json.loads(result.stdout.strip().splitlines()[-1]), False,
+                      'WB_TRUST_FORWARDED_HOST 默认必须是关 —— 打开它等于让客户端'
+                      '自带的 X-Forwarded-Host 成为来源锚点')
+
+    def test_an_environment_value_can_turn_it_on(self):
+        """开关本身要真的可读（否则「默认关」可能是因为压根没接上）。"""
+        script = (
+            'import json\n'
+            'from server import config\n'
+            'print(json.dumps(config.TRUST_FORWARDED_HOST))\n'
+        )
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]),
+                   WB_TRUST_FORWARDED_HOST='1')
+        result = subprocess.run([sys.executable, '-c', script], capture_output=True,
+                                text=True, encoding='utf-8', env=env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr[-800:])
+        self.assertIs(json.loads(result.stdout.strip().splitlines()[-1]), True)
 
 
 class ForwardedHostIsOptIn(_AnchorCase):
@@ -578,20 +649,35 @@ class DeploymentTrustModel(unittest.TestCase):
                 self.assertNotIn(f'{header} $remote_addr', block,
                                  f'internal location 把 {header} 转发成了浏览器地址')
 
-    def test_readme_proxy_blocks_set_forwarded_host(self) -> None:
-        """文档样例必须与门禁同口径：每个 proxy_pass 块显式设置 X-Forwarded-Host。
+    def test_readme_proxy_blocks_pass_the_release_gate(self) -> None:
+        """文档样例必须与门禁**吃同一个判据**：直接把样例块喂给门禁函数。
 
-        客户端可以自带这个头，nginx 默认原样转发 —— 示例里漏了它，照抄的部署
-        就等于把「本站来源」交给了请求。
+        为什么不能只 `assertIn('X-Forwarded-Host', block)`：那会被**注释**里的
+        同名文字骗过（实测过一次），而照抄那种样例的部署会被发布门禁拒掉 ——
+        文档说没问题、门禁说有问题，两套实现迟早发散。
         """
+        release_tool = _release_tool('d41')
         text = (self.ROOT / 'deploy' / 'README.md').read_text(encoding='utf-8')
-        fences = re.findall(r'```nginx\n(.*?)```', text, re.DOTALL)
-        blocks = [fence for fence in fences if 'proxy_pass' in fence]
+        blocks = [chunk.split('```')[0] for chunk in text.split('```nginx')[1:]]
+        blocks = [block for block in blocks if 'proxy_pass' in block]
         self.assertTrue(blocks, 'README 里没有带 proxy_pass 的 nginx 样例了？')
         for index, block in enumerate(blocks):
             with self.subTest(block=index):
-                self.assertIn('X-Forwarded-Host', block,
-                              'nginx 样例的 proxy 块没设置 X-Forwarded-Host')
+                # README 里有的样例写在引用块里（行首 `> `），先去掉这层前缀
+                sample = '\n'.join(line.lstrip('> ').rstrip() for line in block.splitlines())
+                directives = [line.strip() for line in sample.splitlines()
+                              if line.split()[:2] == ['proxy_set_header', 'X-Forwarded-Host']]
+                self.assertTrue(directives,
+                                'nginx 样例的 proxy 块没有真正的 X-Forwarded-Host 指令'
+                                '（写在注释里不算）')
+                release_tool.check_nginx(_readme_site(sample))
+
+    def test_the_readme_gate_check_can_actually_fail(self) -> None:
+        """对照组：把样例里那行换成转发，门禁与上面那条必须同时拒。"""
+        release_tool = _release_tool('d41-fail')
+        broken = 'location / {\n    proxy_pass http://127.0.0.1:7864;\n}\n'
+        with self.assertRaises(release_tool.ReleaseError):
+            release_tool.check_nginx(_readme_site(broken))
 
     def test_escape_hatch_schema_matches_the_runtime_parser(self) -> None:
         """`_env_bool` 只认 1/true/yes/on；`t` / `y` 必须在启动期被拒，而不是静默 false。"""
