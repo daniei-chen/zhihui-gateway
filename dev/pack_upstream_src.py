@@ -208,9 +208,12 @@ LICENSE 与版权声明。
         size = out_path.stat().st_size
         digest = hashlib.sha256(out_path.read_bytes()).hexdigest()[:16]
         print(f'已打出 {out_path}（{len(files)} 个文件，{size / 1024:.0f} KB，sha256:{digest}…）')
-        print('上传到固定 tag 的 Release（让 CI 取得到）：')
-        print(f'  gh release upload upstream-src {out_path} --clobber '
-              f'--repo ithtelab/workbuddy-manager')
+        print('产物已就绪。**不要**把它上传到别人的仓库：')
+        print('  这个包是我们的源码快照，传到第三方仓库等于把自己的源码发布权交出去。')
+        print(f'  要发布，先在本仓建一个固定 tag 的 Release，再改 '
+              f'windows/launcher/build.ps1 的 $UpstreamSrcUrl 与 $UpstreamSrcSha256')
+        print('  两处一起提交（当前构建仍从固定载体取，见该文件的注释）。')
+        print(f'  校验值：sha256:{hashlib.sha256(out_path.read_bytes()).hexdigest()}')
     return 0
 
 

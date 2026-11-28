@@ -1943,6 +1943,20 @@ async def _handle(request: Request) -> JSONResponse | StreamingResponse:
             except Exception:  # noqa: BLE001
                 data = None
             if resp.status_code < 400:
+                if observability.budget_exhausted_response(data):
+                    # 与 chat（`gateway._chat`）、messages（`to_anthropic_response`
+                    # → `OutputBudgetExhausted`）同一条判据，只留在
+                    # `observability.budget_exhausted_response` 一处（D-21）。
+                    # 原来这里照样回 200 + `status: incomplete` + 空 output：
+                    # 客户端把它当「正常完成」并原样重试，每一次都计费，而模
+                    # 型什么都没交付。上游与账号都健康，所以回 400 而不是 502，
+                    # 也不把账号推进冷却。
+                    message = observability.BUDGET_EXHAUSTED_MESSAGE
+                    await gateway._record_async(key, ip, model, mapped or '', 400,
+                                    _as_int(usage.get('prompt_tokens')),
+                                    _as_int(usage.get('completion_tokens')), latency,
+                                    ua, message, False, usage=usage)
+                    return _failed(message, 400, 'invalid_request_error', 'output_budget_exhausted')
                 try:
                     if not gateway._valid_chat_response(data):
                         raise ValueError('invalid upstream chat response')

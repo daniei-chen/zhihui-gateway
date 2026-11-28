@@ -373,8 +373,35 @@ class UpdaterSupplyChainTest(unittest.TestCase):
 
 
 _UPDATE_PS1 = _ROOT / 'windows' / 'update.ps1'
+_BUILD_PS1 = _ROOT / 'windows' / 'launcher' / 'build.ps1'
 _SOURCE_BEGIN = '# <manager-repo-source begin>'
 _SOURCE_END = '# <manager-repo-source end>'
+_PIN_BEGIN = '# <upstream-src-pin begin>'
+_PIN_END = '# <upstream-src-pin end>'
+_VERIFY_BEGIN = '# <upstream-src-verify begin>'
+_VERIFY_END = '# <upstream-src-verify end>'
+
+
+def _powershell() -> str | None:
+    return shutil.which('pwsh') or shutil.which('powershell')
+
+
+def _run_ps(script: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    """把脚本写成临时 .ps1 再执行。
+
+    不走 stdin：Windows PowerShell 按控制台代码页解码 stdin，中文注释会被拆坏成
+    语法错误（实测 ParserError 缺字符串终止符）。BOM 保证按 UTF-8 读。
+    """
+    with tempfile.TemporaryDirectory() as temp:
+        path = Path(temp) / 'probe.ps1'
+        path.write_text(script, encoding='utf-8-sig')
+        args = [_powershell() or '', '-NoProfile', '-NonInteractive']
+        if os.name == 'nt':
+            args += ['-ExecutionPolicy', 'Bypass']
+        args += ['-File', str(path)]
+        return subprocess.run(args, capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=120,
+                              env=dict(os.environ, **(env or {})))
 
 
 class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
@@ -436,24 +463,11 @@ class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
         return self.source[begin:end]
 
     def _resolve(self, requested: str) -> subprocess.CompletedProcess:
-        shell = shutil.which('pwsh') or shutil.which('powershell')
-        if not shell:
+        if not _powershell():
             self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
-        # 走临时 .ps1 文件而不是 stdin：Windows PowerShell 按控制台代码页解码 stdin，
-        # 中文注释会被拆坏成语法错误（实测 ParserError 缺字符串终止符）。
-        with tempfile.TemporaryDirectory() as temp:
-            script = Path(temp) / 'resolve.ps1'
-            script.write_text(
-                self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n',
-                encoding='utf-8-sig')
-            args = [shell, '-NoProfile', '-NonInteractive']
-            if os.name == 'nt':
-                args += ['-ExecutionPolicy', 'Bypass']
-            args += ['-File', str(script)]
-            return subprocess.run(
-                args, capture_output=True, text=True, encoding='utf-8',
-                errors='replace', timeout=120,
-                env=dict(os.environ, WB_MANAGER_REPO=requested))
+        return _run_ps(
+            self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n',
+            {'WB_MANAGER_REPO': requested})
 
     def test_unset_override_resolves_to_official_repository(self) -> None:
         done = self._resolve('')
@@ -468,6 +482,151 @@ class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
         done = self._resolve(THIRD_PARTY_REPO)
         self.assertNotEqual(done.returncode, 0, '第三方发布源竟然没让更新中止')
         self.assertNotIn('RESOLVED=', done.stdout, '中止前就把仓库定下来了')
+
+
+class UpstreamSourcePinTests(unittest.TestCase):
+    """随包发布的 `wb2api.exe` 由第三方源码编译 —— 那份源码必须钉住摘要。
+
+    `windows/launcher/build.ps1` 从固定载体下载 `workbuddy2api-src.tar.gz`，解包后
+    用 Go 编译成 `wb2api.exe` 打进安装包。`upstreamMeta` 只记录**编译产物**的
+    `artifact_sha256` —— 那证明的是「我们编译出了什么」，**证明不了源码来自哪里**。
+    谁控制那个仓库，谁就能让每一次发布都打包进他写的代码，而事后的 hash 一点忙
+    也帮不上。
+
+    所以要在解包**之前**核对 tarball 自己的 sha256，不匹配就停。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _BUILD_PS1.read_text(encoding='utf-8-sig')
+
+    def _slice(self, begin: str, end: str) -> str:
+        start, stop = self.source.find(begin), self.source.find(end)
+        self.assertNotEqual(start, -1, f'找不到 {begin} 标记')
+        self.assertNotEqual(stop, -1, f'找不到 {end} 标记')
+        return self.source[start:stop]
+
+    def test_upstream_source_digest_is_pinned(self) -> None:
+        found = re.search(r"\$UpstreamSrcSha256 = '([0-9a-f]{64})'", self.source)
+        self.assertIsNotNone(found, '上游源码包的 sha256 没有钉成常量（下载下来的东西不校验）')
+
+    def test_digest_is_verified_before_extraction(self) -> None:
+        verify = self.source.find(_VERIFY_BEGIN)
+        extract = self.source.find('& $TarExe -xzf $tarPath')
+        self.assertNotEqual(verify, -1, '找不到摘要校验段')
+        self.assertNotEqual(extract, -1, '找不到解包调用（解析口径变了）')
+        self.assertLess(verify, extract,
+                        '摘要在解包之后才校验：那时来源不明的源码已经落地了')
+
+    def test_mismatched_digest_aborts_before_unpacking(self) -> None:
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / 'src.tar.gz'
+            payload.write_bytes(b'not the pinned upstream tarball\n')
+            script = (self._slice(_PIN_BEGIN, _PIN_END)
+                      + f"\n$tarPath = '{payload.as_posix()}'\n"
+                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
+                      + "\nWrite-Output 'VERIFIED'\n")
+            done = _run_ps(script)
+            self.assertNotEqual(done.returncode, 0,
+                                f'摘要不匹配竟然继续往下走：\n{done.stdout}{done.stderr}')
+            self.assertNotIn('VERIFIED', done.stdout, '拒绝之前就放行了')
+
+    def test_matching_digest_lets_the_build_continue(self) -> None:
+        """校验不能永远失败：摘要对上时必须放行，否则每次都红等于没校验。"""
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / 'src.tar.gz'
+            payload.write_bytes(b'pinned upstream tarball\n')
+            actual = hashlib.sha256(payload.read_bytes()).hexdigest()
+            script = (self._slice(_PIN_BEGIN, _PIN_END)
+                      + f"\n$UpstreamSrcSha256 = '{actual}'\n"
+                      + f"$tarPath = '{payload.as_posix()}'\n"
+                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
+                      + "\nWrite-Output 'VERIFIED'\n")
+            done = _run_ps(script)
+            self.assertIn('VERIFIED', done.stdout, done.stdout + done.stderr)
+
+    def test_packer_does_not_hand_the_source_to_a_third_party_repository(self) -> None:
+        text = (_ROOT / 'dev' / 'pack_upstream_src.py').read_text(encoding='utf-8')
+        self.assertNotIn('--repo ithtelab/', text,
+                         '打包助手仍教人把我们的源码快照传到第三方仓库')
+        self.assertNotIn('gh release upload', text,
+                         '打包助手仍印着一条可直接执行的第三方上传命令')
+
+
+class InstallSurfacesPointAtThisRepositoryTests(unittest.TestCase):
+    """安装面（脚本、运维命令、上报入口）不能把人送进别人仓库（SWO-39）。
+
+    `deploy/README.md` 已由 SWO-34 改过。这里钉住剩下那些**会被人照抄执行**的地方：
+    校验脚本让人去第三方 Releases 页核对摘要、企业补丁脚本从第三方 registry 拉镜像、
+    issue 模板与漏洞上报落到别人仓库、发布流程的 ruleset 命令查的是别人的仓库。
+
+    保留的两类**不动**：上游归属说明（`docs/enterprise-support/README.en.md`、
+    `README.md:5` 的出处）与历史记录（`docs/history/*`、`docs/release-process.md:236`
+    解释旧默认值）。改了它们等于篡改来源，所以断言都是逐条指向，不做整仓替换。
+    """
+
+    #: 从别人仓库取可执行内容/镜像 → 安装面，必须改
+    _THIRD_PARTY = 'ithtelab'
+
+    @staticmethod
+    def _read(relative: str) -> str:
+        return (_ROOT / relative).read_text(encoding='utf-8')
+
+    def test_release_verification_sends_users_to_this_repository(self) -> None:
+        script = self._read('deploy/verify-release.sh')
+        self.assertNotIn(self._THIRD_PARTY, script,
+                         'sha256 核对指引仍指向第三方 Releases（照它核对等于核对别人发的包）')
+        self.assertIn('github.com/daniei-chen/zhihui-gateway/releases', script)
+
+    def test_enterprise_support_patch_is_retired(self) -> None:
+        """企业补丁包已停用 —— 它下面的命令是**留在仓库里的历史实现**，不执行。
+
+        `apply.sh` 第一行之外先 `exit 2`（被 source 时 `return 2`），README 顶部也标了
+        「历史补丁资料，已停用」。所以里面的镜像名要**保持历史原样**：那是「当时用的是
+        什么」的记录，改成今天的样子等于篡改历史。这一条是把我 SWO-39 盘点里把它
+        归成「活的安装路径」的那个判断纠正回来 —— 实测它是个死路径。
+        """
+        script = self._read('docs/enterprise-support/apply.sh')
+        head = script.split('set -euo pipefail')[0]
+        self.assertIn('RETIRED', head, 'apply.sh 的停用闸门不见了')
+        self.assertIn('exit 2', head, 'apply.sh 不再在动手之前退出')
+        self.assertLess(head.index('exit 2'), script.find('docker run -d'),
+                        '停用闸门被挪到 docker 命令之后了')
+
+    def test_enterprise_support_readme_names_the_live_release_source(self) -> None:
+        """归属照写，但必须同时说清「本仓是自维护分支、发布源与镜像取本仓」。"""
+        text = self._read('docs/enterprise-support/README.md')
+        self.assertIn('ithtelab/workbuddy-manager', text,
+                      '上游归属被删了 —— 那是来源事实，不能为了干净而抹掉')
+        self.assertIn('已停用', text, '停用声明被删了，历史命令会被当成可用指令')
+        self.assertIn('ghcr.io/daniei-chen/workbuddy-manager', text,
+                      '没说清当前该用哪个镜像')
+        self.assertIn('daniei-chen/zhihui-gateway', text,
+                      '没说清本仓与上游的关系，读者无法判断装哪个')
+
+    def test_issue_templates_point_at_this_repository(self) -> None:
+        text = self._read('.github/ISSUE_TEMPLATE/config.yml')
+        self.assertNotIn(self._THIRD_PARTY, text,
+                         'issue 模板把用户送到第三方仓库的 README/CHANGELOG')
+        self.assertIn('daniei-chen/zhihui-gateway', text)
+
+    def test_release_process_commands_target_this_repository(self) -> None:
+        """这两条是**会被人复制执行**的运维命令，指向第三方会改错仓库。"""
+        text = self._read('docs/release-process.md')
+        self.assertNotIn('repos/ithtelab/', text, 'ruleset 命令查的是别人的仓库')
+        self.assertNotIn('owner:"ithtelab"', text, '分支保护查询查的是别人的仓库')
+        self.assertIn('repos/daniei-chen/zhihui-gateway/rulesets', text)
+        self.assertIn('owner:"daniei-chen", name:"zhihui-gateway"', text)
+
+    def test_no_stale_updater_backup_is_committed(self) -> None:
+        """`deploy/update.py.pre-srcpatch-*` 是被提交进仓库的备份，里面还写着旧默认源。"""
+        leftovers = sorted(p.name for p in (_ROOT / 'deploy').glob('update.py.pre-*'))
+        self.assertEqual(leftovers, [],
+                         f'仓库里还躺着更新器备份文件：{leftovers}（它记着旧的第三方默认源）')
 
 
 if __name__ == '__main__':

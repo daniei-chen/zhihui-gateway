@@ -595,6 +595,27 @@ MODULES = (
     # 两条断言都先红后绿（修前 4 failed，修后 4 passed），所以必须进门禁 ——
     # 否则「账本写入又回到返回路径上」这种回归没有任何测试会喊。
     "server.tests.test_dan19_rejection_ledger",
+    # issue #210/#187 的根因是「读—改—写」丢更新，而 filelock 一直是唯一没有
+    # 测试的保护点：8 线程 × 25 次真并发、真子进程抢内核锁、相对/绝对路径归一。
+    # 变异（RLock→Lock、去掉 credentiallease 委托）都会让它变红。
+    "server.tests.test_filelock",
+    "server.tests.test_credentiallease_guards",
+    # credentiallease._open 的四道文件守卫（symlink / nlink / 0o077 / 属主）。
+    # 2026-11-28 审计：把这四道检查删掉再跑 77 条相关用例全绿 —— 守卫此前零覆盖，
+    # 而 test_portal_closeout 里看起来覆盖了 0o644 与硬链接的那两条打的是 recovery
+    # 的快照校验器，不是这里。三条能真跑的在 Windows 上也会跑（nlink 那条全平台生效）。
+    # userstore.locked() 的第一份测试。这个模块守着 users.json 的读改写，
+    # 但此前零测试：丢更新、跨进程互斥、5 秒 deadline、symlink/nlink 拒绝
+    # 全靠人读代码。五处变异各自杀掉一条用例（见 PR 证据）。
+    "server.tests.test_userstore_lock",
+    # G-07（2026-11-28）：重置用量必须连当天 `key_daily_usage` 一起清，否则
+    # 管理员点完重置、界面已用变 0，请求照样 429。三条用例各自被一个变异杀掉
+    # （去掉清理 / 删行而非写 0 / 顺手清掉历史日），见 PR 证据。
+    "server.tests.test_g07_reset_daily_usage",
+    # G-13（2026-11-28）：三协议 P1 —— Messages 非流式丢 content 数组（D-20）、
+    # Responses 预算耗尽回 200 incomplete（D-21）、thinking disabled 仍发 effort
+    # （D-22）。三条各自被一个变异杀掉，见 PR 证据。
+    "server.tests.test_g13_protocol_semantics",
 )
 
 
