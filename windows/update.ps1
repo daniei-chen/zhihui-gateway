@@ -27,7 +27,8 @@ function Resolve-ManagerRepo {
     # 不在白名单不静默回退：静默换成官方仓库会让运维以为自己配的镜像在生效。
     Write-Host "[ERROR] WB_MANAGER_REPO=$Requested 不是允许的发布源，更新已中止。" -ForegroundColor Red
     Write-Host "[ERROR]   更新器会以装机权限安装包内的依赖清单，所以发布源只允许：$($AllowedManagerRepos -join ', ')。" -ForegroundColor Red
-    Write-Host "[ERROR]   自建镜像请修改 windows/update.ps1 的 AllowedManagerRepos，并沿用同一把发布签名。" -ForegroundColor Red
+    Write-Host "[ERROR]   自建镜像请修改 windows/update.ps1 的 AllowedManagerRepos。" -ForegroundColor Red
+    Write-Host "[ERROR]   注意：Windows 侧只核对发布页的 sha256，不做 Ed25519 验签（该摘要与包同源）。" -ForegroundColor Red
     exit 1
 }
 
