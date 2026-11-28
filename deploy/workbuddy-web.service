@@ -31,9 +31,20 @@ Environment=WB_GATEWAY_RATE_PER_MIN=120
 # 注意：EnvironmentFile 的值是**字面量**，别在值后面写行内注释。
 EnvironmentFile=-/opt/workbuddy-manager/.env
 
-ExecStart=/usr/bin/python3 -m uvicorn server.main:app --host 0.0.0.0 --port 7864
+# 启动命令不能改回 `uvicorn server.main:app`：那条路径既拿不到实例租约（同一份
+# data/ 上会起第二个实例），也没有 drain 钩子（SIGTERM 后不会先进入 draining）。
+# 代价是**静默的** —— 限额按进程放大 N 倍、账号文件的读改写重新变成多写者交错
+# （issue #210/#187 的丢更新）。守卫见 server/tests/test_launch_surface.py。
+ExecStart=/usr/bin/python3 -m server.serve --host 0.0.0.0 --port 7864
 Restart=always
 RestartSec=3
+
+# 停机预算：uvicorn 的 graceful 窗口默认是**无限等**，而 systemd 的 TimeoutStopSec
+# 默认 90s，到点就 SIGKILL —— 流式回答会被截断且不落 5xx，发布脚本的「零 5xx」看不见。
+# 这里把窗口压到 60s（serve.py 读 WB_GRACEFUL_SHUTDOWN_S），并让 systemd 的上限
+# 留在它之上，保证「等在途归零」先于 SIGKILL 发生。
+Environment=WB_GRACEFUL_SHUTDOWN_S=60
+TimeoutStopSec=90
 
 [Install]
 WantedBy=multi-user.target

@@ -92,3 +92,5 @@ sudo ss -lntp | grep 7866    # 应只剩 python 在监听，行为回到装之�
 * `.socket` 固定监听 `127.0.0.1:7866`。改端口要同时改这里和
   `WB_MANAGER_PORT`，否则服务会自己 bind 到新端口、socket 还占着旧口。
 * 如果将来改成多进程（`--workers N`），这套仍然可用，但 `Backlog` 要一起调大。
+  **现在不行**：`python -m server.serve` 直接拒绝 `--workers` 大于 1，因为限额与
+  准入计数都在进程内存里，多进程会把额度按 N 放大并让账号读改写重新变成多写者。

@@ -25,9 +25,20 @@ $bindHost = '127.0.0.1'
 $bindPort = '7864'
 $envPath = Join-Path $root '.env'
 if (Test-Path $envPath) {
+    # .env 逐行灌进进程环境：`python -m server.serve` 不是 uvicorn CLI，没有
+    # `--env-file`；而且服务自己只读环境变量（配置校验会拒收未登记的 WB_*）。
     foreach ($line in Get-Content $envPath) {
-        if ($line -match '^\s*WB_MANAGER_HOST\s*=\s*(\S+)') { $bindHost = $Matches[1] }
-        elseif ($line -match '^\s*WB_MANAGER_PORT\s*=\s*(\S+)') { $bindPort = $Matches[1] }
+        if ($line -notmatch '=' -or $line -match '^\s*#') { continue }
+        $name, $value = $line.Split('=', 2)
+        $name = $name.Trim()
+        if (-not $name) { continue }
+        $value = $value.Trim()
+        if ($value.Length -ge 2 -and $value.StartsWith('"') -and $value.EndsWith('"')) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        Set-Item -Path ("Env:" + $name) -Value $value
+        if ($name -eq 'WB_MANAGER_HOST') { $bindHost = $value }
+        if ($name -eq 'WB_MANAGER_PORT') { $bindPort = $value }
     }
 }
 
@@ -44,7 +55,7 @@ Write-Host "[INFO] WorkBuddy Manager 已就绪: http://${bindHost}:${bindPort}�
 Start-Process "http://${bindHost}:${bindPort}"
 
 try {
-    & $python -m uvicorn server.main:app --env-file .env --host $bindHost --port $bindPort
+    & $python -m server.serve --host $bindHost --port $bindPort
 } finally {
     if (Test-Path $upstreamStopScript) {
         & cmd.exe /c $upstreamStopScript

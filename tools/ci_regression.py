@@ -619,6 +619,10 @@ MODULES = (
     # G-11 单写者：serve.py 必须拒绝 --workers>1，同一数据目录只许一个实例。
     # 三条变异各自杀掉用例（去掉 --workers 拒绝 / serve.py 不抢租约 / 吞掉锁失败）。
     "server.tests.test_single_writer_launcher",
+    # D-16 启动面：发行版只允许 `python -m server.serve`。deploy/、Dockerfile、
+    # windows/ 出现 uvicorn 直连或 `--workers ≥2` 即红；文档只有本地热重载
+    # （带 --reload）例外。五刀变异各自杀掉一条断言。
+    "server.tests.test_launch_surface",
 )
 
 

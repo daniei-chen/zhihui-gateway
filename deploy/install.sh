@@ -291,9 +291,11 @@ sed -e "s#/opt/workbuddy-manager#${APP_DIR}#g" \
     -e "s#WB_UPSTREAM_CONFIG=/opt/workbuddy2api/config.json#WB_UPSTREAM_CONFIG=${UPSTREAM_DIR}/config.json#g" \
     "${APP_DIR}/deploy/workbuddy-web.service" > /etc/systemd/system/workbuddy-web.service
 
-# 若 venv 可用，改写 ExecStart 指向 venv
+# 若 venv 可用，改写 ExecStart 指向 venv。命令本身保持 `-m server.serve`：
+# 换回 `-m uvicorn server.main:app` 会同时丢掉实例租约与 drain 钩子（静默代价），
+# 守卫见 server/tests/test_launch_surface.py。
 if [ "$RT_PY" != "$PY" ]; then
-  sed -i "s#^ExecStart=.*#ExecStart=${APP_DIR}/venv/bin/python -m uvicorn server.main:app --host 0.0.0.0 --port ${MANAGER_PORT}#" \
+  sed -i "s#^ExecStart=.*#ExecStart=${APP_DIR}/venv/bin/python -m server.serve --host 0.0.0.0 --port ${MANAGER_PORT}#" \
     /etc/systemd/system/workbuddy-web.service
 fi
 
