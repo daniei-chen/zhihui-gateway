@@ -359,7 +359,8 @@ class TrustedForwardedHostDefaultsOff(unittest.TestCase):
                if key != 'WB_TRUST_FORWARDED_HOST'}
         env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
         result = subprocess.run([sys.executable, '-c', script], capture_output=True,
-                                text=True, encoding='utf-8', env=env, timeout=120)
+                                text=True, encoding='utf-8', errors='replace',
+                                env=env, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr[-800:])
         self.assertIs(json.loads(result.stdout.strip().splitlines()[-1]), False,
                       'WB_TRUST_FORWARDED_HOST 默认必须是关 —— 打开它等于让客户端'
@@ -375,7 +376,8 @@ class TrustedForwardedHostDefaultsOff(unittest.TestCase):
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]),
                    WB_TRUST_FORWARDED_HOST='1')
         result = subprocess.run([sys.executable, '-c', script], capture_output=True,
-                                text=True, encoding='utf-8', env=env, timeout=120)
+                                text=True, encoding='utf-8', errors='replace',
+                                env=env, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr[-800:])
         self.assertIs(json.loads(result.stdout.strip().splitlines()[-1]), True)
 
