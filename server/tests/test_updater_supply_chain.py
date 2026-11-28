@@ -372,8 +372,9 @@ _UPDATE_PS1 = _ROOT / 'windows' / 'update.ps1'
 _BUILD_PS1 = _ROOT / 'windows' / 'launcher' / 'build.ps1'
 _SOURCE_BEGIN = '# <manager-repo-source begin>'
 _SOURCE_END = '# <manager-repo-source end>'
-_PIN_BEGIN = '# <upstream-src-pin begin>'
-_PIN_END = '# <upstream-src-pin end>'
+_PIN_HELPER = _ROOT / 'windows' / 'launcher' / 'upstream-pin.ps1'
+_UPSTREAM_LOCK = _ROOT / 'dev' / 'upstream-source.lock'
+_PACKER = _ROOT / 'dev' / 'pack_upstream_src.py'
 _VERIFY_BEGIN = '# <upstream-src-verify begin>'
 _VERIFY_END = '# <upstream-src-verify end>'
 
@@ -481,30 +482,62 @@ class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
 
 
 class UpstreamSourcePinTests(unittest.TestCase):
-    """随包发布的 `wb2api.exe` 由第三方源码编译 —— 那份源码必须钉住摘要。
+    """随包发布的 `wb2api.exe` 由哪份源码编译，只能有**一处**答案（SWO-87）。
 
     `windows/launcher/build.ps1` 从固定载体下载 `workbuddy2api-src.tar.gz`，解包后
     用 Go 编译成 `wb2api.exe` 打进安装包。`upstreamMeta` 只记录**编译产物**的
     `artifact_sha256` —— 那证明的是「我们编译出了什么」，**证明不了源码来自哪里**。
-    谁控制那个仓库，谁就能让每一次发布都打包进他写的代码，而事后的 hash 一点忙
-    也帮不上。
 
-    所以要在解包**之前**核对 tarball 自己的 sha256，不匹配就停。
+    2026-11-28 的 v1.6.28 发布就是败在「同一个东西两处 pin」：`release.yml` 读
+    `dev/upstream-source.lock`，`build.ps1` 却自己写死了一份 sha256、而且从第三方
+    仓库取源。那边同名文件被换成另一份字节之后，Linux 侧跟着 lock 走（对），
+    Windows 安装器守着自己的旧值把**正确的**包也拒了，`installer` job 直接红。
+
+    所以这里钉两件事：取源只有本仓一处、pin 只有 lock 一处，且校验在解包之前；
+    再加一条「打包与改 lock 在同一次运行里完成」。
     """
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = _BUILD_PS1.read_text(encoding='utf-8-sig')
+        cls.packer = _PACKER.read_text(encoding='utf-8')
 
-    def _slice(self, begin: str, end: str) -> str:
-        start, stop = self.source.find(begin), self.source.find(end)
-        self.assertNotEqual(start, -1, f'找不到 {begin} 标记')
-        self.assertNotEqual(stop, -1, f'找不到 {end} 标记')
-        return self.source[start:stop]
+    # ── 文本判据：取源与 pin 各只有一处 ────────────────────────────────
 
-    def test_upstream_source_digest_is_pinned(self) -> None:
-        found = re.search(r"\$UpstreamSrcSha256 = '([0-9a-f]{64})'", self.source)
-        self.assertIsNotNone(found, '上游源码包的 sha256 没有钉成常量（下载下来的东西不校验）')
+    def test_source_url_is_this_repository(self) -> None:
+        found = re.search(r"\$UpstreamSrcUrl = '([^']+)'", self.source)
+        self.assertIsNotNone(found, '找不到 $UpstreamSrcUrl')
+        url = found.group(1)
+        self.assertIn(f'github.com/{OFFICIAL_REPO}/releases/download/', url,
+                      f'安装器仍从别处取上游源码：{url}')
+        self.assertNotIn(THIRD_PARTY_REPO, self.source,
+                         'build.ps1 仍指向第三方仓库（SWO-87 的根因就是它）')
+
+    def test_build_ps1_has_no_second_pin(self) -> None:
+        """pin 只能有 lock 一处：第二份常量就是下次发版红的种子。"""
+        self.assertIsNone(re.search(r'\$UpstreamSrcSha256\s*=', self.source),
+                          'build.ps1 又写死了一份摘要：唯一真源必须是 dev/upstream-source.lock')
+        self.assertIsNone(re.search(r"\$[A-Za-z]*Sha256\s*=\s*'[0-9a-fA-F]{64}'", self.source),
+                          'build.ps1 里有硬编码的 64 位摘要常量')
+        self.assertIn('dev/upstream-source.lock', self.source,
+                      'build.ps1 没有引用锁文件')
+        self.assertIn('Read-UpstreamSrcPin', self.source,
+                      'build.ps1 没有从 lock 读 pin')
+        self.assertIn('Assert-UpstreamSrcArchive', self.source,
+                      'build.ps1 没有做摘要+字节双校验')
+
+    def test_lock_is_the_single_source_and_carries_both_checks(self) -> None:
+        values = {}
+        for line in _UPSTREAM_LOCK.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            values[key.strip()] = value.strip()
+        self.assertEqual(values.get('release'), 'upstream-src')
+        self.assertEqual(values.get('asset'), 'workbuddy2api-src.tar.gz')
+        self.assertRegex(values.get('sha256', ''), r'^[0-9a-f]{64}$')
+        self.assertRegex(values.get('bytes', ''), r'^[1-9][0-9]*$')
 
     def test_digest_is_verified_before_extraction(self) -> None:
         verify = self.source.find(_VERIFY_BEGIN)
@@ -514,43 +547,124 @@ class UpstreamSourcePinTests(unittest.TestCase):
         self.assertLess(verify, extract,
                         '摘要在解包之后才校验：那时来源不明的源码已经落地了')
 
+    # ── 行为判据：真跑 windows/launcher/upstream-pin.ps1 ──────────────
+
+    def _probe(self, payload: bytes, lock_text: str | None,
+               pin: str | None = None) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            archive = tmp / 'src.tar.gz'
+            archive.write_bytes(payload)
+            lock = tmp / 'upstream-source.lock'
+            if lock_text is not None:
+                lock.write_text(lock_text, encoding='utf-8')
+            # stderr 走 [Console]::OutputEncoding：Windows PowerShell 5.1 默认按
+            # 控制台代码页（这里是 GBK）编码，中文拒绝信息会变成乱码，用例就没法
+            # 断言「被哪条判据拒绝」。这两行把它按 UTF-8 输出。
+            script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "$ErrorActionPreference = 'Stop'\n"
+                f". '{_PIN_HELPER.as_posix()}'\n"
+                f"$pin = Read-UpstreamSrcPin -LockPath '{lock.as_posix()}'\n"
+                f"Assert-UpstreamSrcArchive -Path '{archive.as_posix()}' -Pin $pin\n"
+                "Write-Output 'VERIFIED'\n"
+            )
+            return _run_ps(script)
+
+    @staticmethod
+    def _lock_text(digest: str, size: int) -> str:
+        return ('release=upstream-src\n'
+                'asset=workbuddy2api-src.tar.gz\n'
+                f'sha256={digest}\n'
+                f'bytes={size}\n')
+
     def test_mismatched_digest_aborts_before_unpacking(self) -> None:
         if not _powershell():
             self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
-        with tempfile.TemporaryDirectory() as temp:
-            payload = Path(temp) / 'src.tar.gz'
-            payload.write_bytes(b'not the pinned upstream tarball\n')
-            script = (self._slice(_PIN_BEGIN, _PIN_END)
-                      + f"\n$tarPath = '{payload.as_posix()}'\n"
-                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
-                      + "\nWrite-Output 'VERIFIED'\n")
-            done = _run_ps(script)
-            self.assertNotEqual(done.returncode, 0,
-                                f'摘要不匹配竟然继续往下走：\n{done.stdout}{done.stderr}')
-            self.assertNotIn('VERIFIED', done.stdout, '拒绝之前就放行了')
+        payload = b'not the pinned upstream tarball\n'
+        expected = 'f' * 64
+        done = self._probe(payload, self._lock_text(expected, len(payload)))
+        self.assertNotEqual(done.returncode, 0,
+                            f'摘要不匹配竟然继续往下走：\n{done.stdout}{done.stderr}')
+        self.assertNotIn('VERIFIED', done.stdout, '拒绝之前就放行了')
+        self.assertIn(expected, done.stderr, '拒绝信息里没有期望值，排查时看不出该怎么修')
+        self.assertIn(hashlib.sha256(payload).hexdigest(), done.stderr,
+                      '拒绝信息里没有实际值')
 
-    def test_matching_digest_lets_the_build_continue(self) -> None:
-        """校验不能永远失败：摘要对上时必须放行，否则每次都红等于没校验。"""
+    def test_mismatched_size_aborts_before_unpacking(self) -> None:
+        """字节数是第二条判据：只有摘要一条时，换包后的「摘要巧合」无从证伪。"""
         if not _powershell():
             self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
-        with tempfile.TemporaryDirectory() as temp:
-            payload = Path(temp) / 'src.tar.gz'
-            payload.write_bytes(b'pinned upstream tarball\n')
-            actual = hashlib.sha256(payload.read_bytes()).hexdigest()
-            script = (self._slice(_PIN_BEGIN, _PIN_END)
-                      + f"\n$UpstreamSrcSha256 = '{actual}'\n"
-                      + f"$tarPath = '{payload.as_posix()}'\n"
-                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
-                      + "\nWrite-Output 'VERIFIED'\n")
-            done = _run_ps(script)
-            self.assertIn('VERIFIED', done.stdout, done.stdout + done.stderr)
+        payload = b'pinned upstream tarball\n'
+        digest = hashlib.sha256(payload).hexdigest()
+        done = self._probe(payload, self._lock_text(digest, len(payload) + 1))
+        self.assertNotEqual(done.returncode, 0,
+                            f'字节数不匹配竟然继续往下走：\n{done.stdout}{done.stderr}')
+        self.assertNotIn('VERIFIED', done.stdout, '拒绝之前就放行了')
+        self.assertIn('大小不匹配', done.stderr + done.stdout,
+                      '拒绝原因不是字节数判据（没抓住要说清是被哪条抓住的）')
 
-    def test_packer_does_not_hand_the_source_to_a_third_party_repository(self) -> None:
-        text = (_ROOT / 'dev' / 'pack_upstream_src.py').read_text(encoding='utf-8')
-        self.assertNotIn('--repo ithtelab/', text,
+    def test_missing_lock_aborts_instead_of_skipping_the_check(self) -> None:
+        """没有 lock 时不许「跳过校验继续建」——那等于把安装包交给未验证的源码。"""
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        payload = b'pinned upstream tarball\n'
+        done = self._probe(payload, None)
+        self.assertNotEqual(done.returncode, 0,
+                            f'lock 不存在竟然继续往下走：\n{done.stdout}{done.stderr}')
+        self.assertNotIn('VERIFIED', done.stdout, '没有 pin 也放行了')
+        self.assertIn('锁文件不存在', done.stderr,
+                      '拒绝原因没说清是「没有可校验的 pin」，运维只会看到一句文件找不到')
+
+    def test_matching_pin_lets_the_build_continue(self) -> None:
+        """校验不能永远失败：lock 与包对上时必须放行，否则每次都红等于没校验。"""
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        payload = b'pinned upstream tarball\n'
+        done = self._probe(payload, self._lock_text(hashlib.sha256(payload).hexdigest(),
+                                                    len(payload)))
+        self.assertIn('VERIFIED', done.stdout, done.stdout + done.stderr)
+
+    # ── 打包侧：上传与改 lock 必须同一次运行 ──────────────────────────
+
+    def test_packer_writes_the_lock_in_the_same_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            src = tmp / 'src'
+            src.mkdir()
+            (src / 'docker-compose.yml').write_text('services: {}\n', encoding='utf-8')
+            (src / 'app.py').write_text('print(1)\n', encoding='utf-8')
+            lock = tmp / 'upstream-source.lock'
+            done = subprocess.run(
+                [sys.executable, '-X', 'utf8', str(_PACKER), str(src),
+                 '-o', str(tmp / 'out'), '--lock', str(lock), '--stamp', 'test'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace')
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            asset = tmp / 'out' / 'workbuddy2api-src.tar.gz'
+            raw = asset.read_bytes()
+            text = lock.read_text(encoding='utf-8')
+            self.assertIn(f'sha256={hashlib.sha256(raw).hexdigest()}', text,
+                          'lock 的 sha256 与本次产物不一致（或根本没写）')
+            self.assertIn(f'bytes={len(raw)}', text,
+                          'lock 的 bytes 与本次产物不一致（或根本没写）')
+
+    def test_packer_refuses_a_third_party_upload_target(self) -> None:
+        """上传目标只能本仓：把源码快照传到第三方等于交出发布权。"""
+        self.assertNotIn(THIRD_PARTY_REPO, self.packer,
                          '打包助手仍教人把我们的源码快照传到第三方仓库')
-        self.assertNotIn('gh release upload', text,
-                         '打包助手仍印着一条可直接执行的第三方上传命令')
+        self.assertIn(f"DEFAULT_REPO = '{OFFICIAL_REPO}'", self.packer,
+                      '打包助手的默认上传目标不是本仓')
+        with tempfile.TemporaryDirectory() as temp:
+            src = Path(temp) / 'src'
+            src.mkdir()
+            (src / 'docker-compose.yml').write_text('services: {}\n', encoding='utf-8')
+            done = subprocess.run(
+                [sys.executable, '-X', 'utf8', str(_PACKER), str(src),
+                 '-o', str(Path(temp) / 'out'), '--lock', str(Path(temp) / 'l.txt'),
+                 '--upload', '--repo', THIRD_PARTY_REPO],
+                capture_output=True, text=True, encoding='utf-8', errors='replace')
+            self.assertNotEqual(done.returncode, 0, '第三方上传目标竟然被接受')
 
 
 class InstallSurfacesPointAtThisRepositoryTests(unittest.TestCase):

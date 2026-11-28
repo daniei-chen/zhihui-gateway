@@ -248,7 +248,7 @@ gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 | `docs/UPSTREAM-*`、`docs/PLATFORM-POOL-REVIEW.md` | 上游评审/采纳记录，记的是「这条产品线的上游是谁、当时对的是哪个 commit」 |
 | `docs/enterprise-support/*` | 已停用的历史补丁包（`apply.sh` 动手之前就 `exit 2`）。里面的镜像名是当时的记录 |
 | `deploy/update.py:83,351`（及打包后的 `server/deploy/update.py`） | 注释在解释「默认值曾经是别人的仓库」，是那次修复的来由 |
-| `windows/launcher/build.ps1:45`、`windows/README.md` | 上游源码载体 `upstream-src/...tar.gz` **只存在于上游仓库**；取不到就没有可编译的源码。该包的 sha256 已钉住（`$UpstreamSrcSha256`），解包前校验 |
+| `windows/launcher/build.ps1`、`windows/README.md` | 上游源码载体在本仓的 `upstream-src` Release 上；摘要的唯一真源是 `dev/upstream-source.lock`（`$UpstreamSrcSha256` 已删，改由 `windows/launcher/upstream-pin.ps1` 读 lock 并双校验），解包前校验 |
 | `fork-tools/fork-upgrade.sh` | 它就是「从上游取东西来对照」的工具，从上游拉是设计目的 |
 | `server/tests/*`、`web/tests/*`、`dev/*` | 测试夹具里**故意**构造第三方仓库名，用来证明拒绝逻辑真的拒绝 |
 | `dev/.palette|.update-clear/version-check.json` | 版本探测的缓存产物 |
