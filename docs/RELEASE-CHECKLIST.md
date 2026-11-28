@@ -71,6 +71,29 @@ sudo ./deploy/rollout-rolling.sh <版本>
 所以切换指针的瞬间，**正在用的脚本也换了**。这就是为什么 `rollout-rolling.sh`
 必须用新版跑，而不是旧版。
 
+### 蓝绿：候选实例怎么退场
+
+`route_switch old` 之后，候选实例（`workbuddy-web-helper`，7865）上还留着切流前
+接下的请求。脚本不再「等一秒就停」，而是**先等它报在途归零，再停**：
+
+- 主信号是候选实例自己的只读探针 `GET /api/health/inflight`（只在回环地址上应答，
+  不带凭据）。计数来自 `DrainMiddleware` 的请求级跟踪，流式响应的整个生命周期都在
+  里面 —— `/metrics` 要采集器令牌、`/api/readyz/detail` 要管理员身份，
+  而发布脚本是 root 的 shell，两者都拿不到，所以单独开了这个端点。
+- 墙钟只是安全上限：`WB_ROLLOUT_DRAIN_TIMEOUT`，默认 300 秒。它必须小于 unit 的
+  `TimeoutStopSec=330`，否则等于在等 systemd 的 SIGKILL。
+- 计数读不到、上限到了、或者停之后的优雅关闭日志里有
+  `timeout graceful shutdown exceeded` / `requests outstanding`，**发布按失败记
+  （退出码 2）**，`rollout-log.jsonl` 里写 `候选实例在途未排空`。
+  截断的流不会落 5xx，所以不能等那个统计来说话。
+- 配套上限：helper unit 的 `WB_GRACEFUL_SHUTDOWN_S=320`（launch_guard 从环境读，
+  没设时仍是 75）、`WB_DRAIN_TIMEOUT_SEC=320`、`TimeoutStopSec=330`。
+  三个数的关系是 300 < 320 <= 330，`test_rollout_candidate_drain.py` 会校验它。
+
+局限：这套判据依赖候选实例跑的是带 `/api/health/inflight` 的版本。探针读不到时脚本
+直接失败（不会把「读不到」当成「排空了」），所以从更老的版本第一次蓝绿发布前，
+要先确认候选实例是新版。
+
 ## 四、部署后必须验证的五件事
 
 | 项 | 查法 | 通过标准 |

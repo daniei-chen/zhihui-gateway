@@ -226,9 +226,13 @@ def writer_command(*, helper=False, reconcile=False):
             'pycache_prefix=/opt/zhihui-release/python-cache', '-m']
     if reconcile:
         return prefix + ['server.budget_reconcile']
+    # 优雅关闭窗口按实例取：候选实例（helper）要等在途的长流跑完才退出，所以
+    # unit 用 WB_GRACEFUL_SHUTDOWN_S 把它放大（见 deploy/workbuddy-web-helper.service）；
+    # 没有设这个变量的实例保持 75 秒，与历史行为一致。
+    graceful = os.environ.get('WB_GRACEFUL_SHUTDOWN_S', '').strip() or '75'
     return prefix + ['server.serve', '--host', '127.0.0.1',
             '--port', '7865' if helper else '7866',
-            '--timeout-graceful-shutdown', '75']
+            '--timeout-graceful-shutdown', graceful]
 
 
 class Launcher:

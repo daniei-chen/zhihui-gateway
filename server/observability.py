@@ -1146,9 +1146,13 @@ def _env_int(name, default):
 
 class RequestAuditMiddleware:
     """Pure ASGI wrapper; mutable context survives streaming tasks and is reset per request."""
+    #: 控制路径走独立的小并发额度：业务容量打满时，巡检与发布判据仍然答得上来。
+    #: `/api/health/inflight` 是发布脚本判断「候选实例在途归零」的依据（D-04）。
     CONTROL_PATHS = frozenset(('/healthz', '/readyz', '/api/healthz', '/api/readyz',
-                              '/api/readyz/detail', '/api/system/drain', '/metrics'))
-    PUBLIC_PROBES = frozenset(('/healthz', '/readyz', '/api/healthz', '/api/readyz'))
+                              '/api/readyz/detail', '/api/system/drain', '/metrics',
+                              '/api/health/inflight'))
+    PUBLIC_PROBES = frozenset(('/healthz', '/readyz', '/api/healthz', '/api/readyz',
+                              '/api/health/inflight'))
 
     def __init__(self, app, shared=None):
         self.app = app
