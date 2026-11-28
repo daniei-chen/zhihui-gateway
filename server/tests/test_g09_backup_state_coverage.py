@@ -10,6 +10,7 @@
 """
 import json
 import os
+import signal
 from pathlib import Path
 import tarfile
 import tempfile
@@ -243,6 +244,90 @@ class MainWiringIsPresentTest(unittest.TestCase):
                       '`empty` 算出来了却没有判据 —— 空壳目录会照样通过验证')
         self.assertIn("raise RuntimeError('recovery archive has directory entries without files",
                       window, '有空壳目录条目时必须抛出，而不是继续发布这份包')
+
+
+@unittest.skipUnless(hasattr(os, 'mkfifo'), '本机没有 os.mkfifo（Windows 无法造 FIFO）')
+class NonRegularStateEntryTest(unittest.TestCase):
+    """FIFO 之类不是普通文件，**不能当文件收进包**：`open('rb')` 在 FIFO 上是阻塞，
+    不是异常 —— 当晚备份会挂住，没有异常、没有退出码，只能靠人第二天发现。
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.manager = Path(self.directory.name) / 'manager'
+        self.gateway = Path(self.directory.name) / 'gateway'
+        self.pipe = self.manager / 'data' / 'logpipe'
+        self.pipe.parent.mkdir(parents=True, exist_ok=True)
+        os.mkfifo(self.pipe)  # 真的 FIFO，不是 mock
+
+    def timed(self, call):
+        """把「挂住」变成失败：Windows 没有 SIGALRM，但那里没有 mkfifo，整类已 skip。"""
+        if not hasattr(signal, 'SIGALRM'):
+            call()
+            return
+        def handler(signum, frame):
+            raise AssertionError('在 FIFO 上挂住了 —— 判据失效，这一夜备份不会结束')
+        previous = signal.signal(signal.SIGALRM, handler)
+        signal.alarm(5)
+        try:
+            call()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+
+    def test_a_fifo_in_a_state_root_is_reported_instead_of_blocking(self):
+        entries, _excluded, unexpected = recoverystate.collect_state_entries(
+            self.manager, self.gateway, paired=False)
+        self.assertEqual([item['path'] for item in unexpected], ['manager/data/logpipe'])
+        self.assertNotIn('manager/data/logpipe', {name for name, _path in entries},
+                         'FIFO 被当成普通文件收进包，备份就会卡在 open 上')
+
+    def test_writing_a_fifo_fails_instead_of_hanging(self):
+        """枚举之后、打开之前被换成 FIFO 的窗口：必须报错，不能挂住。"""
+        archive_path = Path(self.directory.name) / 'probe.tar'
+
+        def call():
+            with tarfile.open(archive_path, 'w') as archive:
+                with self.assertRaises(RuntimeError):
+                    recoverystate.add_state_file(
+                        archive, 'manager/data/logpipe', self.pipe)
+
+        self.timed(call)
+
+
+class DisabledAuthFileKeepsRawBytesTest(unittest.TestCase):
+    """`.json.disabled` 现在**原样入包**，不再经过 `stable_json` 归一化。
+
+    旧版显式 `state.extend((GATEWAY/'auths').glob('*.json.disabled'))`，随后统一
+    `add_bytes(archive, name, stable_json(path), ...)`；新版 `main()` 只对 suffix
+    恰好是 `.json` 的成员做归一化。原样更对 —— 禁用文件不是运行时配置，而且源文件
+    本身不是合法 JSON 时不再把整次备份拖垮 —— 但它**改了包内字节**，所以这里钉住
+    两件事：归一化的选择条件，以及原样写法确实逐字节保真。
+
+    边界：钉的是「选择条件 + 原样写法」，不是端到端跑一次 `main()`（那件事在 SWO-88）。
+    """
+
+    def test_only_exact_json_suffix_is_normalized(self):
+        self.assertEqual(Path('account.json').suffix, '.json')
+        self.assertEqual(Path('account.json.disabled').suffix, '.disabled')
+        index = SOURCE.find("if path.suffix=='.json':")
+        self.assertNotEqual(index, -1, '归一化的选择条件不见了，先确认它挪到哪了')
+        self.assertIn('add_bytes', SOURCE[index:index + 200])
+
+    def test_raw_state_files_survive_byte_for_byte(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        source = Path(directory.name) / 'account.json.disabled'
+        source.write_text('{"b": 1,   "a": 2}\n', encoding='utf-8')
+        archive_path = Path(directory.name) / 'probe.tar'
+        with tarfile.open(archive_path, 'w') as archive:
+            recoverystate.add_state_file(
+                archive, 'gateway/auths/account.json.disabled', source)
+        with tarfile.open(archive_path) as archive:
+            got = archive.extractfile('gateway/auths/account.json.disabled').read()
+        self.assertEqual(got, source.read_bytes(),
+                         '`.json.disabled` 必须原样入包；被重排说明它走了 .json 那条路')
 
 
 if __name__ == '__main__':

@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 from pathlib import Path
+import stat
 import tarfile
 
 #: 数据根：`家族` + 相对该家族的目录。家族只有两个 —— 恢复包里的
@@ -93,6 +95,13 @@ def collect_state_entries(manager_root, gateway_root, paired):
                 continue
             if path.is_dir():
                 continue
+            # FIFO / socket / 设备节点**不能当普通文件收**：`open('rb')` 在 FIFO 上是
+            # **阻塞**而不是异常 —— 当晚备份会一直挂住，没有异常、没有退出码，
+            # 第二天只能靠人发现「备份没跑完」。挂住比失败更难发现，而备份是保护
+            # 数据的那条线。所以这里按 `lstat` 判类型（不跟随链接，链接上面已经挡掉）。
+            if not stat.S_ISREG(path.lstat().st_mode):
+                unexpected.append({'path': name, 'reason': '不是普通文件（FIFO/socket/设备节点）'})
+                continue
             reason = exclusion_reason(relative, family, patterns)
             if reason:
                 excluded.append({'path': name, 'reason': reason})
@@ -111,14 +120,28 @@ def add_state_file(archive, name, path):
 
     不能用整份读内存的写法：`admission-cohort.db` 这类文件可以很大，
     2026-11-25 那次 OOM 就是整份读进内存导致的。
+
+    枚举那一刻判过类型，但枚举与打开之间还有窗口：那一瞬被换成 symlink 或 FIFO，
+    `open` 要么跟随到别的文件、要么**在 FIFO 上阻塞**。`O_NOFOLLOW | O_NONBLOCK`
+    让两种情形都变成立即报错而不是挂住，随后用 `fstat` 复核类型 —— 元数据也取自
+    同一个 fd，不再二次 `stat`。
     """
-    metadata = Path(path).stat()
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise RuntimeError('state file is not a regular file: ' + name)
     info = tarfile.TarInfo(name)
     info.size = metadata.st_size
     info.mode = 0o600
     info.mtime = int(metadata.st_mtime)
     info.uid, info.gid = metadata.st_uid, metadata.st_gid
-    with Path(path).open('rb') as stream:
+    with os.fdopen(descriptor, 'rb') as stream:
         archive.addfile(info, stream)
     return metadata.st_uid, metadata.st_gid
 
