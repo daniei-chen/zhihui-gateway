@@ -197,40 +197,80 @@ class InstanceLeaseTests(_TempDataDir):
             instancelease.acquire(self.data)
 
 
+def _instance_env(data_dir: Path) -> dict:
+    return {**os.environ, 'WB_DATA_DIR': str(Path(data_dir)),
+            'WB_STATIC_DIR': str(Path(data_dir).parent / 'web'),
+            'WB_ADMIN_PASSWORD': 'single-writer-test-9f',
+            'PYTHONIOENCODING': 'utf-8'}
+
+
+def _spawn_instance(data_dir: Path, port: int, log_path: Path) -> tuple[subprocess.Popen, object]:
+    handle = Path(log_path).open('w', encoding='utf-8', errors='replace')
+    proc = subprocess.Popen(
+        [sys.executable, '-B', '-m', 'server.serve',
+         '--host', '127.0.0.1', '--port', str(port)],
+        cwd=str(ROOT), env=_instance_env(data_dir),
+        stdout=handle, stderr=subprocess.STDOUT)
+    return proc, handle
+
+
+def _read_log(log_path: Path, size: int = 1500) -> str:
+    try:
+        return Path(log_path).read_text(encoding='utf-8', errors='replace')[-size:]
+    except OSError:
+        return ''
+
+
+def _stop(proc: subprocess.Popen, handle) -> None:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=30)
+    handle.close()
+
+
 class _Serving:
     """一个**真的在服务**的 `serve.py` 实例：真端口、真进程、真数据目录。"""
 
     def __init__(self, data_dir: Path, port: int | None = None) -> None:
         self.port = port or _free_port()
         self.log_path = Path(data_dir).parent / f'instance-{self.port}.log'
-        self._log = self.log_path.open('w', encoding='utf-8', errors='replace')
-        env = {**os.environ, 'WB_DATA_DIR': str(data_dir),
-               'WB_STATIC_DIR': str(Path(data_dir).parent / 'web'),
-               'WB_ADMIN_PASSWORD': 'single-writer-test-9f',
-               'PYTHONIOENCODING': 'utf-8'}
-        self.proc = subprocess.Popen(
-            [sys.executable, '-B', '-m', 'server.serve',
-             '--host', '127.0.0.1', '--port', str(self.port)],
-            cwd=str(ROOT), env=env, stdout=self._log, stderr=subprocess.STDOUT)
+        self.proc, self._log = _spawn_instance(data_dir, self.port, self.log_path)
 
     def wait_ready(self) -> dict:
         return _wait_inflight(self.port, self.log_path)
 
     def log_tail(self, size: int = 1500) -> str:
-        try:
-            return self.log_path.read_text(encoding='utf-8', errors='replace')[-size:]
-        except OSError:
-            return ''
+        return _read_log(self.log_path, size)
 
     def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=30)
-        self._log.close()
+        _stop(self.proc, self._log)
+
+
+def _second_instance(data_dir: Path, wait: float = 45.0) -> tuple[str, int | None, str]:
+    """起第二个实例，最多等 `wait` 秒：要么被拒绝退出，要么（租约漏洞）真的起来服务。
+
+    返回 `('refused'|'serving'|'hung', 退出码, 日志尾部)`。边等边探它自己的端口：
+    租约一旦没覆盖生命周期，最快的证据是「它已经在 :port 上应答了」，不必干等到超时。
+    """
+    port = _free_port()
+    log_path = Path(data_dir).parent / f'second-{port}.log'
+    proc, handle = _spawn_instance(data_dir, port, log_path)
+    try:
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            code = proc.poll()
+            if code is not None:
+                return ('refused' if code != 0 else 'serving', code, _read_log(log_path))
+            if _inflight(port) is not None:
+                return ('serving', None, _read_log(log_path))
+            time.sleep(0.25)
+        return ('hung', None, _read_log(log_path))
+    finally:
+        _stop(proc, handle)
 
 
 class LeaseLifetimeTests(_TempDataDir):
@@ -238,8 +278,8 @@ class LeaseLifetimeTests(_TempDataDir):
 
     为什么单独一条：把 `with lease:` 写成「先 `release()` 再进 with」——一次看起来
     完全无害的重构（比如为了「别一直占着锁」）——会让租约在启动后立刻失效，而
-    上面那些用例全都还是绿的：它们的第二个实例是被**测试进程自己**持有的租约挡住的，
-    跟服务进程有没有一直握着租约无关。这条用例盯的正是那个差别。
+    上面那些用例全都还是绿的：它们的第二个实例是被**测试进程自己**持有的租约挡住
+    的，跟服务进程有没有一直握着租约无关。这条用例盯的正是那个差别。
     """
 
     def test_a_serving_instance_keeps_the_lease_until_it_exits(self) -> None:
@@ -247,9 +287,11 @@ class LeaseLifetimeTests(_TempDataDir):
         try:
             first.wait_ready()
             for attempt in (1, 2):
-                blocked = _launcher(self.data, timeout=90)
-                output = blocked.stdout + blocked.stderr
-                self.assertNotEqual(blocked.returncode, 0, output)
+                state, code, output = _second_instance(self.data)
+                self.assertEqual(
+                    state, 'refused',
+                    '第 %d 次尝试：第一个实例还活着，第二个却起来了（租约没覆盖生命周期）\n%s'
+                    % (attempt, output))
                 self.assertIn('拒绝启动', output)
                 self.assertIn(f'pid={first.proc.pid}', output,
                               f'第 {attempt} 次被拒绝时没说清是谁占着')
@@ -263,14 +305,12 @@ class LeaseLifetimeTests(_TempDataDir):
         finally:
             first.stop()
 
-        port = _free_port()
-        successor = _Serving(self.data, port)
+        successor = _Serving(self.data)
         try:
             info = successor.wait_ready()
             self.assertEqual(info.get('total_in_flight'), 0)
         finally:
             successor.stop()
-
 
 
 if __name__ == "__main__":
