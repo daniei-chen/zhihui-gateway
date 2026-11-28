@@ -1132,9 +1132,16 @@ def current_user(request: Request) -> dict:
 #   2. `WB_CORS_ORIGINS`：已有的跨源白名单。只认白名单，外加「不可能被攻击者
 #      控制」的同源 Host（见 `_cannot_be_rebound`），否则跨源部署下连面板自己
 #      都写不了。
-#   3. 都没配：只采信**可信反代**（peer 落在 `WB_TRUSTED_PROXY_CIDRS`，与
-#      `iputil.client_ip` 同一份判据）送来的 `X-Forwarded-Host`。非可信 peer
-#      的 XFH 就是普通请求头，一律忽略。
+#   3. 都没配：默认**没有**锚点。只有 `WB_TRUST_FORWARDED_HOST=1` 时才额外
+#      采信 `X-Forwarded-Host`，且要求 peer 落在 `WB_TRUSTED_PROXY_CIDRS`
+#      （与 `iputil.client_ip` 同一份判据）。
+#
+#      为什么默认关：`X-Forwarded-Host` 不在 Fetch 的 forbidden header 名单里，
+#      rebinding 之后的同源 fetch 能直接带；nginx 默认还会把客户端的未知头
+#      原样转发给上游。所以「对端是可信反代」不能推出「这个头是反代写的」——
+#      上一版把锚点从请求自己的 `Host` 换成了请求自己的另一个头，等于没换。
+#      打开这个开关是部署方声明「我的反代覆盖写 XFH」，发布门禁会要求每个
+#      proxy 块显式设置该头（`deploy/release.py`）。
 #   4. 最后才是「不可能被 rebinding 的 Host」：IP 字面量、`localhost`、
 #      单标签内网名。带点的主机名（`evil.test`、`zhihui.kaogong.art`）不能自证
 #      身份，不给锚点。
@@ -1194,6 +1201,16 @@ def _proxied(request: Request) -> bool:
     return bool(config.TRUST_PROXY and _is_trusted_proxy(peer))
 
 
+def _trusts_forwarded_host(request: Request) -> bool:
+    """`X-Forwarded-Host` 能否当锚点：**两把锁**都要开。
+
+    对端可信（`_proxied`）只说明这条连接来自反代，不说明这个头是反代写的 ——
+    nginx 默认转发客户端的未知头。所以还要部署方显式声明
+    `WB_TRUST_FORWARDED_HOST=1`（并让反代覆盖写该头，发布门禁会查）。
+    """
+    return bool(config.TRUST_FORWARDED_HOST and _proxied(request))
+
+
 def _origin_of(request: Request, host: str, *, proxied: bool):
     """把 `Host` / `X-Forwarded-Host` 拼成来源三元组。"""
     host = (host or '').strip()
@@ -1230,7 +1247,8 @@ def _resolve_anchor(request: Request) -> tuple:
     """返回 (状态, 允许的来源)。状态同时用于管理页的状态/自检字段。
 
     configured     —— `WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS` 已声明（服务端锚点）
-    proxy          —— 没声明，但请求来自可信反代且带了 `X-Forwarded-Host`
+    proxy          —— 没声明，但 `WB_TRUST_FORWARDED_HOST=1` 且可信反代送了
+                      `X-Forwarded-Host`（默认关，见 `_trusts_forwarded_host`）
     loopback-only  —— 没声明，Host 本身不可能被攻击者控制（IP/localhost/单标签内网名）
     unconfigured   —— 没声明、Host 又是点分域名：没有锚点，写请求必须被拒
     relaxed        —— 逃生门打开（锚点退回 Host —— 修前行为，rebinding 风险自负）
@@ -1244,7 +1262,8 @@ def _resolve_anchor(request: Request) -> tuple:
         anchors = [*configured, *([own] if own is not None else [])]
         return 'relaxed', tuple(dict.fromkeys(anchors))
     anchors = list(configured)
-    if not anchors and proxied:
+    trusts_xfh = _trusts_forwarded_host(request)
+    if not anchors and trusts_xfh:
         forwarded = (request.headers.get('x-forwarded-host') or '').split(',')[0]
         xfh = _origin_of(request, forwarded, proxied=True)
         if xfh is not None:
@@ -1256,8 +1275,8 @@ def _resolve_anchor(request: Request) -> tuple:
         return 'configured', anchors
     if not anchors:
         return 'unconfigured', ()
-    return ('proxy' if (request.headers.get('x-forwarded-host') or '').strip() else
-            'loopback-only'), anchors
+    used_xfh = trusts_xfh and bool((request.headers.get('x-forwarded-host') or '').strip())
+    return ('proxy' if used_xfh else 'loopback-only'), anchors
 
 
 def origin_anchors(request: Request) -> tuple:

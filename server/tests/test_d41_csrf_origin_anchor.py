@@ -42,6 +42,7 @@ DNS rebinding 下浏览器访问 `http://evil.test:8000`，`Host` 与 `Origin` �
 from __future__ import annotations
 
 import asyncio
+import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -94,6 +95,7 @@ class _AnchorCase(unittest.TestCase):
         self._patch(config, 'TRUST_PROXY', '1')
         self._patch(config, 'TRUSTED_PROXY_CIDRS', ['127.0.0.0/8', '::1/128'])
         self._patch(config, 'ALLOW_UNCONFIGURED_ORIGIN', False)
+        self._patch(config, 'TRUST_FORWARDED_HOST', False)
         security._unanchored_warned.clear()
         patcher = mock.patch.object(auth, '_complete_login',
                                     return_value=JSONResponse({'ok': True}))
@@ -270,9 +272,11 @@ class ConfiguredOriginIsAuthoritative(_AnchorCase):
 
 
 class TrustedProxyOnly(_AnchorCase):
-    """`X-Forwarded-Host` 只在 peer 属于 `WB_TRUSTED_PROXY_CIDRS` 时算数。"""
+    """`X-Forwarded-Host` 要**两把锁**：peer 在 `WB_TRUSTED_PROXY_CIDRS` **且**
+    `WB_TRUST_FORWARDED_HOST=1`（默认关，见 `ForwardedHostIsOptIn`）。"""
 
     def test_forwarded_host_from_a_trusted_proxy_is_honored(self) -> None:
+        self._patch(config, 'TRUST_FORWARDED_HOST', True)
         response = self._call(peer=LOOPBACK, host='127.0.0.1:7864',
                               origin='https://panel.example.com',
                               extra={'x-forwarded-host': 'panel.example.com',
@@ -297,11 +301,73 @@ class TrustedProxyOnly(_AnchorCase):
 
     def test_trust_proxy_off_disables_forwarded_host(self) -> None:
         self._patch(config, 'TRUST_PROXY', False)
+        self._patch(config, 'TRUST_FORWARDED_HOST', True)
         response = self._call(peer=LOOPBACK, host='127.0.0.1:7864',
                               origin='https://panel.example.com',
                               extra={'x-forwarded-host': 'panel.example.com',
                                      'x-forwarded-proto': 'https'})
         self.assertEqual(response.status_code, 403)
+
+
+class ForwardedHostIsOptIn(_AnchorCase):
+    """`X-Forwarded-Host` 默认**不可信**：它不在 Fetch 的 forbidden header 名单里。
+
+    本轮实测的洞：默认配置（无 `WB_PUBLIC_ORIGIN`）+ README 那套 nginx 反代到
+    127.0.0.1 时，客户端自带 `X-Forwarded-Host: panel.example.com` 的
+    `POST /api/login` 返回 200 —— 锚点从「请求自己的 Host」换成了「请求自己的
+    另一个头」。现在要两把锁（peer 可信 + 显式 opt-in）。
+    """
+
+    def test_forwarded_host_is_ignored_by_default(self) -> None:
+        """① 开关关、无权威来源、peer 回环、客户端自带 XFH → 403。
+
+        形态就是实测的那个洞：攻击域名 + 同名 XFH。上一版据此可以建会话。
+        """
+        response = self._call(peer=LOOPBACK, host='evil.test:8000',
+                              origin='http://evil.test:8000',
+                              extra={'x-forwarded-host': 'evil.test:8000',
+                                     'x-forwarded-proto': 'http'})
+        self.assertEqual(response.status_code, 403,
+                         '默认采信了客户端可自带的 X-Forwarded-Host')
+        self.assertEqual(response.json().get('detail'), 'origin_unconfigured')
+        self.login.assert_not_called()
+
+    def test_the_opt_in_reproduces_exactly_that_risk(self) -> None:
+        """② 的反面：打开开关后同一形态会被放行 —— 开关是**主动承担**这个风险。
+
+        这条不是「应该 200」，而是把开关的代价钉在测试里：任何人想把默认值
+        改成 True，都得先读到这里。
+        """
+        self._patch(config, 'TRUST_FORWARDED_HOST', True)
+        response = self._call(peer=LOOPBACK, host='evil.test:8000',
+                              origin='http://evil.test:8000',
+                              extra={'x-forwarded-host': 'evil.test:8000',
+                                     'x-forwarded-proto': 'http'})
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_opt_in_accepts_it_and_reports_the_proxy_state(self) -> None:
+        """② 开关开 → 允许，且状态字段如实报 `proxy`。"""
+        self._patch(config, 'TRUST_FORWARDED_HOST', True)
+        request = _request('127.0.0.1:7864', 'https://panel.example.com', peer=LOOPBACK,
+                           extra={'x-forwarded-host': 'panel.example.com',
+                                  'x-forwarded-proto': 'https'})
+        self.assertEqual(security.origin_status(request)['state'], 'proxy')
+        response = self._call(peer=LOOPBACK, host='127.0.0.1:7864',
+                              origin='https://panel.example.com',
+                              extra={'x-forwarded-host': 'panel.example.com',
+                                     'x-forwarded-proto': 'https'})
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_an_untrusted_peer_is_refused_even_with_the_opt_in(self) -> None:
+        """③ 非可信 peer 带 XFH → 403，与开关无关。"""
+        for flag in (False, True):
+            with self.subTest(trust_forwarded_host=flag):
+                self._patch(config, 'TRUST_FORWARDED_HOST', flag)
+                response = self._call(peer=LAN, host='10.0.0.9:7864',
+                                      origin='https://panel.example.com',
+                                      extra={'x-forwarded-host': 'panel.example.com'})
+                self.assertEqual(response.status_code, 403)
+        self.login.assert_not_called()
 
 
 class OriginStatusField(_AnchorCase):
@@ -324,6 +390,8 @@ class OriginStatusField(_AnchorCase):
                       extra={'x-forwarded-host': 'panel.example.com',
                              'x-forwarded-proto': 'https'})),
         )
+        # proxy 一角要求显式打开 opt-in 开关（其余角落不受影响）。
+        self._patch(config, 'TRUST_FORWARDED_HOST', True)
         for expected_state, expected_allowed, request in cases:
             with self.subTest(expected=expected_state):
                 status = security.origin_status(request)
@@ -489,7 +557,8 @@ class DeploymentTrustModel(unittest.TestCase):
         import yaml
         dc = yaml.safe_load((self.ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
         env = dc['services']['workbuddy-manager']['environment']
-        for key in ('WB_PUBLIC_ORIGIN', 'WB_ALLOW_UNCONFIGURED_ORIGIN'):
+        for key in ('WB_PUBLIC_ORIGIN', 'WB_ALLOW_UNCONFIGURED_ORIGIN',
+                    'WB_TRUST_FORWARDED_HOST'):
             with self.subTest(key=key):
                 self.assertIn(key, env, f'compose 没把 {key} 透传进来 —— 写进 .env 也没用')
                 self.assertIn('${' + key, str(env[key]), f'{key} 没从 .env 取值')
@@ -506,6 +575,21 @@ class DeploymentTrustModel(unittest.TestCase):
                               '转发它等于把子请求判成外部来源')
                 self.assertNotIn(f'{header} $remote_addr', block,
                                  f'internal location 把 {header} 转发成了浏览器地址')
+
+    def test_readme_proxy_blocks_set_forwarded_host(self) -> None:
+        """文档样例必须与门禁同口径：每个 proxy_pass 块显式设置 X-Forwarded-Host。
+
+        客户端可以自带这个头，nginx 默认原样转发 —— 示例里漏了它，照抄的部署
+        就等于把「本站来源」交给了请求。
+        """
+        text = (self.ROOT / 'deploy' / 'README.md').read_text(encoding='utf-8')
+        fences = re.findall(r'```nginx\n(.*?)```', text, re.DOTALL)
+        blocks = [fence for fence in fences if 'proxy_pass' in fence]
+        self.assertTrue(blocks, 'README 里没有带 proxy_pass 的 nginx 样例了？')
+        for index, block in enumerate(blocks):
+            with self.subTest(block=index):
+                self.assertIn('X-Forwarded-Host', block,
+                              'nginx 样例的 proxy 块没设置 X-Forwarded-Host')
 
     def test_escape_hatch_schema_matches_the_runtime_parser(self) -> None:
         """`_env_bool` 只认 1/true/yes/on；`t` / `y` 必须在启动期被拒，而不是静默 false。"""

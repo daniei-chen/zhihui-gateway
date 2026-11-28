@@ -38,6 +38,9 @@
   "WB_ALLOW_UNCONFIGURED_ORIGIN": {
     "sensitive": false
   },
+  "WB_TRUST_FORWARDED_HOST": {
+    "sensitive": false
+  },
   "WB_API_CONCURRENCY": {
     "sensitive": false
   },

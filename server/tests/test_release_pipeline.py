@@ -582,6 +582,7 @@ class NginxCheckTest(unittest.TestCase):
         site = self._site_with_internal("""    location = /__zh_session {
         internal;
         proxy_pass http://127.0.0.1:7864/api/system/internal-session-verify;
+        proxy_set_header X-Forwarded-Host "";
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
@@ -596,6 +597,7 @@ class NginxCheckTest(unittest.TestCase):
         site = self._site_with_internal("""    location = /__zh_session {
         internal;
         proxy_pass http://127.0.0.1:7864/api/system/internal-session-verify;
+        proxy_set_header X-Forwarded-Host "";
         proxy_set_header X-Real-IP "";
         proxy_set_header X-Forwarded-For "";
     }
@@ -620,6 +622,7 @@ class NginxCheckTest(unittest.TestCase):
         site = self._site_with_internal("""    location = /__zh_session {
         internal;
         proxy_pass http://127.0.0.1:7864/api/system/internal-session-verify;
+        proxy_set_header X-Forwarded-Host "";
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP "";
     }
@@ -630,6 +633,30 @@ class NginxCheckTest(unittest.TestCase):
         self.assertIn('X-Forwarded-For', str(ctx.exception))
         self.assertFalse((self.root / 'current').exists(),
                          '站点配置没过时不该切指针')
+
+    def test_proxy_block_without_forwarded_host_is_refused(self) -> None:
+        """客户端自带的 X-Forwarded-Host 会被 nginx 原样转过去 → 必须显式设置。"""
+        site = self._site(self.USAGE_TOKEN_BLOCKS + """    location / {
+        proxy_pass http://127.0.0.1:7864;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+""")
+        with self.assertRaises(release_tool.ReleaseError) as ctx:
+            release_tool.check_nginx(site)
+        self.assertIn('X-Forwarded-Host', str(ctx.exception))
+        self.assertIn('location /', str(ctx.exception))
+
+    def test_proxy_block_clearing_or_overwriting_forwarded_host_passes(self) -> None:
+        for value in ('""', '$host'):
+            with self.subTest(value=value):
+                site = self._site(self.USAGE_TOKEN_BLOCKS + f"""    location / {{
+        proxy_pass http://127.0.0.1:7864;
+        proxy_set_header X-Forwarded-Host {value};
+    }}
+""")
+                notes = release_tool.check_nginx(site)
+                self.assertTrue(any('X-Forwarded-Host' in note for note in notes), notes)
 
     def test_verify_with_nginx_stops_before_the_signing_gate(self) -> None:
         """`verify --nginx` 在签名门禁**之前**就拒 —— 否则错配置会一路走到切指针。"""

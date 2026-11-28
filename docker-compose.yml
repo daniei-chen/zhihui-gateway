@@ -58,6 +58,7 @@ services:
       # 逃生门：只在确实来不及配置来源时临时打开（锚点退回「只信 Host」，DNS
       # rebinding 重新可用；跨站 Origin/Referer 仍会拦）。启动日志会醒目告警。
       WB_ALLOW_UNCONFIGURED_ORIGIN: ${WB_ALLOW_UNCONFIGURED_ORIGIN:-}
+      WB_TRUST_FORWARDED_HOST: ${WB_TRUST_FORWARDED_HOST:-}
       # 生产环境不暴露 /docs 与 /openapi.json
       WB_ENABLE_DOCS: "0"
       # 出口代理（可选）：写在与本文件同目录的 .env 里即可，compose 用 ${} 取过来。

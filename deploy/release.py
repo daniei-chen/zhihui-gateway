@@ -527,6 +527,42 @@ def _check_auth_request_targets(text: str) -> list[str]:
     return notes
 
 
+def _check_forwarded_host_overwritten(text: str) -> list[str]:
+    """每个 `proxy_pass` 的 location 必须**显式设置** `X-Forwarded-Host`。
+
+    为什么这是一条发布门禁而不是文档：客户端可以自带这个头（它不在 Fetch 的
+    forbidden header 名单里），而 nginx 默认把客户端的未知头原样转给上游。于是
+    「请求经过反代」并不能说明 `X-Forwarded-Host` 是反代写的 —— 不显式覆盖时，
+    带这个头的客户端等于自己宣布「本站来源」。应用侧已经把采信它变成显式开关
+    （`WB_TRUST_FORWARDED_HOST`），这里再保证「开关打开时那个头确实来自反代」。
+
+    允许两种写法：`""`（不采信，默认）与 `$host` / `$http_host`（覆盖写）。
+    """
+    notes = []
+    for match in re.finditer(r'location\s[^\n{]*\{', text):
+        depth, index = 1, match.end()
+        while index < len(text) and depth:
+            if text[index] == '{':
+                depth += 1
+            elif text[index] == '}':
+                depth -= 1
+            index += 1
+        body = text[match.end():index - 1]
+        if 'proxy_pass' not in body:
+            continue
+        name = text[match.start():match.end()].split('{')[0].strip()
+        pattern = r'proxy_set_header\s+X-Forwarded-Host\s+(""|\'\'|\$host|\$http_host)\s*;'
+        if not re.search(pattern, body, re.IGNORECASE):
+            raise ReleaseError(
+                f'{name} 转发到上游却没有显式设置 X-Forwarded-Host：客户端自带的'
+                '同名头会被 nginx 原样转过去，等于让请求自己宣布本站来源。'
+                '加 `proxy_set_header X-Forwarded-Host "";`（不采信）或 '
+                '`$host`（覆盖写，并同时设 WB_TRUST_FORWARDED_HOST=1）。'
+                '见 deploy/README.md')
+        notes.append(f'{name} 显式设置了 X-Forwarded-Host')
+    return notes
+
+
 def check_nginx(site: Path) -> list[str]:
     """站点配置里是否还有余额协议的两段放行。
 
@@ -542,7 +578,9 @@ def check_nginx(site: Path) -> list[str]:
     if missing:
         raise ReleaseError(
             "站点配置缺少余额协议放行（恢复备份后需重新插入）：" + "; ".join(missing))
-    return ["余额协议放行已就位", *_check_auth_request_targets(text)]
+    return ["余额协议放行已就位",
+            *_check_auth_request_targets(text),
+            *_check_forwarded_host_overwritten(text)]
 
 
 def cmd_verify(args) -> int:

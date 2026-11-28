@@ -231,6 +231,7 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;   # 必须：真实 IP 来源
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host "";   # 必须：别让客户端自带的那份透进来
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -248,6 +249,14 @@ server {
 > 于是「对端是不是本机反代」永远判错：`WB_TRUSTED_PROXY_CIDRS` 形同虚设，
 > `X-Forwarded-Host` 不被采信（写请求会被拒）。**反代信任只有一份判据**：
 > `WB_TRUSTED_PROXY_CIDRS` + `iputil.client_ip()`。
+>
+> **`X-Forwarded-Host` 默认不被采信**，而且每个 `proxy_pass` 的 location 都必须
+> 显式设置它（`""` 或 `$host`）—— 客户端可以自带这个头（它不在浏览器的
+> forbidden header 名单里），nginx 默认又会把未知头原样转给上游。不显式设置时，
+> 带这个头的请求等于自己宣布「本站来源」。`release.py verify --nginx` 会逐个
+> proxy 块检查，缺了直接拒发布。依赖反代声明外部名的部署请显式设置
+> `WB_TRUST_FORWARDED_HOST=1`，并让反代**覆盖写** `X-Forwarded-Host $host`；
+> 更推荐直接设 `WB_PUBLIC_ORIGIN`。
 >
 > **每个转发给管理端的 location 都必须覆盖 `X-Real-IP`**（`location /` 已经这么
 > 写了，自己另加的 `location /api/` 之类别漏）：应用只在 TCP 对端可信时采信这
@@ -273,6 +282,7 @@ server {
 >     # 子请求不是"来自某个客户端"，把来源头显式清空，别让它继承浏览器的那一份
 >     proxy_set_header        X-Real-IP "";
 >     proxy_set_header        X-Forwarded-For "";
+>     proxy_set_header        X-Forwarded-Host "";
 > }
 > ```
 >
@@ -384,6 +394,7 @@ location /workbuddy-manager/ {
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host "";   # 否则客户端自带的值会直达应用
     proxy_http_version 1.1;
     proxy_set_header Upgrade    $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -396,7 +407,7 @@ location /workbuddy-manager/ {
 ```nginx
 location /workbuddy-manager/ {
     proxy_pass http://127.0.0.1:7864;    # 没有尾斜杠：请求带着前缀进来
-    ...同样那几个 header 与超时...
+    # 与上面同样的那几个 header（含 X-Forwarded-Host ""）与超时
 }
 ```
 
