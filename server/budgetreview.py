@@ -57,9 +57,9 @@ def page(*, limit=25, bucket='all', cursor=None, now=None):
         # The review summary deliberately keeps upstream_rejected in the human
         # queue: a supplier rejection is diagnostic evidence, not proof that
         # no provider-side billing occurred.  Reuse budget's single source of
-        # truth here so historical resolution text cannot make that class look
-        # archived in the UI/API.
-        archived = budget._is_archived(row) and classification in budget.EVIDENCELESS_CLASSES
+        # truth here (archive-time class vs. current class) so historical
+        # resolution text cannot make any class look archived in the UI/API.
+        archived = budget.archived_now(row, classification)
         if bucket == 'upstream_rejected' and classification != bucket:
             continue
         if bucket == 'archived_pending' and not archived:
