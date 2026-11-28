@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -135,6 +136,92 @@ class CountingComesFromRealExecutionTests(unittest.TestCase):
         row = result.per_module['server.tests.test_ci_skip_floor']
         self.assertEqual(row, {'tests': 1, 'skipped': 1})
         self.assertLessEqual(row['tests'] - row['skipped'], 0)
+
+
+class MainWiringTests(unittest.TestCase):
+    """接线：判据算出违反之后，`main()` 的退出码必须真的非 0。
+
+    上面两组用例证的都只是 `_skip_floor` 这个原语。判据算对了却没人把它接进
+    `main()` 的返回值时，门禁照样全绿——把 `main()` 里 `and not skip_floor`
+    那一行删掉，这个文件照样 14 条全通过。所以这里让 `main()` 真的跑一遍：
+    `MODULES` 只剩一个临时写出来的探针模块，pytest/前端/静态三套外部套件 stub
+    掉，**判据与接线保持为真**。
+    """
+
+    ALL_SKIP = 'zz_swo89_all_skip_probe'
+    MIXED = 'zz_swo89_mixed_probe'
+
+    def setUp(self):
+        self._cwd = os.getcwd()
+        self._env = {key: os.environ.get(key) for key in ('WB_DATA_DIR', 'ZH_CI_NET_ISOLATED')}
+        self._temporary = tempfile.TemporaryDirectory()
+        self._dir = Path(self._temporary.name)
+        (self._dir / f'{self.ALL_SKIP}.py').write_text(
+            'import unittest\n'
+            '\n'
+            '\n'
+            'class OnlyOne(unittest.TestCase):\n'
+            '    @unittest.skip("接线探针：整个模块一条都不跑")\n'
+            '    def test_never_runs(self):\n'
+            '        self.fail("这条不该执行到断言")\n', encoding='utf-8')
+        (self._dir / f'{self.MIXED}.py').write_text(
+            'import unittest\n'
+            '\n'
+            '\n'
+            'class Mixed(unittest.TestCase):\n'
+            '    def test_runs(self):\n'
+            '        self.assertTrue(True)\n'
+            '\n'
+            '    @unittest.skip("接线探针：单条 skip 不连坐")\n'
+            '    def test_skipped(self):\n'
+            '        self.fail("被 skip 的用例不该执行到断言")\n', encoding='utf-8')
+        sys.path.insert(0, str(self._dir))
+
+    def tearDown(self):
+        sys.path.remove(str(self._dir))
+        sys.modules.pop(self.ALL_SKIP, None)
+        sys.modules.pop(self.MIXED, None)
+        self._temporary.cleanup()
+        os.chdir(self._cwd)
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _main(self, modules):
+        """真的跑一遍 `main()`；只 stub 外部三套件与它自己的环境副作用。"""
+        summary = self._dir / 'ci-validation-summary.json'
+        passed = {'ok': True, 'returncode': 0, 'passed': 1, 'skipped_tests': [],
+                  'empty_modules': [], 'fully_skipped_modules': [], 'modules': []}
+        clean = {'ok': True, 'returncode': 0}
+        real_path = gate.Path
+
+        def _summary_beside_the_test(*args, **kwargs):
+            """`main()` 把摘要写在仓库根上；这里改成写在临时目录，免得弄脏工作区。"""
+            if args and args[0] == 'ci-validation-summary.json':
+                return summary
+            return real_path(*args, **kwargs)
+
+        # 嵌套的 main() 不该去动网卡或关掉外层套件正在用的数据库连接：
+        # 这两件都是环境副作用，与「判据是否接进退出码」无关。
+        os.environ.pop('ZH_CI_NET_ISOLATED', None)
+        with mock.patch.object(gate, 'MODULES', modules), \
+             mock.patch.object(gate, 'pytest_suite', lambda: dict(passed)), \
+             mock.patch.object(gate, 'frontend_suite', lambda: dict(clean)), \
+             mock.patch.object(gate, 'static_suite', lambda: dict(clean)), \
+             mock.patch.object(gate, 'Path', _summary_beside_the_test), \
+             mock.patch('server.budgetowner.close'), \
+             mock.patch('server.db._close_connection_locked'):
+            return gate.main([])
+
+    def test_all_skipped_module_fails_the_gate(self):
+        self.assertEqual(self._main((self.ALL_SKIP,)), 1,
+                         '整模块全 skip 时 main() 必须退出 1')
+
+    def test_single_skip_still_passes_the_gate(self):
+        self.assertEqual(self._main((self.MIXED,)), 0,
+                         '单条 skip 不该把整个门禁判红')
 
 
 if __name__ == '__main__':
