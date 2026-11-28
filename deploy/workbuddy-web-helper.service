@@ -23,7 +23,11 @@ Environment=WB_SECURE_COOKIE=auto
 Environment=WB_TRUST_PROXY=1
 Environment=WB_TRUSTED_PROXY_HOPS=1
 Environment=WB_ENABLE_DOCS=0
-Environment=WB_DRAIN_TIMEOUT_SEC=75
+# 发布时脚本要等在途请求跑完才停这个实例（D-04）。75 秒会在 120 秒的
+# 长流上把回答截断，所以给到发布脚本的等待上限之上：脚本上限 300 秒，
+# 应用优雅关闭 320 秒，systemd 的耐心 330 秒。
+Environment=WB_DRAIN_TIMEOUT_SEC=320
+Environment=WB_GRACEFUL_SHUTDOWN_S=320
 Environment=WB_UPSTREAM_TIMEOUT=300
 Environment=WB_GATEWAY_MAX_BODY_CEILING_MB=64
 Environment=WB_GATEWAY_MAX_FORWARD_BODY_MB=64
@@ -55,7 +59,7 @@ ProtectSystem=full
 ProtectHome=read-only
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
-TimeoutStopSec=90
+TimeoutStopSec=330
 KillMode=control-group
 MemoryHigh=1G
 MemoryMax=1280M

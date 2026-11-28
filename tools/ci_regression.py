@@ -41,6 +41,8 @@ MODULES = (
     # D-04：停候选实例之前等在途请求跑完（假的 systemctl/journalctl，不需要 systemd）。
     # 它和上面那条守的是同一个脚本，但一条读源码结构、一条真的把函数跑起来。
     "server.tests.test_rollout_candidate_drain",
+    # 发布脚本轮询的那个只回环在途探针（/api/health/inflight）本身的契约。
+    "server.tests.test_health_inflight",
     "server.tests.test_verify_runtime_config",
     "server.tests.test_healthcheck_coverage",
     "server.tests.test_key_quota_alerts",

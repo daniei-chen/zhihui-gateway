@@ -669,6 +669,37 @@ def health_alerts(request: Request):
     }, headers={'Cache-Control': 'no-store'})
 
 
+@app.get('/api/health/inflight', include_in_schema=False)
+def health_inflight(request: Request):
+    """发布期在途计数（只读、只回环）。
+
+    ## 为什么需要它
+
+    蓝绿发布切回旧实例之后，候选实例上还留着切流前接下的请求。停它之前必须
+    确认这些请求跑完了 —— 否则 `TimeoutStopSec` 一到就是 SIGKILL，而流式截断
+    通常不落 5xx，发布脚本的「窗口零 5xx」根本看不见它（2026-11-28 审计 D-04）。
+
+    在途数只有这里说得准：`request_outcomes` 只有终态；`/metrics` 要采集器令牌；
+    `/api/readyz/detail` 要管理员身份。发布脚本是 root 的 shell，没有会话凭据，
+    所以照 `/api/health/alerts` 的做法只认回环地址，不引入新的鉴权面。
+
+    计数来自 `DrainMiddleware` 的请求级跟踪（含流式响应的整个生命周期），
+    本端点自己在中间件的控制路径名单里，不会把自己算进去。
+    """
+    try:
+        loopback = ipaddress.ip_address(client_ip(request)).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        return JSONResponse({'error': 'loopback only'}, status_code=403)
+    return JSONResponse({
+        'service': 'zhihui-gateway',
+        'total_in_flight': drain.total_in_flight(),
+        'in_flight': drain.in_flight(),
+        'draining': drain.is_draining(),
+    }, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/api/readyz/detail', include_in_schema=False)
 def readiness_detail(user: dict = Depends(security.require_panel_reader)) -> dict:
     """完整就绪诊断（需面板读者身份）。
