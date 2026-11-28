@@ -86,8 +86,16 @@ def publish_verified_status(result, destination=DEFAULT_STATUS):
     stamp = result.get('verified_at', now)
     if type(stamp) is not int or not -300 <= now - stamp <= MAX_EVIDENCE_AGE:
         raise ValueError('backup validation evidence is stale or invalid')
+    coverage = result.get('state_coverage') if isinstance(result.get('state_coverage'), dict) else {}
+    uncovered = [item.get('root') for item in coverage.get('uncovered') or []
+                 if isinstance(item, dict) and isinstance(item.get('root'), str)]
     public = {'schema': 2, 'created_at': stamp, 'bytes': size,
               'restore_check': 'ok',
+              # 「备份成功」与「备份覆盖了全部数据根」是两件事。上一版只报前者，
+              # 于是大部分状态不在包里也显示成健康（G-09 / D-12）。这里把后者的
+              # 结论一起落盘，让下游（`operational.evaluate_backup_health`）能真的读到。
+              'state_coverage_complete': result.get('state_coverage_complete') is True,
+              'uncovered_state_roots': uncovered,
               'offsite': readback is not None,
               'archive_sha256': result.get('sha256') if _SHA.fullmatch(str(result.get('sha256', ''))) else None,
               'offsite_readback': readback, 'offsite_restore_verified': False}
