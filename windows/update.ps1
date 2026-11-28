@@ -10,6 +10,31 @@ Set-Location $root
 # 启用现代 TLS 协议支持
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
 
+# 发布源（信任边界，SWO-50）
+# 与 deploy/update.py 的 OFFICIAL_MANAGER_REPO / ALLOWED_MANAGER_REPOS 是同一处
+# 事实：更新器会以装机权限执行包内的依赖清单，所以发布源本身就是信任边界的一部分。
+# 默认值曾经是第三方仓库，那样「装什么」的决定权不在我们手上；而且本项目的发布在
+# 下面这个仓库，按别人的仓库去取版本号根本找不到本仓的 release。
+# <manager-repo-source begin>
+$OfficialManagerRepo = 'daniei-chen/zhihui-gateway'
+$AllowedManagerRepos = @($OfficialManagerRepo)
+
+function Resolve-ManagerRepo {
+    param([string]$Requested)
+    $value = if ($Requested) { $Requested.Trim().Trim('/') } else { '' }
+    if (-not $value) { return $OfficialManagerRepo }
+    if ($AllowedManagerRepos -contains $value) { return $value }
+    # 不在白名单不静默回退：静默换成官方仓库会让运维以为自己配的镜像在生效。
+    Write-Host "[ERROR] WB_MANAGER_REPO=$Requested 不是允许的发布源，更新已中止。" -ForegroundColor Red
+    Write-Host "[ERROR]   更新器会以装机权限安装包内的依赖清单，所以发布源只允许：$($AllowedManagerRepos -join ', ')。" -ForegroundColor Red
+    Write-Host "[ERROR]   自建镜像请修改 windows/update.ps1 的 AllowedManagerRepos。" -ForegroundColor Red
+    Write-Host "[ERROR]   注意：Windows 侧只核对发布页的 sha256，不做 Ed25519 验签（该摘要与包同源）。" -ForegroundColor Red
+    exit 1
+}
+
+$ManagerRepo = Resolve-ManagerRepo $env:WB_MANAGER_REPO
+# <manager-repo-source end>
+
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "        WorkBuddy Manager 通用自动更新程序        " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
@@ -154,7 +179,7 @@ function Get-LatestGitHubTag {
     if ($mirrorBase) {
         try {
             $apiParams = @{
-                Uri = "$mirrorBase" + 'https://api.github.com/repos/ithtelab/workbuddy-manager/releases/latest'
+                Uri = "$mirrorBase" + "https://api.github.com/repos/$ManagerRepo/releases/latest"
                 Headers = @{"User-Agent"="workbuddy-updater"}
                 TimeoutSec = 15
             }
@@ -178,7 +203,7 @@ function Get-LatestGitHubTag {
             try {
                 $cArgs = @('-s', '-I', '--connect-timeout', '4')
                 if ($p) { $cArgs += @('-x', $p) }
-                $cArgs += 'https://github.com/ithtelab/workbuddy-manager/releases/latest'
+                $cArgs += "https://github.com/$ManagerRepo/releases/latest"
                 $lines = & $curlExe $cArgs
                 foreach ($line in $lines) {
                     if ($line -match 'location:\s*.*?/releases/tag/([^\r\n/?#]+)') {
@@ -220,7 +245,7 @@ function Get-LatestGitHubTag {
     foreach ($p in $proxyList) {
         try {
             $apiParams = @{
-                Uri = "https://api.github.com/repos/ithtelab/workbuddy-manager/releases/latest"
+                Uri = "https://api.github.com/repos/$ManagerRepo/releases/latest"
                 Headers = @{"User-Agent"="PowerShell"}
                 TimeoutSec = 4
             }
@@ -309,7 +334,7 @@ if (-not $latestVer -and -not $existingPkg) {
     Write-Host "[TIP] 提示：您可登录 Web 管理面板，在「系统设置 → 一键更新」中直接更新。" -ForegroundColor Cyan
     $openBrowser = Read-Host "是否在浏览器中打开 GitHub Releases 页面手动下载？(Y/n)"
     if ($openBrowser -ne 'n' -and $openBrowser -ne 'N') {
-        Start-Process "https://github.com/ithtelab/workbuddy-manager/releases"
+        Start-Process "https://github.com/$ManagerRepo/releases"
         Write-Host "[WAIT] 正在监听下载目录（下载完 tar.gz 后会自动识别并更新）..." -ForegroundColor Cyan
         
         $startTime = [DateTime]::Now
@@ -361,7 +386,7 @@ $expectedDigest = if ($tagInfo -and $tagInfo.Digest) { "$($tagInfo.Digest)" } el
 if (-not $expectedDigest -and $latestVer) {
     try {
         # 配了镜像时先经镜像取摘要（api.github.com 可被镜像代理）
-        $apiUrl = "https://api.github.com/repos/ithtelab/workbuddy-manager/releases/tags/$latestVer"
+        $apiUrl = "https://api.github.com/repos/$ManagerRepo/releases/tags/$latestVer"
         $apiTargets = @()
         if ($mirrorBase) { $apiTargets += (New-MirrorUrl -Url $apiUrl -Mirror $mirrorBase) }
         $apiTargets += $apiUrl
@@ -392,7 +417,7 @@ if ($targetPkg) {
     Write-Host "[INFO] 已在目录中识别到本地安装包: $($targetPkg.FullName)" -ForegroundColor Green
     Copy-Item -Path $targetPkg.FullName -Destination $tempTar -Force
 } else {
-    $tarUrl = "https://github.com/ithtelab/workbuddy-manager/releases/download/$latestVer/workbuddy-manager-$latestVer.tar.gz"
+    $tarUrl = "https://github.com/$ManagerRepo/releases/download/$latestVer/workbuddy-manager-$latestVer.tar.gz"
     $curlExe = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
     $downloadSuccess = $false
 
