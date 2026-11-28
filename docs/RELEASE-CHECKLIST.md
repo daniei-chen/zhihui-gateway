@@ -56,8 +56,8 @@ python tools/ci_regression.py                        # 必须 exit 0
 ```bash
 sudo ./deploy/release.py stage <版本> --archive <tar> --web <web tar>
 sudo ./deploy/release.py seal <版本>
-sudo ./deploy/release.py verify <版本>
-sudo ./deploy/release.py activate <版本>
+sudo ./deploy/release.py verify <版本> --nginx <站点配置>
+sudo ./deploy/release.py activate <版本> --nginx <站点配置>
 sudo ./deploy/rollout-rolling.sh <版本>
 ```
 
