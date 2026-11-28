@@ -42,13 +42,18 @@ $WebBuildRecipeVersion = '3'
 $UpstreamBuildRecipeVersion = '2'
 $RuntimeBuildRecipeVersion = '3'
 
-$UpstreamSrcUrl = 'https://github.com/ithtelab/workbuddy-manager/releases/download/upstream-src/workbuddy2api-src.tar.gz'
-# 上游源码载体的固定摘要。随包发布的 wb2api.exe 由这份源码编译而来，而
-# 「编译产物的 hash」只证明我们编译出了什么，证明不了源码来自哪里 —— 所以
-# 下载后、解包前必须先核对 tarball 本身的 sha256，不匹配就拒绝构建。
-# <upstream-src-pin begin>
-$UpstreamSrcSha256 = 'f306bfdca734244c6e7a0e11e759d9f01d798191ba3fe24a9f37d94edc0f5885'
-# <upstream-src-pin end>
+# 上游源码的**唯一**取源：本仓的 `upstream-src` Release —— 和
+# `.github/workflows/release.yml` 取的是同一个地址。随包发布的 wb2api.exe 由这份
+# 源码编译而来，而「编译产物的 hash」只证明我们编译出了什么，证明不了源码来自
+# 哪里，所以下载后、解包前必须核对 tarball 本身。
+#
+# 摘要**不写在这里**：唯一真源是 `dev/upstream-source.lock`（sha256 + bytes），
+# 校验逻辑在 `windows/launcher/upstream-pin.ps1`。这里曾经有一份手写 pin，于是
+# 同一个包在两处各有一份值：第三方载体上的同名文件被换掉之后，release.yml 跟着
+# lock 走（对），安装器守着自己那份旧值（把正确的包也拒了）。
+$UpstreamSrcUrl = 'https://github.com/daniei-chen/zhihui-gateway/releases/download/upstream-src/workbuddy2api-src.tar.gz'
+$UpstreamSrcLock = Join-Path $repoRoot 'dev/upstream-source.lock'
+. (Join-Path $scriptDir 'upstream-pin.ps1')
 $UvUrl = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip'
 $GoToolchainUrl = 'https://go.dev/dl/go1.27.0.windows-amd64.zip'
 # 显式用 Windows 自带 bsdtar：PATH 里的 GNU tar 会把 C:\ 路径当作「远程主机:路径」
@@ -373,12 +378,12 @@ if (-not $SkipUpstream) {
         $tarPath = Join-Path $env:TEMP 'wb-upstream-src.tar.gz'
         Invoke-Curl $UpstreamSrcUrl $tarPath
         # <upstream-src-verify begin>
-        $srcDigest = (Get-FileHash -LiteralPath $tarPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($srcDigest -ne $UpstreamSrcSha256) {
-            throw ("上游源码摘要不匹配，已拒绝构建：期望 $UpstreamSrcSha256，实际 $srcDigest。`n" +
-                   '  发布源上的源码包被替换过，或上游改了包而 $UpstreamSrcSha256 没跟着更新。' +
-                   '  在解包与编译之前停下，避免把来源不明的源码打进安装包。')
-        }
+        # 只认 dev/upstream-source.lock：sha256 与 bytes 两条都过才继续；lock 缺失
+        # 或格式不对一律拒绝 —— 没有可校验的 pin 时不许构建。
+        $srcPin = Read-UpstreamSrcPin -LockPath $UpstreamSrcLock
+        Assert-UpstreamSrcArchive -Path $tarPath -Pin $srcPin
+        Write-Step ('上游源码已核对：sha256 ' + $srcPin.Sha256.Substring(0, 16) +
+                    '… / ' + $srcPin.Bytes + ' 字节（dev/upstream-source.lock）')
         # <upstream-src-verify end>
         $extractTmp = Join-Path $env:TEMP ('wb-upstream-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory $extractTmp -Force | Out-Null

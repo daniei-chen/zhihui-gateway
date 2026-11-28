@@ -90,9 +90,11 @@ powershell -ExecutionPolicy Bypass -File windows\launcher\build.ps1
   3.11 匹配包，网络解析失败时回退到 `3.11.17+20261009`；构建日志会打印实际下载 URL。
   Python 的 `LICENSE.txt` 会随 `.runtime\python\` 一起打包，构建脚本在预置运行时
   缺少该文件时拒绝复用/打包。
-- **上游网关**：从固定的
-  [上游源码载体](https://github.com/ithtelab/workbuddy-manager/releases/download/upstream-src/workbuddy2api-src.tar.gz)
+- **上游网关**：从本仓固定的
+  [上游源码载体](https://github.com/daniei-chen/zhihui-gateway/releases/download/upstream-src/workbuddy2api-src.tar.gz)
   下载源码，再用 Go 编译 `./cmd/server` 生成 `wb2api.exe`；不是下载上游预编译二进制。
+  下载后按 `dev/upstream-source.lock` 核对 sha256 **与**字节数（两者都过才解包，
+  lock 缺失直接失败）——与 `.github/workflows/release.yml` 用的是同一份 lock。
   上游源码中的 `upstream\LICENSE` 也会随包分发。
 - **无代码签名**：当前安装器没有 Authenticode 签名，Windows SmartScreen 可能显示
   “Windows 已保护你的电脑”等警告。这不代表安装器必然恶意；请只从可信的项目 Release
