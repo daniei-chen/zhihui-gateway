@@ -91,5 +91,29 @@ class ProductOriginTests(unittest.TestCase):
             self.assertEqual(value['product']['repository'], product.REPOSITORY)
 
 
+class InstallDocsPointAtThisRepositoryTests(unittest.TestCase):
+    """安装文档不能把用户送到第三方仓库（SWO-34）。
+
+    `deploy/update.py` 的 `ALLOWED_MANAGER_REPOS` 只含本项目仓库，从别处装的包
+    会被更新器 fail-closed 拒绝。文档若仍写 `ithtelab/...`，用户照文档装完就
+    更新不了 —— 这类「文档与白名单互相矛盾」只能靠测试守住。
+    """
+
+    README = (Path(__file__).resolve().parents[2] / 'deploy' / 'README.md').read_text(
+        encoding='utf-8')
+
+    def test_install_commands_do_not_target_a_third_party_repository(self):
+        for pattern in ('github.com/ithtelab/', 'ghcr.io/ithtelab/'):
+            with self.subTest(pattern=pattern):
+                self.assertNotIn(
+                    pattern, self.README,
+                    '安装步骤仍指向第三方仓库，与 ALLOWED_MANAGER_REPOS 矛盾')
+
+    def test_install_commands_point_at_this_repository(self):
+        self.assertIn('github.com/daniei-chen/zhihui-gateway/releases', self.README)
+        self.assertIn('git clone https://github.com/daniei-chen/zhihui-gateway.git', self.README)
+        self.assertIn('ghcr.io/daniei-chen/workbuddy2api', self.README)
+
+
 if __name__ == '__main__':
     unittest.main()

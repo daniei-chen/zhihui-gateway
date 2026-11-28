@@ -1,5 +1,5 @@
 {
-  "base_commit": "687e25a1c9fd803b2de9b79ef2abd64c6a229e7d",
+  "base_commit": "718eb025fb268f55986d7d8ea5112e1a39c37590",
   "base_release": "v1.6.27",
   "candidate_only": true,
   "database_rollback": false,
@@ -183,7 +183,7 @@
     "server/tests/test_managed_stage_helper.py": "07f57f66fb895d54dc2b009ee48abe5a424b0a1603edfbcce1bdcd3fa1fe0c78",
     "server/tests/test_platform_integration_guards.py": "f9f5a5a7c4554c2c4bd28567eb6706b5fc8a871cfeb5bb9e82de5c637f89b2bd",
     "server/tests/test_platform_policy.py": "204f43166ebd146343b82d361237aad5587f5e1f070c2be70945011d17b31482",
-    "server/tests/test_product_origin.py": "e5d58e7a87c4f4c337b430a18096d1ddc0d9eb15ee4ed32f254392db7be13e26",
+    "server/tests/test_product_origin.py": "6757910ea7ede762303396170640ec55233f4f7476871da1fb29abdf235a6ff2",
     "server/tests/test_protocol_error_closure.py": "44c597a6686b82a0a016320e835f571d573b0d841575e1fbd337a2598e67b3ab",
     "server/tests/test_qoder_checkin_evidence.py": "7d675a246878df295faf0291dac7a047324f644986e2354621e0743a6d5a1f87",
     "server/tests/test_qoder_rootless_contract.py": "fec8993c1c63bb62453a2bc05e56640c94758156f9d62bbba24a09327c99ed27",

@@ -22,13 +22,27 @@
 ### 包内自带，开箱即用
 
 最新版本的 Release 包内含 `upstream/`（上游源码），装的时候直接用，
-**不需要联网取任何外部源码**：
+**不需要联网取任何外部源码**。
+
+> **发布源只取本项目仓库** `daniei-chen/zhihui-gateway` —— 与更新器的白名单
+> （`deploy/update.py` 的 `ALLOWED_MANAGER_REPOS`，见「更新器只安装签过名的
+> 发布包」）同口径。从别的仓库下载的包会被更新器 fail-closed 拒绝，装上也更新不了。
 
 ```bash
-wget https://github.com/ithtelab/workbuddy-manager/releases/latest/download/workbuddy-manager-<版本>.tar.gz
+wget https://github.com/daniei-chen/zhihui-gateway/releases/latest/download/workbuddy-manager-<版本>.tar.gz
 tar xzf workbuddy-manager-*.tar.gz && cd workbuddy-manager-*
 sudo bash deploy/install.sh          # 自动使用包内的 upstream/
 ```
+
+> **本地无法验证的步骤**（本文档作者环境实测）：
+> - 产物名 `workbuddy-manager-<版本>.tar.gz` / `.zip` 与
+>   `.github/workflows/release.yml` 的 `STAGE="workbuddy-manager-${TAG}"` 一致；
+>   但 `releases/latest/download/...` 的**产物是否已发布**只能在发布页确认。
+> - `ghcr.io/daniei-chen/workbuddy2api` / `ghcr.io/daniei-chen/workbuddy-manager`
+>   的镜像拉取需要 registry 凭据，本地无凭据，未实拉；镜像名与 release.yml 的
+>   `ghcr.io/${github.repository_owner}/...` 推算一致。
+> - `deploy/install.sh` 存在（仓库内 `deploy/install.sh`），但完整安装需一台干净
+>   机器与 Docker，未在本地跑通。
 
 要改用你自己那份源码（或机器上已有的 `/opt/workbuddy2api`），按下面的优先级覆盖：
 
@@ -64,7 +78,7 @@ cd /opt/workbuddy2api && docker compose up -d --build
 与项目上游源码不一致」的版本漂移。
 
 ```bash
-docker pull ghcr.io/ithtelab/workbuddy2api:<版本>
+docker pull ghcr.io/daniei-chen/workbuddy2api:<版本>
 # latest 指向最近一次发布；长期跑建议钉版本号（理由同管理端镜像）
 ```
 
@@ -74,7 +88,7 @@ docker pull ghcr.io/ithtelab/workbuddy2api:<版本>
 ```yaml
 services:
   wb2api:
-    image: ghcr.io/ithtelab/workbuddy2api:2.8.0
+    image: ghcr.io/daniei-chen/workbuddy2api:2.8.0
     container_name: workbuddy2api
     restart: unless-stopped
     environment:
@@ -108,7 +122,7 @@ services:
 
 ```bash
 # 1) 下载 Release 包（内含已构建的前端，无需 Node.js）
-wget https://github.com/ithtelab/workbuddy-manager/releases/latest/download/workbuddy-manager-<版本>.tar.gz
+wget https://github.com/daniei-chen/zhihui-gateway/releases/latest/download/workbuddy-manager-<版本>.tar.gz
 tar xzf workbuddy-manager-*.tar.gz
 cd workbuddy-manager-*
 
@@ -131,7 +145,9 @@ sudo bash deploy/install.sh
 ## 二、通过 git clone 部署
 
 ```bash
-git clone https://github.com/ithtelab/workbuddy-manager.git
+# 仓库名是 zhihui-gateway，但部署目录习惯用 workbuddy-manager —— 克隆时显式指定，
+# 后面所有 `cd workbuddy-manager`、`/opt/workbuddy-manager` 才对得上。
+git clone https://github.com/daniei-chen/zhihui-gateway.git workbuddy-manager
 cd workbuddy-manager
 
 # 需先在 web/ 构建前端（git 仓库不含构建产物）
@@ -708,7 +724,7 @@ grep api_key /opt/workbuddy2api/config.json
 前提：`workbuddy2api` 已在本机运行，并有可用的启停脚本与文件日志。
 
 ```powershell
-git clone https://github.com/ithtelab/workbuddy-manager.git
+git clone https://github.com/daniei-chen/zhihui-gateway.git workbuddy-manager
 cd workbuddy-manager
 Copy-Item .env.example .env
 ```

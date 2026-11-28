@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -366,6 +367,190 @@ class UpdaterSupplyChainTest(unittest.TestCase):
         self.assertEqual(calls, [])
         self._assert_untouched(install, rep)
 
+
+_UPDATE_PS1 = _ROOT / 'windows' / 'update.ps1'
+_BUILD_PS1 = _ROOT / 'windows' / 'launcher' / 'build.ps1'
+_SOURCE_BEGIN = '# <manager-repo-source begin>'
+_SOURCE_END = '# <manager-repo-source end>'
+_PIN_BEGIN = '# <upstream-src-pin begin>'
+_PIN_END = '# <upstream-src-pin end>'
+_VERIFY_BEGIN = '# <upstream-src-verify begin>'
+_VERIFY_END = '# <upstream-src-verify end>'
+
+
+def _powershell() -> str | None:
+    return shutil.which('pwsh') or shutil.which('powershell')
+
+
+def _run_ps(script: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    """把脚本写成临时 .ps1 再执行。
+
+    不走 stdin：Windows PowerShell 按控制台代码页解码 stdin，中文注释会被拆坏成
+    语法错误（实测 ParserError 缺字符串终止符）。BOM 保证按 UTF-8 读。
+    """
+    with tempfile.TemporaryDirectory() as temp:
+        path = Path(temp) / 'probe.ps1'
+        path.write_text(script, encoding='utf-8-sig')
+        args = [_powershell() or '', '-NoProfile', '-NonInteractive']
+        if os.name == 'nt':
+            args += ['-ExecutionPolicy', 'Bypass']
+        args += ['-File', str(path)]
+        return subprocess.run(args, capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=120,
+                              env=dict(os.environ, **(env or {})))
+
+
+class WindowsUpdaterSourceBoundaryTests(unittest.TestCase):
+    """`windows/update.ps1` 的发布源必须和 Linux 更新器同一条边界（SWO-50）。
+
+    DAN-24 只修了 `deploy/update.py`。Windows 一键更新器仍在从第三方仓库取
+    版本号（:157/:181/:223）、`asset.digest`（:364）和安装包（:395）：那种口径下
+    摘要只能证明「与第三方的元数据一致」，证明不了装的是本仓的包；而且我们的
+    发布在 `daniei-chen/zhihui-gateway`，按第三方取版本号根本找不到本仓 release
+    —— 于是 Windows 客户端一路装的是上游构建。
+
+    Linux 侧的判据是 `ALLOWED_MANAGER_REPOS` + `_resolve_manager_repo`：环境变量
+    只能从白名单里挑，不在白名单**不静默回退**。这里钉住 Windows 的同一件事。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _UPDATE_PS1.read_text(encoding='utf-8-sig')
+
+    def test_official_repository_constant_matches_linux_updater(self) -> None:
+        self.assertIn(f"$OfficialManagerRepo = '{OFFICIAL_REPO}'", self.source,
+                      'Windows 更新器的官方发布源与 deploy/update.py 不是同一个仓库')
+        self.assertEqual(OFFICIAL_REPO, product.REPOSITORY,
+                         '更新器与服务端的仓库事实不一致（server/product.py）')
+
+    def test_no_third_party_repository_slug(self) -> None:
+        self.assertNotIn(THIRD_PARTY_REPO, self.source,
+                         'Windows 更新器仍指向第三方仓库')
+
+    def test_every_github_url_interpolates_the_resolved_repository(self) -> None:
+        urls = [line.strip() for line in self.source.splitlines()
+                if re.search(r'https://(?:api\.)?github\.com/', line)]
+        self.assertTrue(urls, 'windows/update.ps1 里找不到 GitHub 地址，解析口径变了')
+        for line in urls:
+            with self.subTest(line=line):
+                self.assertIn('$ManagerRepo', line,
+                              '发布源地址写死了仓库名；应统一用 Resolve-ManagerRepo 的结果')
+
+    def test_override_is_resolved_before_any_network_call(self) -> None:
+        """白名单校验必须排在取版本号之前。
+
+        顺序反了的话，非白名单的源会**先被用来发请求**，等拒绝时已经连出去了
+        —— 「没落盘、没执行」就只剩安装阶段那一半。
+        """
+        resolve = self.source.find('$ManagerRepo = Resolve-ManagerRepo')
+        fetch = self.source.find('$tagInfo = Get-LatestGitHubTag')
+        self.assertNotEqual(resolve, -1, '找不到 Resolve-ManagerRepo 的调用点')
+        self.assertNotEqual(fetch, -1, '找不到 Get-LatestGitHubTag 的调用点')
+        self.assertLess(resolve, fetch,
+                        '白名单校验排在取版本号之后：拒绝之前已经按非白名单的源发过请求')
+
+    # ── 行为：白名单校验与非白名单拒绝（需要本机有 PowerShell）──
+
+    def _source_block(self) -> str:
+        begin = self.source.find(_SOURCE_BEGIN)
+        end = self.source.find(_SOURCE_END)
+        self.assertNotEqual(begin, -1, f'找不到 {_SOURCE_BEGIN} 标记')
+        self.assertNotEqual(end, -1, f'找不到 {_SOURCE_END} 标记')
+        return self.source[begin:end]
+
+    def _resolve(self, requested: str) -> subprocess.CompletedProcess:
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        return _run_ps(
+            self._source_block() + '\nWrite-Output "RESOLVED=$ManagerRepo"\n',
+            {'WB_MANAGER_REPO': requested})
+
+    def test_unset_override_resolves_to_official_repository(self) -> None:
+        done = self._resolve('')
+        self.assertIn(f'RESOLVED={OFFICIAL_REPO}', done.stdout, done.stderr)
+
+    def test_allowlisted_override_is_accepted(self) -> None:
+        done = self._resolve(OFFICIAL_REPO)
+        self.assertIn(f'RESOLVED={OFFICIAL_REPO}', done.stdout, done.stderr)
+
+    def test_third_party_override_aborts_instead_of_falling_back(self) -> None:
+        """非白名单不能静默换成官方仓库：静默回退会让运维以为自己配的镜像在生效。"""
+        done = self._resolve(THIRD_PARTY_REPO)
+        self.assertNotEqual(done.returncode, 0, '第三方发布源竟然没让更新中止')
+        self.assertNotIn('RESOLVED=', done.stdout, '中止前就把仓库定下来了')
+
+
+class UpstreamSourcePinTests(unittest.TestCase):
+    """随包发布的 `wb2api.exe` 由第三方源码编译 —— 那份源码必须钉住摘要。
+
+    `windows/launcher/build.ps1` 从固定载体下载 `workbuddy2api-src.tar.gz`，解包后
+    用 Go 编译成 `wb2api.exe` 打进安装包。`upstreamMeta` 只记录**编译产物**的
+    `artifact_sha256` —— 那证明的是「我们编译出了什么」，**证明不了源码来自哪里**。
+    谁控制那个仓库，谁就能让每一次发布都打包进他写的代码，而事后的 hash 一点忙
+    也帮不上。
+
+    所以要在解包**之前**核对 tarball 自己的 sha256，不匹配就停。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _BUILD_PS1.read_text(encoding='utf-8-sig')
+
+    def _slice(self, begin: str, end: str) -> str:
+        start, stop = self.source.find(begin), self.source.find(end)
+        self.assertNotEqual(start, -1, f'找不到 {begin} 标记')
+        self.assertNotEqual(stop, -1, f'找不到 {end} 标记')
+        return self.source[start:stop]
+
+    def test_upstream_source_digest_is_pinned(self) -> None:
+        found = re.search(r"\$UpstreamSrcSha256 = '([0-9a-f]{64})'", self.source)
+        self.assertIsNotNone(found, '上游源码包的 sha256 没有钉成常量（下载下来的东西不校验）')
+
+    def test_digest_is_verified_before_extraction(self) -> None:
+        verify = self.source.find(_VERIFY_BEGIN)
+        extract = self.source.find('& $TarExe -xzf $tarPath')
+        self.assertNotEqual(verify, -1, '找不到摘要校验段')
+        self.assertNotEqual(extract, -1, '找不到解包调用（解析口径变了）')
+        self.assertLess(verify, extract,
+                        '摘要在解包之后才校验：那时来源不明的源码已经落地了')
+
+    def test_mismatched_digest_aborts_before_unpacking(self) -> None:
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / 'src.tar.gz'
+            payload.write_bytes(b'not the pinned upstream tarball\n')
+            script = (self._slice(_PIN_BEGIN, _PIN_END)
+                      + f"\n$tarPath = '{payload.as_posix()}'\n"
+                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
+                      + "\nWrite-Output 'VERIFIED'\n")
+            done = _run_ps(script)
+            self.assertNotEqual(done.returncode, 0,
+                                f'摘要不匹配竟然继续往下走：\n{done.stdout}{done.stderr}')
+            self.assertNotIn('VERIFIED', done.stdout, '拒绝之前就放行了')
+
+    def test_matching_digest_lets_the_build_continue(self) -> None:
+        """校验不能永远失败：摘要对上时必须放行，否则每次都红等于没校验。"""
+        if not _powershell():
+            self.skipTest('没有 PowerShell，跳过行为用例（文本用例仍然生效）')
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / 'src.tar.gz'
+            payload.write_bytes(b'pinned upstream tarball\n')
+            actual = hashlib.sha256(payload.read_bytes()).hexdigest()
+            script = (self._slice(_PIN_BEGIN, _PIN_END)
+                      + f"\n$UpstreamSrcSha256 = '{actual}'\n"
+                      + f"$tarPath = '{payload.as_posix()}'\n"
+                      + self._slice(_VERIFY_BEGIN, _VERIFY_END)
+                      + "\nWrite-Output 'VERIFIED'\n")
+            done = _run_ps(script)
+            self.assertIn('VERIFIED', done.stdout, done.stdout + done.stderr)
+
+    def test_packer_does_not_hand_the_source_to_a_third_party_repository(self) -> None:
+        text = (_ROOT / 'dev' / 'pack_upstream_src.py').read_text(encoding='utf-8')
+        self.assertNotIn('--repo ithtelab/', text,
+                         '打包助手仍教人把我们的源码快照传到第三方仓库')
+        self.assertNotIn('gh release upload', text,
+                         '打包助手仍印着一条可直接执行的第三方上传命令')
 
 
 if __name__ == '__main__':
