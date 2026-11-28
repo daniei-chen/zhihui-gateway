@@ -107,14 +107,47 @@ def initialize(force: bool = False) -> bool:
     _SCHEMA_STATE['key'] = key
     return True
 
+#: 心跳每 10 秒把 `lease_until` 续到 now+60。租约过期意味着属主**没在心跳** ——
+#: 与「锁文件还在不在」是两件事：进程卡死、容器被 cgroup 冻结、或 owner 字符串被
+#: 后来的进程复用时，`budgetowner.alive()` 会一直返回 True，而这条预留再也不会
+#: 有结论。`forwarded` 行在准入判据里**没有时间窗**（见 prepare 的 pending 查询），
+#: 所以一条这样的行 = 该密钥永久 `budget_pending`（有配额密钥在途上限默认 1）。
+LEASE_SECONDS = 60
+#: 留一次心跳的余量再判定过期，避免把恰好在续租途中的行收掉。
+LEASE_GRACE_SECONDS = 120
+
+
+def _lease_until(stored) -> int:
+    """读一行的 `lease_until`；`sqlite3.Row` 没有 `.get()`，两种形状都要能读。"""
+    try:
+        return int(stored['lease_until'] or 0)
+    except (IndexError, KeyError):
+        return 0
+
+
+def _lease_expired(row, now) -> bool:
+    until = _lease_until(row)
+    if until <= 0:
+        # `lease_until` 的库默认值是 0：老行、以及「进程刚起来还没跑过心跳」的行
+        # 都长这样。把它当成「已过期」会在升级后第一时间把**活着的**在途请求
+        # 全收掉 —— `test_budget_kill_closure` 那条进程死亡契约钉的正是这一点
+        # （属主还在、`lease_until=0`，`recover()` 必须一行都不动）。
+        return False
+    return until < int(now) - LEASE_GRACE_SECONDS
+
+
 def recover():
     """A startup must not reclaim another running worker's reservations."""
     initialize()
     budgetowner.identity()
+    now = int(time.time())
     with db.transaction():
-        for row in db.query("SELECT request_id,state,owner,fence FROM budget_reservations WHERE state IN ('reserved','forwarded')"):
+        for row in db.query("SELECT request_id,state,owner,fence,lease_until FROM budget_reservations WHERE state IN ('reserved','forwarded')"):
             live = budgetowner.alive(row['owner'])
-            if live is True:
+            # 锁活着**且**租约没过期，才是「别人还在跑」，必须放过。
+            # 租约早就没人续了却仍被锁挡着（卡死/冻结/identity 复用），这条预留
+            # 永远不会有结论 —— 那正是 G-05 的泄漏形态，不能一直跳过。
+            if live is True and not _lease_expired(row, now):
                 continue
             # Only a demonstrably dead local owner with an unsent reservation can
             # be released. Missing/legacy/remote identity remains uncertain.
@@ -122,10 +155,41 @@ def recover():
             db.execute('UPDATE budget_reservations SET state=?,fence=fence+1,updated_at=? WHERE request_id=? AND fence=?',
                        (target, int(time.time()), row['request_id'], row['fence']))
 
+
+def reap_expired_leases(now=None) -> int:
+    """收回租约已过期的未结预留；返回条数。
+
+    `recover()` 只在启动时跑一次，而泄漏是在**运行中**产生的（请求转发后进程卡死、
+    容器被冻结）。只靠重启回收，等于「不重启就永远 429」。这里给同一条判据一个
+    周期性出口，由后台心跳循环按 `LEASE_REAP_INTERVAL_SECONDS` 节流调用。
+
+    只处理**过期**的行：没过期的交给 `recover()` 的语义（别人还在跑）。
+    """
+    initialize()
+    now = int(now if now is not None else time.time())
+    reclaimed = 0
+    with db.transaction():
+        for row in db.query("SELECT request_id,state,owner,fence,lease_until FROM budget_reservations "
+                            "WHERE state IN ('reserved','forwarded')"):
+            if not _lease_expired(row, now):
+                continue
+            live = budgetowner.alive(row['owner'])
+            target = 'released' if live is False and row['state'] == 'reserved' else 'unknown'
+            changed = db.execute_count(
+                'UPDATE budget_reservations SET state=?,fence=fence+1,updated_at=? '
+                'WHERE request_id=? AND fence=?',
+                (target, now, row['request_id'], row['fence']))
+            if changed:
+                reclaimed += 1
+                _log.warning('reclaimed expired budget lease request_id=%s owner=%s -> %s',
+                             row['request_id'], row['owner'], target)
+    return reclaimed
+
+
 def heartbeat():
     now = int(time.time())
     db.execute("UPDATE budget_reservations SET lease_until=? WHERE owner=? AND state IN ('reserved','forwarded')",
-               (now + 60, budgetowner.identity()))
+               (now + LEASE_SECONDS, budgetowner.identity()))
 
 def _env_int(name, default):
     """读环境变量里的正整数；缺失/非法回落默认值。C-004：阈值不该藏在带外补丁里。"""
@@ -474,9 +538,29 @@ def finish(state):
                "WHERE request_id=? AND owner=? AND fence=? AND state IN ('reserved','forwarded')", (int(time.time()),state.request_id,budgetowner.identity(),state.budget_fence))
 
 def unresolved(key_id=None):
-    args = () if key_id is None else (key_id,)
+    """**全部**未结行（升序），不再截断。
+
+    D-26：这里原本是 `ORDER BY created_at,request_id LIMIT 1000` —— 升序 + 上限，
+    于是被砍掉的是**最新**的那批。`/resolve-batch` 用它建 `pending` 字典，窗口外的
+    request_id 会被判成 `not_pending`（「不存在」），运维据此核对等于永远看不到新
+    积压。所以这里走 `unresolved_batches()` 的分页游标做全量扫描 —— 那条路径本来
+    就存在（`operational.py` 的巡检用的就是它），不是新写的。
+    """
+    return sorted(iter_unresolved(key_id),
+                  key=lambda row: (row['created_at'], row['request_id']))
+
+
+def has_unresolved(key_id=None) -> bool:
+    """是否有未结行；只问「有没有」，不取回行。
+
+    给「有未决就拒绝」这类判据用（重置用量、密钥操作）。全量扫描只是为了回答一个
+    布尔问题，大表上不值得；`LIMIT 1` 一样准确。
+    """
     clause = '' if key_id is None else ' AND key_id=?'
-    return [dict(r) for r in db.query("SELECT * FROM budget_reservations WHERE state IN ('reserved','forwarded','unknown')" + clause + ' ORDER BY created_at,request_id LIMIT 1000', args)]
+    args = () if key_id is None else (key_id,)
+    return db.query_one(
+        "SELECT 1 AS hit FROM budget_reservations WHERE state IN "
+        "('reserved','forwarded','unknown')" + clause + ' LIMIT 1', args) is not None
 
 
 def unresolved_batches(key_id=None, batch_size=500):
@@ -727,14 +811,30 @@ def _logs_for(request_ids) -> dict:
 #
 # 归档它**不改钱**：charged_tokens/charged_credit 原样保留（不重复计费、
 # 不退费），只把剩余预留估算从准入与告警里释放掉，行仍留在 unknown 等人工
-# resolve。`upstream_rejected` / `usage_present` 仍不归档 —— 那两类还有
-# 「上游到底收没收钱」这个能核的问题。
+# resolve。`usage_present` 仍不归档 —— 那一类还有「上游到底收没收钱」这个能核
+# 的问题。
+#
+# ## `upstream_rejected` 也要有出口（G-05 / D-06，2026-11-28 拍板）
+#
+# 上游**明确拒绝**（429/`code:112`/`quota_exceeded`/`model_not_found` …）时，
+# 请求根本没被受理，也就不存在「上游收没收钱」这个能核的问题 —— 它和
+# `usage_present` 不是一回事。此前的口径把它一起挡在归档之外，代价是：对有
+# `quota_credit` 的密钥，任意一条这样的 unknown 就是 `credit_quota_unconfirmed`
+# 的永久闸，一次上游拒绝把密钥锁死到永远。
+#
+# 拍板口径：**零计费，但必须归档** —— 不向用户收钱，同时给出明确出口，让密钥
+# 能继续用。归档沿用它本来的语义（不动 charged，释放剩余预留估算），且
+# `upstream_rejected` 的行按分类定义就没有 charged（有 charged 的先落
+# `charged_partial`），所以「零计费」在这里是**结构上成立**的，不是又写了一遍。
 ARCHIVE_RESOLUTION_PREFIX = '已归档待核对：'
 #: 没有任何上游用量证据的分类。已计入金额、但结论仍未知的见 CHARGED_PARTIAL_CLASS。
 EVIDENCELESS_CLASSES = ('client_cancelled', 'no_request_log', 'unexplained')
+#: 上游明确拒绝、请求未被受理：零计费，但同样要有出口（见上方说明）。
+UPSTREAM_REJECTED_CLASS = 'upstream_rejected'
 #: 已计入金额、但结论仍未知的分类：同样可归档，归档时不碰已计入的 charged。
 CHARGED_PARTIAL_CLASS = 'charged_partial'
-ARCHIVABLE_CLASSES = EVIDENCELESS_CLASSES + (CHARGED_PARTIAL_CLASS,)
+ARCHIVABLE_CLASSES = (EVIDENCELESS_CLASSES
+                      + (UPSTREAM_REJECTED_CLASS, CHARGED_PARTIAL_CLASS))
 #: 归档留痕里的分类，用于「归档时的结论」与「现在的分类」比对。
 _ARCHIVED_CLASS_PATTERN = re.compile(r'分类 ([a-z_]+)')
 REVIEW_DEADLINE_DAYS_DEFAULT = 7
@@ -823,6 +923,13 @@ def archive_overdue_unknowns(now: int, deadline_days: int | None = None) -> int:
         else:
             reason = ('%s超过 %d 天处理期限仍无上游证据（分类 %s，创建于 %s）；'
                       '保留 state=unknown 供人工核对，未改用量、未删除'
+                      % (ARCHIVE_RESOLUTION_PREFIX, days, cls, created_text))
+        if cls == UPSTREAM_REJECTED_CLASS:
+            # 口径明确写进留痕：拒绝 = 零计费。否则下一个人看到「归档」会以为
+            # 这笔钱被放过了，而实际上它从来没被计过。
+            reason = ('%s超过 %d 天处理期限，上游明确拒绝、请求未被受理（分类 %s，'
+                      '创建于 %s）；按零计费归档（该分类不产生 charged），'
+                      '保留 state=unknown 供人工核对'
                       % (ARCHIVE_RESOLUTION_PREFIX, days, cls, created_text))
         try:
             if not _mark_archived(row['request_id'], reason):

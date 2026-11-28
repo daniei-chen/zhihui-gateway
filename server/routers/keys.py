@@ -229,7 +229,7 @@ def _check_assignment(username, user):
 def reset_usage(key_id: int, user: dict = Depends(security.require_keys_writer)) -> dict:
     from .. import budget
     budget.initialize()
-    if budget.unresolved(key_id):
+    if budget.has_unresolved(key_id):
         raise HTTPException(status_code=409,detail='该密钥有未结算请求，请先核对用量')
     # 不存在的 id 应报 404，而不是静默成功：否则前端会提示「已重置」，
     # 而实际什么都没发生（密钥可能已被别人删掉，页面上却看着还在）。
