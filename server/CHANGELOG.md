@@ -36,7 +36,7 @@
 ### 升级前必做
 
 - **用域名访问的部署要先声明来源。** 设 `WB_PUBLIC_ORIGIN=https://你的域名`（多个来源用 `WB_CORS_ORIGINS`，逗号分隔）。没有声明、又没开反代来源头的部署，升级后写请求（**登录也是写请求**）会被拒，页面报 `{"detail": "origin_unconfigured"}`。用 IP、`localhost`、单标签内网名直连的部署不受影响。两种修法选一种：设 `WB_PUBLIC_ORIGIN`，或确认反代**覆盖写** `X-Forwarded-Host $host` 之后显式打开 `WB_TRUST_FORWARDED_HOST=1`。
-- **nginx 每个 `proxy_pass` 的 location 显式设置来源头。** 加一行 `proxy_set_header X-Forwarded-Host "";`（表示不采信，推荐）或 `proxy_set_header X-Forwarded-Host $host;`（覆盖写）。不设置时，客户端自带的值会直接到达应用，上面那道保护就白做了。发布脚本在切换目录前会检查这一条：缺了会**拒绝激活**并指出是哪个 location —— **这是新加的保护，不是故障**，补上那一行再切。
+- **nginx 每个 `proxy_pass` 的 location 显式设置来源头。** 加一行 `proxy_set_header X-Forwarded-Host "";`（表示不采信，推荐）或 `proxy_set_header X-Forwarded-Host $host;`（覆盖写）。不设置时，客户端自带的值会直接到达应用，上面那道保护就白做了。**切换前请先跑 `release.py verify <版本> --nginx <站点配置>`**：它会检查这一条，缺了会拒绝放行并指出是哪个 location（`activate` 自己那次校验**不带** `--nginx`，所以不跑这一步就拦不住）—— **这是新加的保护，不是故障**，补上那一行再切。
 
 ### 改进
 
