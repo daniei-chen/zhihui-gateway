@@ -121,7 +121,9 @@ def _kernel_lock_holder(path: Path, release_after: float | None = None):
 
 class _TempDirTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory(prefix='filelock-test-')
+        # 变异验证时会有守护线程卡在锁上、还开着内核锁文件；清理失败不该盖掉真正的断言
+        self._tmp = tempfile.TemporaryDirectory(prefix='filelock-test-',
+                                                ignore_cleanup_errors=True)
         self.dir = Path(self._tmp.name)
         self.path = self.dir / 'account.json'
         self.path.write_text(json.dumps({'count': 0, 'proxy': '', 'weight': 1}),
