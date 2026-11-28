@@ -30,6 +30,32 @@ class BytesBody(httpx.AsyncByteStream):
         yield self.content
 
 
+class OneShot(httpx.AsyncByteStream):
+    """只能迭代一次的真流：`BytesBody` 可以重启，真 socket 不行。
+
+    预读把流读到一半后，只有把迭代器接回去才能继续透传；重启式 fake 会掩盖
+    「没有接回」的 bug。
+    """
+
+    def __init__(self, *chunks):
+        self.chunks = list(chunks)
+        self.used = False
+
+    async def __aiter__(self):
+        if self.used:
+            raise httpx.StreamConsumed()
+        self.used = True
+        for chunk in self.chunks:
+            yield chunk
+
+
+
+class Truncated(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'{"error":'
+        raise httpx.ReadError('backend truncated the 503 body')
+
+
 # 排空应答的真实形状：server/drain.py 的 DrainMiddleware → protocolerrors.response。
 DRAIN_BODY = json.dumps({'error': {'type': 'server_error', 'code': 'gateway_draining',
                                   'message': 'Gateway is draining for maintenance; retry later.'}},
@@ -191,7 +217,7 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
 
         async def provider(request):
             attempts.append(request)
-            return httpx.Response(503, stream=BytesBody(CAPACITY_BODY),
+            return httpx.Response(503, stream=OneShot(CAPACITY_BODY),
                                   headers={'retry-after': '1', 'connection': 'close',
                                            'content-type': 'application/json'})
 
@@ -210,7 +236,7 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
 
         async def provider(request):
             attempts.append(request)
-            return httpx.Response(503, stream=BytesBody(b'<html>busy</html>'),
+            return httpx.Response(503, stream=OneShot(b'<html>busy</html>'),
                                   headers={'retry-after': '1',
                                            'content-type': 'text/html'})
 
@@ -220,6 +246,61 @@ class StartupRetryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.content, b'<html>busy</html>')
         self.assertEqual(len(attempts), 1)
+
+    async def test_oversized_503_body_is_forwarded_intact(self):
+        """超过判据上限的 503 body 一个字节都不多读，透传时也必须完整。
+
+        判据只认几千字节的错误信封；声明就超长的应答直接放弃判断，交给透传。
+        """
+        body = b'{"error": {"code": "gateway_capacity_exceeded", "message": "' + b'x' * 6000 + b'"}}'
+        attempts = []
+
+        async def provider(request):
+            attempts.append(request)
+            return httpx.Response(503, stream=OneShot(body),
+                                  headers={'retry-after': '1', 'content-type': 'application/json',
+                                           'content-length': str(len(body))})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.content, body)
+
+    async def test_oversized_chunked_503_body_is_forwarded_intact(self):
+        """没有 content-length 时边读边数：超限立即停手，已读字节接回去。"""
+        attempts = []
+
+        async def provider(request):
+            attempts.append(request)
+            return httpx.Response(503, stream=OneShot(b'{"error":', b' ' + b'y' * 5000,
+                                                      b' ' + b'z' * 1000 + b'}'),
+                                  headers={'retry-after': '1', 'content-type': 'application/json'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(len(response.content), len(b'{"error": ' + b'y' * 5000 + b' ' + b'z' * 1000 + b'}'))
+
+    async def test_truncated_503_body_is_transport_uncertain_not_a_passthrough(self):
+        """预读失败既不能透传也不能重放：按传输不确定回 502，绝不伪装成功。"""
+        attempts = []
+
+        async def provider(request):
+            attempts.append(request)
+            return httpx.Response(503, stream=Truncated(),
+                                  headers={'retry-after': '1', 'content-type': 'application/json'})
+
+        self._use(provider)
+        with mock.patch.object(rollingrelay, 'STARTUP_RETRY_DELAY', 0):
+            response = await self._post()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()['error']['code'], 'relay_upstream_transport_uncertain')
+        self.assertEqual(self.relay.transport_errors, 1)
 
     async def test_the_real_drain_and_admission_envelopes_are_told_apart(self):
         """判据对的必须是两个真实的错误信封，而不是测试里编的字符串。

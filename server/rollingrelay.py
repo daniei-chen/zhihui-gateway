@@ -71,20 +71,52 @@ DRAIN_ERROR_CODE = 'gateway_draining'
 MAX_ERROR_BODY = 4096
 
 
-async def error_code(response) -> str | None:
-    """读出 503 的 JSON 错误码，并把 body 缓存下来供原样透传。
+class _Replay(httpx.AsyncByteStream):
+    """把 `error_code()` 预读的字节接回原流：透传时前缀在前、其余照常。"""
 
-    只有 503 走这里；成功应答/SSE 一个字节都不预读。读不出（非 JSON、超长、
-    传输错误）就返回 None —— 判据宁可判假，也不凭猜测重放一条 POST。
+    def __init__(self, prefix, rest):
+        self.prefix, self.rest = prefix, rest
+
+    async def __aiter__(self):
+        for chunk in self.prefix:
+            yield chunk
+        async for chunk in self.rest:
+            yield chunk
+
+    async def aclose(self):
+        await self.rest.aclose()
+
+
+async def error_code(response) -> str | None:
+    """读出 503 的 JSON 错误码；预读有硬上限，读下的字节接回 `response.stream`。
+
+    只有 503 走这里；成功应答/SSE 一个字节都不预读。上限之外不多读一个字节：
+    `content-length` 声明超限就直接放弃，没声明时边读边数、超了立即停手。判假时
+    由 `_Replay` 把已读字节接回去，客户端收到的仍是完整的原始字节（原始头、
+    编码、长度都不变），所以 `forward()` 不需要为预读做任何特殊处理。
+
+    读失败（后端截断、超时）向上抛：那条应答既不能透传也不能重放，交给调用方按
+    传输不确定处理（502），不伪装成一次成功的前缀透传。
     """
-    try:
-        await response.aread()
-    except httpx.HTTPError:
+    if not isinstance(response.stream, httpx.AsyncByteStream):
         return None
-    if len(response.content) > MAX_ERROR_BODY:
+    declared = response.headers.get('content-length', '')
+    if declared.isdigit() and int(declared) > MAX_ERROR_BODY:
+        return None
+    stream, chunks, total = response.stream, [], 0
+    iterator = stream.__aiter__()
+    while total <= MAX_ERROR_BODY:
+        try:
+            chunk = await anext(iterator)
+        except StopAsyncIteration:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    response.stream = _Replay(chunks, iterator)
+    if total > MAX_ERROR_BODY:
         return None
     try:
-        error = json.loads(response.content).get('error')
+        error = json.loads(b''.join(chunks)).get('error')
     except (ValueError, AttributeError, UnicodeDecodeError):
         return None
     return error.get('code') if isinstance(error, dict) else None
@@ -321,24 +353,10 @@ class StreamingRelay:
                         headers=headers, content=payload)
                 response = await self._send_with_startup_retry(build)
                 response_started = True
-                headers_out = end_to_end(response.headers.raw)
-                if response.is_stream_consumed:
-                    # is_draining_response 为了看 code 已经读过这条 503 的 body
-                    # （容量拒绝、以及重试用尽的排空应答都走这里）：原样补发。
-                    # 预读拿到的是解码后的字节，编码与长度声明要跟着改。
-                    headers_out = [(key, value) for key, value in headers_out
-                                   if key.lower() not in (b'content-encoding', b'content-length')]
-                    if response.content:
-                        headers_out.append((b'content-length', str(len(response.content)).encode()))
                 await send({'type': 'http.response.start', 'status': response.status_code,
-                            'headers': headers_out})
-                if response.is_stream_consumed:
-                    if response.content:
-                        await send({'type': 'http.response.body', 'body': response.content,
-                                    'more_body': True})
-                else:
-                    async for chunk in response.aiter_raw():
-                        await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
+                            'headers': end_to_end(response.headers.raw)})
+                async for chunk in response.aiter_raw():
+                    await send({'type': 'http.response.body', 'body': chunk, 'more_body': True})
                 await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
             except asyncio.CancelledError:
                 raise
