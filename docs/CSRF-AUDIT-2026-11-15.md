@@ -35,7 +35,7 @@
 | 覆盖的方法 | `POST` / `PUT` / `PATCH` / `DELETE` |
 | 「浏览器发起」的判据 | `Sec-Fetch-Site` / `Sec-Fetch-Mode` / `Sec-Fetch-Dest` 任一存在 |
 | 来源归一 | 复用另一模块的解析器，处理 userinfo 混淆、`null`、缺省端口 |
-| 期望来源 | `Host` + 本机反代时的原始协议 |
+| 期望来源 | 服务端配置的锚点（`WB_PUBLIC_ORIGIN` / `WB_CORS_ORIGINS`）；都没配才回退到可信反代的 `X-Forwarded-Host`，最后是不可能是攻击者的 Host（IP 字面量 / localhost / 单标签内网名）。**D-41 之前**这里取的是 `Host` + 本机反代时的原始协议，见第九节 |
 | 拒绝原因 | 五种，各自命名（多重 Origin、缺失、Host 缺失、格式非法、不匹配） |
 
 **它不是只做了「有 Origin 就比一下」**：`null`、多重 Origin、userinfo 混淆形态
@@ -127,3 +127,47 @@
 2. **WebSocket / SSE** —— 不走中间件意味着不走这套校验
 3. **Referer 回退** —— 现代浏览器都发 Origin，但老客户端可能只发 Referer
 
+---
+
+## 九、D-41 补记（2026-11-28）：锚点不再取 `Host`
+
+第八节第 1 条说的「同源判定用 Host」，在 2026-11-27 的深度审计里被实测成漏洞
+（`D-41`，见 `docs/audit/04-security.md` 的 D-4）：DNS rebinding 下浏览器访问
+`http://evil.test:8000`，`Host` 与 `Origin` 天然都是 `evil.test:8000`，两者相等，
+于是**任意域名**都能通过同源校验：
+
+```
+POST /api/login   Host: evil.test:8000   Origin: http://evil.test:8000   -> 200（修前）
+```
+
+修完之后同一形态是 `403` + `X-Manager-Csrf-Reason: csrf_origin_unconfigured`。
+
+### 锚点从哪来（越靠前越权威）
+
+1. `WB_PUBLIC_ORIGIN`：部署方声明的公网来源（如
+   `https://zhihui.kaogong.art`）。设了它就**只认它**，`Host` 完全不参与。
+2. `WB_CORS_ORIGINS`：已有的跨源白名单，外加「不可能被攻击者控制」的同源 Host
+   （IP 字面量 / `localhost` / 单标签内网名）。
+3. 都没配：只采信**可信反代**（peer 落在 `WB_TRUSTED_PROXY_CIDRS`，与
+   `iputil.client_ip` 同一份判据）送来的 `X-Forwarded-Host`；非可信 peer 的
+   `X-Forwarded-Host` / `X-Forwarded-Proto` 一律忽略。
+4. 最后才是「不可能被 rebinding 的 Host」：IP 字面量、`localhost`、
+   单标签内网名。带点的主机名（`evil.test`、`zhihui.kaogong.art`）不能自证身份。
+
+### 代价（故意的）
+
+**用域名直连、不经反代、又没配 `WB_PUBLIC_ORIGIN`** 时，写请求会被拒：
+浏览器看到 403，响应头 `X-Manager-Csrf-Reason: csrf_origin_unconfigured`，
+服务日志告警一次（附该设哪个变量）。这个形态和攻击形态在服务端**无法区分** ——
+能区分的只有「部署方声明的来源」或「可信反代看到的来源」。
+
+不受影响的形态：配了 `WB_PUBLIC_ORIGIN`（推荐）、IP / localhost / 单标签内网名
+直连、反代透传 `X-Forwarded-Host`。登录、退出与所有管理面写端点用的是同一套
+判定，`routers/portal.py` 的用户端写闸门与 `services/platformauth.py` 的轮询闸门
+也已统一到 `security.origin_allowed()`。
+
+### 这次补上的测试
+
+`server/tests/test_d41_csrf_origin_anchor.py`（已登记进
+`tools/ci_regression.py` 的 `MODULES`）：修前红、修后绿，并做过变异验证
+（把锚点改回「只信 Host」，对应用例必须失败）。`GET` 等安全方法不受影响。

@@ -124,6 +124,9 @@ MODULES = (
     "server.tests.test_audit_protocol_limits",
     "server.tests.test_audit_middleware_boundaries",
     "server.tests.test_audit_auth_origin",
+    # D-41（2026-11-28）：写操作的同源锚点不再由请求的 Host 头决定。
+    # 只把测试写进磁盘不写进这里 = 门禁不执行它（#65 的教训）。
+    "server.tests.test_d41_csrf_origin_anchor",
     "server.tests.test_auth_bypass",
     "server.tests.test_gateway_body_limit",
     "server.tests.test_api_tokens",

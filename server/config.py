@@ -285,6 +285,11 @@ SESSION_IDLE_HOURS = _env_int('WB_SESSION_IDLE_HOURS', 12)
 COOKIE_NAME = 'wb_session'
 SECURE_COOKIE = _env('WB_SECURE_COOKIE', 'auto')  # auto | true | false
 
+# 本站公网来源（D-41）：写端点同源校验的**权威锚点**，如
+# `https://zhihui.kaogong.art`（可逗号分隔多个）。留空时逐级回退：WB_CORS_ORIGINS
+# → 可信反代的 X-Forwarded-Host → 不可能被 DNS rebinding 的 Host
+# （IP 字面量 / localhost / 单标签内网名）。判定细节见 security.origin_anchors。
+PUBLIC_ORIGIN = _env('WB_PUBLIC_ORIGIN', '')
 # 允许的 CORS 来源（同源部署时留空即可）
 CORS_ORIGINS = [o for o in _env('WB_CORS_ORIGINS', '').split(',') if o]
 

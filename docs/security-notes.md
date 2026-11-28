@@ -6,6 +6,13 @@
 - 网关密钥仅存 SHA-256 哈希，明文只在创建时返回一次
 - 管理端密码使用 PBKDF2-SHA256（26 万次迭代）加盐存储
 - 会话使用 HttpOnly + SameSite=Lax 签名 Cookie，生产环境自动启用 `Secure`
+- **写端点的同源校验锚点在服务端**（`WB_PUBLIC_ORIGIN`，其次 `WB_CORS_ORIGINS`）：
+  2026-11-28 起不再用请求的 `Host` 拼「本站期望来源」—— DNS rebinding 下
+  `Host == Origin == 任意域名`，那样判等于没有锚点。都没配时只认「不可能被攻击者
+  控制」的 Host（IP 字面量 / `localhost` / 单标签内网名）与**可信反代**
+  （`WB_TRUSTED_PROXY_CIDRS`）透传的 `X-Forwarded-Host`；用域名直连、不经反代、
+  又没配 `WB_PUBLIC_ORIGIN` 时，写请求会被拒（403 +
+  `X-Manager-Csrf-Reason: csrf_origin_unconfigured`）
 - 同 IP 登录失败 5 次锁定 10 分钟
 - 所有文件操作做路径穿越校验
 - **真实 IP 取自反代覆盖写入的 `X-Real-IP`**（`X-Forwarded-For` 首段可伪造），

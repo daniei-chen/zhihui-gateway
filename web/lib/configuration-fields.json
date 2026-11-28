@@ -203,6 +203,9 @@
   "WB_PROXY_PROBE_URL": {
     "sensitive": false
   },
+  "WB_PUBLIC_ORIGIN": {
+    "sensitive": false
+  },
   "WB_QTG_ADAPTER_BASE": {
     "sensitive": false
   },
