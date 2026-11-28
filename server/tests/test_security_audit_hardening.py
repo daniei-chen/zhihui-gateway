@@ -202,7 +202,7 @@ class TrafficPrivacyAndSettingsTests(unittest.TestCase):
         payload = self._payload()
         traffic._write_payload(payload)
         captured = next((self.root / 'traffic').glob('*/*.json.gz'))
-        with gzip.open(captured, 'rt') as handle:
+        with gzip.open(captured, 'rt', encoding='utf-8') as handle:
             raw = handle.read()
         index = (self.root / 'traffic/index.jsonl').read_text(encoding='utf-8')
         for forbidden in ('13800138000', 'synthetic@example.invalid', 'synthetic-bearer-secret'):

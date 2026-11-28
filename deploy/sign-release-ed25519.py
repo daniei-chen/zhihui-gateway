@@ -98,7 +98,9 @@ def sign_file(key: Path, target: Path, signature: Path, *, trust: Path | None = 
             verify_file(trust, target, temporary)
         # Detached signatures are public verification material, even under umask 077.
         temporary.chmod(0o644)
-        with temporary.open('rb') as handle:
+        # Windows 的 fsync 走 FlushFileBuffers，句柄必须可写，只读句柄会 EBADF；
+        # POSIX 上只读句柄可以 fsync。r+b 两种平台都能刷盘，且不截断。
+        with temporary.open('r+b') as handle:
             os.fsync(handle.fileno())
         os.replace(temporary, signature)
     finally:

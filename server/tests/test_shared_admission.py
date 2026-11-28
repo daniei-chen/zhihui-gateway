@@ -113,8 +113,9 @@ class SharedAdmissionTest(unittest.TestCase):
                 self.a.release('a1')
             # 写锁预算已从 25 ms 提到 500 ms（25 ms 会把瞬时争用误报成"容量已满"）。
             # 两次调用各等一次预算，合计 1 秒量级；这条断言要验证的是"会失败退出、
-            # 不会永久挂住"，不是"25 毫秒内失败"。
-            self.assertLess(time.monotonic() - started, 3.0)
+            # 不会永久挂住"，不是"25 毫秒内失败"。上界留 5 秒：Windows 的 SQLite
+            # busy 处理器按 15.6 ms 时钟片退避，两次 500 ms 预算实测 3.3 秒。
+            self.assertLess(time.monotonic() - started, 5.0)
             self.assertEqual(self.b.snapshot()['active'], 1)
             self.assertFalse(self.b.snapshot()['healthy'])
         finally:

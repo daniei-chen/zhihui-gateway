@@ -131,5 +131,8 @@ class PublicSignaturePermissionsTests(unittest.TestCase):
                 module.verify_file(public,target,signature)
             finally:
                 os.umask(old)
-            self.assertEqual(key.stat().st_mode & 0o777,0o600)
-            self.assertEqual(signature.stat().st_mode & 0o777,0o644)
+            # 签名与验签行为在两个平台都要跑；只有 POSIX 权限位本身是平台限制：
+            # Windows 的 os.chmod 只能切只读位，读回来一律是 0o666。
+            if os.name != 'nt':
+                self.assertEqual(key.stat().st_mode & 0o777,0o600)
+                self.assertEqual(signature.stat().st_mode & 0o777,0o644)
