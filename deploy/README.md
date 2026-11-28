@@ -242,6 +242,16 @@ server {
 > `X-Real-IP` 是管理端判定真实来源 IP 的**首选依据**（`X-Forwarded-For`
 > 首段可被客户端伪造）。若前面还叠了 CDN，请把服务端
 > `WB_TRUSTED_PROXY_HOPS` 设为 CDN + 反代的层数。
+>
+> **uvicorn 的代理头改写已关闭**（`--no-proxy-headers` / `proxy_headers=False`）。
+> 它默认会按上面的 `X-Forwarded-For` 把 `scope["client"]` 改写成浏览器地址，
+> 于是「对端是不是本机反代」永远判错：`WB_TRUSTED_PROXY_CIDRS` 形同虚设，
+> `X-Forwarded-Host` 不被采信（写请求会被拒），`/api/system/internal-session-verify`
+> 的「仅本机」也会拒掉真正的 nginx。**反代信任只有一份判据**：
+> `WB_TRUSTED_PROXY_CIDRS` + `iputil.client_ip()`。
+>
+> 用域名访问时请同时设置 `WB_PUBLIC_ORIGIN=https://你的域名`（写端点的同源锚点）；
+> 不设也能跑，但「域名 + 没有可信反代」的表单提交会被 403，管理页会提示怎么修。
 
 #### 前面是 Cloudflare（或任何 CDN）时**必须**再配一步
 

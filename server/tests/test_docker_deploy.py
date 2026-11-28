@@ -665,7 +665,10 @@ class DockerAssetsTest(unittest.TestCase):
         import yaml
         dc = yaml.safe_load((_ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
         env = dc['services']['workbuddy-manager']['environment']
-        for key in ('WB_HTTP_PROXY', 'WB_UPDATE_PROXY', 'WB_DEFAULT_ACCOUNT_PROXY'):
+        for key in ('WB_HTTP_PROXY', 'WB_UPDATE_PROXY', 'WB_DEFAULT_ACCOUNT_PROXY',
+                    # D-41：来源校验的两个开关同样必须能到进程 —— 否则「按文档
+                    # 在 .env 里设置」在容器里静默无效，登录/写请求继续被拒。
+                    'WB_PUBLIC_ORIGIN', 'WB_ALLOW_UNCONFIGURED_ORIGIN'):
             with self.subTest(key=key):
                 self.assertIn(key, env, f'compose 没把 {key} 透传进来 —— 写进 .env 也没用')
                 self.assertIn('${' + key, str(env[key]),

@@ -49,7 +49,15 @@ services:
       # 详见 deploy/README.md 的「子路径部署」。
       # WB_BASE_PATH: /workbuddy-manager
       # 反向代理在后面时，真实 IP 取自它覆盖写入的 X-Real-IP
+      # （uvicorn 的代理头改写已在镜像里关掉：信任只由 WB_TRUSTED_PROXY_CIDRS 判）
       WB_TRUST_PROXY: "1"
+      # 写端点同源校验（D-41）：用域名访问时声明本站来源，例如
+      #   WB_PUBLIC_ORIGIN: "https://zhihui.kaogong.art"
+      # 值写在同目录的 .env 里、由 compose 用 ${} 取过来（compose 不会自动注入 .env）。
+      WB_PUBLIC_ORIGIN: ${WB_PUBLIC_ORIGIN:-}
+      # 逃生门：只在确实来不及配置来源时临时打开（锚点退回「只信 Host」，DNS
+      # rebinding 重新可用；跨站 Origin/Referer 仍会拦）。启动日志会醒目告警。
+      WB_ALLOW_UNCONFIGURED_ORIGIN: ${WB_ALLOW_UNCONFIGURED_ORIGIN:-}
       # 生产环境不暴露 /docs 与 /openapi.json
       WB_ENABLE_DOCS: "0"
       # 出口代理（可选）：写在与本文件同目录的 .env 里即可，compose 用 ${} 取过来。

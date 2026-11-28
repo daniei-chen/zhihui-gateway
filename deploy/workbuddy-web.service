@@ -31,7 +31,10 @@ Environment=WB_GATEWAY_RATE_PER_MIN=120
 # 注意：EnvironmentFile 的值是**字面量**，别在值后面写行内注释。
 EnvironmentFile=-/opt/workbuddy-manager/.env
 
-ExecStart=/usr/bin/python3 -m uvicorn server.main:app --host 0.0.0.0 --port 7864
+# --no-proxy-headers：代理头的信任判定只留应用一份（iputil.client_ip 按
+# WB_TRUSTED_PROXY_CIDRS 数跳）。uvicorn 默认会按 X-Forwarded-For 改写
+# scope["client"]，让「对端是不是本机反代」永远判错。
+ExecStart=/usr/bin/python3 -m uvicorn server.main:app --host 0.0.0.0 --port 7864 --no-proxy-headers
 Restart=always
 RestartSec=3
 

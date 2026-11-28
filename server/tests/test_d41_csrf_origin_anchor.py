@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import httpx
@@ -387,6 +388,53 @@ class SideGatesUseTheSameAnchors(_AnchorCase):
         self._patch(config, 'PUBLIC_ORIGIN', 'https://panel.example.com')
         platformauth.check_poll_origin(
             _request('panel.example.com', 'https://panel.example.com'))
+
+
+class DeploymentTrustModel(unittest.TestCase):
+    """信任判定只能有一份：应用里的 `iputil.client_ip` / `WB_TRUSTED_PROXY_CIDRS`。
+
+    uvicorn 的 `proxy_headers`（默认开、`forwarded_allow_ips=127.0.0.1`）会按
+    `X-Forwarded-For` 把 `scope['client']` 改写成浏览器地址。仓库附带的 nginx
+    配置（deploy/README.md）**会**传 XFF，于是「对端是不是本机反代」永远判错：
+    来源锚点拿不到 X-Forwarded-Host（写请求 403），`/api/system/internal-session-verify`
+    的「仅本机」也会拒掉真正的 nginx。启动器必须显式关掉这个改写。
+    """
+
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_launchers_disable_uvicorn_proxy_header_rewriting(self) -> None:
+        for rel in ('Dockerfile', 'deploy/workbuddy-web.service', 'deploy/install.sh'):
+            with self.subTest(path=rel):
+                text = (self.ROOT / rel).read_text(encoding='utf-8')
+                self.assertIn('--no-proxy-headers', text,
+                              f'{rel} 的 uvicorn 启动命令没有 --no-proxy-headers：'
+                              '反代信任会被 uvicorn 改写 scope["client"] 破坏')
+        serve = (self.ROOT / 'server' / 'serve.py').read_text(encoding='utf-8')
+        self.assertEqual(serve.count('proxy_headers=False'), 2,
+                         'server/serve.py 的两个 uvicorn.Config 都要关掉代理头改写')
+
+    def test_compose_forwards_the_origin_settings(self) -> None:
+        import yaml
+        dc = yaml.safe_load((self.ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
+        env = dc['services']['workbuddy-manager']['environment']
+        for key in ('WB_PUBLIC_ORIGIN', 'WB_ALLOW_UNCONFIGURED_ORIGIN'):
+            with self.subTest(key=key):
+                self.assertIn(key, env, f'compose 没把 {key} 透传进来 —— 写进 .env 也没用')
+                self.assertIn('${' + key, str(env[key]), f'{key} 没从 .env 取值')
+
+    def test_escape_hatch_schema_matches_the_runtime_parser(self) -> None:
+        """`_env_bool` 只认 1/true/yes/on；`t` / `y` 必须在启动期被拒，而不是静默 false。"""
+        from server import configcontract
+        spec = configcontract.load_schema()['settings']['WB_ALLOW_UNCONFIGURED_ORIGIN']
+        self.assertEqual(spec.get('boolean_dialect'), 'manager',
+                         'schema 没对齐运行期方言：t/y 会通过校验却被当成 false')
+        for bad in ('t', 'y', 'f', 'n'):
+            with self.subTest(value=bad):
+                with self.assertRaises(configcontract.ConfigurationError):
+                    configcontract.validate_environment(
+                        {'WB_ALLOW_UNCONFIGURED_ORIGIN': bad})
+        parsed = configcontract.validate_environment({'WB_ALLOW_UNCONFIGURED_ORIGIN': 'on'})
+        self.assertEqual(parsed['settings']['WB_ALLOW_UNCONFIGURED_ORIGIN']['value'], True)
 
 
 if __name__ == '__main__':
