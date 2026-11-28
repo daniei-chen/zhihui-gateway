@@ -238,6 +238,26 @@ gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 `daniei-chen/zhihui-gateway` 白名单，摘要仍然打印出来供人工比对，但**它不再是门禁**：
 没有签名、签名验不过、信任锚缺失或可被他人改写，更新一律中止，一个字节都不落盘。
 
+### 仓库里仍然保留的 `ithtelab/...` 引用
+
+`git grep -n ithtelab` 还能命中一批，**这些是有意保留的，不要「顺手改干净」**：
+
+| 位置 | 为什么保留 |
+|---|---|
+| `docs/history/CHANGELOG.*-legacy.md` | 历史变更日志。改它等于改写当时实际发生的事 |
+| `docs/UPSTREAM-*`、`docs/PLATFORM-POOL-REVIEW.md` | 上游评审/采纳记录，记的是「这条产品线的上游是谁、当时对的是哪个 commit」 |
+| `docs/enterprise-support/*` | 已停用的历史补丁包（`apply.sh` 动手之前就 `exit 2`）。里面的镜像名是当时的记录 |
+| `deploy/update.py:83,351`（及打包后的 `server/deploy/update.py`） | 注释在解释「默认值曾经是别人的仓库」，是那次修复的来由 |
+| `windows/launcher/build.ps1:45`、`windows/README.md` | 上游源码载体 `upstream-src/...tar.gz` **只存在于上游仓库**；取不到就没有可编译的源码。该包的 sha256 已钉住（`$UpstreamSrcSha256`），解包前校验 |
+| `fork-tools/fork-upgrade.sh` | 它就是「从上游取东西来对照」的工具，从上游拉是设计目的 |
+| `server/tests/*`、`web/tests/*`、`dev/*` | 测试夹具里**故意**构造第三方仓库名，用来证明拒绝逻辑真的拒绝 |
+| `dev/.palette|.update-clear/version-check.json` | 版本探测的缓存产物 |
+
+判断口径：**「人会照抄执行、或从那里取可执行内容」的才改**；「记录来源、解释历史、
+或故意构造反例」的不改。安装面已经逐一收敛到本仓（`deploy/README.md`、`deploy/verify-release.sh`、
+`windows/update.ps1`、`.github/ISSUE_TEMPLATE/config.yml`、`docs/enterprise-support/README.md`
+的来源说明）。
+
 **漏了第 5 步会怎样**：草稿发布之后，所有自称能更新到这一版的部署都会在
 「该发布没有提供签名」处停下（旧版本继续服务，不会装半成品）。补上 `.sig` 资产
 即可恢复，不需要重新打包。私钥保管与信任锚的边界见
@@ -312,7 +332,7 @@ gh release edit vX.Y.Z --repo daniei-chen/zhihui-gateway --draft=false
 
 ```bash
 # 查看
-gh api repos/ithtelab/workbuddy-manager/rulesets \
+gh api repos/daniei-chen/zhihui-gateway/rulesets \
   --jq '.[] | "\(.id) \(.name) \(.target)"'
 ```
 
@@ -334,7 +354,7 @@ gh api repos/ithtelab/workbuddy-manager/rulesets \
 REST 接口只回显整数，GraphQL 会给出 `repositoryRoleName`：
 
 ```bash
-gh api graphql -f query='{ repository(owner:"ithtelab", name:"workbuddy-manager") {
+gh api graphql -f query='{ repository(owner:"daniei-chen", name:"zhihui-gateway") {
   rulesets(first:10){ nodes { name target bypassActors(first:20){
     nodes { repositoryRoleDatabaseId repositoryRoleName bypassMode } } } } } }'
 ```
