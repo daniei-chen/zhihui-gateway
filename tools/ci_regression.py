@@ -595,6 +595,10 @@ MODULES = (
     # 两条断言都先红后绿（修前 4 failed，修后 4 passed），所以必须进门禁 ——
     # 否则「账本写入又回到返回路径上」这种回归没有任何测试会喊。
     "server.tests.test_dan19_rejection_ledger",
+    # userstore.locked() 的第一份测试。这个模块守着 users.json 的读改写，
+    # 但此前零测试：丢更新、跨进程互斥、5 秒 deadline、symlink/nlink 拒绝
+    # 全靠人读代码。五处变异各自杀掉一条用例（见 PR 证据）。
+    "server.tests.test_userstore_lock",
 )
 
 
