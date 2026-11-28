@@ -626,6 +626,84 @@ MODULES = (
 )
 
 
+# 「绿的判据只有一个 —— 真的跑了」。下面三件事此前都能静默绿：
+#   * 整模块全 skip（`wasSuccessful()` 对 skip 返回 True）
+#   * 条件式跳过（skipUnless 里的依赖缺失）
+#   * glob/清单零命中（只在「加载出 0 条」时才算，改成「执行了 0 条」才算）
+# 单条 skip 仍然允许（那是用例自己的事），但**整个模块一条都没跑**必须红：
+# 那时这个模块等于不存在，而门禁看起来是绿的。
+SKIP_ALLOWLIST = ROOT / 'tools' / 'skip_allowlist.json'
+
+
+def _skip_allowlist() -> dict:
+    """全 skip 模块的白名单：每条要写 reason 与兜底平台，例外可见、有人签过字。
+
+    故意不做「默认容忍」：没写进这个文件的模块一条用例都没跑就是红的。
+    """
+    try:
+        return json.loads(SKIP_ALLOWLIST.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return {}
+    except ValueError as exc:
+        raise SystemExit(f'skip 白名单不是合法 JSON：{SKIP_ALLOWLIST}：{exc}') from exc
+
+
+def _module_of(test_id: str, modules) -> str:
+    """把 `module.Class.method` / pytest 的 classname 归到清单里的模块名。"""
+    for name in sorted(modules, key=len, reverse=True):
+        if test_id == name or test_id.startswith(name + '.'):
+            return name
+    return test_id.rsplit('.', 1)[0]
+
+
+def _skip_floor(per_module: dict, modules, *, track: str) -> list:
+    """整模块「执行条数 = 0」判失败；白名单里的放行并打印一行说明。
+
+    两条赛道（unittest / pytest）共用这一套判据与同一份白名单 —— 此前 pytest
+    要求 `passed > 0`、unittest 只看 `wasSuccessful()`，同一个门禁两种标准。
+    """
+    allowlist = _skip_allowlist()
+    violations = []
+    for name in modules:
+        row = per_module.get(name) or {'tests': 0, 'skipped': 0}
+        if row['tests'] - row['skipped'] > 0:
+            continue
+        entry = allowlist.get(name) or {}
+        if entry.get('reason'):
+            print(f'  {track} 全 skip 但已签名放行：{name}'
+                  f'（{entry["reason"]}；兜底：{entry.get("platform", "未写")}）')
+            continue
+        violations.append({'module': name, 'tests': row['tests'], 'skipped': row['skipped']})
+    if violations:
+        print(f'{track} 有 {len(violations)} 个模块一条用例都没跑：', file=sys.stderr)
+        for item in violations:
+            print(f'  ✗ {item["module"]}：{item["tests"]} 条，全部 skip', file=sys.stderr)
+        print('  要么让它真跑；要么在 tools/skip_allowlist.json 写 reason 与兜底平台。',
+              file=sys.stderr)
+    return violations
+
+
+class _CountingResult(unittest.TextTestResult):
+    """按模块统计「跑了多少 / skip 多少」，给 skip 下限判据用。"""
+
+    def __init__(self, stream, descriptions, verbosity, modules=()):
+        super().__init__(stream, descriptions, verbosity)
+        self.modules = tuple(modules)
+        self.per_module = {}
+
+    def _row(self, test):
+        name = _module_of(test.id(), self.modules)
+        return self.per_module.setdefault(name, {'tests': 0, 'skipped': 0})
+
+    def startTest(self, test):
+        super().startTest(test)
+        self._row(test)['tests'] += 1
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self._row(test)['skipped'] += 1
+
+
 # Pytest functions cannot be discovered by unittest; this suite is mandatory.
 PYTEST_MODULES = (
     "server.tests.test_merge_page_latency",
@@ -678,7 +756,15 @@ def pytest_suite() -> dict:
         empty_modules = [name for name in PYTEST_MODULES if not any(
             case.get('classname', '') == name or case.get('classname', '').startswith(name + '.')
             for case in cases)]
-        ok = (proc.returncode == 0 and passed > 0 and not empty_modules
+        per_module = {name: {'tests': 0, 'skipped': 0} for name in PYTEST_MODULES}
+        for case in cases:
+            row = per_module.setdefault(_module_of(case.get('classname', ''), PYTEST_MODULES),
+                                        {'tests': 0, 'skipped': 0})
+            row['tests'] += 1
+            if case.find('skipped') is not None:
+                row['skipped'] += 1
+        skip_floor = _skip_floor(per_module, PYTEST_MODULES, track='pytest')
+        ok = (proc.returncode == 0 and passed > 0 and not empty_modules and not skip_floor
               and not counts['failures'] and not counts['errors'])
         if not ok:
             output = (proc.stdout or '') + (proc.stderr or '')
@@ -689,7 +775,7 @@ def pytest_suite() -> dict:
                    for row in tree.getroot().iter('testcase') if row.find('skipped') is not None]
         return {'ok': ok, 'required': True, 'returncode': proc.returncode,
                 **counts, 'passed': passed, 'skipped_tests': skipped,
-                'empty_modules': empty_modules,
+                'empty_modules': empty_modules, 'fully_skipped_modules': skip_floor,
                 'modules': list(PYTEST_MODULES)}
 
 
@@ -824,10 +910,15 @@ def main(argv: list[str] | None = None) -> int:
             if loaded.countTestCases() == 0:
                 empty_modules.append(name)
             suite.addTests(loaded)
-        result = unittest.TextTestRunner(verbosity=1).run(suite)
+        runner = unittest.TextTestRunner(
+            verbosity=1,
+            resultclass=lambda *a, **k: _CountingResult(*a, modules=MODULES, **k))
+        result = runner.run(suite)
         backend_nonempty = result.testsRun > 0 and not empty_modules
         if not backend_nonempty:
             print(f'Backend discovery produced empty modules: {empty_modules}', file=sys.stderr)
+        # 「加载出至少一条」不等于「跑了一条」：整模块全 skip 时 testsRun>0 仍然成立。
+        skip_floor = _skip_floor(getattr(result, 'per_module', {}), MODULES, track='unittest')
         historical = pytest_suite()
         # 前端用例放在 Python 套件之后：Python 失败时先看到 Python 的报告，
         # 不必等一套无关的 Node 进程。
@@ -844,6 +935,7 @@ def main(argv: list[str] | None = None) -> int:
             "errors": len(result.errors),
             "skips": len(result.skipped),
             "empty_modules": empty_modules,
+            "fully_skipped_modules": skip_floor,
             "skipped_tests": [{"test": case.id(), "reason": reason} for case, reason in result.skipped],
             "loopback_provider": provider,
             "historical_pytest": historical,
@@ -864,6 +956,7 @@ def main(argv: list[str] | None = None) -> int:
             pass
     return 0 if (result.wasSuccessful()
                  and backend_nonempty
+                 and not skip_floor
                  and historical.get('ok') is True
                  and frontend.get('ok') is not False
                  and static.get('ok') is not False) else 1
